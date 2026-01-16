@@ -190,6 +190,61 @@ pub struct SdkServices {
     pub(crate) flashnet_client: Arc<FlashnetClient>,
 }
 
+impl SdkServices {
+    /// Returns wallet information including balance.
+    pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+        if request.ensure_synced.unwrap_or_default() {
+            self.initial_synced_watcher
+                .clone()
+                .changed()
+                .await
+                .map_err(|_| {
+                    SdkError::Generic("Failed to receive initial synced signal".to_string())
+                })?;
+        }
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let account_info = object_repository
+            .fetch_account_info()
+            .await?
+            .unwrap_or_default();
+        Ok(GetInfoResponse {
+            balance_sats: account_info.balance_sats,
+            token_balances: account_info.token_balances,
+        })
+    }
+
+    /// Lists payments based on the provided request filters.
+    pub async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<ListPaymentsResponse, SdkError> {
+        let payments = self.storage.list_payments(request).await?;
+        Ok(ListPaymentsResponse { payments })
+    }
+
+    /// Pays a lightning invoice.
+    pub async fn pay_lightning_invoice(
+        &self,
+        invoice: &str,
+        amount_sats: Option<u64>,
+    ) -> Result<spark_wallet::PayLightningInvoiceResult, SdkError> {
+        self.spark_wallet
+            .pay_lightning_invoice(invoice, amount_sats, None, false, None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Adds an event listener and returns its ID.
+    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+        self.event_emitter.add_listener(listener).await
+    }
+
+    /// Removes an event listener by ID.
+    pub async fn remove_event_listener(&self, id: &str) {
+        self.event_emitter.remove_listener(id).await;
+    }
+}
+
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
 #[derive(Clone)]

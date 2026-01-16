@@ -2,9 +2,12 @@ use std::collections::HashMap;
 
 use crate::error::NwcResult;
 
+pub(crate) mod context;
 pub mod error;
 pub mod event;
+pub(crate) mod handler;
 mod persist;
+pub(crate) mod sdk_event;
 
 pub use event::{NwcEvent, NwcEventDetails, NwcEventListener};
 
