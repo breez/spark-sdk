@@ -63,16 +63,24 @@ make build-wasm  # only if wasm/ touched
 
 ### Security (always check)
 
-- No keys in logs/errors
-- Checked arithmetic for crypto (`checked_add`, `checked_mul`)
-- Input validation at boundaries
-- Schnorr signing uses `aux_rand`
+Threat model, don't checklist.
+
+- Trust boundaries: LNURL, Spark, swap validated and failure-safe?
+- State: Crash mid-operation—safe persistence and recovery?
+- Secrets: Never logged, exposed, or reused?
+- Avoid floating-point rounding errors at protocol boundaries for amounts
+- Attacks: Fee stealing & griefing, replay protection, overflow/underflow considered?
 
 ### Code Quality (always check)
 
-- No `unwrap()`/`expect()` in SDK code
-- Public API has `///` doc comments
-- Clippy clean (or `#[allow()]` with justification)
+Design and maintainability, not style.
+
+- Abstractions: Flexible for future protocol changes?
+- Simplicity: Simplest viable design? Are tradeoffs documented?
+- API: Easy to use?
+- Errors: Clear and retryable?
+- Tests: Cover edges, errors, persistence?
+- Docs: Public API documented?
 
 ### Design (for non-trivial changes)
 
