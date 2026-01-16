@@ -239,6 +239,9 @@ pub struct ConversionDetails {
     pub to: ConversionStep,
 }
 
+/// Conversions have one send and one receive payment that are associated to the
+/// ongoing payment via the `parent_payment_id` in the payment metadata. These payments
+/// are queried from the storage by the SDK, then converted.
 impl TryFrom<&Vec<Payment>> for ConversionDetails {
     type Error = SdkError;
     fn try_from(payments: &Vec<Payment>) -> Result<Self, Self::Error> {
@@ -267,9 +270,10 @@ impl TryFrom<&Vec<Payment>> for ConversionDetails {
 pub struct ConversionStep {
     /// The underlying payment id of the conversion step
     pub payment_id: String,
-    /// Amount in satoshis or token base units
+    /// Payment amount in satoshis or token base units
     pub amount: u128,
     /// Fee paid in satoshis or token base units
+    /// This represents the payment fee + the conversion fee
     pub fee: u128,
     /// Method of payment
     pub method: PaymentMethod,
@@ -277,6 +281,9 @@ pub struct ConversionStep {
     pub token_metadata: Option<TokenMetadata>,
 }
 
+/// Converts a Spark or Token payment into a `ConversionStep`.
+/// Fees are a sum of the payment fee and the conversion fee, if applicable,
+/// from the payment details. Token metadata should only be set for a token payment.
 impl TryFrom<&Payment> for ConversionStep {
     type Error = SdkError;
     fn try_from(payment: &Payment) -> Result<Self, Self::Error> {
@@ -302,7 +309,7 @@ impl TryFrom<&Payment> for ConversionStep {
             amount: payment.amount,
             fee: payment
                 .fees
-                .saturating_add(conversion_info.fee.unwrap_or_default()),
+                .saturating_add(conversion_info.fee.unwrap_or(0)),
             method: payment.method,
             token_metadata,
         })
