@@ -112,8 +112,17 @@ jobs:
             packages/react-native/app.plugin.js
             packages/react-native/ubrn.config.yaml
             packages/react-native/android/generated
+            packages/react-native/android/src/main/java
+            packages/react-native/android/src/main/AndroidManifest.xml
+            packages/react-native/android/src/main/AndroidManifestNew.xml
+            packages/react-native/android/src/oldarch
+            packages/react-native/android/src/newarch
+            packages/react-native/android/build.gradle
             packages/react-native/android/CMakeLists.txt
             packages/react-native/cpp
+            packages/react-native/ios/*.h
+            packages/react-native/ios/*.mm
+            packages/react-native/ios/generated
             packages/react-native/lib
             packages/react-native/plugin/build
             packages/react-native/scripts
@@ -160,9 +169,18 @@ jobs:
       - name: Remove existing bindings
         run: |
           git rm android/CMakeLists.txt || true
+          git rm android/build.gradle || true
           git rm *.podspec || true
           git rm -r android/generated || true
+          git rm -r android/src/main/java || true
+          git rm android/src/main/AndroidManifest.xml || true
+          git rm android/src/main/AndroidManifestNew.xml || true
+          git rm -r android/src/oldarch || true
+          git rm -r android/src/newarch || true
           git rm -r cpp || true
+          git rm ios/*.h || true
+          git rm ios/*.mm || true
+          git rm -r ios/generated || true
           git rm -r lib || true
           git rm -r plugin || true
           git rm -r scripts || true
