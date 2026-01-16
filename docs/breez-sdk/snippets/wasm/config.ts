@@ -39,8 +39,23 @@ const exampleConfigureOptimizationConfiguration = async () => {
   console.log('Config:', config)
 }
 
+const exampleConfigureStableBalance = async () => {
+  // ANCHOR: stable-balance-config
+  const config = defaultConfig('mainnet')
+
+  // Enable stable balance with auto-conversion to a specific token
+  config.stableBalanceConfig = {
+    tokenIdentifier: '<token_identifier>',
+    thresholdSats: 10_000,
+    maxSlippageBps: 100
+  }
+  // ANCHOR_END: stable-balance-config
+  console.log('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
-  exampleConfigureOptimizationConfiguration
+  exampleConfigureOptimizationConfiguration,
+  exampleConfigureStableBalance
 }
