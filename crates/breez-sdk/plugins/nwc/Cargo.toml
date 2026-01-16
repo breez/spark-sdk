@@ -1,0 +1,29 @@
+[package]
+name = "breez-sdk-liquid-nwc"
+edition = "2021"
+version = "0.0.1"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+anyhow.workspace = true
+macros.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+breez-sdk-spark.workspace = true
+breez-sdk-common.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio_with_wasm.workspace = true
+uuid.workspace = true
+nostr-sdk = { version = "0.43.0", features = ["nip44", "nip47"] }
+
+# Non-Wasm dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# Wasm dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+tokio = { workspace = true, features = ["macros"] }
