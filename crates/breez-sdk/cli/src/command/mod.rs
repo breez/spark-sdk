@@ -10,7 +10,7 @@ use breez_sdk_spark::{
     PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
     SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    SyncWalletRequest, TokenIssuer, TokenTransactionType, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -54,7 +54,7 @@ pub enum Command {
         #[arg(short, long)]
         status_filter: Option<Vec<PaymentStatus>>,
 
-        /// Filter by payment details
+        /// Filter by asset
         #[arg(short, long)]
         asset_filter: Option<AssetFilter>,
 
@@ -65,6 +65,10 @@ pub enum Command {
         /// Filter by token transaction hash
         #[arg(long)]
         tx_hash: Option<String>,
+
+        /// Filter by token transaction type
+        #[arg(long)]
+        tx_type: Option<TokenTransactionType>,
 
         /// Only include payments created after this timestamp (inclusive)
         #[arg(long)]
@@ -313,6 +317,7 @@ pub(crate) async fn execute_command(
             status_filter,
             spark_htlc_status_filter,
             tx_hash,
+            tx_type,
             asset_filter,
             from_timestamp,
             to_timestamp,
@@ -328,7 +333,15 @@ pub(crate) async fn execute_command(
             if let Some(tx_hash) = tx_hash {
                 payment_details_filter.push(PaymentDetailsFilter::Token {
                     conversion_refund_needed: None,
+                    tx_type: None,
                     tx_hash: Some(tx_hash),
+                });
+            }
+            if let Some(tx_type) = tx_type {
+                payment_details_filter.push(PaymentDetailsFilter::Token {
+                    conversion_refund_needed: None,
+                    tx_type: Some(tx_type),
+                    tx_hash: None,
                 });
             }
             let payment_details_filter = if payment_details_filter.is_empty() {

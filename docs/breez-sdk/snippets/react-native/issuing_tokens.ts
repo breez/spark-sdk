@@ -8,7 +8,9 @@ import {
   type Payment,
   KeySetType,
   SdkBuilder,
-  type KeySetConfig
+  type KeySetConfig,
+  PaymentDetailsFilter,
+  TokenTransactionType
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -71,6 +73,28 @@ const burnToken = async (tokenIssuer: TokenIssuer): Promise<Payment> => {
   })
   // ANCHOR_END: burn-token
   return payment
+}
+
+const listMintBurnPayments = async (): Promise<void> => {
+  // ANCHOR: list-mint-burn-payments
+  // Provide one or multiple of the following filters to
+  // the `paymentDetailsFilter` field when listing payments
+  const paymentDetailsTransferFilter = new PaymentDetailsFilter.Token({
+    txType: TokenTransactionType.Transfer,
+    txHash: undefined,
+    conversionRefundNeeded: undefined
+  })
+  const paymentDetailsMintFilter = new PaymentDetailsFilter.Token({
+    txType: TokenTransactionType.Mint,
+    txHash: undefined,
+    conversionRefundNeeded: undefined
+  })
+  const paymentDetailsBurnFilter = new PaymentDetailsFilter.Token({
+    txType: TokenTransactionType.Burn,
+    txHash: undefined,
+    conversionRefundNeeded: undefined
+  })
+  // ANCHOR_END: list-mint-burn-payments
 }
 
 const getTokenMetadata = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => {

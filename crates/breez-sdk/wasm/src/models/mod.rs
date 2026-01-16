@@ -456,6 +456,7 @@ pub enum PaymentDetails {
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        tx_type: TokenTransactionType,
         invoice_details: Option<SparkInvoicePaymentDetails>,
         conversion_info: Option<ConversionInfo>,
     },
@@ -475,6 +476,13 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenTransactionType)]
+pub enum TokenTransactionType {
+    Transfer,
+    Mint,
+    Burn,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoicePaymentDetails)]
@@ -850,6 +858,7 @@ pub enum PaymentDetailsFilter {
     Token {
         conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
+        tx_type: Option<TokenTransactionType>,
     },
 }
 
