@@ -14,12 +14,11 @@ import {
 const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // ANCHOR: send-htlc-payment
   const paymentRequest = '<spark address>'
-  // Set the amount you wish the pay the receiver
+  // Set the amount you wish to pay the receiver
   const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50000) })
   const prepareRequest = {
     paymentRequest,
     payAmount,
-    onchainSpeed: undefined,
     conversionOptions: undefined
   }
   const prepareResponse = await sdk.prepareSendPayment(prepareRequest)

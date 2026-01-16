@@ -252,7 +252,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: 10_000,
             }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -283,7 +282,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 3_000 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -307,7 +305,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 2_000 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -346,7 +343,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 1_500 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -395,7 +391,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice,
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -433,7 +428,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_invoice,
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -464,7 +458,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 amount: 100,
                 token_identifier: token_metadata.identifier.clone(),
             }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -491,7 +484,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 amount: 50,
                 token_identifier: token_metadata.identifier.clone(),
             }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -525,7 +517,6 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: 10_000,
             }),
-            onchain_speed: Some(OnchainConfirmationSpeed::Medium),
             conversion_options: None,
         })
         .await?;

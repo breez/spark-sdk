@@ -3,7 +3,7 @@ import BreezSdkSpark
 func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let paymentRequest = "<bolt11 invoice>"
-    // Optionally set the amount you wish the pay the receiver
+    // Optionally set the amount you wish to pay the receiver
     let optionalPayAmount = PayAmount.bitcoin(amountSats: 5_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
@@ -28,26 +28,23 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
 func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-onchain
     let paymentRequest = "<bitcoin address>"
-    // Set the amount you wish the pay the receiver
+    // Set the amount you wish to pay the receiver
     let payAmount = PayAmount.bitcoin(amountSats: 50_000)
-    // Select the confirmation speed (required for Bitcoin addresses)
-    let onchainSpeed = OnchainConfirmationSpeed.medium
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: payAmount,
-            onchainSpeed: onchainSpeed
+            payAmount: payAmount
         ))
 
-    // If the fees are acceptable, continue to create the Send Payment
-    if case let .bitcoinAddress(
-        address: _,
-        feeQuote: _,
-        feeSats: feeSats,
-        selectedSpeed: selectedSpeed
-    ) = prepareResponse.paymentMethod {
-        print("Fee for \(selectedSpeed) speed: \(feeSats) sats")
+    // Review the fee quote for each confirmation speed
+    if case let .bitcoinAddress(address: _, feeQuote: feeQuote) = prepareResponse.paymentMethod {
+        let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+        let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+        let fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+        print("Slow fee: \(slowFeeSats) sats")
+        print("Medium fee: \(mediumFeeSats) sats")
+        print("Fast fee: \(fastFeeSats) sats")
     }
     // ANCHOR_END: prepare-send-payment-onchain
 }
@@ -55,7 +52,7 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
 func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-spark-address
     let paymentRequest = "<spark address>"
-    // Set the amount you wish the pay the receiver
+    // Set the amount you wish to pay the receiver
     let payAmount = PayAmount.bitcoin(amountSats: 50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
@@ -73,7 +70,7 @@ func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
 func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-spark-invoice
     let paymentRequest = "<spark invoice>"
-    // Optionally set the amount you wish the pay the receiver
+    // Optionally set the amount you wish to pay the receiver
     let optionalPayAmount = PayAmount.bitcoin(amountSats: 50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
@@ -134,10 +131,15 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
 
 func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-onchain
+    // Select the confirmation speed for the on-chain transaction
+    let options = SendPaymentOptions.bitcoinAddress(
+        confirmationSpeed: OnchainConfirmationSpeed.medium
+    )
     let optionalIdempotencyKey = "<idempotency key uuid>"
     let sendResponse = try await sdk.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
+            options: options,
             idempotencyKey: optionalIdempotencyKey
         ))
     let payment = sendResponse.payment
@@ -158,53 +160,27 @@ func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse
     print(payment)
 }
 
-func estimateOnchainSendFeeQuotes(sdk: BreezSdk) async throws {
-    // ANCHOR: estimate-onchain-send-fee-quotes
-    let address = "<bitcoin address>"
-    // Optionally set the amount, omit for drain
-    let optionalAmountSats: UInt64? = 50_000
-
-    let response = try await sdk.estimateOnchainSendFeeQuotes(
-        request: EstimateOnchainSendFeeQuotesRequest(
-            address: address,
-            amountSats: optionalAmountSats
-        ))
-
-    let feeQuote = response.feeQuote
-    let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-    let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-    let fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-    print("Slow Fees: \(slowFeeSats) sats")
-    print("Medium Fees: \(mediumFeeSats) sats")
-    print("Fast Fees: \(fastFeeSats) sats")
-    // ANCHOR_END: estimate-onchain-send-fee-quotes
-}
-
 func prepareSendPaymentDrainOnchain(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-drain-onchain
     let paymentRequest = "<bitcoin address>"
-    // Select the confirmation speed (required for Bitcoin addresses)
-    let onchainSpeed = OnchainConfirmationSpeed.medium
     // Use Drain to send all available funds
     let payAmount = PayAmount.drain
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: payAmount,
-            onchainSpeed: onchainSpeed
+            payAmount: payAmount
         ))
 
-    // The amount is calculated as balance minus the fee for the selected speed
-    if case let .bitcoinAddress(
-        address: _,
-        feeQuote: _,
-        feeSats: feeSats,
-        selectedSpeed: selectedSpeed
-    ) = prepareResponse.paymentMethod {
-        let drainAmount = prepareResponse.amount
-        print("Drain amount: \(drainAmount) sats")
-        print("Fee for \(selectedSpeed) speed: \(feeSats) sats")
+    // Review the fee quote and drain amount for each confirmation speed
+    if case let .bitcoinAddress(address: _, feeQuote: feeQuote) = prepareResponse.paymentMethod {
+        let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
+        let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
+        let fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
+        print("Drain amount: \(prepareResponse.payAmount)")
+        print("Slow fee: \(slowFeeSats) sats")
+        print("Medium fee: \(mediumFeeSats) sats")
+        print("Fast fee: \(fastFeeSats) sats")
     }
     // ANCHOR_END: prepare-send-payment-drain-onchain
 }

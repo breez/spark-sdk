@@ -61,7 +61,6 @@ async fn test_01_spark_transfer(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -303,12 +302,11 @@ async fn test_03_lightning_invoice_payment(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             pay_amount: sender_amount.map(|a| PayAmount::Bitcoin { amount_sats: a }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
 
-    info!("Payment prepared - amount: {} sats", prepare.amount);
+    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
 
     // The expected payment amount is either from the invoice or what Alice specified
     let expected_amount = invoice_amount_sats
@@ -562,7 +560,6 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -657,7 +654,6 @@ async fn test_06_lightning_timeout_and_wait(
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: expected_amount,
             }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -766,7 +762,6 @@ async fn test_07_spark_invoice(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_invoice.clone(),
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -928,12 +923,11 @@ async fn test_08_lightning_invoice_expiry_secs(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
 
-    info!("Payment prepared - amount: {} sats", prepare.amount);
+    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
 
     // Alice sends the payment
     info!(

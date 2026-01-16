@@ -705,24 +705,11 @@ pub struct SendOnchainSpeedFeeQuote {
     pub l1_broadcast_fee_sat: u64,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::EstimateOnchainSendFeeQuotesRequest)]
-pub struct EstimateOnchainSendFeeQuotesRequest {
-    pub address: String,
-    pub amount_sats: Option<u64>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::EstimateOnchainSendFeeQuotesResponse)]
-pub struct EstimateOnchainSendFeeQuotesResponse {
-    pub fee_quote: SendOnchainFeeQuote,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentMethod)]
 pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
-        fee_sats: u64,
-        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -818,15 +805,13 @@ pub struct LnurlWithdrawResponse {
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
     pub pay_amount: Option<PayAmount>,
-    pub onchain_speed: Option<OnchainConfirmationSpeed>,
     pub conversion_options: Option<ConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u128,
-    pub token_identifier: Option<String>,
+    pub pay_amount: PayAmount,
     pub conversion_estimate: Option<ConversionEstimate>,
 }
 
@@ -839,6 +824,9 @@ pub enum OnchainConfirmationSpeed {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentOptions)]
 pub enum SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,

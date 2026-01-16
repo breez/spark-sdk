@@ -313,7 +313,6 @@ async fn main() -> Result<()> {
                         pay_amount: Some(PayAmount::Bitcoin {
                             amount_sats: receiver_balance,
                         }),
-                        onchain_speed: None,
                         conversion_options: None,
                     })
                     .await?;
@@ -463,7 +462,6 @@ async fn main() -> Result<()> {
                 pay_amount: Some(PayAmount::Bitcoin {
                     amount_sats: payment_spec.amount_sats,
                 }),
-                onchain_speed: None,
                 conversion_options: None,
             })
             .await;
@@ -847,7 +845,6 @@ async fn return_funds_to_sender(
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: amount,
             }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

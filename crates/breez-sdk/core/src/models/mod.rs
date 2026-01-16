@@ -699,8 +699,6 @@ pub enum SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
-        fee_sats: u64,
-        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -748,21 +746,6 @@ impl SendOnchainSpeedFeeQuote {
     pub fn total_fee_sat(&self) -> u64 {
         self.user_fee_sat.saturating_add(self.l1_broadcast_fee_sat)
     }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct EstimateOnchainSendFeeQuotesRequest {
-    /// The Bitcoin address to send to
-    pub address: String,
-    /// The amount to send in satoshis. Omit for drain operations.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub amount_sats: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct EstimateOnchainSendFeeQuotesResponse {
-    pub fee_quote: SendOnchainFeeQuote,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -903,6 +886,25 @@ pub enum PayAmount {
     Drain,
 }
 
+impl PayAmount {
+    /// Create a `PayAmount` from an amount and optional token identifier
+    pub fn from_amount_and_token(
+        amount: u128,
+        token_identifier: Option<String>,
+    ) -> Result<Self, SdkError> {
+        if let Some(token_id) = token_identifier {
+            Ok(PayAmount::Token {
+                amount,
+                token_identifier: token_id,
+            })
+        } else {
+            Ok(PayAmount::Bitcoin {
+                amount_sats: amount.try_into()?,
+            })
+        }
+    }
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize)]
 pub enum OnchainConfirmationSpeed {
@@ -920,10 +922,6 @@ pub struct PrepareSendPaymentRequest {
     /// Use `PayAmount::Drain` to send all funds (only for Bitcoin addresses and LNURL).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub pay_amount: Option<PayAmount>,
-    /// Confirmation speed for on-chain payments.
-    /// Returns an error if provided for non-on-chain payment types.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub onchain_speed: Option<OnchainConfirmationSpeed>,
     /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
@@ -933,18 +931,18 @@ pub struct PrepareSendPaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    /// Amount to send. By default is denominated in sats.
-    /// If a token identifier is provided, the amount will be denominated in the token base units.
-    pub amount: u128,
-    /// The presence of this field indicates that the payment is for a token.
-    /// If empty, it is a Bitcoin payment.
-    pub token_identifier: Option<String>,
+    /// Amount to send.
+    pub pay_amount: PayAmount,
     /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SendPaymentOptions {
+    BitcoinAddress {
+        /// Confirmation speed for the on-chain transaction.
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
     Bolt11Invoice {
         prefer_spark: bool,
 

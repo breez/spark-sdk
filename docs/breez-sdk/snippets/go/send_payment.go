@@ -9,7 +9,7 @@ import (
 func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-lightning-bolt11
 	paymentRequest := "<bolt11 invoice>"
-	// Optionally set the amount you wish the pay the receiver
+	// Optionally set the amount you wish to pay the receiver
 	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
 		AmountSats: 5_000,
 	}
@@ -41,17 +41,14 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-onchain
 	paymentRequest := "<bitcoin address>"
-	// Set the amount you wish the pay the receiver
+	// Set the amount you wish to pay the receiver
 	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
 		AmountSats: 50_000,
 	}
-	// Select the confirmation speed (required for Bitcoin addresses)
-	onchainSpeed := breez_sdk_spark.OnchainConfirmationSpeedMedium
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
 		PayAmount:      &payAmount,
-		OnchainSpeed:   &onchainSpeed,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -59,12 +56,16 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 		return nil, err
 	}
 
-	// If the fees are acceptable, continue to create the Send Payment
+	// Review the fee quote for each confirmation speed
 	switch paymentMethod := response.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodBitcoinAddress:
-		feeSats := paymentMethod.FeeSats
-		selectedSpeed := paymentMethod.SelectedSpeed
-		log.Printf("Fee for %v speed: %v sats", selectedSpeed, feeSats)
+		feeQuote := paymentMethod.FeeQuote
+		slowFeeSats := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
+		mediumFeeSats := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
+		fastFeeSats := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
+		log.Printf("Slow fee: %v sats", slowFeeSats)
+		log.Printf("Medium fee: %v sats", mediumFeeSats)
+		log.Printf("Fast fee: %v sats", fastFeeSats)
 	}
 	// ANCHOR_END: prepare-send-payment-onchain
 	return &response, nil
@@ -73,7 +74,7 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-address
 	paymentRequest := "<spark address>"
-	// Set the amount you wish the pay the receiver
+	// Set the amount you wish to pay the receiver
 	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
 		AmountSats: 50_000,
 	}
@@ -101,7 +102,7 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-invoice
 	paymentRequest := "<spark invoice>"
-	// Optionally set the amount you wish the pay the receiver
+	// Optionally set the amount you wish to pay the receiver
 	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
 		AmountSats: 50_000,
 	}
@@ -186,9 +187,14 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 
 func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-onchain
+	// Select the confirmation speed for the on-chain transaction
+	var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBitcoinAddress{
+		ConfirmationSpeed: breez_sdk_spark.OnchainConfirmationSpeedMedium,
+	}
 	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
+		Options:         &options,
 		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 	response, err := sdk.SendPayment(request)
@@ -220,45 +226,15 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	return &payment, nil
 }
 
-func EstimateOnchainSendFeeQuotes(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.EstimateOnchainSendFeeQuotesResponse, error) {
-	// ANCHOR: estimate-onchain-send-fee-quotes
-	address := "<bitcoin address>"
-	// Optionally set the amount, omit for drain
-	optionalAmountSats := uint64(50_000)
-
-	request := breez_sdk_spark.EstimateOnchainSendFeeQuotesRequest{
-		Address:    address,
-		AmountSats: &optionalAmountSats,
-	}
-	response, err := sdk.EstimateOnchainSendFeeQuotes(request)
-
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
-		return nil, err
-	}
-
-	feeQuote := response.FeeQuote
-	slowFeeQuote := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
-	mediumFeeQuote := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
-	fastFeeQuote := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
-	log.Printf("Slow Fees: %v sats", slowFeeQuote)
-	log.Printf("Medium Fees: %v sats", mediumFeeQuote)
-	log.Printf("Fast Fees: %v sats", fastFeeQuote)
-	// ANCHOR_END: estimate-onchain-send-fee-quotes
-	return &response, nil
-}
-
 func PrepareSendPaymentDrainOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-drain-onchain
 	paymentRequest := "<bitcoin address>"
-	// Select the confirmation speed (required for Bitcoin addresses)
-	onchainSpeed := breez_sdk_spark.OnchainConfirmationSpeedMedium
 	// Use Drain to send all available funds
 	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountDrain{}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
 		PayAmount:      &payAmount,
-		OnchainSpeed:   &onchainSpeed,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -266,14 +242,17 @@ func PrepareSendPaymentDrainOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 		return nil, err
 	}
 
-	// The amount is calculated as balance minus the fee for the selected speed
+	// Review the fee quote and drain amount for each confirmation speed
 	switch paymentMethod := response.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodBitcoinAddress:
-		drainAmount := response.Amount
-		feeSats := paymentMethod.FeeSats
-		selectedSpeed := paymentMethod.SelectedSpeed
-		log.Printf("Drain amount: %v sats", drainAmount)
-		log.Printf("Fee for %v speed: %v sats", selectedSpeed, feeSats)
+		feeQuote := paymentMethod.FeeQuote
+		slowFeeSats := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
+		mediumFeeSats := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
+		fastFeeSats := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
+		log.Printf("Drain amount: %v", response.PayAmount)
+		log.Printf("Slow fee: %v sats", slowFeeSats)
+		log.Printf("Medium fee: %v sats", mediumFeeSats)
+		log.Printf("Fast fee: %v sats", fastFeeSats)
 	}
 	// ANCHOR_END: prepare-send-payment-drain-onchain
 	return &response, nil

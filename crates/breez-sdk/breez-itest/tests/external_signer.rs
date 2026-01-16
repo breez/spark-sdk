@@ -38,7 +38,6 @@ async fn test_external_signer_send_receive(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 100 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

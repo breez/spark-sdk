@@ -90,7 +90,6 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             pay_amount: optional_pay_amount,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -187,7 +186,6 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             pay_amount: optional_pay_amount,
-            onchain_speed: None,
             conversion_options,
         })
         .await?;

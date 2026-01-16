@@ -95,13 +95,6 @@ impl BreezSdk {
         self.inner.lnurl_auth(request_data).await
     }
 
-    pub async fn estimate_onchain_send_fee_quotes(
-        &self,
-        request: EstimateOnchainSendFeeQuotesRequest,
-    ) -> Result<EstimateOnchainSendFeeQuotesResponse, SdkError> {
-        self.inner.estimate_onchain_send_fee_quotes(request).await
-    }
-
     pub async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,

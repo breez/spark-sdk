@@ -81,7 +81,6 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     payAmount: optionalPayAmount,
-    onchainSpeed: undefined,
     conversionOptions: undefined
   })
 
@@ -157,7 +156,6 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
     payAmount: optionalPayAmount,
-    onchainSpeed: undefined,
     conversionOptions
   })
 

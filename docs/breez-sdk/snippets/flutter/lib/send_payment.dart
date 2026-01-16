@@ -4,7 +4,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   String paymentRequest = "<bolt11 invoice>";
-  // Optionally set the amount you wish the pay the receiver
+  // Optionally set the amount you wish to pay the receiver
   PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(5000));
 
   final request = PrepareSendPaymentRequest(
@@ -30,23 +30,24 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-onchain
   String paymentRequest = "<bitcoin address>";
-  // Set the amount you wish the pay the receiver
+  // Set the amount you wish to pay the receiver
   PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
-  // Select the confirmation speed (required for Bitcoin addresses)
-  final onchainSpeed = OnchainConfirmationSpeed.medium;
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: payAmount,
-      onchainSpeed: onchainSpeed);
+      payAmount: payAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
-  // If the fees are acceptable, continue to create the Send Payment
+  // Review the fee quote for each confirmation speed
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
-    final feeSats = paymentMethod.feeSats;
-    final selectedSpeed = paymentMethod.selectedSpeed;
-    print("Fee for $selectedSpeed speed: $feeSats sats");
+    final feeQuote = paymentMethod.feeQuote;
+    final slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
+    final mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
+    final fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
+    print("Slow fee: $slowFeeSats sats");
+    print("Medium fee: $mediumFeeSats sats");
+    print("Fast fee: $fastFeeSats sats");
   }
   // ANCHOR_END: prepare-send-payment-onchain
   return response;
@@ -56,7 +57,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
-  // Set the amount you wish the pay the receiver
+  // Set the amount you wish to pay the receiver
   PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
 
   final request = PrepareSendPaymentRequest(
@@ -78,7 +79,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
-  // Optionally set the amount you wish the pay the receiver
+  // Optionally set the amount you wish to pay the receiver
   PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
 
   final request = PrepareSendPaymentRequest(
@@ -147,9 +148,13 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
 Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
+  // Select the confirmation speed for the on-chain transaction
+  final options = SendPaymentOptions.bitcoinAddress(
+      confirmationSpeed: OnchainConfirmationSpeed.medium);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
       prepareResponse: prepareResponse,
+      options: options,
       idempotencyKey: optionalIdempotencyKey);
   SendPaymentResponse response = await sdk.sendPayment(request: request);
   Payment payment = response.payment;
@@ -171,54 +176,29 @@ Future<SendPaymentResponse> sendPaymentSpark(
   return response;
 }
 
-Future<EstimateOnchainSendFeeQuotesResponse> estimateOnchainSendFeeQuotes(
-    BreezSdk sdk) async {
-  // ANCHOR: estimate-onchain-send-fee-quotes
-  String address = "<bitcoin address>";
-  // Optionally set the amount, omit for drain
-  BigInt? optionalAmountSats = BigInt.from(50000);
-
-  final request = EstimateOnchainSendFeeQuotesRequest(
-      address: address, amountSats: optionalAmountSats);
-  final response = await sdk.estimateOnchainSendFeeQuotes(request: request);
-
-  final feeQuote = response.feeQuote;
-  final slowFeeSats =
-      feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
-  final mediumFeeSats =
-      feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
-  final fastFeeSats =
-      feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
-  print("Slow Fees: $slowFeeSats sats");
-  print("Medium Fees: $mediumFeeSats sats");
-  print("Fast Fees: $fastFeeSats sats");
-  // ANCHOR_END: estimate-onchain-send-fee-quotes
-  return response;
-}
-
 Future<PrepareSendPaymentResponse> prepareSendPaymentDrainOnchain(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-drain-onchain
   String paymentRequest = "<bitcoin address>";
-  // Select the confirmation speed (required for Bitcoin addresses)
-  final onchainSpeed = OnchainConfirmationSpeed.medium;
   // Use Drain to send all available funds
   PayAmount payAmount = PayAmount.drain();
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: payAmount,
-      onchainSpeed: onchainSpeed);
+      payAmount: payAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
-  // The amount is calculated as balance minus the fee for the selected speed
+  // Review the fee quote and drain amount for each confirmation speed
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
-    final drainAmount = response.amount;
-    final feeSats = paymentMethod.feeSats;
-    final selectedSpeed = paymentMethod.selectedSpeed;
-    print("Drain amount: $drainAmount sats");
-    print("Fee for $selectedSpeed speed: $feeSats sats");
+    final feeQuote = paymentMethod.feeQuote;
+    final slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
+    final mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
+    final fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
+    print("Drain amount: ${response.payAmount}");
+    print("Slow fee: $slowFeeSats sats");
+    print("Medium fee: $mediumFeeSats sats");
+    print("Fast fee: $fastFeeSats sats");
   }
   // ANCHOR_END: prepare-send-payment-drain-onchain
   return response;

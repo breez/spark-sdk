@@ -323,15 +323,13 @@ pub struct _PrepareLnurlPayResponse {
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
     pub pay_amount: Option<PayAmount>,
-    pub onchain_speed: Option<OnchainConfirmationSpeed>,
     pub conversion_options: Option<ConversionOptions>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u128,
-    pub token_identifier: Option<String>,
+    pub pay_amount: PayAmount,
     pub conversion_estimate: Option<ConversionEstimate>,
 }
 
@@ -393,24 +391,11 @@ pub struct _SendOnchainSpeedFeeQuote {
     pub l1_broadcast_fee_sat: u64,
 }
 
-#[frb(mirror(EstimateOnchainSendFeeQuotesRequest))]
-pub struct _EstimateOnchainSendFeeQuotesRequest {
-    pub address: String,
-    pub amount_sats: Option<u64>,
-}
-
-#[frb(mirror(EstimateOnchainSendFeeQuotesResponse))]
-pub struct _EstimateOnchainSendFeeQuotesResponse {
-    pub fee_quote: SendOnchainFeeQuote,
-}
-
 #[frb(mirror(SendPaymentMethod))]
 pub enum _SendPaymentMethod {
     BitcoinAddress {
         address: BitcoinAddressDetails,
         fee_quote: SendOnchainFeeQuote,
-        fee_sats: u64,
-        selected_speed: OnchainConfirmationSpeed,
     },
     Bolt11Invoice {
         invoice_details: Bolt11InvoiceDetails,
@@ -431,6 +416,9 @@ pub enum _SendPaymentMethod {
 
 #[frb(mirror(SendPaymentOptions))]
 pub enum _SendPaymentOptions {
+    BitcoinAddress {
+        confirmation_speed: OnchainConfirmationSpeed,
+    },
     Bolt11Invoice {
         prefer_spark: bool,
         completion_timeout_secs: Option<u32>,

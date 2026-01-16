@@ -58,7 +58,6 @@ async fn test_01_spark_idempotency_key(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -224,7 +223,6 @@ async fn test_02_lightning_idempotency_key(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -377,7 +375,6 @@ async fn test_03_bitcoin_idempotency_key(
             pay_amount: Some(PayAmount::Bitcoin {
                 amount_sats: amount,
             }),
-            onchain_speed: Some(OnchainConfirmationSpeed::Fast),
             conversion_options: None,
         })
         .await?;
@@ -520,7 +517,6 @@ async fn test_04_spark_htlc_idempotency_key(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;

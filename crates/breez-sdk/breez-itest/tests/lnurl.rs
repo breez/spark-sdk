@@ -532,7 +532,6 @@ async fn test_06_client_side_zap_receipt(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: invoice.clone(),
             pay_amount: None,
-            onchain_speed: None,
             conversion_options: None,
         })
         .await?;
@@ -989,7 +988,6 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
                 pay_amount: Some(PayAmount::Bitcoin {
                     amount_sats: excess,
                 }),
-                onchain_speed: None,
                 conversion_options: None,
             })
             .await?;

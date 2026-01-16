@@ -10,7 +10,6 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
     let prepare_request = PrepareSendPaymentRequest {
         payment_request,
         pay_amount: Some(pay_amount),
-        onchain_speed: None,
         conversion_options: None,
     };
     let prepare_response = sdk.prepare_send_payment(prepare_request).await?;

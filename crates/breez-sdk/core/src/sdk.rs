@@ -61,9 +61,8 @@ use crate::{
     lnurl::{ListMetadataRequest, LnurlServerClient, PublishZapReceiptRequest},
     logger,
     models::{
-        Config, EstimateOnchainSendFeeQuotesRequest, EstimateOnchainSendFeeQuotesResponse,
-        GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse, Payment,
-        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
+        Config, GetInfoRequest, GetInfoResponse, ListPaymentsRequest, ListPaymentsResponse,
+        Payment, PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentMethod, SendPaymentRequest,
         SendPaymentResponse, SyncWalletRequest, SyncWalletResponse,
     },
@@ -1355,7 +1354,6 @@ impl BreezSdk {
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 pay_amount: Some(PayAmount::Bitcoin { amount_sats }),
-                onchain_speed: None,
                 conversion_options: None,
             })
             .await?;
@@ -1444,8 +1442,9 @@ impl BreezSdk {
                         spark_transfer_fee_sats: None,
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    amount: request.prepare_response.amount_sats.into(),
-                    token_identifier: None,
+                    pay_amount: PayAmount::Bitcoin {
+                        amount_sats: request.prepare_response.amount_sats,
+                    },
                     conversion_estimate: None,
                 },
                 options: None,
@@ -1720,14 +1719,16 @@ impl BreezSdk {
                     )
                     .await?;
 
+                let pay_amount =
+                    PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
                         address: spark_address_details.address.clone(),
                         fee: 0,
-                        token_identifier: token_identifier.clone(),
+                        token_identifier,
                     },
-                    amount,
-                    token_identifier,
+                    pay_amount,
                     conversion_estimate,
                 })
             }
@@ -1745,14 +1746,16 @@ impl BreezSdk {
                     )
                     .await?;
 
+                let pay_amount =
+                    PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
                         spark_invoice_details: spark_invoice_details.clone(),
                         fee: 0,
-                        token_identifier: token_identifier.clone(),
+                        token_identifier,
                     },
-                    amount,
-                    token_identifier,
+                    pay_amount,
                     conversion_estimate,
                 })
             }
@@ -1790,22 +1793,19 @@ impl BreezSdk {
                     )
                     .await?;
 
+                let pay_amount = PayAmount::from_amount_and_token(amount, token_identifier)?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
                         spark_transfer_fee_sats,
                         lightning_fee_sats,
                     },
-                    amount,
-                    token_identifier,
+                    pay_amount,
                     conversion_estimate,
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
-                let selected_speed = request.onchain_speed.clone().ok_or(
-                    SdkError::InvalidInput("onchain_speed is required for Bitcoin address".into()),
-                )?;
-
                 let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
 
                 // For drain, pass None to get drain-specific fees; otherwise pass the amount
@@ -1823,39 +1823,36 @@ impl BreezSdk {
                     .await?
                     .into();
 
-                let fee_sats = match selected_speed {
-                    OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
-                    OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
-                    OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
-                };
-
-                let amount = if is_drain {
-                    let balance_sats = self.spark_wallet.get_balance().await?;
-                    u128::from(balance_sats.saturating_sub(fee_sats))
+                let (pay_amount, conversion_estimate) = if is_drain {
+                    // Drain doesn't support conversion (validated earlier)
+                    (PayAmount::Drain, None)
                 } else {
-                    amount_for_quote
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?
-                        .into()
-                };
-
-                let conversion_estimate = self
-                    .token_converter
+                    let amount: u64 = amount_for_quote
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+                    // For conversion estimate, use fast fee as worst case
+                    let fee_sats_for_estimate = fee_quote.speed_fast.total_fee_sat();
+                    let conversion_estimate = self
+                        .token_converter
                     .validate(
-                        request.conversion_options.as_ref(),
-                        token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(fee_sats)),
+                            request.conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            u128::from(amount).saturating_add(u128::from(fee_sats_for_estimate)),
+                        )
+                        .await?;
+                    (
+                        PayAmount::Bitcoin {
+                            amount_sats: amount,
+                        },
+                        conversion_estimate,
                     )
-                    .await?;
+                };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::BitcoinAddress {
                         address: withdrawal_address.clone(),
                         fee_quote,
-                        fee_sats,
-                        selected_speed,
                     },
-                    amount,
-                    token_identifier,
+                    pay_amount,
                     conversion_estimate,
                 })
             }
@@ -1863,24 +1860,6 @@ impl BreezSdk {
                 "Unsupported payment method".to_string(),
             )),
         }
-    }
-
-    /// Estimate on-chain send fees before calling `prepare_send_payment`.
-    ///
-    /// The `amount_sats` field is optional - omit it for drain operations.
-    ///
-    /// Returns `EstimateOnchainSendFeeQuotesResponse` with fees for slow, medium, and fast speeds.
-    pub async fn estimate_onchain_send_fee_quotes(
-        &self,
-        request: EstimateOnchainSendFeeQuotesRequest,
-    ) -> Result<EstimateOnchainSendFeeQuotesResponse, SdkError> {
-        let fee_quote = self
-            .spark_wallet
-            .fetch_coop_exit_fee_quote(&request.address, request.amount_sats)
-            .await?;
-        Ok(EstimateOnchainSendFeeQuotesResponse {
-            fee_quote: fee_quote.into(),
-        })
     }
 
     pub async fn send_payment(
@@ -2286,9 +2265,16 @@ impl BreezSdk {
         mut suppress_payment_event: bool,
         amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
+        // Extract token_identifier from pay_amount
+        let token_identifier = match &request.prepare_response.pay_amount {
+            PayAmount::Token {
+                token_identifier, ..
+            } => Some(token_identifier.clone()),
+            _ => None,
+        };
+
         // Check the idempotency key is valid and payment doesn't already exist
-        if request.idempotency_key.is_some() && request.prepare_response.token_identifier.is_some()
-        {
+        if request.idempotency_key.is_some() && token_identifier.is_some() {
             return Err(SdkError::InvalidInput(
                 "Idempotency key is not supported for token payments".to_string(),
             ));
@@ -2342,6 +2328,20 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
+        // Extract amount and token_identifier from pay_amount
+        let (amount, token_identifier) = match &request.prepare_response.pay_amount {
+            PayAmount::Bitcoin { amount_sats } => (u128::from(*amount_sats), None),
+            PayAmount::Token {
+                amount,
+                token_identifier,
+            } => (*amount, Some(token_identifier.clone())),
+            PayAmount::Drain => {
+                return Err(SdkError::InvalidInput(
+                    "Drain not supported with token conversion".to_string(),
+                ));
+            }
+        };
+
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =
             match &request.prepare_response.payment_method {
@@ -2363,8 +2363,8 @@ impl BreezSdk {
                         .convert(
                             conversion_options,
                             &conversion_purpose,
-                            request.prepare_response.token_identifier.as_ref(),
-                            request.prepare_response.amount,
+                            token_identifier.as_ref(),
+                            amount,
                         )
                         .await?;
                     (res, conversion_purpose)
@@ -2392,8 +2392,8 @@ impl BreezSdk {
                         .convert(
                             conversion_options,
                             &conversion_purpose,
-                            request.prepare_response.token_identifier.as_ref(),
-                            request.prepare_response.amount,
+                            token_identifier.as_ref(),
+                            amount,
                         )
                         .await?;
                     (res, conversion_purpose)
@@ -2414,22 +2414,24 @@ impl BreezSdk {
                             *lightning_fee_sats,
                             request,
                             &conversion_purpose,
+                            amount,
+                            token_identifier.as_ref(),
                         )
                         .await?;
                     (res, conversion_purpose)
                 }
-                SendPaymentMethod::BitcoinAddress {
-                    address, fee_sats, ..
-                } => {
+                SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                     let conversion_purpose = ConversionPurpose::OngoingPayment {
                         payment_request: address.address.clone(),
                     };
                     let res = self
                         .convert_token_for_bitcoin_address(
                             conversion_options,
-                            *fee_sats,
+                            fee_quote,
                             request,
                             &conversion_purpose,
+                            amount,
+                            token_identifier.as_ref(),
                         )
                         .await?;
                     (res, conversion_purpose)
@@ -2612,6 +2614,16 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
+        // Extract the amount from pay_amount
+        let amount = match &request.prepare_response.pay_amount {
+            PayAmount::Bitcoin { amount_sats } => u128::from(*amount_sats),
+            PayAmount::Token { amount, .. } => *amount,
+            PayAmount::Drain => {
+                // For drain, amount is computed at send time in send_bitcoin_address
+                0
+            }
+        };
+
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress {
                 address,
@@ -2621,7 +2633,7 @@ impl BreezSdk {
                 self.send_spark_address(
                     address,
                     token_identifier.clone(),
-                    request.prepare_response.amount,
+                    amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
                 )
@@ -2631,7 +2643,7 @@ impl BreezSdk {
                 spark_invoice_details,
                 ..
             } => {
-                self.send_spark_invoice(&spark_invoice_details.invoice, request)
+                self.send_spark_invoice(&spark_invoice_details.invoice, request, amount)
                     .await
             }
             SendPaymentMethod::Bolt11Invoice {
@@ -2646,17 +2658,12 @@ impl BreezSdk {
                     *lightning_fee_sats,
                     request,
                     amount_override,
+                    amount,
                 ))
                 .await
             }
-            SendPaymentMethod::BitcoinAddress {
-                address,
-                fee_quote,
-                selected_speed,
-                ..
-            } => {
-                self.send_bitcoin_address(address, fee_quote, selected_speed, request)
-                    .await
+            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                self.send_bitcoin_address(address, fee_quote, request).await
             }
         }
     }
@@ -2782,6 +2789,7 @@ impl BreezSdk {
         &self,
         invoice: &str,
         request: &SendPaymentRequest,
+        amount: u128,
     ) -> Result<SendPaymentResponse, SdkError> {
         let transfer_id = request
             .idempotency_key
@@ -2791,7 +2799,7 @@ impl BreezSdk {
 
         let payment = match self
             .spark_wallet
-            .fulfill_spark_invoice(invoice, Some(request.prepare_response.amount), transfer_id)
+            .fulfill_spark_invoice(invoice, Some(amount), transfer_id)
             .await?
         {
             spark_wallet::FulfillSparkInvoiceResult::Transfer(wallet_transfer) => {
@@ -2820,6 +2828,7 @@ impl BreezSdk {
         lightning_fee_sats: u64,
         request: &SendPaymentRequest,
         amount_override: Option<u64>,
+        amount: u128,
     ) -> Result<SendPaymentResponse, SdkError> {
         let amount_to_send = match amount_override {
             // Amount override provided (e.g., for drain overpayment)
@@ -2828,7 +2837,7 @@ impl BreezSdk {
                 // We are not sending amount in case the invoice contains it.
                 Some(_) => None,
                 // We are sending amount for zero amount invoice
-                None => Some(request.prepare_response.amount),
+                None => Some(amount),
             },
         };
         let (prefer_spark, completion_timeout_secs) = match request.options {
@@ -2865,7 +2874,7 @@ impl BreezSdk {
                 let ssp_id = lightning_payment.id.clone();
                 let payment = Payment::from_lightning(
                     lightning_payment,
-                    request.prepare_response.amount,
+                    amount,
                     payment_response.transfer.id.to_string(),
                 )?;
                 self.poll_lightning_send_payment(&payment, ssp_id);
@@ -2900,10 +2909,44 @@ impl BreezSdk {
         &self,
         address: &BitcoinAddressDetails,
         fee_quote: &SendOnchainFeeQuote,
-        selected_speed: &OnchainConfirmationSpeed,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let exit_speed: ExitSpeed = selected_speed.clone().into();
+        // Extract confirmation speed from options
+        let confirmation_speed = match &request.options {
+            Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                confirmation_speed.clone()
+            }
+            None => OnchainConfirmationSpeed::Fast, // Default to fast
+            _ => {
+                return Err(SdkError::InvalidInput(
+                    "Invalid options for Bitcoin address payment".to_string(),
+                ));
+            }
+        };
+
+        let exit_speed: ExitSpeed = confirmation_speed.clone().into();
+
+        // Calculate fee based on selected speed
+        let fee_sats = match confirmation_speed {
+            OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+            OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
+            OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
+        };
+
+        // Compute amount - for drain, calculate at send time
+        let amount_sats: u64 = match &request.prepare_response.pay_amount {
+            PayAmount::Bitcoin { amount_sats } => *amount_sats,
+            PayAmount::Drain => {
+                let balance_sats = self.spark_wallet.get_balance().await?;
+                balance_sats.saturating_sub(fee_sats)
+            }
+            PayAmount::Token { .. } => {
+                return Err(SdkError::InvalidInput(
+                    "Token payments not supported for Bitcoin address".to_string(),
+                ));
+            }
+        };
+
         let transfer_id = request
             .idempotency_key
             .as_ref()
@@ -2913,7 +2956,7 @@ impl BreezSdk {
             .spark_wallet
             .withdraw(
                 &address.address,
-                Some(request.prepare_response.amount.try_into()?),
+                Some(amount_sats),
                 exit_speed,
                 fee_quote.clone().into(),
                 transfer_id,
@@ -3133,6 +3176,7 @@ impl BreezSdk {
         Ok(address_info)
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn convert_token_for_bolt11_invoice(
         &self,
         conversion_options: &ConversionOptions,
@@ -3140,6 +3184,8 @@ impl BreezSdk {
         lightning_fee_sats: u64,
         request: &SendPaymentRequest,
         conversion_purpose: &ConversionPurpose,
+        amount: u128,
+        token_identifier: Option<&String>,
     ) -> Result<TokenConversionResponse, SdkError> {
         // Determine the fee to be used based on preference
         let fee_sats = match request.options {
@@ -3152,16 +3198,13 @@ impl BreezSdk {
             _ => lightning_fee_sats,
         };
         // The absolute minimum amount out is the lightning invoice amount plus fee
-        let min_amount_out = request
-            .prepare_response
-            .amount
-            .saturating_add(u128::from(fee_sats));
+        let min_amount_out = amount.saturating_add(u128::from(fee_sats));
 
         self.token_converter
             .convert(
                 conversion_options,
                 conversion_purpose,
-                request.prepare_response.token_identifier.as_ref(),
+                token_identifier,
                 min_amount_out,
             )
             .await
@@ -3171,21 +3214,32 @@ impl BreezSdk {
     async fn convert_token_for_bitcoin_address(
         &self,
         conversion_options: &ConversionOptions,
-        fee_sats: u64,
+        fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
         conversion_purpose: &ConversionPurpose,
+        amount: u128,
+        token_identifier: Option<&String>,
     ) -> Result<TokenConversionResponse, SdkError> {
+        // Derive fee_sats from request.options confirmation speed
+        let fee_sats = match &request.options {
+            Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                match confirmation_speed {
+                    OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
+                    OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
+                    OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+                }
+            }
+            _ => fee_quote.speed_fast.total_fee_sat(), // Default to fast
+        };
+
         // The absolute minimum amount out is the amount plus fee
-        let min_amount_out = request
-            .prepare_response
-            .amount
-            .saturating_add(u128::from(fee_sats));
+        let min_amount_out = amount.saturating_add(u128::from(fee_sats));
 
         self.token_converter
             .convert(
                 conversion_options,
                 conversion_purpose,
-                request.prepare_response.token_identifier.as_ref(),
+                token_identifier,
                 min_amount_out,
             )
             .await

@@ -2,7 +2,6 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
-    EstimateOnchainSendFeeQuotesRequest,
     OnchainConfirmationSpeed,
     PayAmount,
     PrepareSendPaymentRequest,
@@ -18,7 +17,7 @@ from breez_sdk_spark import (
 async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-lightning-bolt11
     payment_request = "<bolt11 invoice>"
-    # Optionally set the amount you wish the pay the receiver
+    # Optionally set the amount you wish to pay the receiver
     optional_pay_amount = PayAmount.BITCOIN(amount_sats=5_000)
     try:
         request = PrepareSendPaymentRequest(
@@ -48,25 +47,35 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
 async def prepare_send_payment_onchain(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-onchain
     payment_request = "<bitcoin address>"
-    # Set the amount you wish the pay the receiver
+    # Set the amount you wish to pay the receiver
     pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
-    # Select the confirmation speed (required for Bitcoin addresses)
-    onchain_speed = OnchainConfirmationSpeed.MEDIUM
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             pay_amount=pay_amount,
-            onchain_speed=onchain_speed,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
-        # If the fees are acceptable, continue to create the Send Payment
+        # Review the fee quote for each confirmation speed
         if isinstance(
             prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
         ):
-            fee_sats = prepare_response.payment_method.fee_sats
-            selected_speed = prepare_response.payment_method.selected_speed
-            logging.debug(f"Fee for {selected_speed} speed: {fee_sats} sats")
+            fee_quote = prepare_response.payment_method.fee_quote
+            slow_fee_sats = (
+                fee_quote.speed_slow.user_fee_sat
+                + fee_quote.speed_slow.l1_broadcast_fee_sat
+            )
+            medium_fee_sats = (
+                fee_quote.speed_medium.user_fee_sat
+                + fee_quote.speed_medium.l1_broadcast_fee_sat
+            )
+            fast_fee_sats = (
+                fee_quote.speed_fast.user_fee_sat
+                + fee_quote.speed_fast.l1_broadcast_fee_sat
+            )
+            logging.debug(f"Slow fee: {slow_fee_sats} sats")
+            logging.debug(f"Medium fee: {medium_fee_sats} sats")
+            logging.debug(f"Fast fee: {fast_fee_sats} sats")
     except Exception as error:
         logging.error(error)
         raise
@@ -76,7 +85,7 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
 async def prepare_send_payment_spark_address(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-address
     payment_request = "<spark address>"
-    # Set the amount you wish the pay the receiver
+    # Set the amount you wish to pay the receiver
     pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
     try:
         request = PrepareSendPaymentRequest(
@@ -98,7 +107,7 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
 async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-invoice
     payment_request = "<spark invoice>"
-    # Optionally set the amount you wish the pay the receiver
+    # Optionally set the amount you wish to pay the receiver
     optional_pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
     try:
         request = PrepareSendPaymentRequest(
@@ -179,9 +188,14 @@ async def send_payment_onchain(
 ):
     # ANCHOR: send-payment-onchain
     try:
+        # Select the confirmation speed for the on-chain transaction
+        options = SendPaymentOptions.BITCOIN_ADDRESS(
+            confirmation_speed=OnchainConfirmationSpeed.MEDIUM
+        )
         optional_idempotency_key = "<idempotency key uuid>"
         request = SendPaymentRequest(
             prepare_response=prepare_response,
+            options=options,
             idempotency_key=optional_idempotency_key,
         )
         send_response = await sdk.send_payment(request=request)
@@ -209,64 +223,39 @@ async def send_payment_spark(
     # ANCHOR_END: send-payment-spark
 
 
-async def estimate_onchain_send_fee_quotes(sdk: BreezSdk):
-    # ANCHOR: estimate-onchain-send-fee-quotes
-    address = "<bitcoin address>"
-    # Optionally set the amount, omit for drain
-    optional_amount_sats = 50_000
-    try:
-        request = EstimateOnchainSendFeeQuotesRequest(
-            address=address,
-            amount_sats=optional_amount_sats,
-        )
-        response = await sdk.estimate_onchain_send_fee_quotes(request=request)
-
-        fee_quote = response.fee_quote
-        slow_fee_sats = (
-            fee_quote.speed_slow.user_fee_sat
-            + fee_quote.speed_slow.l1_broadcast_fee_sat
-        )
-        medium_fee_sats = (
-            fee_quote.speed_medium.user_fee_sat
-            + fee_quote.speed_medium.l1_broadcast_fee_sat
-        )
-        fast_fee_sats = (
-            fee_quote.speed_fast.user_fee_sat
-            + fee_quote.speed_fast.l1_broadcast_fee_sat
-        )
-        logging.debug(f"Slow Fees: {slow_fee_sats} sats")
-        logging.debug(f"Medium Fees: {medium_fee_sats} sats")
-        logging.debug(f"Fast Fees: {fast_fee_sats} sats")
-    except Exception as error:
-        logging.error(error)
-        raise
-    # ANCHOR_END: estimate-onchain-send-fee-quotes
-
-
 async def prepare_send_payment_drain_onchain(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-drain-onchain
     payment_request = "<bitcoin address>"
-    # Select the confirmation speed (required for Bitcoin addresses)
-    onchain_speed = OnchainConfirmationSpeed.MEDIUM
     # Use Drain to send all available funds
     pay_amount = PayAmount.DRAIN()
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
             pay_amount=pay_amount,
-            onchain_speed=onchain_speed,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
-        # The amount is calculated as balance minus the fee for the selected speed
+        # Review the fee quote and drain amount for each confirmation speed
         if isinstance(
             prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
         ):
-            drain_amount = prepare_response.amount
-            fee_sats = prepare_response.payment_method.fee_sats
-            selected_speed = prepare_response.payment_method.selected_speed
-            logging.debug(f"Drain amount: {drain_amount} sats")
-            logging.debug(f"Fee for {selected_speed} speed: {fee_sats} sats")
+            fee_quote = prepare_response.payment_method.fee_quote
+            slow_fee_sats = (
+                fee_quote.speed_slow.user_fee_sat
+                + fee_quote.speed_slow.l1_broadcast_fee_sat
+            )
+            medium_fee_sats = (
+                fee_quote.speed_medium.user_fee_sat
+                + fee_quote.speed_medium.l1_broadcast_fee_sat
+            )
+            fast_fee_sats = (
+                fee_quote.speed_fast.user_fee_sat
+                + fee_quote.speed_fast.l1_broadcast_fee_sat
+            )
+            logging.debug(f"Drain amount: {prepare_response.pay_amount}")
+            logging.debug(f"Slow fee: {slow_fee_sats} sats")
+            logging.debug(f"Medium fee: {medium_fee_sats} sats")
+            logging.debug(f"Fast fee: {fast_fee_sats} sats")
     except Exception as error:
         logging.error(error)
         raise
