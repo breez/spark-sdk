@@ -17,3 +17,4 @@ turboModule:
   ts: src
 noOverwrite:
   - "android/src/main/java/**/BreezSdkSparkReactNativePackage.kt"
+  - "android/build.gradle"
