@@ -86,6 +86,31 @@ class IssuingTokens {
         // ANCHOR_END: burn-token
     }
 
+    suspend fun listMintBurnPayments() {
+        // ANCHOR: list-mint-burn-payments
+        // Provide one or multiple of the following filters to
+        // the `paymentDetailsFilter` field when listing payments
+        val paymentDetailsTransferFilter =
+                PaymentDetailsFilter.Token(
+                        txType = TokenTransactionType.TRANSFER,
+                        txHash = null,
+                        conversionRefundNeeded = null
+                )
+        val paymentDetailsMintFilter =
+                PaymentDetailsFilter.Token(
+                        txType = TokenTransactionType.MINT,
+                        txHash = null,
+                        conversionRefundNeeded = null
+                )
+        val paymentDetailsBurnFilter =
+                PaymentDetailsFilter.Token(
+                        txType = TokenTransactionType.BURN,
+                        txHash = null,
+                        conversionRefundNeeded = null
+                )
+        // ANCHOR_END: list-mint-burn-payments
+    }
+
     suspend fun getTokenMetadata(tokenIssuer: TokenIssuer) {
         // ANCHOR: get-token-metadata
         try {

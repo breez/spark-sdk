@@ -69,6 +69,24 @@ Future<Payment> burnTokens(TokenIssuer tokenIssuer) async {
   return payment;
 }
 
+Future<List<PaymentDetailsFilter>> listMintBurnPayments(BreezSdk sdk) async {
+  // ANCHOR: list-mint-burn-payments
+  // Provide one or multiple of the following filters to
+  // the `paymentDetailsFilter` field when listing payments
+  PaymentDetailsFilter paymentDetailsTransferFilter =
+      PaymentDetailsFilter.token(txType: TokenTransactionType.transfer);
+  PaymentDetailsFilter paymentDetailsMintFilter =
+      PaymentDetailsFilter.token(txType: TokenTransactionType.mint);
+  PaymentDetailsFilter paymentDetailsBurnFilter =
+      PaymentDetailsFilter.token(txType: TokenTransactionType.burn);
+  // ANCHOR_END: list-mint-burn-payments
+  return [
+    paymentDetailsTransferFilter,
+    paymentDetailsMintFilter,
+    paymentDetailsBurnFilter
+  ];
+}
+
 Future<TokenMetadata> getTokenMetadata(TokenIssuer tokenIssuer) async {
   // ANCHOR: get-token-metadata
   TokenBalance tokenBalance = await tokenIssuer.getIssuerTokenBalance();
