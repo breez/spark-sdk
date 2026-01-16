@@ -48,5 +48,20 @@ namespace BreezSdkSnippets
             };
             // ANCHOR_END: optimization-configuration
         }
+
+        void ConfigureStableBalance()
+        {
+            // ANCHOR: stable-balance-config
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                // Enable stable balance with auto-conversion to a specific token
+                stableBalanceConfig = new StableBalanceConfig(
+                    tokenIdentifier: "<token_identifier>",
+                    thresholdSats: 10000,
+                    maxSlippageBps: 100
+                )
+            };
+            // ANCHOR_END: stable-balance-config
+        }
     }
 }

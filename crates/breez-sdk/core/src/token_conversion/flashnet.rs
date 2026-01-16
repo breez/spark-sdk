@@ -9,7 +9,7 @@ use flashnet::{
 use spark_wallet::{ListTokenTransactionsRequest, ListTransfersRequest, SparkWallet, TransferId};
 use tokio::{
     select,
-    sync::{broadcast, watch},
+    sync::{Mutex, OnceCell, broadcast, watch},
 };
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, warn};
@@ -21,8 +21,9 @@ use crate::{
 };
 
 use super::{
-    ConversionError, ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose,
-    ConversionStatus, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS, FetchConversionLimitsRequest,
+    AutoConversionConfig, ConversionAmount, ConversionError, ConversionEstimate, ConversionGuard,
+    ConversionInfo, ConversionOptions, ConversionPurpose, ConversionStatus, ConversionType,
+    DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS, FetchConversionLimitsRequest,
     FetchConversionLimitsResponse, TokenConversionPool, TokenConversionResponse, TokenConverter,
 };
 
@@ -33,6 +34,12 @@ pub(crate) struct FlashnetTokenConverter {
     spark_wallet: Arc<SparkWallet>,
     network: Network,
     refund_trigger: broadcast::Sender<()>,
+    /// Lock to prevent concurrent conversions (e.g., auto-conversion racing with payment conversion)
+    conversion_lock: Arc<Mutex<()>>,
+    /// Configuration for auto-conversion
+    auto_conversion_config: Option<AutoConversionConfig>,
+    /// Cached effective threshold for auto-conversion
+    effective_threshold: OnceCell<u64>,
 }
 
 impl FlashnetTokenConverter {
@@ -45,11 +52,13 @@ impl FlashnetTokenConverter {
     /// * `spark_wallet` - Spark wallet for transfer/transaction lookups
     /// * `network` - The network configuration
     /// * `shutdown_receiver` - Watch receiver to signal shutdown of the refunder task
+    /// * `auto_conversion_config` - Optional configuration for auto-conversion of sats to stable tokens
     pub fn new(
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
         network: Network,
         shutdown_receiver: watch::Receiver<()>,
+        auto_conversion_config: Option<AutoConversionConfig>,
     ) -> Self {
         let flashnet_client = Arc::new(FlashnetClient::new(
             FlashnetConfig::default_config(network.into()),
@@ -65,6 +74,9 @@ impl FlashnetTokenConverter {
             spark_wallet,
             network,
             refund_trigger: refund_trigger.clone(),
+            conversion_lock: Arc::new(Mutex::new(())),
+            auto_conversion_config,
+            effective_threshold: OnceCell::new(),
         };
 
         // Spawn the background refunder task
@@ -515,106 +527,107 @@ impl FlashnetTokenConverter {
 
         Ok((sent_payment_id, received_payment_id))
     }
+
+    /// Gets or initializes the effective threshold for auto-conversion.
+    ///
+    /// On first call, fetches conversion limits and computes the effective threshold
+    /// as `max(user_threshold, min_from_amount)`. Subsequent calls return the cached value.
+    async fn get_or_init_threshold(
+        &self,
+        config: &AutoConversionConfig,
+    ) -> Result<u64, ConversionError> {
+        // Return cached value if already initialized
+        if let Some(&threshold) = self.effective_threshold.get() {
+            return Ok(threshold);
+        }
+
+        // Fetch limits and compute effective threshold
+        let limits = self
+            .fetch_limits(&FetchConversionLimitsRequest {
+                conversion_type: ConversionType::FromBitcoin,
+                token_identifier: Some(config.token_identifier.clone()),
+            })
+            .await?;
+
+        let min_from_amount =
+            u64::try_from(limits.min_from_amount.unwrap_or(0)).unwrap_or(u64::MAX);
+
+        let threshold = match config.threshold_sats {
+            Some(t) if t >= min_from_amount => t,
+            Some(_) | None => min_from_amount,
+        };
+
+        // Store in the effective threshold
+        let _ = self.effective_threshold.set(threshold);
+        info!("Auto-conversion effective threshold initialized: {threshold} sats");
+
+        Ok(threshold)
+    }
 }
 
 #[macros::async_trait]
 impl TokenConverter for FlashnetTokenConverter {
+    async fn auto_convert(&self, balance_sats: u64) -> Result<bool, ConversionError> {
+        let Some(config) = &self.auto_conversion_config else {
+            return Ok(false); // Not configured
+        };
+
+        // Try to acquire the conversion lock without blocking.
+        // If another conversion is in progress (e.g., token-to-bitcoin for a payment),
+        // skip auto-conversion to avoid racing with it.
+        let Ok(guard) = Arc::clone(&self.conversion_lock).try_lock_owned() else {
+            debug!("Auto-conversion skipped: another conversion is in progress");
+            return Ok(false);
+        };
+
+        // Lazy init: fetch limits on first call, use cached value thereafter
+        let threshold = self.get_or_init_threshold(config).await?;
+
+        if balance_sats < threshold {
+            debug!(
+                "Auto-conversion skipped: balance {} < threshold {}",
+                balance_sats, threshold
+            );
+            return Ok(false);
+        }
+
+        info!(
+            "Auto-conversion triggered: converting {} sats to {}",
+            balance_sats, config.token_identifier
+        );
+
+        let options = ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: config.max_slippage_bps,
+            completion_timeout_secs: None,
+        };
+
+        // Use convert_with_guard to pass our already-acquired guard
+        let _guard = self
+            .convert_with_guard(
+                guard,
+                &options,
+                &ConversionPurpose::AutoConversion,
+                Some(&config.token_identifier),
+                ConversionAmount::AmountIn(u128::from(balance_sats)),
+            )
+            .await?;
+
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_lines)]
     async fn convert(
         &self,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
-        min_amount_out: u128,
-    ) -> Result<TokenConversionResponse, ConversionError> {
-        let conversion_pool = self
-            .get_conversion_pool(options, token_identifier, min_amount_out)
-            .await?;
-
-        let conversion_estimate = self
-            .estimate_internal(&conversion_pool, options, min_amount_out)
-            .await?
-            .ok_or(ConversionError::ConversionFailed(
-                "No conversion estimate available".to_string(),
-            ))?;
-
-        // Execute the conversion
-        let pool_id = conversion_pool.pool.lp_public_key;
-        let response_res = self
-            .flashnet_client
-            .execute_swap(ExecuteSwapRequest {
-                asset_in_address: conversion_pool.asset_in_address.clone(),
-                asset_out_address: conversion_pool.asset_out_address.clone(),
-                pool_id,
-                amount_in: conversion_estimate.amount,
-                max_slippage_bps: options
-                    .max_slippage_bps
-                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
-                min_amount_out,
-                integrator_fee_rate_bps: None,
-                integrator_public_key: None,
-            })
-            .await;
-
-        match response_res {
-            Ok(response) => {
-                info!(
-                    "Conversion executed: accepted {}, error {:?}",
-                    response.accepted, response.error
-                );
-                let (sent_payment_id, received_payment_id) = self
-                    .update_payment_conversion_info(
-                        &pool_id,
-                        response.transfer_id,
-                        response.outbound_transfer_id,
-                        response.refund_transfer_id,
-                        response.fee_amount,
-                        purpose,
-                    )
-                    .await?;
-
-                if let Some(received_payment_id) = received_payment_id
-                    && response.accepted
-                {
-                    Ok(TokenConversionResponse {
-                        sent_payment_id,
-                        received_payment_id,
-                    })
-                } else {
-                    let error_message = response
-                        .error
-                        .unwrap_or("Conversion not accepted".to_string());
-                    Err(ConversionError::ConversionFailed(format!(
-                        "Convert token failed, refund in progress: {error_message}",
-                    )))
-                }
-            }
-            Err(e) => {
-                error!("Convert token failed: {e:?}");
-                if let FlashnetError::Execution {
-                    transaction_identifier: Some(transaction_identifier),
-                    source,
-                } = &e
-                {
-                    let _ = self
-                        .update_payment_conversion_info(
-                            &pool_id,
-                            transaction_identifier.clone(),
-                            None,
-                            None,
-                            None,
-                            purpose,
-                        )
-                        .await;
-                    let _ = self.refund_trigger.send(());
-                    Err(ConversionError::ConversionFailed(format!(
-                        "Convert token failed, refund pending: {}",
-                        *source.clone()
-                    )))
-                } else {
-                    Err(e.into())
-                }
-            }
-        }
+        amount: ConversionAmount,
+    ) -> Result<ConversionGuard, ConversionError> {
+        // Acquire lock to prevent concurrent conversions
+        let guard = Arc::clone(&self.conversion_lock).lock_owned().await;
+        self.convert_with_guard(guard, options, purpose, token_identifier, amount)
+            .await
     }
 
     async fn validate(
@@ -655,5 +668,151 @@ impl TokenConverter for FlashnetTokenConverter {
             min_from_amount: min_amounts.asset_in_min,
             min_to_amount: min_amounts.asset_out_min,
         })
+    }
+}
+
+impl FlashnetTokenConverter {
+    /// Internal conversion implementation that accepts a pre-acquired guard.
+    /// This allows `auto_convert` to use `try_lock` to skip if another conversion is in progress.
+    #[allow(clippy::too_many_lines)]
+    async fn convert_with_guard(
+        &self,
+        guard: tokio::sync::OwnedMutexGuard<()>,
+        options: &ConversionOptions,
+        purpose: &ConversionPurpose,
+        token_identifier: Option<&String>,
+        amount: ConversionAmount,
+    ) -> Result<ConversionGuard, ConversionError> {
+        // Determine amount_in and min_amount_out based on ConversionAmount variant
+        let (amount_in, min_amount_out) = match amount {
+            ConversionAmount::MinAmountOut(min_out) => {
+                // Existing flow: calculate amount_in from min_amount_out
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, min_out)
+                    .await?;
+                let estimate = self
+                    .estimate_internal(&conversion_pool, options, min_out)
+                    .await?
+                    .ok_or(ConversionError::ConversionFailed(
+                        "No conversion estimate available".to_string(),
+                    ))?;
+                (estimate.amount, min_out)
+            }
+            ConversionAmount::AmountIn(amount_in) => {
+                // Auto-conversion flow: we have the input, simulate to get expected output
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, 0)
+                    .await?;
+
+                let simulate_response = self
+                    .flashnet_client
+                    .simulate_swap(SimulateSwapRequest {
+                        asset_in_address: conversion_pool.asset_in_address.clone(),
+                        asset_out_address: conversion_pool.asset_out_address.clone(),
+                        pool_id: conversion_pool.pool.lp_public_key,
+                        amount_in,
+                        integrator_bps: None,
+                    })
+                    .await?;
+
+                // Apply slippage tolerance to get minimum acceptable output
+                let max_slippage = options
+                    .max_slippage_bps
+                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS);
+                let min_out = simulate_response
+                    .amount_out
+                    .saturating_mul(10_000u128.saturating_sub(u128::from(max_slippage)))
+                    .saturating_div(10_000);
+
+                (amount_in, min_out)
+            }
+        };
+
+        // Get the conversion pool for execution
+        let conversion_pool = self
+            .get_conversion_pool(options, token_identifier, min_amount_out)
+            .await?;
+        let pool_id = conversion_pool.pool.lp_public_key;
+
+        // Execute the conversion
+        let response_res = self
+            .flashnet_client
+            .execute_swap(ExecuteSwapRequest {
+                asset_in_address: conversion_pool.asset_in_address.clone(),
+                asset_out_address: conversion_pool.asset_out_address.clone(),
+                pool_id,
+                amount_in,
+                max_slippage_bps: options
+                    .max_slippage_bps
+                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
+                min_amount_out,
+                integrator_fee_rate_bps: None,
+                integrator_public_key: None,
+            })
+            .await;
+
+        match response_res {
+            Ok(response) => {
+                info!(
+                    "Conversion executed: accepted {}, error {:?}",
+                    response.accepted, response.error
+                );
+                let (sent_payment_id, received_payment_id) = self
+                    .update_payment_conversion_info(
+                        &pool_id,
+                        response.transfer_id,
+                        response.outbound_transfer_id,
+                        response.refund_transfer_id,
+                        response.fee_amount,
+                        purpose,
+                    )
+                    .await?;
+
+                if let Some(received_payment_id) = received_payment_id
+                    && response.accepted
+                {
+                    Ok(ConversionGuard::new(
+                        guard,
+                        TokenConversionResponse {
+                            sent_payment_id,
+                            received_payment_id,
+                        },
+                    ))
+                } else {
+                    let error_message = response
+                        .error
+                        .unwrap_or("Conversion not accepted".to_string());
+                    Err(ConversionError::ConversionFailed(format!(
+                        "Convert token failed, refund in progress: {error_message}",
+                    )))
+                }
+            }
+            Err(e) => {
+                error!("Convert token failed: {e:?}");
+                if let FlashnetError::Execution {
+                    transaction_identifier: Some(transaction_identifier),
+                    source,
+                } = &e
+                {
+                    let _ = self
+                        .update_payment_conversion_info(
+                            &pool_id,
+                            transaction_identifier.clone(),
+                            None,
+                            None,
+                            None,
+                            purpose,
+                        )
+                        .await;
+                    let _ = self.refund_trigger.send(());
+                    Err(ConversionError::ConversionFailed(format!(
+                        "Convert token failed, refund pending: {}",
+                        *source.clone()
+                    )))
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
     }
 }

@@ -52,7 +52,7 @@ use crate::{
     PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest, RefundDepositResponse,
     RegisterLightningAddressRequest, SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem,
     SignMessageRequest, SignMessageResponse, SparkHtlcOptions, SparkInvoiceDetails,
-    TokenConversionResponse, UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
+    UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -71,7 +71,10 @@ use crate::{
         UpdateDepositPayload,
     },
     sync::SparkSyncService,
-    token_conversion::{DEFAULT_CONVERSION_TIMEOUT_SECS, FlashnetTokenConverter, TokenConverter},
+    token_conversion::{
+        ConversionAmount, ConversionGuard, DEFAULT_CONVERSION_TIMEOUT_SECS, FlashnetTokenConverter,
+        TokenConverter,
+    },
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
         run_with_shutdown,
@@ -250,6 +253,7 @@ pub fn default_config(network: Network) -> Config {
             auto_enabled: true,
             multiplicity: 1,
         },
+        stable_balance_config: None,
     }
 }
 
@@ -324,6 +328,7 @@ impl BreezSdk {
             Arc::clone(&params.spark_wallet),
             params.config.network,
             params.shutdown_sender.subscribe(),
+            params.config.stable_balance_config.as_ref().map(Into::into),
         ));
 
         let sdk = Self {
@@ -892,6 +897,23 @@ impl BreezSdk {
             self.event_emitter.clone(),
         );
         sync_service.sync_payments(initial_sync_complete).await?;
+
+        // Trigger auto-conversion after sync if configured
+        if let Err(e) = self.try_stable_balance_auto_convert().await {
+            warn!("Stable balance auto-conversion failed: {e:?}");
+        }
+
+        Ok(())
+    }
+
+    /// Attempts to perform auto-conversion of sats to stable tokens if configured and threshold is met.
+    async fn try_stable_balance_auto_convert(&self) -> Result<(), SdkError> {
+        let balance_sats = self.spark_wallet.get_balance().await?;
+
+        if self.token_converter.auto_convert(balance_sats).await? {
+            // Re-sync balances after conversion
+            update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
+        }
 
         Ok(())
     }
@@ -2219,96 +2241,96 @@ impl BreezSdk {
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Perform a conversion before sending the payment
-        let (conversion_response, conversion_purpose) =
-            match &request.prepare_response.payment_method {
-                SendPaymentMethod::SparkAddress { address, .. } => {
-                    let spark_address = address
-                        .parse::<SparkAddress>()
-                        .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-                    let conversion_purpose = if spark_address.identity_public_key
-                        == self.spark_wallet.get_identity_public_key()
-                    {
-                        ConversionPurpose::SelfTransfer
-                    } else {
-                        ConversionPurpose::OngoingPayment {
-                            payment_request: address.clone(),
-                        }
-                    };
-                    let res = self
-                        .token_converter
-                        .convert(
-                            conversion_options,
-                            &conversion_purpose,
-                            request.prepare_response.token_identifier.as_ref(),
-                            request.prepare_response.amount,
-                        )
-                        .await?;
-                    (res, conversion_purpose)
-                }
-                SendPaymentMethod::SparkInvoice {
-                    spark_invoice_details:
-                        SparkInvoiceDetails {
-                            identity_public_key,
-                            invoice,
-                            ..
-                        },
-                    ..
-                } => {
-                    let own_identity_public_key =
-                        self.spark_wallet.get_identity_public_key().to_string();
-                    let conversion_purpose = if identity_public_key == &own_identity_public_key {
-                        ConversionPurpose::SelfTransfer
-                    } else {
-                        ConversionPurpose::OngoingPayment {
-                            payment_request: invoice.clone(),
-                        }
-                    };
-                    let res = self
-                        .token_converter
-                        .convert(
-                            conversion_options,
-                            &conversion_purpose,
-                            request.prepare_response.token_identifier.as_ref(),
-                            request.prepare_response.amount,
-                        )
-                        .await?;
-                    (res, conversion_purpose)
-                }
-                SendPaymentMethod::Bolt11Invoice {
-                    spark_transfer_fee_sats,
-                    lightning_fee_sats,
-                    invoice_details,
-                    ..
-                } => {
-                    let conversion_purpose = ConversionPurpose::OngoingPayment {
-                        payment_request: invoice_details.invoice.bolt11.clone(),
-                    };
-                    let res = self
-                        .convert_token_for_bolt11_invoice(
-                            conversion_options,
-                            *spark_transfer_fee_sats,
-                            *lightning_fee_sats,
-                            request,
-                            &conversion_purpose,
-                        )
-                        .await?;
-                    (res, conversion_purpose)
-                }
-                SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-                    let conversion_purpose = ConversionPurpose::OngoingPayment {
-                        payment_request: address.address.clone(),
-                    };
-                    let res = self
-                        .convert_token_for_bitcoin_address(
-                            conversion_options,
-                            fee_quote,
-                            request,
-                            &conversion_purpose,
-                        )
-                        .await?;
-                    (res, conversion_purpose)
-                }
-            };
+        let (conversion_guard, conversion_purpose) = match &request.prepare_response.payment_method
+        {
+            SendPaymentMethod::SparkAddress { address, .. } => {
+                let spark_address = address
+                    .parse::<SparkAddress>()
+                    .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
+                let conversion_purpose = if spark_address.identity_public_key
+                    == self.spark_wallet.get_identity_public_key()
+                {
+                    ConversionPurpose::SelfTransfer
+                } else {
+                    ConversionPurpose::OngoingPayment {
+                        payment_request: address.clone(),
+                    }
+                };
+                let conversion_guard = self
+                    .token_converter
+                    .convert(
+                        conversion_options,
+                        &conversion_purpose,
+                        request.prepare_response.token_identifier.as_ref(),
+                        ConversionAmount::MinAmountOut(request.prepare_response.amount),
+                    )
+                    .await?;
+                (conversion_guard, conversion_purpose)
+            }
+            SendPaymentMethod::SparkInvoice {
+                spark_invoice_details:
+                    SparkInvoiceDetails {
+                        identity_public_key,
+                        invoice,
+                        ..
+                    },
+                ..
+            } => {
+                let own_identity_public_key =
+                    self.spark_wallet.get_identity_public_key().to_string();
+                let conversion_purpose = if identity_public_key == &own_identity_public_key {
+                    ConversionPurpose::SelfTransfer
+                } else {
+                    ConversionPurpose::OngoingPayment {
+                        payment_request: invoice.clone(),
+                    }
+                };
+                let conversion_guard = self
+                    .token_converter
+                    .convert(
+                        conversion_options,
+                        &conversion_purpose,
+                        request.prepare_response.token_identifier.as_ref(),
+                        ConversionAmount::MinAmountOut(request.prepare_response.amount),
+                    )
+                    .await?;
+                (conversion_guard, conversion_purpose)
+            }
+            SendPaymentMethod::Bolt11Invoice {
+                spark_transfer_fee_sats,
+                lightning_fee_sats,
+                invoice_details,
+                ..
+            } => {
+                let conversion_purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: invoice_details.invoice.bolt11.clone(),
+                };
+                let conversion_guard = self
+                    .convert_token_for_bolt11_invoice(
+                        conversion_options,
+                        *spark_transfer_fee_sats,
+                        *lightning_fee_sats,
+                        request,
+                        &conversion_purpose,
+                    )
+                    .await?;
+                (conversion_guard, conversion_purpose)
+            }
+            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                let conversion_purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: address.address.clone(),
+                };
+                let conversion_guard = self
+                    .convert_token_for_bitcoin_address(
+                        conversion_options,
+                        fee_quote,
+                        request,
+                        &conversion_purpose,
+                    )
+                    .await?;
+                (conversion_guard, conversion_purpose)
+            }
+        };
         // Trigger a wallet state sync if converting from Bitcoin to token
         if matches!(
             conversion_options.conversion_type,
@@ -2322,7 +2344,7 @@ impl BreezSdk {
         let payment = self
             .wait_for_payment(
                 WaitForPaymentIdentifier::PaymentId(
-                    conversion_response.received_payment_id.clone(),
+                    conversion_guard.response.received_payment_id.clone(),
                 ),
                 conversion_options
                     .completion_timeout_secs
@@ -2337,11 +2359,11 @@ impl BreezSdk {
             *suppress_payment_event = true;
             return Ok(SendPaymentResponse { payment });
         }
-        // Now send the actual payment
+        // Now send the actual payment - the conversion_guard is held until this completes
         let response = Box::pin(self.send_payment_internal(request)).await?;
         // Merge payment metadata to link the payments
         self.merge_payment_metadata(
-            conversion_response.sent_payment_id,
+            conversion_guard.response.sent_payment_id.clone(),
             PaymentMetadata {
                 parent_payment_id: Some(response.payment.id.clone()),
                 ..Default::default()
@@ -2349,13 +2371,15 @@ impl BreezSdk {
         )
         .await?;
         self.merge_payment_metadata(
-            conversion_response.received_payment_id,
+            conversion_guard.response.received_payment_id.clone(),
             PaymentMetadata {
                 parent_payment_id: Some(response.payment.id.clone()),
                 ..Default::default()
             },
         )
         .await?;
+        // Drop the guard to release the conversion lock
+        drop(conversion_guard);
 
         Ok(response)
     }
@@ -2887,7 +2911,7 @@ impl BreezSdk {
         lightning_fee_sats: u64,
         request: &SendPaymentRequest,
         conversion_purpose: &ConversionPurpose,
-    ) -> Result<TokenConversionResponse, SdkError> {
+    ) -> Result<ConversionGuard, SdkError> {
         // Determine the fee to be used based on preference
         let fee_sats = match request.options {
             Some(SendPaymentOptions::Bolt11Invoice { prefer_spark, .. }) => {
@@ -2909,7 +2933,7 @@ impl BreezSdk {
                 conversion_options,
                 conversion_purpose,
                 request.prepare_response.token_identifier.as_ref(),
-                min_amount_out,
+                ConversionAmount::MinAmountOut(min_amount_out),
             )
             .await
             .map_err(Into::into)
@@ -2921,7 +2945,7 @@ impl BreezSdk {
         fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
         conversion_purpose: &ConversionPurpose,
-    ) -> Result<TokenConversionResponse, SdkError> {
+    ) -> Result<ConversionGuard, SdkError> {
         // Determine the fee to be used based on confirmation speed
         let fee_sats = if let Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) =
             &request.options
@@ -2945,7 +2969,7 @@ impl BreezSdk {
                 conversion_options,
                 conversion_purpose,
                 request.prepare_response.token_identifier.as_ref(),
-                min_amount_out,
+                ConversionAmount::MinAmountOut(min_amount_out),
             )
             .await
             .map_err(Into::into)

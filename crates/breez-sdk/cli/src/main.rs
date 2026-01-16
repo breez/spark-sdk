@@ -4,7 +4,9 @@ mod persist;
 use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::{EventListener, Network, SdkBuilder, SdkEvent, Seed, default_config};
+use breez_sdk_spark::{
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, default_config,
+};
 use clap::Parser;
 use command::{Command, execute_command};
 use rustyline::Editor;
@@ -28,6 +30,14 @@ struct Cli {
     /// Account number to use for the Spark signer
     #[arg(long)]
     account_number: Option<u32>,
+
+    /// Stable balance token identifer
+    #[arg(long)]
+    stable_balance_token_identifier: Option<String>,
+
+    /// Stable balance threshold, in sats
+    #[arg(long)]
+    stable_balance_threshhold: Option<u64>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -78,6 +88,7 @@ async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
     account_number: Option<u32>,
+    stable_balance_config: Option<StableBalanceConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -101,6 +112,7 @@ async fn run_interactive_mode(
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
     config.api_key = breez_api_key;
+    config.stable_balance_config = stable_balance_config;
 
     let seed = Seed::Mnemonic {
         mnemonic: mnemonic.to_string(),
@@ -197,8 +209,21 @@ async fn main() -> Result<(), anyhow::Error> {
         "mainnet" => Network::Mainnet,
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
+    let stable_balance_config =
+        cli.stable_balance_token_identifier
+            .map(|token_identifier| StableBalanceConfig {
+                token_identifier,
+                threshold_sats: cli.stable_balance_threshhold,
+                max_slippage_bps: None,
+            });
 
-    Box::pin(run_interactive_mode(data_dir, network, cli.account_number)).await?;
+    Box::pin(run_interactive_mode(
+        data_dir,
+        network,
+        cli.account_number,
+        stable_balance_config,
+    ))
+    .await?;
 
     Ok(())
 }
