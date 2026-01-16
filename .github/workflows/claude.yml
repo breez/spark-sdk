@@ -9,10 +9,22 @@ on:
     types: [opened, assigned]
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_or_issue_number:
+        description: 'PR or issue number to process'
+        required: true
+        type: number
+      prompt:
+        description: 'Instructions for Claude (e.g., "@claude review this PR")'
+        required: true
+        type: string
+        default: '@claude'
 
 jobs:
   claude:
     if: |
+      (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
@@ -43,8 +55,9 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
+          # For workflow_dispatch: specify the PR/issue and prompt (empty string for other triggers)
+          issue_number: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_or_issue_number || '' }}
+          prompt: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prompt || '' }}
 
           # Optional: Add claude_args to customize behavior and configuration
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
