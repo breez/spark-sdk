@@ -80,6 +80,15 @@ jobs:
         working-directory: packages/react-native
         run: yarn prepare
 
+      - name: Reorganize Android module files for old/new arch support
+        working-directory: packages/react-native
+        run: |
+          # Copy generated Module.kt to newarch (keeps bindings up-to-date)
+          cp android/src/main/java/com/breeztech/breezsdkspark/BreezSdkSparkReactNativeModule.kt \
+             android/src/newarch/java/com/breeztech/breezsdkspark/
+          # Remove Module.kt from main/java (shouldn't be there)
+          rm android/src/main/java/com/breeztech/breezsdkspark/BreezSdkSparkReactNativeModule.kt
+
       - name: Set cargo version
         working-directory: packages/react-native
         run: |

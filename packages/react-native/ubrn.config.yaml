@@ -15,3 +15,5 @@ ios:
 turboModule:
   cpp: cpp
   ts: src
+noOverwrite:
+  - "android/src/main/java/**/BreezSdkSparkReactNativePackage.kt"
