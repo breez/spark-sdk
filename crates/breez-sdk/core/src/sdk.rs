@@ -28,7 +28,7 @@ use spark_wallet::{
     ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, ListTransfersRequest, Preimage,
     SparkAddress, SparkWallet, TransferId, TransferTokenOutput, WalletEvent, WalletTransfer,
 };
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::{HashMap, HashSet}, str::FromStr, sync::Arc};
 use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, SystemTime};
 
@@ -75,6 +75,7 @@ use crate::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, StaticDepositAddress, Storage,
         UpdateDepositPayload,
     },
+    plugin::{Plugin, PluginStorage},
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -195,6 +196,7 @@ pub struct SdkServices {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
     pub(crate) services: Arc<SdkServices>,
+    plugins: Vec<Arc<dyn Plugin>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -325,7 +327,10 @@ pub(crate) struct SdkServicesParams {
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn init_and_start(sp: SdkServicesParams) -> Result<Self, SdkError> {
+    pub(crate) fn init_and_start(
+        sp: SdkServicesParams,
+        plugins: Vec<Arc<dyn Plugin>>,
+    ) -> Result<Self, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.
         if !matches!(sp.config.network, Network::Regtest) {
@@ -358,8 +363,9 @@ impl BreezSdk {
             flashnet_client: sp.flashnet_client,
         });
 
-        let sdk = Self { services };
+        let sdk = Self { services, plugins };
         sdk.start(initial_synced_sender);
+        sdk.start_plugins()?;
         Ok(sdk)
     }
 
@@ -377,6 +383,43 @@ impl BreezSdk {
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
         self.spawn_conversion_refunder();
+    }
+
+    /// Starts all registered plugins
+    fn start_plugins(&self) -> Result<(), SdkError> {
+        // First pass: validate all plugin IDs
+        let mut seen_ids = HashSet::new();
+        for plugin in &self.plugins {
+            let plugin_id = plugin.id();
+            if plugin_id.is_empty() {
+                return Err(SdkError::Generic("Plugin has empty ID".to_string()));
+            }
+            if !seen_ids.insert(plugin_id.clone()) {
+                return Err(SdkError::Generic(format!(
+                    "Duplicate plugin ID: {plugin_id}"
+                )));
+            }
+        }
+
+        // Second pass: start all plugins
+        for plugin in &self.plugins {
+            let plugin_id = plugin.id();
+            let storage = PluginStorage::new(Arc::clone(&self.services.storage), plugin_id);
+            let plugin = plugin.clone();
+            let services = self.services.clone();
+            let mut shutdown_receiver = self.services.shutdown_sender.subscribe();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("Plugin shutdown signal received");
+                        plugin.on_stop().await;
+                    }
+                    _ = plugin.on_start(services, Arc::new(storage)) => {}
+                }
+            });
+        }
+
+        Ok(())
     }
 
     fn spawn_spark_private_mode_initialization(&self) {

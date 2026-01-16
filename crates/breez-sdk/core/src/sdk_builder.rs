@@ -17,7 +17,7 @@ use tracing::{debug, info};
 
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
-    RestClientWrapper, Seed,
+    RestClientWrapper, Plugin, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
@@ -63,6 +63,7 @@ pub struct SdkBuilder {
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     sync_storage: Option<Arc<dyn SyncStorage>>,
+    plugins: Vec<Arc<dyn Plugin>>,
 }
 
 impl SdkBuilder {
@@ -91,6 +92,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             sync_storage: None,
+            plugins: Vec::new(),
         }
     }
 
@@ -112,6 +114,7 @@ impl SdkBuilder {
             lnurl_server_client: None,
             payment_observer: None,
             sync_storage: None,
+            plugins: Vec::new(),
         }
     }
 
@@ -232,6 +235,16 @@ impl SdkBuilder {
     #[allow(unused)]
     pub fn with_payment_observer(mut self, payment_observer: Arc<dyn PaymentObserver>) -> Self {
         self.payment_observer = Some(payment_observer);
+        self
+    }
+
+    /// Adds plugins to be started when the SDK is built.
+    ///
+    /// # Arguments
+    /// - `plugins`: The plugins to be started.
+    #[must_use]
+    pub fn with_plugins(mut self, plugins: Vec<Arc<dyn Plugin>>) -> Self {
+        self.plugins = plugins;
         self
     }
 
@@ -438,20 +451,23 @@ impl SdkBuilder {
         let nostr_client = Arc::new(NostrClient::new(nostr_signer));
 
         // Create the SDK instance
-        let sdk = BreezSdk::init_and_start(SdkServicesParams {
-            config: self.config,
-            storage,
-            chain_service,
-            fiat_service,
-            lnurl_client,
-            lnurl_server_client,
-            lnurl_auth_signer,
-            shutdown_sender,
-            spark_wallet,
-            event_emitter,
-            nostr_client,
-            flashnet_client,
-        })?;
+        let sdk = BreezSdk::init_and_start(
+            SdkServicesParams {
+                config: self.config,
+                storage,
+                chain_service,
+                fiat_service,
+                lnurl_client,
+                lnurl_server_client,
+                lnurl_auth_signer,
+                shutdown_sender,
+                spark_wallet,
+                event_emitter,
+                nostr_client,
+                flashnet_client,
+            },
+            self.plugins,
+        )?;
         debug!("Initialized and started breez sdk.");
 
         Ok(sdk)
