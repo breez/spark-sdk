@@ -66,7 +66,7 @@ if [[ ${#UNMODIFIED_BINDINGS[@]} -gt 0 ]]; then
   done
   echo ""
   echo "If this PR changes the SDK's public interface, ensure all binding files are updated."
-  echo "See `.claude/docs/sdk-interfaces.md` for details."
+  echo "See \`.claude/docs/sdk-interfaces.md\` for details."
   exit 1
 fi
 
