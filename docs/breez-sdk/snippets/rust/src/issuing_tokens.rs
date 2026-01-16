@@ -1,8 +1,9 @@
 use anyhow::Result;
 use breez_sdk_spark::{
     default_config, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
-    FreezeIssuerTokenRequest, KeySetConfig, KeySetType, MintIssuerTokenRequest, Network, Payment, SdkBuilder,
-    Seed, TokenIssuer, TokenMetadata, UnfreezeIssuerTokenRequest,
+    FreezeIssuerTokenRequest, KeySetConfig, KeySetType, MintIssuerTokenRequest, Network, Payment,
+    PaymentDetailsFilter, SdkBuilder, Seed, TokenIssuer, TokenMetadata, TokenTransactionType,
+    UnfreezeIssuerTokenRequest,
 };
 use log::info;
 
@@ -68,6 +69,33 @@ async fn burn_token(token_issuer: &TokenIssuer) -> Result<Payment> {
     let payment = token_issuer.burn_issuer_token(request).await?;
     // ANCHOR_END: burn-token
     Ok(payment)
+}
+
+async fn list_mint_burn_payments() -> Result<Vec<PaymentDetailsFilter>> {
+    // ANCHOR: list-mint-burn-payments
+    // Provide one or multiple of the following filters to
+    // the `payment_details_filter` field when listing payments
+    let payment_details_transfer_filter = PaymentDetailsFilter::Token {
+        tx_type: Some(TokenTransactionType::Transfer),
+        tx_hash: None,
+        conversion_refund_needed: None,
+    };
+    let payment_details_mint_filter = PaymentDetailsFilter::Token {
+        tx_type: Some(TokenTransactionType::Mint),
+        tx_hash: None,
+        conversion_refund_needed: None,
+    };
+    let payment_details_burn_filter = PaymentDetailsFilter::Token {
+        tx_type: Some(TokenTransactionType::Burn),
+        tx_hash: None,
+        conversion_refund_needed: None,
+    };
+    // ANCHOR_END: list-mint-burn-payments
+    Ok(vec![
+        payment_details_transfer_filter,
+        payment_details_mint_filter,
+        payment_details_burn_filter,
+    ])
 }
 
 async fn get_token_metadata(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {

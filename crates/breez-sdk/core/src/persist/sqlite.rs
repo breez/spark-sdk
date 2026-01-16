@@ -267,6 +267,14 @@ impl SqliteStorage {
             ALTER TABLE payment_metadata DROP COLUMN token_conversion_info;
             ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
             ",
+            // Add tx_type column with a default value of 'Transfer'.
+            // Reset only the token sync position (not bitcoin offset) to trigger token re-sync.
+            // This will update all token payment records with the correct tx_type values.
+            // Note: This intentionally couples to the CachedSyncInfo schema at migration time.
+            "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT '\"Transfer\"';
+            UPDATE settings
+            SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
+            WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL;",
         ]
     }
 }
@@ -429,6 +437,16 @@ impl Storage for SqliteStorage {
                     params.push(Box::new(tx_hash.clone()));
                 }
 
+                // Filter by token transaction type
+                if let PaymentDetailsFilter::Token {
+                    tx_type: Some(tx_type),
+                    ..
+                } = payment_details_filter
+                {
+                    payment_details_clauses.push("t.tx_type = ?".to_string());
+                    params.push(Box::new(serde_json::to_string(tx_type)?));
+                }
+
                 if !payment_details_clauses.is_empty() {
                     all_payment_details_clauses
                         .push(format!("({})", payment_details_clauses.join(" AND ")));
@@ -538,20 +556,23 @@ impl Storage for SqliteStorage {
             Some(PaymentDetails::Token {
                 metadata,
                 tx_hash,
+                tx_type,
                 invoice_details,
                 ..
             }) => {
                 tx.execute(
-                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details)
-                     VALUES (?, ?, ?, ?)
+                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
+                     VALUES (?, ?, ?, ?, ?)
                      ON CONFLICT(payment_id) DO UPDATE SET 
                         metadata=excluded.metadata,
                         tx_hash=excluded.tx_hash,
+                        tx_type=excluded.tx_type,
                         invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)",
                     params![
                         payment.id,
                         serde_json::to_string(&metadata)?,
                         tx_hash,
+                        serde_json::to_string(&tx_type)?,
                         invoice_details.as_ref().map(serde_json::to_string).transpose()?,
                     ],
                 )?;
@@ -713,7 +734,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(26)?;
+            let parent_payment_id: String = row.get(27)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1190,7 +1211,7 @@ fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-25 are used by `map_payment`, index 26 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-26 are used by `map_payment`, index 27 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1212,6 +1233,7 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_info,
            t.metadata AS token_metadata,
            t.tx_hash AS token_tx_hash,
+           t.tx_type AS token_tx_type,
            t.invoice_details AS token_invoice_details,
            s.invoice_details AS spark_invoice_details,
            s.htlc_details AS spark_htlc_details,
@@ -1247,9 +1269,9 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let preimage: Option<String> = row.get(14)?;
             let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(16)?;
-            let lnurl_nostr_zap_request: Option<String> = row.get(23)?;
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(24)?;
-            let lnurl_sender_comment: Option<String> = row.get(25)?;
+            let lnurl_nostr_zap_request: Option<String> = row.get(24)?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(25)?;
+            let lnurl_sender_comment: Option<String> = row.get(26)?;
             let lnurl_receive_metadata =
                 if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
                     Some(LnurlReceiveMetadata {
@@ -1274,13 +1296,13 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(21)?;
+            let invoice_details_str: Option<String> = row.get(22)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 21))
-                .transpose()?;
-            let htlc_details_str: Option<String> = row.get(22)?;
-            let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 22))
+                .transpose()?;
+            let htlc_details_str: Option<String> = row.get(23)?;
+            let htlc_details = htlc_details_str
+                .map(|s| serde_json_from_str(&s, 23))
                 .transpose()?;
             let conversion_info_str: Option<String> = row.get(17)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
@@ -1293,9 +1315,11 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let invoice_details_str: Option<String> = row.get(20)?;
+            let tx_type_str: String = row.get(20)?;
+            let tx_type = serde_json_from_str(&tx_type_str, 20)?;
+            let invoice_details_str: Option<String> = row.get(21)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 20))
+                .map(|s| serde_json_from_str(&s, 21))
                 .transpose()?;
             let conversion_info_str: Option<String> = row.get(17)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
@@ -1304,6 +1328,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             Some(PaymentDetails::Token {
                 metadata: serde_json_from_str(&metadata, 18)?,
                 tx_hash: row.get(19)?,
+                tx_type,
                 invoice_details,
                 conversion_info,
             })
@@ -1542,6 +1567,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_token_transaction_type_filtering() {
+        let temp_dir = create_temp_dir("sqlite_storage_token_transaction_type_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_token_transaction_type_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_combined_filters() {
         let temp_dir = create_temp_dir("sqlite_storage_combined_filter");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -1587,5 +1620,207 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_metadata_merge(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_migration_tx_type() {
+        use crate::{
+            ListPaymentsRequest, Payment, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+            PaymentStatus, PaymentType, Storage, TokenMetadata, TokenTransactionType,
+        };
+        use rusqlite::{Connection, params};
+        use rusqlite_migration::{M, Migrations};
+
+        let temp_dir = create_temp_dir("sqlite_migration_tx_type");
+        let db_path = temp_dir.join(super::DEFAULT_DB_FILENAME);
+
+        // Step 1: Create database at version 21 (before tx_type migration)
+        {
+            let mut conn = Connection::open(&db_path).unwrap();
+            let migrations_before_tx_type: Vec<_> = SqliteStorage::current_migrations()
+                .iter()
+                .take(22) // Migrations 0-21 (index 22 is the tx_type migration)
+                .map(|s| M::up(s))
+                .collect();
+            let migrations = Migrations::new(migrations_before_tx_type);
+            migrations.to_latest(&mut conn).unwrap();
+        }
+
+        // Step 2: Insert a token payment WITHOUT tx_type column
+        {
+            let conn = Connection::open(&db_path).unwrap();
+
+            // Insert into payments table
+            conn.execute(
+                "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    "token-migration-test",
+                    "send",
+                    "completed",
+                    "5000",
+                    "10",
+                    1_234_567_890_i64,
+                    "\"token\""
+                ],
+            )
+            .unwrap();
+
+            // Insert into payment_details_token WITHOUT tx_type (pre-migration)
+            let metadata = serde_json::json!({
+                "identifier": "test-token-id",
+                "issuer_public_key": format!("02{}", "a".repeat(64)),
+                "name": "Test Token",
+                "ticker": "TST",
+                "decimals": 8,
+                "max_supply": 1_000_000_u128,
+                "is_freezable": false
+            });
+
+            conn.execute(
+                "INSERT INTO payment_details_token (payment_id, metadata, tx_hash)
+                 VALUES (?, ?, ?)",
+                params![
+                    "token-migration-test",
+                    metadata.to_string(),
+                    "0xabcdef1234567890"
+                ],
+            )
+            .unwrap();
+        }
+
+        // Step 3: Open with SqliteStorage (triggers migration to latest)
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        // Step 4: Verify the migrated token payment
+        let migrated_payment = storage
+            .get_payment_by_id("token-migration-test".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(migrated_payment.id, "token-migration-test");
+        assert_eq!(migrated_payment.amount, 5000);
+        assert_eq!(migrated_payment.fees, 10);
+        assert_eq!(migrated_payment.status, PaymentStatus::Completed);
+        assert_eq!(migrated_payment.payment_type, PaymentType::Send);
+        assert_eq!(migrated_payment.method, PaymentMethod::Token);
+
+        // Verify token payment details have the default txType
+        match migrated_payment.details {
+            Some(PaymentDetails::Token {
+                metadata,
+                tx_hash,
+                tx_type,
+                ..
+            }) => {
+                assert_eq!(metadata.identifier, "test-token-id");
+                assert_eq!(metadata.name, "Test Token");
+                assert_eq!(metadata.ticker, "TST");
+                assert_eq!(metadata.decimals, 8);
+                assert_eq!(tx_hash, "0xabcdef1234567890");
+                // Key assertion: migration added default tx_type
+                assert_eq!(
+                    tx_type,
+                    TokenTransactionType::Transfer,
+                    "Migration should add default txType 'transfer' to token payments"
+                );
+            }
+            _ => panic!("Expected Token payment details"),
+        }
+
+        // Step 5: Insert a new token payment with explicit tx_type
+        let new_payment = Payment {
+            id: "new-token-payment".to_string(),
+            payment_type: PaymentType::Receive,
+            status: PaymentStatus::Completed,
+            amount: 8000,
+            fees: 20,
+            timestamp: 1_234_567_891,
+            method: PaymentMethod::Token,
+            details: Some(PaymentDetails::Token {
+                metadata: TokenMetadata {
+                    identifier: "another-token-id".to_string(),
+                    issuer_public_key: format!("02{}", "b".repeat(64)),
+                    name: "Another Token".to_string(),
+                    ticker: "ATK".to_string(),
+                    decimals: 6,
+                    max_supply: 2_000_000,
+                    is_freezable: true,
+                },
+                tx_hash: "0x1111222233334444".to_string(),
+                tx_type: TokenTransactionType::Mint,
+                invoice_details: None,
+                conversion_info: None,
+            }),
+            conversion_details: None,
+        };
+
+        storage.insert_payment(new_payment).await.unwrap();
+
+        // Step 6: List all payments
+        let request = ListPaymentsRequest {
+            type_filter: None,
+            status_filter: None,
+            asset_filter: None,
+            payment_details_filter: None,
+            from_timestamp: None,
+            to_timestamp: None,
+            offset: None,
+            limit: None,
+            sort_ascending: Some(true),
+        };
+
+        let payments = storage.list_payments(request).await.unwrap();
+        assert_eq!(payments.len(), 2, "Should have both payments");
+
+        // Verify migrated payment has Transfer type
+        let migrated = payments
+            .iter()
+            .find(|p| p.id == "token-migration-test")
+            .unwrap();
+        match &migrated.details {
+            Some(PaymentDetails::Token { tx_type, .. }) => {
+                assert_eq!(*tx_type, TokenTransactionType::Transfer);
+            }
+            _ => panic!("Expected Token payment details"),
+        }
+
+        // Verify new payment has Mint type
+        let new = payments
+            .iter()
+            .find(|p| p.id == "new-token-payment")
+            .unwrap();
+        match &new.details {
+            Some(PaymentDetails::Token { tx_type, .. }) => {
+                assert_eq!(*tx_type, TokenTransactionType::Mint);
+            }
+            _ => panic!("Expected Token payment details"),
+        }
+
+        // Step 7: Test filtering by token transaction type
+        let transfer_filter = ListPaymentsRequest {
+            type_filter: None,
+            status_filter: None,
+            asset_filter: None,
+            payment_details_filter: Some(vec![PaymentDetailsFilter::Token {
+                conversion_refund_needed: None,
+                tx_hash: None,
+                tx_type: Some(TokenTransactionType::Transfer),
+            }]),
+            from_timestamp: None,
+            to_timestamp: None,
+            offset: None,
+            limit: None,
+            sort_ascending: Some(true),
+        };
+
+        let transfer_payments = storage.list_payments(transfer_filter).await.unwrap();
+        assert_eq!(
+            transfer_payments.len(),
+            1,
+            "Should find only the Transfer payment"
+        );
+        assert_eq!(transfer_payments[0].id, "token-migration-test");
     }
 }

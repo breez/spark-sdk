@@ -1,6 +1,6 @@
 use breez_sdk_spark::{
-    default_config, BreezSdk, CheckLightningAddressRequest, Config, Network,
-    RegisterLightningAddressRequest, GetPaymentRequest, PaymentDetails,
+    default_config, BreezSdk, CheckLightningAddressRequest, Config, GetPaymentRequest, Network,
+    PaymentDetails, RegisterLightningAddressRequest,
 };
 
 pub fn configure_lightning_address() -> Config {

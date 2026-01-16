@@ -40,11 +40,7 @@ pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
         username: "<username>".to_string(),
         password: "<password>".to_string(),
     };
-    builder.with_rest_chain_service(
-        url,
-        chain_api_type,
-        Some(optional_credentials),
-    )
+    builder.with_rest_chain_service(url, chain_api_type, Some(optional_credentials))
     // ANCHOR_END: with-rest-chain-service
 }
 

@@ -22,6 +22,13 @@ extern "C" {
     fn remove_dir_all(dir_path: &str) -> Result<Promise, JsValue>;
 }
 
+// Import test helpers
+#[wasm_bindgen(module = "js/node-test-helpers.cjs")]
+extern "C" {
+    #[wasm_bindgen(js_name = "createOldV17Database", catch)]
+    fn create_old_v17_database(db_path: &str) -> Result<Promise, JsValue>;
+}
+
 // Helper to create a WasmStorage instance for testing using node-storage
 async fn create_test_storage(dir_name: &str) -> WasmStorage {
     let data_dir = format!("/tmp/breez-sdk-node-storage-test-{}", dir_name);
@@ -137,8 +144,220 @@ async fn test_conversion_refund_needed_filtering() {
 }
 
 #[wasm_bindgen_test]
+async fn test_token_transaction_type_filtering() {
+    let storage = create_test_storage("token_tx_type_filtering").await;
+
+    breez_sdk_spark::storage_tests::test_token_transaction_type_filtering(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_sync_storage() {
     let storage = create_test_storage("sync_storage").await;
 
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_from_v17_to_v18() {
+    let data_dir = "/tmp/breez-sdk-node-migration-v17-to-v18-test";
+    let db_path = format!("{}/storage.sql", data_dir);
+
+    // Step 1: Remove any existing test directory
+    let future = JsFuture::from(remove_dir_all(data_dir).expect("Failed to remove test data_dir"));
+    let _ = future.await.expect("Failed to remove test data_dir");
+
+    // Step 2: Create directory
+    let fs = js_sys::eval("require('fs').promises").expect("Failed to get fs module");
+    let mkdir = js_sys::Reflect::get(&fs, &"mkdir".into())
+        .expect("Failed to get mkdir")
+        .dyn_into::<js_sys::Function>()
+        .expect("mkdir is not a function");
+    let mkdir_options = js_sys::Object::new();
+    js_sys::Reflect::set(&mkdir_options, &"recursive".into(), &true.into())
+        .expect("Failed to set recursive");
+    let mkdir_promise = mkdir
+        .call2(&fs, &data_dir.into(), &mkdir_options)
+        .expect("Failed to call mkdir");
+    JsFuture::from(
+        mkdir_promise
+            .dyn_into::<Promise>()
+            .expect("mkdir didn't return promise"),
+    )
+    .await
+    .expect("Failed to create directory");
+
+    // Step 3: Create old v17 database with token payment WITHOUT tx_type
+    let create_future = JsFuture::from(
+        create_old_v17_database(&db_path).expect("Failed to call create_old_v17_database"),
+    );
+    create_future
+        .await
+        .expect("Failed to create old v17 format database");
+
+    // Step 4: Open with new code (triggers migration to v18)
+    let storage = create_default_storage(data_dir, None)
+        .await
+        .expect("Failed to create node storage instance");
+    let storage = WasmStorage { storage };
+
+    // Step 5: Verify old token payment was migrated correctly
+    let migrated_payment = breez_sdk_spark::Storage::get_payment_by_id(
+        &storage,
+        "token-migration-test-payment".to_string(),
+    )
+    .await
+    .expect("Failed to get migrated token payment");
+
+    assert_eq!(migrated_payment.id, "token-migration-test-payment");
+    assert_eq!(migrated_payment.amount, 5000u128);
+    assert_eq!(migrated_payment.fees, 10u128);
+    assert_eq!(
+        migrated_payment.status,
+        breez_sdk_spark::PaymentStatus::Completed
+    );
+    assert_eq!(
+        migrated_payment.payment_type,
+        breez_sdk_spark::PaymentType::Send
+    );
+    assert_eq!(
+        migrated_payment.method,
+        breez_sdk_spark::PaymentMethod::Token
+    );
+
+    // Step 6: Verify token payment details can be parsed and have the default txType
+    let details = migrated_payment
+        .details
+        .expect("Token payment should have details");
+
+    match details {
+        breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            tx_hash,
+            tx_type,
+            invoice_details,
+            conversion_info,
+        } => {
+            assert_eq!(metadata.identifier, "test-token-id");
+            assert_eq!(metadata.name, "Test Token");
+            assert_eq!(metadata.ticker, "TST");
+            assert_eq!(metadata.decimals, 8);
+            assert_eq!(tx_hash, "0xabcdef1234567890");
+            // This is the key assertion: the migration should add default txType
+            assert_eq!(
+                tx_type,
+                breez_sdk_spark::TokenTransactionType::Transfer,
+                "Migration should add default txType 'Transfer' to token payments"
+            );
+            assert_eq!(invoice_details, None);
+            assert_eq!(conversion_info, None);
+        }
+        _ => panic!("Expected Token payment details, got {:?}", details),
+    }
+
+    // Step 7: Insert a new token payment with explicit txType
+    let new_payment = breez_sdk_spark::Payment {
+        id: "new-token-payment-after-migration".to_string(),
+        payment_type: breez_sdk_spark::PaymentType::Receive,
+        status: breez_sdk_spark::PaymentStatus::Completed,
+        amount: 8000u128,
+        fees: 20u128,
+        timestamp: 1234567893,
+        method: breez_sdk_spark::PaymentMethod::Token,
+        details: Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata: breez_sdk_spark::TokenMetadata {
+                identifier: "another-token-id".to_string(),
+                issuer_public_key: "02".to_string() + &"b".repeat(64),
+                name: "Another Token".to_string(),
+                ticker: "ATK".to_string(),
+                decimals: 6,
+                max_supply: 2000000,
+                is_freezable: true,
+            },
+            tx_hash: "0x1111222233334444".to_string(),
+            tx_type: breez_sdk_spark::TokenTransactionType::Mint,
+            invoice_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+
+    breez_sdk_spark::Storage::insert_payment(&storage, new_payment.clone())
+        .await
+        .expect("Failed to insert new token payment");
+
+    // Step 8: List all token payments to verify both work
+    let request = breez_sdk_spark::ListPaymentsRequest {
+        type_filter: None,
+        status_filter: None,
+        asset_filter: None,
+        payment_details_filter: None,
+        from_timestamp: None,
+        to_timestamp: None,
+        offset: None,
+        limit: None,
+        sort_ascending: Some(true),
+    };
+
+    let payments = breez_sdk_spark::Storage::list_payments(&storage, request)
+        .await
+        .expect("Failed to list payments");
+
+    assert_eq!(
+        payments.len(),
+        2,
+        "Should have both migrated and new token payments"
+    );
+
+    // Verify the migrated payment has default Transfer type
+    let migrated = payments
+        .iter()
+        .find(|p| p.id == "token-migration-test-payment")
+        .unwrap();
+    match &migrated.details {
+        Some(breez_sdk_spark::PaymentDetails::Token { tx_type, .. }) => {
+            assert_eq!(*tx_type, breez_sdk_spark::TokenTransactionType::Transfer);
+        }
+        _ => panic!("Expected Token payment details"),
+    }
+
+    // Verify the new payment has explicit Mint type
+    let new = payments
+        .iter()
+        .find(|p| p.id == "new-token-payment-after-migration")
+        .unwrap();
+    match &new.details {
+        Some(breez_sdk_spark::PaymentDetails::Token { tx_type, .. }) => {
+            assert_eq!(*tx_type, breez_sdk_spark::TokenTransactionType::Mint);
+        }
+        _ => panic!("Expected Token payment details"),
+    }
+
+    // Step 9: Test filtering by token transaction type
+    let transfer_filter_request = breez_sdk_spark::ListPaymentsRequest {
+        type_filter: None,
+        status_filter: None,
+        asset_filter: None,
+        payment_details_filter: Some(vec![breez_sdk_spark::PaymentDetailsFilter::Token {
+            conversion_refund_needed: None,
+            tx_hash: None,
+            tx_type: Some(breez_sdk_spark::TokenTransactionType::Transfer),
+        }]),
+        from_timestamp: None,
+        to_timestamp: None,
+        offset: None,
+        limit: None,
+        sort_ascending: Some(true),
+    };
+
+    let transfer_payments =
+        breez_sdk_spark::Storage::list_payments(&storage, transfer_filter_request)
+            .await
+            .expect("Failed to list transfer payments");
+
+    assert_eq!(
+        transfer_payments.len(),
+        1,
+        "Should find only the Transfer payment"
+    );
+    assert_eq!(transfer_payments[0].id, "token-migration-test-payment");
 }
