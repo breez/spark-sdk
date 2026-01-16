@@ -29,7 +29,7 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
-    sdk::{BreezSdk, BreezSdkParams},
+    sdk::{BreezSdk, SdkServicesParams},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, nostr::NostrSigner,
         rtsync::RTSyncSigner, spark::SparkSigner,
@@ -438,7 +438,7 @@ impl SdkBuilder {
         let nostr_client = Arc::new(NostrClient::new(nostr_signer));
 
         // Create the SDK instance
-        let sdk = BreezSdk::init_and_start(BreezSdkParams {
+        let sdk = BreezSdk::init_and_start(SdkServicesParams {
             config: self.config,
             storage,
             chain_service,
