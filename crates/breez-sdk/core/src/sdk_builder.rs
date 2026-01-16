@@ -9,7 +9,6 @@ use breez_sdk_common::{
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
 
-use flashnet::{CacheStore, FlashnetClient, FlashnetConfig};
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
 use tokio::sync::watch;
@@ -429,11 +428,6 @@ impl SdkBuilder {
         } else {
             storage
         };
-        let flashnet_client = Arc::new(FlashnetClient::new(
-            FlashnetConfig::default_config(self.config.network.into()),
-            spark_wallet.clone(),
-            Arc::new(CacheStore::default()),
-        ));
 
         let nostr_client = Arc::new(NostrClient::new(nostr_signer));
 
@@ -450,7 +444,6 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
-            flashnet_client,
         })?;
         debug!("Initialized and started breez sdk.");
 
