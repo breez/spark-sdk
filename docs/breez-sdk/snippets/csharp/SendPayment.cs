@@ -101,11 +101,11 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-spark-invoice
         }
 
-        async Task PrepareSendPaymentDrainOnchain(BreezSdk sdk)
+        async Task PrepareSendPaymentDrain(BreezSdk sdk)
         {
-            // ANCHOR: prepare-send-payment-drain-onchain
-            var paymentRequest = "<bitcoin address>";
-            // Use Drain to send all available funds
+            // ANCHOR: prepare-send-payment-drain
+            // Use PayAmount.Drain to send all available funds
+            var paymentRequest = "<payment request>";
             var payAmount = new PayAmount.Drain();
 
             var request = new PrepareSendPaymentRequest(
@@ -114,19 +114,9 @@ namespace BreezSdkSnippets
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
-            // Review the fee quote and drain amount for each confirmation speed
-            if (prepareResponse.paymentMethod is SendPaymentMethod.BitcoinAddress bitcoinMethod)
-            {
-                var feeQuote = bitcoinMethod.feeQuote;
-                var slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
-                var mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
-                var fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
-                Console.WriteLine($"Drain amount: {prepareResponse.payAmount}");
-                Console.WriteLine($"Slow fee: {slowFeeSats} sats");
-                Console.WriteLine($"Medium fee: {mediumFeeSats} sats");
-                Console.WriteLine($"Fast fee: {fastFeeSats} sats");
-            }
-            // ANCHOR_END: prepare-send-payment-drain-onchain
+            // The response contains PayAmount.Drain to indicate this is a drain operation
+            Console.WriteLine($"Pay amount: {prepareResponse.payAmount}");
+            // ANCHOR_END: prepare-send-payment-drain
         }
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)

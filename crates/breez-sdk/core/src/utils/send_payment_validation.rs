@@ -53,9 +53,17 @@ fn validate_spark_invoice_request(
     request: &PrepareSendPaymentRequest,
     identity_public_key: &str,
 ) -> Result<(), SdkError> {
-    // Drain is not supported for Spark invoices
+    // Drain is only supported for amountless Spark invoices
     if matches!(request.pay_amount, Some(PayAmount::Drain)) {
-        return Err(SdkError::DrainNotSupported);
+        if spark_invoice_details.amount.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Drain is not supported for invoices with a fixed amount".to_string(),
+            ));
+        }
+        // Token invoices with drain are not supported
+        if spark_invoice_details.token_identifier.is_some() {
+            return Err(SdkError::DrainNotSupported);
+        }
     }
 
     // Extract token identifier from pay_amount if it's a Token variant
@@ -149,8 +157,9 @@ fn validate_spark_invoice_request(
         ));
     }
 
-    // Validate amount is provided when invoice has no amount
-    if spark_invoice_details.amount.is_none() && request_amount.is_none() {
+    // Validate amount is provided when invoice has no amount (unless drain)
+    let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
+    if spark_invoice_details.amount.is_none() && request_amount.is_none() && !is_drain {
         return Err(SdkError::InvalidInput(
             "Amount is required when invoice has no amount".to_string(),
         ));
@@ -161,12 +170,7 @@ fn validate_spark_invoice_request(
 
 /// Validates a spark address request.
 fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
-    // Drain is not supported for Spark addresses
-    if matches!(request.pay_amount, Some(PayAmount::Drain)) {
-        return Err(SdkError::DrainNotSupported);
-    }
-
-    // Amount is required for spark addresses
+    // Amount is required for spark addresses (Drain is allowed)
     if request.pay_amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
@@ -423,15 +427,51 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_drain_not_supported() {
-        let invoice = create_test_invoice();
+    fn test_validate_spark_invoice_drain_with_amountless_invoice() {
+        let invoice = create_test_invoice(); // No amount
+        let request = create_drain_request();
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_ok(),
+            "Should succeed when drain is used for amountless Spark invoice"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_spark_invoice_drain_with_amount_invoice() {
+        let mut invoice = create_test_invoice();
+        invoice.amount = Some(1000); // Invoice has fixed amount
         let request = create_drain_request();
 
         let identity_key = "test_identity".to_string();
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail when drain is used for Spark invoice"
+            "Should fail when drain is used for Spark invoice with fixed amount"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("not supported for invoices with a fixed amount"),
+                "Error message should mention fixed amount"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_spark_invoice_drain_with_token_invoice() {
+        let mut invoice = create_test_invoice();
+        invoice.token_identifier = Some("token123".to_string()); // Token invoice
+        let request = create_drain_request();
+
+        let identity_key = "test_identity".to_string();
+        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail when drain is used for token Spark invoice"
         );
         assert!(
             matches!(result, Err(SdkError::DrainNotSupported)),
@@ -749,16 +789,12 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_address_drain_not_supported() {
+    fn test_validate_spark_address_with_drain() {
         let request = create_drain_request();
         let result = validate_spark_address_request(&request);
         assert!(
-            result.is_err(),
-            "Should fail when drain is used for Spark address"
-        );
-        assert!(
-            matches!(result, Err(SdkError::DrainNotSupported)),
-            "Expected DrainNotSupported error"
+            result.is_ok(),
+            "Should succeed when drain is used for Spark address"
         );
     }
 

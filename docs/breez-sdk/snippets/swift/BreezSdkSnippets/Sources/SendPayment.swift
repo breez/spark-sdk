@@ -160,10 +160,10 @@ func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse
     print(payment)
 }
 
-func prepareSendPaymentDrainOnchain(sdk: BreezSdk) async throws {
-    // ANCHOR: prepare-send-payment-drain-onchain
-    let paymentRequest = "<bitcoin address>"
-    // Use Drain to send all available funds
+func prepareSendPaymentDrain(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-drain
+    // Use PayAmount.drain to send all available funds
+    let paymentRequest = "<payment request>"
     let payAmount = PayAmount.drain
 
     let prepareResponse = try await sdk.prepareSendPayment(
@@ -172,15 +172,7 @@ func prepareSendPaymentDrainOnchain(sdk: BreezSdk) async throws {
             payAmount: payAmount
         ))
 
-    // Review the fee quote and drain amount for each confirmation speed
-    if case let .bitcoinAddress(address: _, feeQuote: feeQuote) = prepareResponse.paymentMethod {
-        let slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-        let mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-        let fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-        print("Drain amount: \(prepareResponse.payAmount)")
-        print("Slow fee: \(slowFeeSats) sats")
-        print("Medium fee: \(mediumFeeSats) sats")
-        print("Fast fee: \(fastFeeSats) sats")
-    }
-    // ANCHOR_END: prepare-send-payment-drain-onchain
+    // The response contains PayAmount.drain to indicate this is a drain operation
+    print("Pay amount: \(prepareResponse.payAmount)")
+    // ANCHOR_END: prepare-send-payment-drain
 }

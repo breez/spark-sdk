@@ -176,11 +176,11 @@ Future<SendPaymentResponse> sendPaymentSpark(
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentDrainOnchain(
+Future<PrepareSendPaymentResponse> prepareSendPaymentDrain(
     BreezSdk sdk) async {
-  // ANCHOR: prepare-send-payment-drain-onchain
-  String paymentRequest = "<bitcoin address>";
-  // Use Drain to send all available funds
+  // ANCHOR: prepare-send-payment-drain
+  // Use PayAmount.drain() to send all available funds
+  String paymentRequest = "<payment request>";
   PayAmount payAmount = PayAmount.drain();
 
   final request = PrepareSendPaymentRequest(
@@ -188,18 +188,8 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentDrainOnchain(
       payAmount: payAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
-  // Review the fee quote and drain amount for each confirmation speed
-  final paymentMethod = response.paymentMethod;
-  if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
-    final feeQuote = paymentMethod.feeQuote;
-    final slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
-    final mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
-    final fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
-    print("Drain amount: ${response.payAmount}");
-    print("Slow fee: $slowFeeSats sats");
-    print("Medium fee: $mediumFeeSats sats");
-    print("Fast fee: $fastFeeSats sats");
-  }
-  // ANCHOR_END: prepare-send-payment-drain-onchain
+  // The response contains PayAmount.drain() to indicate this is a drain operation
+  print("Pay amount: ${response.payAmount}");
+  // ANCHOR_END: prepare-send-payment-drain
   return response;
 }

@@ -1719,19 +1719,26 @@ impl BreezSdk {
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
-                let amount = request_amount
-                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-                let conversion_estimate = self
-                    .token_converter
-                    .validate(
-                        request.conversion_options.as_ref(),
-                        token_identifier.as_ref(),
-                        amount,
-                    )
-                    .await?;
+                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
 
-                let pay_amount =
-                    PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+                let (pay_amount, conversion_estimate) = if is_drain {
+                    // Drain doesn't support conversion (validated earlier)
+                    (PayAmount::Drain, None)
+                } else {
+                    let amount = request_amount
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+                    let conversion_estimate = self
+                        .token_converter
+                    .validate(
+                            request.conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            amount,
+                        )
+                        .await?;
+                    let pay_amount =
+                        PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+                    (pay_amount, conversion_estimate)
+                };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
@@ -1744,21 +1751,29 @@ impl BreezSdk {
                 })
             }
             InputType::SparkInvoice(spark_invoice_details) => {
-                let amount = spark_invoice_details
-                    .amount
-                    .or(request_amount)
-                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-                let conversion_estimate = self
-                    .token_converter
-                    .validate(
-                        request.conversion_options.as_ref(),
-                        token_identifier.as_ref(),
-                        amount,
-                    )
-                    .await?;
+                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
 
-                let pay_amount =
-                    PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+                let (pay_amount, conversion_estimate) = if is_drain {
+                    // Drain only allowed for amountless invoices (validated earlier)
+                    // Drain doesn't support conversion (validated earlier)
+                    (PayAmount::Drain, None)
+                } else {
+                    let amount = spark_invoice_details
+                        .amount
+                        .or(request_amount)
+                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+                    let conversion_estimate = self
+                        .token_converter
+                    .validate(
+                            request.conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            amount,
+                        )
+                        .await?;
+                    let pay_amount =
+                        PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
+                    (pay_amount, conversion_estimate)
+                };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
@@ -2640,10 +2655,17 @@ impl BreezSdk {
                 token_identifier,
                 ..
             } => {
+                // For drain, get fresh balance at send time
+                let send_amount = if matches!(request.prepare_response.pay_amount, PayAmount::Drain)
+                {
+                    u128::from(self.spark_wallet.get_balance().await?)
+                } else {
+                    amount
+                };
                 self.send_spark_address(
                     address,
                     token_identifier.clone(),
-                    amount,
+                    send_amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
                 )
@@ -2653,7 +2675,14 @@ impl BreezSdk {
                 spark_invoice_details,
                 ..
             } => {
-                self.send_spark_invoice(&spark_invoice_details.invoice, request, amount)
+                // For drain, get fresh balance at send time
+                let send_amount = if matches!(request.prepare_response.pay_amount, PayAmount::Drain)
+                {
+                    u128::from(self.spark_wallet.get_balance().await?)
+                } else {
+                    amount
+                };
+                self.send_spark_invoice(&spark_invoice_details.invoice, request, send_amount)
                     .await
             }
             SendPaymentMethod::Bolt11Invoice {

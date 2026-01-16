@@ -223,10 +223,10 @@ async def send_payment_spark(
     # ANCHOR_END: send-payment-spark
 
 
-async def prepare_send_payment_drain_onchain(sdk: BreezSdk):
-    # ANCHOR: prepare-send-payment-drain-onchain
-    payment_request = "<bitcoin address>"
-    # Use Drain to send all available funds
+async def prepare_send_payment_drain(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-drain
+    # Use PayAmount.DRAIN to send all available funds
+    payment_request = "<payment request>"
     pay_amount = PayAmount.DRAIN()
     try:
         request = PrepareSendPaymentRequest(
@@ -235,28 +235,9 @@ async def prepare_send_payment_drain_onchain(sdk: BreezSdk):
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
-        # Review the fee quote and drain amount for each confirmation speed
-        if isinstance(
-            prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
-        ):
-            fee_quote = prepare_response.payment_method.fee_quote
-            slow_fee_sats = (
-                fee_quote.speed_slow.user_fee_sat
-                + fee_quote.speed_slow.l1_broadcast_fee_sat
-            )
-            medium_fee_sats = (
-                fee_quote.speed_medium.user_fee_sat
-                + fee_quote.speed_medium.l1_broadcast_fee_sat
-            )
-            fast_fee_sats = (
-                fee_quote.speed_fast.user_fee_sat
-                + fee_quote.speed_fast.l1_broadcast_fee_sat
-            )
-            logging.debug(f"Drain amount: {prepare_response.pay_amount}")
-            logging.debug(f"Slow fee: {slow_fee_sats} sats")
-            logging.debug(f"Medium fee: {medium_fee_sats} sats")
-            logging.debug(f"Fast fee: {fast_fee_sats} sats")
+        # The response contains PayAmount.DRAIN to indicate this is a drain operation
+        logging.debug(f"Pay amount: {prepare_response.pay_amount}")
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-drain-onchain
+    # ANCHOR_END: prepare-send-payment-drain

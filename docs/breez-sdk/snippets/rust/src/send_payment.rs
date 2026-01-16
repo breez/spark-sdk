@@ -196,10 +196,10 @@ async fn send_payment_spark(
     Ok(())
 }
 
-async fn prepare_send_payment_drain_onchain(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-send-payment-drain-onchain
-    let payment_request = "<bitcoin address>".to_string();
-    // Use Drain to send all available funds
+async fn prepare_send_payment_drain(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-drain
+    // Use PayAmount::Drain to send all available funds
+    let payment_request = "<payment request>".to_string();
     let pay_amount = Some(PayAmount::Drain);
 
     let prepare_response = sdk
@@ -210,13 +210,8 @@ async fn prepare_send_payment_drain_onchain(sdk: &BreezSdk) -> Result<()> {
         })
         .await?;
 
-    // Review the fee quote and drain amount for each confirmation speed
-    if let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &prepare_response.payment_method {
-        info!("Drain amount: {:?}", prepare_response.pay_amount);
-        info!("Slow fee: {} sats", fee_quote.speed_slow.total_fee_sat());
-        info!("Medium fee: {} sats", fee_quote.speed_medium.total_fee_sat());
-        info!("Fast fee: {} sats", fee_quote.speed_fast.total_fee_sat());
-    }
-    // ANCHOR_END: prepare-send-payment-drain-onchain
+    // The response contains PayAmount::Drain to indicate this is a drain operation
+    info!("Pay amount: {:?}", prepare_response.pay_amount);
+    // ANCHOR_END: prepare-send-payment-drain
     Ok(())
 }

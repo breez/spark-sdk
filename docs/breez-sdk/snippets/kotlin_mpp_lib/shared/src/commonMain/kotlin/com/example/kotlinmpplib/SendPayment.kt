@@ -62,10 +62,10 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-onchain
     }
 
-    suspend fun prepareSendPaymentDrainOnchain(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-drain-onchain
-        val paymentRequest = "<bitcoin address>"
-        // Use Drain to send all available funds
+    suspend fun prepareSendPaymentDrain(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-drain
+        // Use PayAmount.Drain to send all available funds
+        val paymentRequest = "<payment request>"
         val payAmount = PayAmount.Drain
 
         try {
@@ -75,22 +75,12 @@ class SendPayment {
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
-            // Review the fee quote and drain amount for each confirmation speed
-            val paymentMethod = prepareResponse.paymentMethod
-            if (paymentMethod is SendPaymentMethod.BitcoinAddress) {
-                val feeQuote = paymentMethod.feeQuote
-                val slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-                val mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-                val fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-                // Log.v("Breez", "Drain amount: ${prepareResponse.payAmount}")
-                // Log.v("Breez", "Slow fee: $slowFeeSats sats")
-                // Log.v("Breez", "Medium fee: $mediumFeeSats sats")
-                // Log.v("Breez", "Fast fee: $fastFeeSats sats")
-            }
+            // The response contains PayAmount.Drain to indicate this is a drain operation
+            // Log.v("Breez", "Pay amount: ${prepareResponse.payAmount}")
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-drain-onchain
+        // ANCHOR_END: prepare-send-payment-drain
     }
 
     suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {

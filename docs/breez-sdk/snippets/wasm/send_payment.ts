@@ -189,10 +189,10 @@ const exampleSendPaymentSpark = async (
   console.log(payment)
 }
 
-const examplePrepareSendPaymentDrainOnchain = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-send-payment-drain-onchain
-  const paymentRequest = '<bitcoin address>'
-  // Use Drain to send all available funds
+const examplePrepareSendPaymentDrain = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-drain
+  // Use PayAmount Drain to send all available funds
+  const paymentRequest = '<payment request>'
   const payAmount: PayAmount = { type: 'drain' }
 
   const prepareResponse = await sdk.prepareSendPayment({
@@ -200,16 +200,7 @@ const examplePrepareSendPaymentDrainOnchain = async (sdk: BreezSdk) => {
     payAmount
   })
 
-  // Review the fee quote and drain amount for each confirmation speed
-  if (prepareResponse.paymentMethod.type === 'bitcoinAddress') {
-    const feeQuote = prepareResponse.paymentMethod.feeQuote
-    const slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat
-    const mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat
-    const fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat
-    console.debug(`Drain amount: ${JSON.stringify(prepareResponse.payAmount)}`)
-    console.debug(`Slow fee: ${slowFeeSats} sats`)
-    console.debug(`Medium fee: ${mediumFeeSats} sats`)
-    console.debug(`Fast fee: ${fastFeeSats} sats`)
-  }
-  // ANCHOR_END: prepare-send-payment-drain-onchain
+  // The response contains PayAmount Drain to indicate this is a drain operation
+  console.log(`Pay amount: ${JSON.stringify(prepareResponse.payAmount)}`)
+  // ANCHOR_END: prepare-send-payment-drain
 }

@@ -44,17 +44,6 @@ Then prepare the payment with the selected speed.
 
 {{#tabs send_payment:prepare-send-payment-onchain}}
 
-### Draining to Bitcoin address
-
-To send the entire available balance to a Bitcoin address minus fees, specify the drain option for the payment amount:
-
-{{#tabs send_payment:prepare-send-payment-drain-onchain}}
-
-<div class="warning">
-<h4>Developer note</h4>
-Draining is only supported for Bitcoin addresses and LNURL payments. It is not supported for Spark addresses, Spark invoices, or Lightning invoices.
-</div>
-
 ## Spark
 
 #### Spark address
@@ -73,6 +62,12 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 </div>
 
 {{#tabs send_payment:prepare-send-payment-spark-invoice}}
+
+## Draining
+
+To send the entire available balance minus fees, specify the drain option for the payment amount. Draining is supported for Bitcoin addresses, Spark addresses, and amountless Spark invoices. Lightning invoices and Spark invoices with an amount do not support draining.
+
+{{#tabs send_payment:prepare-send-payment-drain}}
 
 <h2 id="sending-payments">
     <a class="header" href="#sending-payments">Sending Payments</a>
