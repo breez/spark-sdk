@@ -10,6 +10,7 @@ mod logger;
 mod models;
 mod nostr;
 mod persist;
+pub mod plugin;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
