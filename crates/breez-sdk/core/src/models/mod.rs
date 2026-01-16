@@ -917,7 +917,7 @@ pub struct PrepareSendPaymentRequest {
     /// The amount to send.
     /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
     /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.
-    /// Use `PayAmount::Drain` to send all funds (only for Bitcoin addresses and LNURL).
+    /// Use `PayAmount::Drain` to send all funds (when amount payment requests without an amount).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub pay_amount: Option<PayAmount>,
     /// If provided, the payment will include a conversion step before sending the payment

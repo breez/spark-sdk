@@ -1729,7 +1729,7 @@ impl BreezSdk {
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                     let conversion_estimate = self
                         .token_converter
-                    .validate(
+                        .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
                             amount,
@@ -1764,7 +1764,7 @@ impl BreezSdk {
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                     let conversion_estimate = self
                         .token_converter
-                    .validate(
+                        .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
                             amount,
@@ -1859,7 +1859,7 @@ impl BreezSdk {
                     let fee_sats_for_estimate = fee_quote.speed_fast.total_fee_sat();
                     let conversion_estimate = self
                         .token_converter
-                    .validate(
+                        .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
                             u128::from(amount).saturating_add(u128::from(fee_sats_for_estimate)),

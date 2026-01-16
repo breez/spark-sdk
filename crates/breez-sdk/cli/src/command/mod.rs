@@ -774,9 +774,9 @@ fn read_payment_options(
     match method {
         SendPaymentMethod::BitcoinAddress { fee_quote, .. } => {
             println!("Please choose payment fee:");
-            println!("1. Fast: {} sats", fee_quote.speed_fast.total_fee_sat());
-            println!("2. Medium: {} sats", fee_quote.speed_medium.total_fee_sat());
-            println!("3. Slow: {} sats", fee_quote.speed_slow.total_fee_sat());
+            println!("1. Fast: {}", fee_quote.speed_fast.total_fee_sat());
+            println!("2. Medium: {}", fee_quote.speed_medium.total_fee_sat());
+            println!("3. Slow: {}", fee_quote.speed_slow.total_fee_sat());
 
             let line = rl.readline_with_initial("", ("1", ""))?.to_lowercase();
             let confirmation_speed = match line.as_str() {
@@ -785,7 +785,6 @@ fn read_payment_options(
                 "3" => OnchainConfirmationSpeed::Slow,
                 _ => return Err(anyhow::anyhow!("Invalid confirmation speed")),
             };
-
             Ok(Some(SendPaymentOptions::BitcoinAddress {
                 confirmation_speed,
             }))
