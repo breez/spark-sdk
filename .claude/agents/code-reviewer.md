@@ -163,19 +163,35 @@ Order: Summary → Issues → Questions → Recommendation
 
 2. **Inline comments (if user requests)** - Post as PR review comments:
 ```bash
-# For each issue with specific file:line location
-gh pr review PR_NUMBER --comment \
-  --body "**[SEVERITY]** Issue description
+# Get commit SHA
+COMMIT_SHA=$(gh api repos/breez/spark-sdk/pulls/PR_NUMBER/commits --jq '.[].sha' | tail -1)
+
+# Post inline comment on specific line
+gh api repos/breez/spark-sdk/pulls/PR_NUMBER/comments -X POST \
+  -f body="**[SEVERITY]** Issue description
 
 **Fix:** Suggested resolution" \
-  --path "path/file.rs" \
-  --line 42
+  -f commit_id="$COMMIT_SHA" \
+  -f path="path/file.rs" \
+  -F line=42 \
+  -f side="RIGHT"
+
+# Post overall review summary
+gh api repos/breez/spark-sdk/pulls/PR_NUMBER/reviews -X POST \
+  -f event=COMMENT \
+  -f body="> 🧪 Experimental PR review using Claude Code.
+
+---
+
+{summary}"
 ```
 
 **When to use inline comments:**
 - User explicitly asks to "post review" or "comment on PR"
 - Issues have specific file:line references
 - More discoverable for contributors (shows in Files Changed tab)
+
+**Note:** Use `side="LEFT"` for deleted code, `side="RIGHT"` for added/unchanged code
 
 **Link format:** Use PR branch name in URL (get from `git rev-parse --abbrev-ref HEAD` or PR context)
 

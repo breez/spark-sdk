@@ -75,19 +75,43 @@ Identify which context-dependent checks apply based on changed files:
 - No changes posted to GitHub
 
 **If `POST_MODE=true` (via `--post` flag):**
-- Use `gh pr review $PR_NUMBER --comment` for each issue
-- Add header: `> 🧪 Experimental PR review using Claude Code.`
-- Post issues as review comments using `--path` and `--line` flags
-- Example:
+
+Post inline comments on specific lines using GitHub API:
+
 ```bash
-gh pr review $PR_NUMBER --comment \
-  --body "**[CRITICAL]** Issue description
+# Get latest commit SHA
+COMMIT_SHA=$(gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/commits --jq '.[].sha' | tail -1)
+
+# For each issue with file:line location, post inline comment
+gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/comments -X POST \
+  -f body="**[SEVERITY]** Issue description
 
 **Fix:** Suggested resolution" \
-  --path "path/file.rs" \
-  --line 42
+  -f commit_id="$COMMIT_SHA" \
+  -f path="path/file.rs" \
+  -F line=42 \
+  -f side="RIGHT"
+
+# Then post overall review summary
+gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/reviews -X POST \
+  -f event=COMMENT \
+  -f body="> 🧪 Experimental PR review using Claude Code.
+
+---
+
+{review_summary}
+
+**Recommendation:** APPROVE | REQUEST CHANGES | COMMENT"
 ```
-- See `.claude/agents/code-reviewer.md` for complete inline comment format
+
+**API Parameters:**
+- `commit_id` - Latest commit SHA from PR
+- `path` - File path relative to repo root
+- `line` - Line number in the diff (use `-F` flag for integer)
+- `side` - "RIGHT" for new code, "LEFT" for deleted code
+- `body` - Comment text (supports markdown)
+
+See `.claude/agents/code-reviewer.md` for severity levels and format
 
 ## Step 4: Follow-up Actions
 
