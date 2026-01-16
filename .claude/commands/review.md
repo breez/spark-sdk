@@ -46,14 +46,13 @@ Identify which context-dependent checks apply based on changed files:
 
 ## Step 3: Present Review
 
-Format as a concise review. If posting to GitHub, include:
-```markdown
-> 🧪 Experimental PR review using Claude Code.
+**Default:** Show review in chat (with clickable GitHub links)
 
----
-
-{review_content}
-```
+**If user requests posting to PR:**
+- Use `gh pr review` for inline comments on specific lines
+- Add header: `> 🧪 Experimental PR review using Claude Code.`
+- Post issues as review comments using `--path` and `--line` flags
+- See `.claude/agents/code-reviewer.md` for inline comment format
 
 ## Step 4: Follow-up Actions
 

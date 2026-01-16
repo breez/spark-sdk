@@ -151,12 +151,31 @@ Omit Notes if nothing to report.
 
 Order: Summary → Issues → Questions → Recommendation
 
+**Two output modes:**
+
+1. **Chat-only (default)** - Show in conversation with clickable links:
 ```
 [CRITICAL|IMPORTANT|SUGGESTION] Brief description
 - File: [`path/file.rs:42`](https://github.com/breez/spark-sdk/blob/BRANCH_NAME/path/file.rs#L42)
 - Issue: What's wrong
 - Fix: How to fix
 ```
+
+2. **Inline comments (if user requests)** - Post as PR review comments:
+```bash
+# For each issue with specific file:line location
+gh pr review PR_NUMBER --comment \
+  --body "**[SEVERITY]** Issue description
+
+**Fix:** Suggested resolution" \
+  --path "path/file.rs" \
+  --line 42
+```
+
+**When to use inline comments:**
+- User explicitly asks to "post review" or "comment on PR"
+- Issues have specific file:line references
+- More discoverable for contributors (shows in Files Changed tab)
 
 **Link format:** Use PR branch name in URL (get from `git rev-parse --abbrev-ref HEAD` or PR context)
 
