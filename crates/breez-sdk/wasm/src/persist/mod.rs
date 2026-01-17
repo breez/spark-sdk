@@ -7,6 +7,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
 
+use std::collections::HashMap;
+
 use crate::models::{
     DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
     Record, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
@@ -255,6 +257,32 @@ impl breez_sdk_spark::Storage for WasmStorage {
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
+
+    async fn get_payments_by_parent_ids(
+        &self,
+        parent_payment_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<breez_sdk_spark::Payment>>, StorageError> {
+        let promise = self
+            .storage
+            .get_payments_by_parent_ids(parent_payment_ids)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        // JS returns { parentId: RelatedPayment[] }
+        let js_map: HashMap<String, Vec<Payment>> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        // Convert WASM RelatedPayment to core RelatedPayment
+        let result_map: HashMap<String, Vec<breez_sdk_spark::Payment>> = js_map
+            .into_iter()
+            .map(|(parent_id, children)| {
+                (parent_id, children.into_iter().map(|c| c.into()).collect())
+            })
+            .collect();
+
+        Ok(result_map)
+    }
 }
 
 #[async_trait]
@@ -418,6 +446,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
+    getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
     syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
@@ -489,6 +518,12 @@ extern "C" {
     pub fn set_lnurl_metadata(
         this: &Storage,
         metadata: Vec<SetLnurlMetadataItem>,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getPaymentsByParentIds, catch)]
+    pub fn get_payments_by_parent_ids(
+        this: &Storage,
+        parent_payment_ids: Vec<String>,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncAddOutgoingChange, catch)]

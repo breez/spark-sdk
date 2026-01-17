@@ -221,6 +221,9 @@ class SqliteStorage {
         }
       }
 
+      // Exclude child payments (those with a parent_payment_id)
+      whereClauses.push("pm.parent_payment_id IS NULL");
+
       // Build the WHERE clause
       const whereSql =
         whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
@@ -520,6 +523,91 @@ class SqliteStorage {
       return Promise.reject(
         new StorageError(
           `Failed to get payment by invoice '${invoice}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  /**
+   * Gets payments that have any of the specified parent payment IDs.
+   * @param {string[]} parentPaymentIds - Array of parent payment IDs
+   * @returns {Promise<Object>} Map of parentPaymentId -> array of RelatedPayment objects
+   */
+  getPaymentsByParentIds(parentPaymentIds) {
+    try {
+      if (!parentPaymentIds || parentPaymentIds.length === 0) {
+        return Promise.resolve({});
+      }
+
+      // Early exit if no related payments exist
+      const hasRelated = this.db
+        .prepare(
+          "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1)"
+        )
+        .pluck()
+        .get();
+      if (!hasRelated) {
+        return Promise.resolve({});
+      }
+
+      const placeholders = parentPaymentIds.map(() => "?").join(", ");
+      const query = `
+            SELECT p.id
+            ,       p.payment_type
+            ,       p.status
+            ,       p.amount
+            ,       p.fees
+            ,       p.timestamp
+            ,       p.method
+            ,       p.withdraw_tx_id
+            ,       p.deposit_tx_id
+            ,       p.spark
+            ,       l.invoice AS lightning_invoice
+            ,       l.payment_hash AS lightning_payment_hash
+            ,       l.destination_pubkey AS lightning_destination_pubkey
+            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
+            ,       l.preimage AS lightning_preimage
+            ,       pm.parent_payment_id
+            ,       pm.lnurl_pay_info
+            ,       pm.lnurl_withdraw_info
+            ,       pm.conversion_info
+            ,       t.metadata AS token_metadata
+            ,       t.tx_hash AS token_tx_hash
+            ,       t.invoice_details AS token_invoice_details
+            ,       s.invoice_details AS spark_invoice_details
+            ,       s.htlc_details AS spark_htlc_details
+            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
+            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
+            ,       lrm.sender_comment AS lnurl_sender_comment
+             FROM payments p
+             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+             LEFT JOIN payment_details_token t ON p.id = t.payment_id
+             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
+             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
+             WHERE pm.parent_payment_id IN (${placeholders})
+             ORDER BY p.timestamp ASC
+            `;
+
+      const stmt = this.db.prepare(query);
+      const rows = stmt.all(...parentPaymentIds);
+
+      // Group payments by parent_payment_id
+      const result = {};
+      for (const row of rows) {
+        const parentId = row.parent_payment_id;
+        if (!result[parentId]) {
+          result[parentId] = [];
+        }
+        result[parentId].push(this._rowToPayment(row));
+      }
+
+      return Promise.resolve(result);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get payments by parent ids: ${error.message}`,
           error
         )
       );
