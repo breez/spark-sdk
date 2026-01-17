@@ -117,9 +117,22 @@ gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/reviews -X POST \
 - `commit_id` - Latest commit SHA from PR
 - `event` - COMMENT | APPROVE | REQUEST_CHANGES
 - `comments[][path]` - File path relative to repo root
-- `comments[][line]` - Line number (integer)
+- `comments[][line]` - Line number in the NEW file version (from diff `+N` in hunk header)
 - `comments[][side]` - "RIGHT" for new code, "LEFT" for deleted
 - `comments[][body]` - Comment text (markdown)
+
+**CRITICAL - Line Number Accuracy:**
+Before posting inline comments, you MUST verify the exact line number by reading the actual file:
+```bash
+# For each file you want to comment on, read it to get accurate line numbers
+# Example: to comment on a specific line in a file
+Read file_path and find the exact line number of the code you want to comment on
+```
+
+The line number must be:
+1. The line number in the NEW version of the file (after the PR changes)
+2. A line that appears in the diff (added or context line, not removed)
+3. Verified by reading the actual file, not estimated from diff output
 
 See `.claude/agents/code-reviewer.md` for severity levels and format
 

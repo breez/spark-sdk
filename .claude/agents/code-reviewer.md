@@ -203,6 +203,21 @@ gh api repos/breez/spark-sdk/pulls/PR_NUMBER/reviews -X POST \
 - Include all comments in single request using `--field 'comments[][...]'`
 - All comments are automatically tied to the review
 
+**CRITICAL - Line Number Accuracy:**
+Before posting inline comments, ALWAYS verify the exact line number:
+1. Use the Read tool to read the actual file from the PR branch
+2. Find the exact line number of the code you want to comment on
+3. The line number must be from the NEW file version (after PR changes)
+4. Never estimate line numbers from diff output - always verify by reading the file
+
+Example workflow:
+```
+1. Identify issue in diff
+2. Read the actual file: `git show origin/BRANCH_NAME:path/to/file.rs`
+3. Find exact line number of the target code
+4. Use that verified line number in the comment
+```
+
 **Link format:** Use PR branch name in URL (get from `git rev-parse --abbrev-ref HEAD` or PR context)
 
 ### Recommendation
