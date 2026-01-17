@@ -122,17 +122,19 @@ gh api repos/breez/spark-sdk/pulls/$PR_NUMBER/reviews -X POST \
 - `comments[][body]` - Comment text (markdown)
 
 **CRITICAL - Line Number Accuracy:**
-Before posting inline comments, you MUST verify the exact line number by reading the actual file:
-```bash
-# For each file you want to comment on, read it to get accurate line numbers
-# Example: to comment on a specific line in a file
-Read file_path and find the exact line number of the code you want to comment on
-```
 
-The line number must be:
-1. The line number in the NEW version of the file (after the PR changes)
-2. A line that appears in the diff (added or context line, not removed)
-3. Verified by reading the actual file, not estimated from diff output
+**Why this matters:** Diff output shows code changes but doesn't display line numbers for each line. Counting lines within a diff hunk is error-prone because:
+- Hunk headers (`@@ -28,6 +30,14 @@`) only show the starting line
+- Context lines, added lines (`+`), and removed lines (`-`) must be counted separately
+- It's easy to point to an adjacent line (e.g., an attribute instead of the field below it)
+
+**Required workflow:**
+1. Identify the issue in the diff
+2. Read the actual file from the PR branch: `git show origin/BRANCH_NAME:path/to/file.rs`
+3. Search for the exact code and note its line number
+4. Use that verified line number in the comment
+
+Never count lines manually from diff output - always verify by reading the file.
 
 See `.claude/agents/code-reviewer.md` for severity levels and format
 
