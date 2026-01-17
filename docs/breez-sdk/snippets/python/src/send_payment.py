@@ -3,6 +3,7 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     OnchainConfirmationSpeed,
+    PayAmount,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
     SendPaymentRequest,
@@ -16,12 +17,12 @@ from breez_sdk_spark import (
 async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-lightning-bolt11
     payment_request = "<bolt11 invoice>"
-    # Optionally set the amount you wish the pay the receiver
-    optional_amount_sats = 5_000
+    # Optionally set the amount you wish to pay the receiver
+    optional_pay_amount = PayAmount.BITCOIN(amount_sats=5_000)
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            amount=optional_amount_sats,
+            pay_amount=optional_pay_amount,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -46,16 +47,16 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
 async def prepare_send_payment_onchain(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-onchain
     payment_request = "<bitcoin address>"
-    # Set the amount you wish the pay the receiver
-    amount_sats = 50_000
+    # Set the amount you wish to pay the receiver
+    pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            amount=amount_sats,
+            pay_amount=pay_amount,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
-        # If the fees are acceptable, continue to create the Send Payment
+        # Review the fee quote for each confirmation speed
         if isinstance(
             prepare_response.payment_method, SendPaymentMethod.BITCOIN_ADDRESS
         ):
@@ -72,9 +73,9 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
                 fee_quote.speed_fast.user_fee_sat
                 + fee_quote.speed_fast.l1_broadcast_fee_sat
             )
-            logging.debug(f"Slow Fees: {slow_fee_sats} sats")
-            logging.debug(f"Medium Fees: {medium_fee_sats} sats")
-            logging.debug(f"Fast Fees: {fast_fee_sats} sats")
+            logging.debug(f"Slow fee: {slow_fee_sats} sats")
+            logging.debug(f"Medium fee: {medium_fee_sats} sats")
+            logging.debug(f"Fast fee: {fast_fee_sats} sats")
     except Exception as error:
         logging.error(error)
         raise
@@ -84,12 +85,12 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
 async def prepare_send_payment_spark_address(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-address
     payment_request = "<spark address>"
-    # Set the amount you wish the pay the receiver
-    amount_sats = 50_000
+    # Set the amount you wish to pay the receiver
+    pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            amount=amount_sats,
+            pay_amount=pay_amount,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -106,12 +107,12 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
 async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-invoice
     payment_request = "<spark invoice>"
-    # Optionally set the amount you wish the pay the receiver
-    optional_amount_sats = 50_000
+    # Optionally set the amount you wish to pay the receiver
+    optional_pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            amount=optional_amount_sats,
+            pay_amount=optional_pay_amount,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -187,6 +188,7 @@ async def send_payment_onchain(
 ):
     # ANCHOR: send-payment-onchain
     try:
+        # Select the confirmation speed for the on-chain transaction
         options = SendPaymentOptions.BITCOIN_ADDRESS(
             confirmation_speed=OnchainConfirmationSpeed.MEDIUM
         )
@@ -219,3 +221,23 @@ async def send_payment_spark(
         logging.error(error)
         raise
     # ANCHOR_END: send-payment-spark
+
+
+async def prepare_send_payment_drain(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-drain
+    # Use PayAmount.DRAIN to send all available funds
+    payment_request = "<payment request>"
+    pay_amount = PayAmount.DRAIN()
+    try:
+        request = PrepareSendPaymentRequest(
+            payment_request=payment_request,
+            pay_amount=pay_amount,
+        )
+        prepare_response = await sdk.prepare_send_payment(request=request)
+
+        # The response contains PayAmount.DRAIN to indicate this is a drain operation
+        logging.debug(f"Pay amount: {prepare_response.pay_amount}")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: prepare-send-payment-drain

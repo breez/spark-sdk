@@ -74,13 +74,14 @@ async fn test_onchain_withdraw_to_static_address(
     info!("Bob deposit address: {}", bob_address);
 
     // Alice prepares and sends 15_000 sats on-chain to Bob
-    let amount = 15_000u128;
+    let amount = 15_000u64;
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address.clone(),
-            amount: Some(amount),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: amount,
+            }),
             conversion_options: None,
         })
         .await?;
@@ -89,9 +90,7 @@ async fn test_onchain_withdraw_to_static_address(
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
-            options: Some(SendPaymentOptions::BitcoinAddress {
-                confirmation_speed: OnchainConfirmationSpeed::Medium,
-            }),
+            options: None,
             idempotency_key: None,
         })
         .await?;
@@ -217,6 +216,103 @@ async fn test_deposit_fee_manual_claim(
             .any(|d| d.txid == txid_found && d.vout == vout),
         "Deposit should be removed after successful claim"
     );
+
+    Ok(())
+}
+
+/// Test drain to Bitcoin address with speed selection
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_drain_to_bitcoin_address(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+
+    // Fund Alice with exactly a known amount
+    let funding_amount = 50_000u64;
+    receive_and_fund(&mut alice, funding_amount, false).await?;
+
+    // Get Alice's initial balance (less than funding_amount due to claim fees)
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_initial = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice initial balance: {} sats", alice_initial);
+    assert!(alice_initial > 0, "Alice should have been funded");
+
+    // Bob exposes a static deposit address
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?
+        .payment_request;
+    info!("Bob deposit address: {}", bob_address);
+
+    // Alice prepares drain
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_address.clone(),
+            pay_amount: Some(PayAmount::Drain),
+            conversion_options: None,
+        })
+        .await?;
+
+    // Get fee quote from prepare response
+    let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &prepare.payment_method else {
+        panic!("Expected BitcoinAddress payment method");
+    };
+    info!(
+        "Fee estimates - Fast: {}, Medium: {}, Slow: {}",
+        fee_quote.speed_fast.total_fee_sat(),
+        fee_quote.speed_medium.total_fee_sat(),
+        fee_quote.speed_slow.total_fee_sat()
+    );
+
+    // Verify pay_amount is Drain
+    assert!(
+        matches!(prepare.pay_amount, PayAmount::Drain),
+        "Pay amount should be Drain"
+    );
+    info!(
+        "Drain prepared with fast fee: {} sats",
+        fee_quote.speed_fast.total_fee_sat()
+    );
+
+    // Send the drain with Fast speed
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::BitcoinAddress {
+                confirmation_speed: OnchainConfirmationSpeed::Fast,
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice withdraw status: {:?}", send_resp.payment.status);
+    assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
+
+    // Verify Alice's balance is now 0
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
 
     Ok(())
 }

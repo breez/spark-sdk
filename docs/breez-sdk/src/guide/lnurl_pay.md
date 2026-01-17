@@ -10,7 +10,17 @@
 During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request,
 and also returns the fees related to the payment so they can be confirmed.
 
+### Setting the receiver amount
+
+When you want the payment recipient to receive a specific amount.
+
 {{#tabs lnurl_pay:prepare-lnurl-pay}}
+
+### Draining all funds
+
+When you want to send all funds from your wallet to the payment recipient.
+
+{{#tabs lnurl_pay:prepare-lnurl-pay-drain}}
 
 <h2 id="lnurl-payments">
     <a class="header" href="#lnurl-payments">LNURL Payments</a>

@@ -57,12 +57,19 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 
 {{#tabs send_payment:prepare-send-payment-spark-invoice}}
 
+## Draining
+
+To send the entire available balance minus fees, specify the drain option for the payment amount. Draining is supported for Bitcoin addresses, Spark addresses, and amountless Spark invoices. Lightning invoices and Spark invoices with an amount do not support draining.
+
+{{#tabs send_payment:prepare-send-payment-drain}}
+
 <h2 id="sending-payments">
     <a class="header" href="#sending-payments">Sending Payments</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>
 </h2>
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:
+
 - **Prepare Response** - The response from the [Preparing the Payment](send_payment.md#preparing-payments) step.
 - **Options** - Any payment method specific options for the payment (see below).
 - **Idempotency Key** - An optional UUID that identifies the payment. If set, providing the same idempotency key for multiple requests will ensure that only one payment is made.
@@ -70,6 +77,7 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 ## Lightning
 
 In the optional send payment options for BOLT11 invoices, you can set:
+
 - **Prefer Spark** - Set the preference to use Spark to transfer the payment if the invoice contains a Spark address. By default, using Spark transfers are disabled.
 - **Completion Timeout** - By default, this function returns immediately. You can override this behavior by specifying a completion timeout in seconds. If the timeout is reached, a pending payment object is returned. If the payment completes within the timeout, the completed payment object is returned.
 
@@ -78,6 +86,7 @@ In the optional send payment options for BOLT11 invoices, you can set:
 ## Bitcoin
 
 In the optional send payment options for Bitcoin addresses, you can set:
+
 - **Confirmation Speed** - The priority that the Bitcoin transaction confirms, that also effects the fee paid. By default, it is set to Fast.
 
 {{#tabs send_payment:send-payment-onchain}}
@@ -85,6 +94,7 @@ In the optional send payment options for Bitcoin addresses, you can set:
 ## Spark
 
 In the optional send payment options for Spark addresses, you can set:
+
 - **HTLC Options** - Enables Spark HTLC payments, which are an advanced feature that allows for conditional payments. See the [Spark HTLC Payments](htlcs.md) page for more details and example usage.
 
 {{#tabs send_payment:send-payment-spark}}
@@ -107,8 +117,8 @@ Once a send payment is initiated, you can follow and react to the different paym
 
 #### Bitcoin
 
-| Event                | Description                                                                  | UX Suggestion                                    |
-| -------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| Event                | Description                                                                   | UX Suggestion                                    |
+| -------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer has been started. Awaiting on-chain withdrawal completion. | Show payment as pending.                         |
 | **PaymentSucceeded** | The payment amount was successfully withdrawn on-chain.                       | Update the balance and show payment as complete. |
 

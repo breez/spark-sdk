@@ -4,11 +4,12 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   String paymentRequest = "<bolt11 invoice>";
-  // Optionally set the amount you wish the pay the receiver
-  BigInt optionalAmountSats = BigInt.from(5000);
+  // Optionally set the amount you wish to pay the receiver
+  PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(5000));
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amount: optionalAmountSats);
+      paymentRequest: paymentRequest,
+      payAmount: optionalPayAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -29,26 +30,24 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-onchain
   String paymentRequest = "<bitcoin address>";
-  // Set the amount you wish the pay the receiver
-  BigInt amountSats = BigInt.from(50000);
+  // Set the amount you wish to pay the receiver
+  PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amount: amountSats);
+      paymentRequest: paymentRequest,
+      payAmount: payAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
-  // If the fees are acceptable, continue to create the Send Payment
+  // Review the fee quote for each confirmation speed
   final paymentMethod = response.paymentMethod;
   if (paymentMethod is SendPaymentMethod_BitcoinAddress) {
     final feeQuote = paymentMethod.feeQuote;
-    final slowFeeSats =
-        feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
-    final mediumFeeSats = feeQuote.speedMedium.userFeeSat +
-        feeQuote.speedMedium.l1BroadcastFeeSat;
-    final fastFeeSats =
-        feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
-    print("Slow Fees: $slowFeeSats sats");
-    print("Medium Fees: $mediumFeeSats sats");
-    print("Fast Fees: $fastFeeSats sats");
+    final slowFeeSats = feeQuote.speedSlow.userFeeSat + feeQuote.speedSlow.l1BroadcastFeeSat;
+    final mediumFeeSats = feeQuote.speedMedium.userFeeSat + feeQuote.speedMedium.l1BroadcastFeeSat;
+    final fastFeeSats = feeQuote.speedFast.userFeeSat + feeQuote.speedFast.l1BroadcastFeeSat;
+    print("Slow fee: $slowFeeSats sats");
+    print("Medium fee: $mediumFeeSats sats");
+    print("Fast fee: $fastFeeSats sats");
   }
   // ANCHOR_END: prepare-send-payment-onchain
   return response;
@@ -58,11 +57,12 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
-  // Set the amount you wish the pay the receiver
-  BigInt amountSats = BigInt.from(50000);
+  // Set the amount you wish to pay the receiver
+  PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amount: amountSats);
+      paymentRequest: paymentRequest,
+      payAmount: payAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -79,11 +79,12 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
     BreezSdk sdk) async {
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
-  // Optionally set the amount you wish the pay the receiver
-  BigInt optionalAmountSats = BigInt.from(50000);
+  // Optionally set the amount you wish to pay the receiver
+  PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amount: optionalAmountSats);
+      paymentRequest: paymentRequest,
+      payAmount: optionalPayAmount);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -147,6 +148,7 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
 Future<SendPaymentResponse> sendPaymentOnchain(
     BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
+  // Select the confirmation speed for the on-chain transaction
   final options = SendPaymentOptions.bitcoinAddress(
       confirmationSpeed: OnchainConfirmationSpeed.medium);
   String? optionalIdempotencyKey = "<idempotency key uuid>";
@@ -171,5 +173,23 @@ Future<SendPaymentResponse> sendPaymentSpark(
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-spark
   print(payment);
+  return response;
+}
+
+Future<PrepareSendPaymentResponse> prepareSendPaymentDrain(
+    BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-drain
+  // Use PayAmount.drain() to send all available funds
+  String paymentRequest = "<payment request>";
+  PayAmount payAmount = PayAmount.drain();
+
+  final request = PrepareSendPaymentRequest(
+      paymentRequest: paymentRequest,
+      payAmount: payAmount);
+  final response = await sdk.prepareSendPayment(request: request);
+
+  // The response contains PayAmount.drain() to indicate this is a drain operation
+  print("Pay amount: ${response.payAmount}");
+  // ANCHOR_END: prepare-send-payment-drain
   return response;
 }
