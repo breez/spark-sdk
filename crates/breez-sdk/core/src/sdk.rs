@@ -1726,12 +1726,13 @@ impl BreezSdk {
                             .transpose()?,
                     )
                     .await?;
+                let total_amount = amount.saturating_add(u128::from(lightning_fee_sats));
                 let conversion_estimate = self
                     .token_converter
                     .validate(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(lightning_fee_sats)),
+                        total_amount,
                     )
                     .await?;
 
@@ -1758,12 +1759,14 @@ impl BreezSdk {
                     )
                     .await?
                     .into();
+                let total_amount =
+                    amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat()));
                 let conversion_estimate = self
                     .token_converter
                     .validate(
                         request.conversion_options.as_ref(),
                         request.token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
+                        total_amount,
                     )
                     .await?;
                 Ok(PrepareSendPaymentResponse {

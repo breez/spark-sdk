@@ -15,7 +15,7 @@ This creates a seamless experience where:
 
 ## Configuration
 
-To enable stable balance, configure the `stable balance config` when initializing the SDK with the following options:
+To enable stable balance, configure the [stable balance config](./config.md#stable-balance-configuration) when initializing the SDK with the following options:
 - **Token Identifier** - The identifier of the stable token to convert Bitcoin to.
 - **Threshold Sats** - Optional minimum sats balance to trigger auto-conversion. Defaults to the conversion limit minimum if not specified.
 - **Maximum Slippage** - Optional maximum slippage in basis points. Defaults to 50 bps (0.5%).
@@ -37,19 +37,18 @@ If the configured `threshold sats` is lower than the minimum amount required by 
 
 ## Sending payments with stable balance
 
-When your balance is held in a stable token, you can still send Bitcoin payments by using [token conversions](./token_conversion.md#token-to-bitcoin). The SDK will convert the necessary amount of tokens to Bitcoin and then complete the payment.
+When your balance is held in a stable token, you can still send Bitcoin payments. The SDK automatically detects when there's not enough Bitcoin balance to cover a payment and sets up the token-to-Bitcoin conversion for you.
 
-For example, to pay a Lightning invoice when your balance is in USDB:
+When you [prepare to send a payment](./send_payment.md#preparing-payments) without specifying conversion options:
+1. If you have enough Bitcoin balance, no conversion is needed
+2. If your Bitcoin balance is insufficient, the SDK automatically configures conversion options using your stable balance settings (token identifier and slippage)
 
-{{#tabs send_payment:prepare-send-payment-with-conversion}}
+<div class="warning">
+<h4>Developer note</h4>
 
-This allows you to:
+You can still explicitly specify `conversion options` in your request if you need custom slippage settings or want to override the automatic behavior.
 
-- Pay any Lightning invoice
-- Pay to any Bitcoin address
-- Send to Spark addresses
-
-All while keeping your balance in the stable token.
+</div>
 
 ## Related pages
 

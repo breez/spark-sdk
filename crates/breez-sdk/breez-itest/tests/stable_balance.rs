@@ -205,19 +205,14 @@ async fn test_stable_balance_auto_conversion(
         .payment_request;
 
     // Alice prepares payment using her tokens (Token → Bitcoin conversion)
+    // Conversion options are auto-populated from stable balance config
     let prepare_token_to_btc = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             amount: None, // Amount from invoice
             token_identifier: None,
-            conversion_options: Some(ConversionOptions {
-                conversion_type: ConversionType::ToBitcoin {
-                    from_token_identifier: REGTEST_TOKEN_ID.to_string(),
-                },
-                max_slippage_bps: Some(200), // 2%
-                completion_timeout_secs: None,
-            }),
+            conversion_options: None, // Auto-populated from stable balance config
         })
         .await?;
 
