@@ -111,10 +111,10 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Real-time sync
 - [x] External input parsers
 - [x] External signer
+- [x] LNURL-Auth
 - [ ] Seedless restore
 - [ ] NWC
 - [ ] WebLN
-- [ ] LNURL-Auth
 - [ ] Fiat on-ramp
 - [ ] BTC <> USDX swaps
 - [ ] Hodl invoice support 
