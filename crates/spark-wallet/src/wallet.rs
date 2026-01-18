@@ -1855,23 +1855,38 @@ impl BackgroundProcessor {
     }
 
     async fn process_events(&self, mut event_stream: broadcast::Receiver<SparkEvent>) {
-        while let Ok(event) = event_stream.recv().await {
-            debug!("Received event: {event}");
-            trace!("Received event: {event:?}");
-            let result = match event.clone() {
-                SparkEvent::Transfer(transfer) => self.process_transfer_event(*transfer).await,
-                SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
-                SparkEvent::Connected => self.process_connected_event().await,
-                SparkEvent::Disconnected => self.process_disconnected_event().await,
-            };
-            debug!("Processed event: {event}");
+        use broadcast::error::RecvError;
 
-            if let Err(e) = result {
-                error!("Error processing event: {e:?}");
+        loop {
+            match event_stream.recv().await {
+                Ok(event) => {
+                    debug!("Received event: {event}");
+                    trace!("Received event: {event:?}");
+                    let result = match event.clone() {
+                        SparkEvent::Transfer(transfer) => {
+                            self.process_transfer_event(*transfer).await
+                        }
+                        SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
+                        SparkEvent::Connected => self.process_connected_event().await,
+                        SparkEvent::Disconnected => self.process_disconnected_event().await,
+                    };
+                    debug!("Processed event: {event}");
+
+                    if let Err(e) = result {
+                        error!("Error processing event: {e:?}");
+                    }
+                }
+
+                Err(RecvError::Lagged(skipped)) => {
+                    error!("Event stream lagged, skipped {} messages", skipped);
+                    continue;
+                }
+                Err(RecvError::Closed) => {
+                    info!("Event stream closed, stopping event processing");
+                    break;
+                }
             }
         }
-
-        info!("Event stream closed, stopping event processing");
     }
 
     async fn process_deposit_event(&self, deposit: TreeNode) -> Result<(), SparkWalletError> {
