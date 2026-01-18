@@ -84,7 +84,7 @@ impl BreezSigner for BreezSignerImpl {
             .sign_ecdsa_recoverable(&message, &derived.private_key))
     }
 
-    async fn ecies_encrypt(
+    async fn encrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
@@ -99,7 +99,7 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|err| SdkError::Generic(format!("Could not encrypt data: {err}")))
     }
 
-    async fn ecies_decrypt(
+    async fn decrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
@@ -135,11 +135,11 @@ impl BreezSigner for BreezSignerImpl {
             .sign_schnorr_with_rng(&message, &keypair, &mut rng))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {
         self.spark_signer
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
@@ -171,33 +171,33 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::SecretKey, SdkError> {
         self.spark_signer
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         self.spark_signer
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &spark_wallet::PrivateKeySource,
         new_signing_key: &spark_wallet::PrivateKeySource,
     ) -> Result<spark_wallet::PrivateKeySource, SdkError> {
         self.spark_signer
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secret_keys(signing_key, new_signing_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }

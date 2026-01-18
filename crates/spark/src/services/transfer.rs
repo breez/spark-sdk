@@ -316,7 +316,7 @@ impl TransferService {
         // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
             .signer
-            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)
+            .subtract_secret_keys(&leaf.signing_key, &leaf.new_signing_key)
             .await?;
 
         // Split the secret into threshold shares with proofs
@@ -965,7 +965,7 @@ impl TransferService {
         // Calculate the public key tweak by subtracting private keys given public keys
         let privkey_tweak = self
             .signer
-            .subtract_private_keys(&leaf.signing_key, &leaf.new_signing_key)
+            .subtract_secret_keys(&leaf.signing_key, &leaf.new_signing_key)
             .await?;
 
         // Split the secret into threshold shares with proofs
@@ -1040,11 +1040,11 @@ impl TransferService {
         // Prepare leaf data map with refund signing information
         let mut leaf_data_map = HashMap::new();
         for leaf_key in leaf_keys {
-            let signing_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
+            let signing_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
             let direct_signing_nonce_commitment =
-                self.signer.generate_frost_signing_commitments().await?;
+                self.signer.generate_random_signing_commitment().await?;
             let direct_from_cpfp_signing_nonce_commitment =
-                self.signer.generate_frost_signing_commitments().await?;
+                self.signer.generate_random_signing_commitment().await?;
 
             let signing_public_key = self
                 .signer

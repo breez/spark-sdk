@@ -59,10 +59,10 @@ pub async fn prepare_leaf_refund_signing_data(
 ) -> Result<HashMap<TreeNodeId, LeafRefundSigningData>, SignerError> {
     let mut leaf_data_map = HashMap::new();
     for leaf_key in leaf_key_tweaks.iter() {
-        let signing_nonce_commitment = signer.generate_frost_signing_commitments().await?;
-        let direct_signing_nonce_commitment = signer.generate_frost_signing_commitments().await?;
+        let signing_nonce_commitment = signer.generate_random_signing_commitment().await?;
+        let direct_signing_nonce_commitment = signer.generate_random_signing_commitment().await?;
         let direct_from_cpfp_signing_nonce_commitment =
-            signer.generate_frost_signing_commitments().await?;
+            signer.generate_random_signing_commitment().await?;
 
         leaf_data_map.insert(
             leaf_key.node.id.clone(),
@@ -257,7 +257,7 @@ async fn sign_refund(
 ) -> Result<SignedTx, SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
-    let self_commitment = signer.generate_frost_signing_commitments().await?;
+    let self_commitment = signer.generate_random_signing_commitment().await?;
     let user_signature = signer
         .sign_frost(SignFrostRequest {
             message: sighash.to_raw_hash().to_byte_array().as_ref(),

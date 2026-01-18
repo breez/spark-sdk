@@ -183,7 +183,7 @@ impl TimelockManager {
             tx: cpfp_split_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -193,7 +193,7 @@ impl TimelockManager {
             tx: direct_split_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -208,7 +208,7 @@ impl TimelockManager {
             tx: cpfp_node_tx.clone(),
             parent_tx_out: cpfp_split_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -218,7 +218,7 @@ impl TimelockManager {
             tx: direct_node_tx.clone(),
             parent_tx_out: cpfp_split_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -239,7 +239,7 @@ impl TimelockManager {
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -250,7 +250,7 @@ impl TimelockManager {
                 tx: direct_refund_tx.clone(),
                 parent_tx_out: direct_node_tx.output[0].clone(),
                 signing_public_key,
-                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                signing_commitments: self.signer.generate_random_signing_commitment().await?,
                 verifying_public_key: node.verifying_public_key,
             });
         }
@@ -262,7 +262,7 @@ impl TimelockManager {
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
                 signing_public_key,
-                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                signing_commitments: self.signer.generate_random_signing_commitment().await?,
                 verifying_public_key: node.verifying_public_key,
             });
         }
@@ -379,7 +379,7 @@ impl TimelockManager {
             tx: cpfp_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -389,7 +389,7 @@ impl TimelockManager {
             tx: direct_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -410,7 +410,7 @@ impl TimelockManager {
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -421,7 +421,7 @@ impl TimelockManager {
                 tx: direct_refund_tx.clone(),
                 parent_tx_out: direct_node_tx.output[0].clone(),
                 signing_public_key,
-                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                signing_commitments: self.signer.generate_random_signing_commitment().await?,
                 verifying_public_key: node.verifying_public_key,
             });
         }
@@ -433,7 +433,7 @@ impl TimelockManager {
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
                 signing_public_key,
-                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                signing_commitments: self.signer.generate_random_signing_commitment().await?,
                 verifying_public_key: node.verifying_public_key,
             });
         }
@@ -536,7 +536,7 @@ impl TimelockManager {
             tx: cpfp_node_tx.clone(),
             parent_tx_out: node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -546,7 +546,7 @@ impl TimelockManager {
             tx: direct_node_tx.clone(),
             parent_tx_out: node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -567,7 +567,7 @@ impl TimelockManager {
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
             signing_public_key,
-            signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+            signing_commitments: self.signer.generate_random_signing_commitment().await?,
             verifying_public_key: node.verifying_public_key,
         });
 
@@ -578,7 +578,7 @@ impl TimelockManager {
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
                 signing_public_key,
-                signing_commitments: self.signer.generate_frost_signing_commitments().await?,
+                signing_commitments: self.signer.generate_random_signing_commitment().await?,
                 verifying_public_key: node.verifying_public_key,
             });
         }

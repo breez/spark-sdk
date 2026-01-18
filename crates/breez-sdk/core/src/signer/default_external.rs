@@ -129,20 +129,20 @@ impl ExternalSigner for DefaultExternalSigner {
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
-            .ecies_encrypt(&message, &derivation_path)
+            .encrypt_ecies(&message, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
-            .ecies_decrypt(&message, &derivation_path)
+            .decrypt_ecies(&message, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -177,12 +177,12 @@ impl ExternalSigner for DefaultExternalSigner {
         Ok(HashedMessageBytes::from_hmac(&sig))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, SignerError> {
         let commitments = self
             .inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         ExternalFrostCommitments::from_frost_commitments(&commitments)
@@ -227,31 +227,25 @@ impl ExternalSigner for DefaultExternalSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<PrivateKeyBytes, SignerError> {
+    async fn static_deposit_secret_key(&self, index: u32) -> Result<PrivateKeyBytes, SignerError> {
         let secret = self
             .inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PrivateKeyBytes::from_secret_key(&secret))
     }
 
-    async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKeyBytes, SignerError> {
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, SignerError> {
         let pk = self
             .inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
@@ -264,14 +258,14 @@ impl ExternalSigner for DefaultExternalSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         let result = self
             .inner
-            .subtract_private_keys(&sk, &nsk)
+            .subtract_secret_keys(&sk, &nsk)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         ExternalPrivateKeySource::from_private_key_source(&result)
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: ExternalSecretToSplit,
         threshold: u32,
@@ -343,7 +337,7 @@ impl ExternalSigner for DefaultExternalSigner {
         ExternalFrostSignatureShare::from_signature_share(&share).map_err(|e| e.to_string().into())
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: ExternalAggregateFrostRequest,
     ) -> Result<ExternalFrostSignature, SignerError> {
@@ -495,7 +489,7 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_ecies_encrypt_decrypt() {
+    async fn test_encrypt_decrypt_ecies() {
         let (external, internal) = create_test_signer();
 
         let message = b"secret message";
@@ -504,18 +498,18 @@ mod tests {
 
         // Test encryption
         let external_encrypted = external
-            .ecies_encrypt(message.to_vec(), path_str.clone())
+            .encrypt_ecies(message.to_vec(), path_str.clone())
             .await
             .unwrap();
-        let internal_encrypted = internal.ecies_encrypt(message, &path).await.unwrap();
+        let internal_encrypted = internal.encrypt_ecies(message, &path).await.unwrap();
 
         // Both should be able to decrypt
         let external_decrypted = external
-            .ecies_decrypt(external_encrypted.clone(), path_str.clone())
+            .decrypt_ecies(external_encrypted.clone(), path_str.clone())
             .await
             .unwrap();
         let internal_decrypted = internal
-            .ecies_decrypt(&internal_encrypted, &path)
+            .decrypt_ecies(&internal_encrypted, &path)
             .await
             .unwrap();
 
@@ -645,14 +639,8 @@ mod tests {
         ));
 
         // Test private key
-        let ext_secret_key = external
-            .get_static_deposit_private_key(index)
-            .await
-            .unwrap();
-        let int_secret_key = internal
-            .get_static_deposit_private_key(index)
-            .await
-            .unwrap();
+        let ext_secret_key = external.static_deposit_secret_key(index).await.unwrap();
+        let int_secret_key = internal.static_deposit_secret_key(index).await.unwrap();
 
         assert_eq!(
             ext_secret_key.bytes,
@@ -661,8 +649,8 @@ mod tests {
         );
 
         // Test public key
-        let ext_public_key = external.get_static_deposit_public_key(index).await.unwrap();
-        let int_public_key = internal.get_static_deposit_public_key(index).await.unwrap();
+        let ext_public_key = external.static_deposit_signing_key(index).await.unwrap();
+        let int_public_key = internal.static_deposit_signing_key(index).await.unwrap();
 
         assert_eq!(
             ext_public_key.to_public_key().unwrap(),
@@ -705,9 +693,9 @@ mod tests {
         let (external, internal) = create_test_signer();
 
         // Generate commitments for both signers
-        let _external_commitments = external.generate_frost_signing_commitments().await.unwrap();
+        let _external_commitments = external.generate_random_signing_commitment().await.unwrap();
         let internal_commitments_full =
-            internal.generate_frost_signing_commitments().await.unwrap();
+            internal.generate_random_signing_commitment().await.unwrap();
 
         // Create a simple FROST signing request
         let message = b"test frost signing message";
