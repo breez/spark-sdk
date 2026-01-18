@@ -185,12 +185,17 @@ pub trait ExternalSigner: Send + Sync {
 
     /// Subtracts one private key from another.
     ///
+    /// This is a lower-level primitive used as part of key tweaking operations.
+    ///
     /// # Arguments
     /// * `signing_key` - The first private key source
     /// * `new_signing_key` - The second private key source to subtract
     ///
     /// # Returns
     /// The resulting private key source, or an error string
+    ///
+    /// See also: [JavaScript `subtractSplitAndEncrypt`](https://docs.spark.money/wallets/spark-signer#subtract,-split,-and-encrypt)
+    /// (this method provides the subtraction step of that higher-level operation)
     async fn subtract_secret_keys(
         &self,
         signing_key: ExternalPrivateKeySource,
