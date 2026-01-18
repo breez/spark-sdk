@@ -37,6 +37,9 @@ jobs:
   itest:
     name: Integration test
     runs-on: ubuntu-latest
+    env:
+      FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
+      FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
