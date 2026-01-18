@@ -23,6 +23,8 @@ use super::external_types::{
 #[macros::async_trait]
 pub trait ExternalSigner: Send + Sync {
     /// Returns the identity public key as 33 bytes (compressed secp256k1 key).
+    ///
+    /// See also: [JavaScript `getIdentityPublicKey`](https://docs.spark.money/wallets/spark-signer#get-identity-public-key)
     fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError>;
 
     /// Derives a public key for the given BIP32 derivation path.
@@ -32,6 +34,8 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The derived public key as 33 bytes, or a `SignerError`
+    ///
+    /// See also: [JavaScript `getPublicKeyFromDerivation`](https://docs.spark.money/wallets/spark-signer#get-public-key-from-derivation)
     async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError>;
 
     /// Signs a message using ECDSA at the given derivation path.
@@ -74,7 +78,7 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// Encrypted data, or a `SignerError`
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
 
     /// Decrypts a message using ECIES at the given derivation path.
     ///
@@ -84,7 +88,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// Decrypted data, or a `SignerError`
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
+    ///
+    /// See also: [JavaScript `decryptEcies`](https://docs.spark.money/wallets/spark-signer#decrypt-ecies)
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError>;
 
     /// Signs a hash using Schnorr signature at the given derivation path.
     ///
@@ -108,6 +114,8 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// 32-byte HMAC-SHA256, or a `SignerError`
+    ///
+    /// See also: [JavaScript `htlcHMAC`](https://docs.spark.money/wallets/spark-signer#generate-htlc-hmac)
     async fn hmac_sha256(
         &self,
         message: Vec<u8>,
@@ -117,7 +125,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// Frost commitments with nonces, or a `SignerError`
-    async fn generate_frost_signing_commitments(
+    ///
+    /// See also: [JavaScript `getRandomSigningCommitment`](https://docs.spark.money/wallets/spark-signer#get-random-signing-commitment)
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, SignerError>;
 
@@ -158,10 +168,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The 32-byte private key, or an error string
-    async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<PrivateKeyBytes, SignerError>;
+    ///
+    /// See also: [JavaScript `getStaticDepositSecretKey`](https://docs.spark.money/wallets/spark-signer#get-static-deposit-secret-key)
+    async fn static_deposit_secret_key(&self, index: u32) -> Result<PrivateKeyBytes, SignerError>;
 
     /// Gets a static deposit public key by index.
     ///
@@ -170,10 +179,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The 33-byte public key, or an error string
-    async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKeyBytes, SignerError>;
+    ///
+    /// See also: [JavaScript `getStaticDepositSigningKey`](https://docs.spark.money/wallets/spark-signer#get-static-deposit-signing-key)
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, SignerError>;
 
     /// Subtracts one private key from another.
     ///
@@ -183,7 +191,7 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The resulting private key source, or an error string
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
@@ -198,7 +206,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// Vector of verifiable secret shares, or an error string
-    async fn split_secret(
+    ///
+    /// See also: [JavaScript `splitSecretWithProofs`](https://docs.spark.money/wallets/spark-signer#split-secret-with-proofs)
+    async fn split_secret_with_proofs(
         &self,
         secret: ExternalSecretToSplit,
         threshold: u32,
@@ -238,6 +248,8 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// A signature share, or an error string
+    ///
+    /// See also: [JavaScript `signFrost`](https://docs.spark.money/wallets/spark-signer#frost-signing)
     async fn sign_frost(
         &self,
         request: ExternalSignFrostRequest,
@@ -250,7 +262,9 @@ pub trait ExternalSigner: Send + Sync {
     ///
     /// # Returns
     /// The aggregated Frost signature, or an error string
-    async fn aggregate_frost_signatures(
+    ///
+    /// See also: [JavaScript `aggregateFrost`](https://docs.spark.money/wallets/spark-signer#aggregate-frost-signatures)
+    async fn aggregate_frost(
         &self,
         request: ExternalAggregateFrostRequest,
     ) -> Result<ExternalFrostSignature, SignerError>;

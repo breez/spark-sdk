@@ -28,7 +28,7 @@ pub trait Signer: Send + Sync + 'static {
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
 
@@ -43,14 +43,14 @@ pub trait Signer: Send + Sync + 'static {
         index: u32,
     ) -> Result<PrivateKeySource, SignerError>;
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
+    async fn static_deposit_secret_key(&self, index: u32) -> Result<SecretKey, SignerError>;
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///
     /// Returns the resulting private key (encrypted)
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &PrivateKeySource,
         new_signing_key: &PrivateKeySource,

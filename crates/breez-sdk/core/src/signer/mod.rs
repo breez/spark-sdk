@@ -26,13 +26,13 @@ pub trait BreezSigner: Send + Sync {
         path: &DerivationPath,
     ) -> Result<RecoverableSignature, SdkError>;
 
-    async fn ecies_encrypt(
+    async fn encrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError>;
 
-    async fn ecies_decrypt(
+    async fn decrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
@@ -49,7 +49,7 @@ pub trait BreezSigner: Send + Sync {
         path: &DerivationPath,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError>;
 
@@ -65,17 +65,15 @@ pub trait BreezSigner: Send + Sync {
         index: u32,
     ) -> Result<spark_wallet::PrivateKeySource, SdkError>;
 
-    async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<secp256k1::SecretKey, SdkError>;
+    async fn static_deposit_secret_key(&self, index: u32)
+    -> Result<secp256k1::SecretKey, SdkError>;
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &spark_wallet::PrivateKeySource,
         new_signing_key: &spark_wallet::PrivateKeySource,

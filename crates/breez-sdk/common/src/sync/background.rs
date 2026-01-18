@@ -585,9 +585,9 @@ mod tests {
             .expect_sign_ecdsa_recoverable()
             .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f])); // Return dummy signature
 
-        // For ecies_encrypt, which is used when encrypting record data in set_record
+        // For encrypt_ecies, which is used when encrypting record data in set_record
         // This should take the input data and return an "encrypted" version
-        signer.expect_ecies_encrypt().returning(|data| {
+        signer.expect_encrypt_ecies().returning(|data| {
             // In a real implementation, this would encrypt the data
             // For testing, we'll just prepend a marker to simulate encryption
             let mut encrypted = vec![0xE5, 0xE5]; // "Encryption" marker
@@ -595,9 +595,9 @@ mod tests {
             Ok(encrypted)
         });
 
-        // For ecies_decrypt, which is used when decrypting record data in map_record
+        // For decrypt_ecies, which is used when decrypting record data in map_record
         // This needs to return a valid SyncData JSON that can be deserialized
-        signer.expect_ecies_decrypt().returning(|data| {
+        signer.expect_decrypt_ecies().returning(|data| {
             // In tests with empty data or if it starts with our marker
             if data.is_empty() || (data.len() >= 2 && data[0] == 0xE5 && data[1] == 0xE5) {
                 // Return a valid SyncData JSON that can be parsed
@@ -869,7 +869,7 @@ mod tests {
             .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
 
         mock_signer
-            .expect_ecies_decrypt()
+            .expect_decrypt_ecies()
             .times(1) // Exactly one call expected for this test
             .returning(|_| {
                 // Create a valid JSON for SyncData
@@ -1193,7 +1193,7 @@ mod tests {
         // Create mock signer that fails on encryption
         let mut mock_signer = MockSyncSigner::new();
         mock_signer
-            .expect_ecies_encrypt()
+            .expect_encrypt_ecies()
             .times(1)
             .returning(|_| Err(anyhow!("Encryption failure")));
 
@@ -1250,7 +1250,7 @@ mod tests {
             .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
 
         mock_signer
-            .expect_ecies_decrypt()
+            .expect_decrypt_ecies()
             .times(1)
             .returning(|_| Err(anyhow!("Decryption failure")));
 
@@ -1302,7 +1302,7 @@ mod tests {
             .expect_sign_ecdsa_recoverable()
             .returning(|_| Ok(vec![0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f]));
 
-        mock_signer.expect_ecies_decrypt().times(1).returning(|_| {
+        mock_signer.expect_decrypt_ecies().times(1).returning(|_| {
             // Return invalid JSON that will fail to parse as SyncData
             let invalid_json = r#"{"not_valid_sync_data": true}"#;
             Ok(invalid_json.as_bytes().to_vec())
@@ -1339,7 +1339,7 @@ mod tests {
 
         // Create mock signer that fails on signing
         let mut mock_signer = MockSyncSigner::new();
-        mock_signer.expect_ecies_encrypt().times(1).returning(Ok);
+        mock_signer.expect_encrypt_ecies().times(1).returning(Ok);
 
         mock_signer
             .expect_sign_ecdsa_recoverable()

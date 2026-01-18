@@ -57,7 +57,7 @@ impl SigningClient {
     pub async fn set_record(&self, record: &Record) -> anyhow::Result<SetRecordReply> {
         let request_time: u32 = now();
         let serialized_data = serde_json::to_vec(&SyncData::new(record.clone()))?;
-        let encrypted_data = self.signer.ecies_encrypt(serialized_data).await?;
+        let encrypted_data = self.signer.encrypt_ecies(serialized_data).await?;
         let msg = format!(
             "{}-{}-{}-{}-{}",
             record.id.to_id_string(),
@@ -121,7 +121,7 @@ impl SigningClient {
     }
 
     async fn map_record(&self, record: crate::sync::proto::Record) -> anyhow::Result<Record> {
-        let decrypted = self.signer.ecies_decrypt(record.data).await?;
+        let decrypted = self.signer.decrypt_ecies(record.data).await?;
         let sync_data: SyncData = serde_json::from_slice(&decrypted)?;
 
         Ok(Record {

@@ -96,28 +96,28 @@ impl BreezSigner for ExternalSignerAdapter {
             .map_err(|e| SdkError::Signer(format!("Invalid recoverable signature: {e}")))
     }
 
-    async fn ecies_encrypt(
+    async fn encrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let path_str = derivation_path_to_string(path);
         self.external
-            .ecies_encrypt(message.to_vec(), path_str)
+            .encrypt_ecies(message.to_vec(), path_str)
             .await
-            .map_err(|e| SdkError::Signer(format!("External signer ecies_encrypt failed: {e}")))
+            .map_err(|e| SdkError::Signer(format!("External signer encrypt_ecies failed: {e}")))
     }
 
-    async fn ecies_decrypt(
+    async fn decrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let path_str = derivation_path_to_string(path);
         self.external
-            .ecies_decrypt(message.to_vec(), path_str)
+            .decrypt_ecies(message.to_vec(), path_str)
             .await
-            .map_err(|e| SdkError::Signer(format!("External signer ecies_decrypt failed: {e}")))
+            .map_err(|e| SdkError::Signer(format!("External signer decrypt_ecies failed: {e}")))
     }
 
     async fn sign_hash_schnorr(
@@ -150,16 +150,16 @@ impl BreezSigner for ExternalSignerAdapter {
         hash_bytes.to_hmac()
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {
         let commitments_ext = self
             .external
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer generate_frost_signing_commitments failed: {e}"
+                    "External signer generate_random_signing_commitment failed: {e}"
                 ))
             })?;
         commitments_ext.to_frost_commitments()
@@ -205,17 +205,17 @@ impl BreezSigner for ExternalSignerAdapter {
         key_ext.to_private_key_source()
     }
 
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::SecretKey, SdkError> {
         let key_bytes = self
             .external
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer get_static_deposit_private_key failed: {e}"
+                    "External signer static_deposit_secret_key failed: {e}"
                 ))
             })?;
 
@@ -224,23 +224,23 @@ impl BreezSigner for ExternalSignerAdapter {
             .map_err(|e| SdkError::Signer(format!("Invalid private key bytes: {e}")))
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         let pk_bytes = self
             .external
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer get_static_deposit_public_key failed: {e}"
+                    "External signer static_deposit_signing_key failed: {e}"
                 ))
             })?;
         pk_bytes.to_public_key()
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &spark_wallet::PrivateKeySource,
         new_signing_key: &spark_wallet::PrivateKeySource,
@@ -251,10 +251,10 @@ impl BreezSigner for ExternalSignerAdapter {
 
         let result_ext = self
             .external
-            .subtract_private_keys(signing_key_ext, new_signing_key_ext)
+            .subtract_secret_keys(signing_key_ext, new_signing_key_ext)
             .await
             .map_err(|e| {
-                SdkError::Signer(format!("External signer subtract_private_keys failed: {e}"))
+                SdkError::Signer(format!("External signer subtract_secret_keys failed: {e}"))
             })?;
         result_ext.to_private_key_source()
     }
@@ -271,9 +271,13 @@ impl BreezSigner for ExternalSignerAdapter {
             .map_err(|_| SdkError::Generic("num_shares value too large".to_string()))?;
         let shares_ext = self
             .external
-            .split_secret(secret_ext, threshold, num_shares_u32)
+            .split_secret_with_proofs(secret_ext, threshold, num_shares_u32)
             .await
-            .map_err(|e| SdkError::Signer(format!("External signer split_secret failed: {e}")))?;
+            .map_err(|e| {
+                SdkError::Signer(format!(
+                    "External signer split_secret_with_proofs failed: {e}"
+                ))
+            })?;
 
         shares_ext
             .into_iter()
@@ -338,7 +342,7 @@ impl BreezSigner for ExternalSignerAdapter {
 
         let sig_ext = self
             .external
-            .aggregate_frost_signatures(request_ext)
+            .aggregate_frost(request_ext)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!("External signer aggregate_frost failed: {e}"))

@@ -64,16 +64,16 @@ impl SyncSigner for RTSyncSigner {
         Ok(complete_signature)
     }
 
-    async fn ecies_encrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    async fn encrypt_ecies(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         self.signer
-            .ecies_encrypt(&msg, &self.encryption_path)
+            .encrypt_ecies(&msg, &self.encryption_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))
     }
 
-    async fn ecies_decrypt(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    async fn decrypt_ecies(&self, msg: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         self.signer
-            .ecies_decrypt(&msg, &self.encryption_path)
+            .decrypt_ecies(&msg, &self.encryption_path)
             .await
             .map_err(|e| anyhow!(e.to_string()))
     }

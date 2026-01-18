@@ -52,11 +52,11 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
         self.signer
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -91,27 +91,27 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+    async fn static_deposit_secret_key(&self, index: u32) -> Result<SecretKey, SignerError> {
         self.signer
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         self.signer
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &PrivateKeySource,
         new_signing_key: &PrivateKeySource,
     ) -> Result<PrivateKeySource, SignerError> {
         self.signer
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secret_keys(signing_key, new_signing_key)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
