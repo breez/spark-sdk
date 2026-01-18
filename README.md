@@ -49,7 +49,7 @@ The [Breez SDK - Nodeless *(Spark Implementation)* cli](https://github.com/breez
 
 Looking for a quick way to try the SDK in the browser or as PWA? Check out our demo app *Glow*:
 
-- **Live demo:** [https://glow-app.co](https://glow-app.co)]
+- **Live demo:** [https://glow-app.co](https://glow-app.co)
 - **Repo:** [breez/breez-sdk-spark-example](https://github.com/breez/breez-sdk-spark-example)  
 
 > **Note:** The demo is for demonstration purposes only and not intended for production use.
