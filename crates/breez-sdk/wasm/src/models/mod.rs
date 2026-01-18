@@ -749,6 +749,7 @@ pub struct PrepareLnurlPayRequest {
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
+    pub conversion_options: Option<ConversionOptions>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayResponse)]
@@ -759,6 +760,7 @@ pub struct PrepareLnurlPayResponse {
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
+    pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayRequest)]

@@ -24,24 +24,40 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 		amountSats := uint64(5_000)
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
+		// Optionally set to use token funds to pay via token conversion
+		optionalMaxSlippageBps := uint32(50)
+		optionalCompletionTimeoutSecs := uint32(30)
+		optionalConversionOptions := breez_sdk_spark.ConversionOptions{
+			ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
+				FromTokenIdentifier: "<token identifier>",
+			},
+			MaxSlippageBps:        &optionalMaxSlippageBps,
+			CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
+		}
 
 		request := breez_sdk_spark.PrepareLnurlPayRequest{
 			AmountSats:               amountSats,
 			PayRequest:               inputType.Field0.PayRequest,
 			Comment:                  &optionalComment,
 			ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
+			ConversionOptions:        &optionalConversionOptions,
 		}
 
-		response, err := sdk.PrepareLnurlPay(request)
+		prepareResponse, err := sdk.PrepareLnurlPay(request)
 
 		if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
 			return nil, err
 		}
 
 		// If the fees are acceptable, continue to create the LNURL Pay
-		feeSats := response.FeeSats
+		if prepareResponse.ConversionEstimate != nil {
+			log.Printf("Estimated conversion amount: %v token base units", prepareResponse.ConversionEstimate.Amount)
+			log.Printf("Estimated conversion fee: %v token base units", prepareResponse.ConversionEstimate.Fee)
+		}
+
+		feeSats := prepareResponse.FeeSats
 		log.Printf("Fees: %v sats", feeSats)
-		return &response, nil
+		return &prepareResponse, nil
 	}
 	// ANCHOR_END: prepare-lnurl-pay
 	return nil, nil

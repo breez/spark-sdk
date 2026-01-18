@@ -10,6 +10,8 @@
 During the prepare step, the SDK ensures that the inputs are valid with respect to the LNURL-pay request,
 and also returns the fees related to the payment so they can be confirmed.
 
+Payments can be sent without holding Bitcoin by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.md">Converting tokens</a> for more information.
+
 {{#tabs lnurl_pay:prepare-lnurl-pay}}
 
 <h2 id="lnurl-payments">

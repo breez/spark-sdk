@@ -770,6 +770,9 @@ pub struct PrepareLnurlPayRequest {
     pub comment: Option<String>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub validate_success_action_url: Option<bool>,
+    /// If provided, the payment will include a token conversion step before sending the payment
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub conversion_options: Option<ConversionOptions>,
 }
 
 #[derive(Debug)]
@@ -781,6 +784,8 @@ pub struct PrepareLnurlPayResponse {
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
+    /// When set, the payment will include a token conversion step before sending the payment
+    pub conversion_estimate: Option<ConversionEstimate>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
