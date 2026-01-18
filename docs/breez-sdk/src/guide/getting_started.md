@@ -1,8 +1,6 @@
 # Getting Started
 
-Integrating Breez SDK - Nodeless _(Spark Implementation)_ into your application takes just a few minutes.
-
-Before you begin, make sure to read the [repository README](https://github.com/breez/spark-sdk#breez-sdk---nodeless-spark-implementation) carefully. Then follow these steps to get started:
+Integrating Breez SDK into your application takes just a few minutes. Follow these steps to get started:
 
 - **[Installing the SDK](/guide/install.md)**
 - **[Testing and development](/guide/testing.md)**
@@ -21,7 +19,7 @@ The _Nodeless_ Breez API key must be set for the SDK to work. You can request on
 
 When implementing the Breez SDK, we recommend reading through our [UX Guidelines](/guide/uxguide.md) to provide a consistent and intuitive experience for your end-users.
 
-Many of the guidelines are implemented in [Misty Breez](https://github.com/breez/misty-breez/), which you can use as the primary UX reference during SDK implementation.
+Many of the guidelines are implemented in [Glow](https://glow-app.co), which you can use as a UX reference during SDK implementation.
 
 ## Demo
 
