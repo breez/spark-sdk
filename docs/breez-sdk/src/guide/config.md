@@ -79,8 +79,9 @@ When configured, any Bitcoin received above the threshold amount will be automat
 
 The configuration includes:
 - **Token Identifier** - The identifier of the stable token to convert Bitcoin to.
-- **Threshold** - Optional minimum sats balance to trigger auto-conversion. Defaults to the conversion limit minimum if not specified.
+- **Threshold Sats** - Optional minimum sats balance to trigger auto-conversion. Defaults to the conversion limit minimum if not specified.
 - **Maximum Slippage** - Optional maximum slippage in basis points. Defaults to 50 bps (0.5%).
+- **Reserved Sats** - Optional amount of sats to keep as Bitcoin and not convert. Defaults to the conversion limit minimum if not specified. This reserve ensures you can send some Bitcoin payments that fall below the conversion limit minimum.
 
 See [Stable balance](./stable_balance.md) for more information on how stable balance works and how to send payments using token-to-Bitcoin conversion.
 

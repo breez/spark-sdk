@@ -37,7 +37,7 @@ struct Cli {
 
     /// Stable balance threshold, in sats
     #[arg(long)]
-    stable_balance_threshhold: Option<u64>,
+    stable_balance_threshold: Option<u64>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -213,8 +213,9 @@ async fn main() -> Result<(), anyhow::Error> {
         cli.stable_balance_token_identifier
             .map(|token_identifier| StableBalanceConfig {
                 token_identifier,
-                threshold_sats: cli.stable_balance_threshhold,
+                threshold_sats: cli.stable_balance_threshold,
                 max_slippage_bps: None,
+                reserved_sats: None,
             });
 
     Box::pin(run_interactive_mode(

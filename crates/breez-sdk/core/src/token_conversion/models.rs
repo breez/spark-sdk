@@ -22,6 +22,11 @@ pub struct AutoConversionConfig {
     ///
     /// Defaults to 50 bps (0.5%) if not set.
     pub max_slippage_bps: Option<u32>,
+
+    /// Amount of sats to keep as Bitcoin reserve.
+    ///
+    /// If not provided, defaults to the conversion minimum.
+    pub reserved_sats: Option<u64>,
 }
 
 /// Response from estimating a conversion, used when preparing a payment that requires conversion

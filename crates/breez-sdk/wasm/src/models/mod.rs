@@ -627,6 +627,7 @@ pub struct StableBalanceConfig {
     pub token_identifier: String,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
+    pub reserved_sats: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]

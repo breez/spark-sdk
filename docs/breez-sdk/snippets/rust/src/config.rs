@@ -58,6 +58,7 @@ pub(crate) fn configure_stable_balance() -> Result<()> {
         token_identifier: "<token_identifier>".to_string(),
         threshold_sats: Some(10_000),
         max_slippage_bps: Some(100),
+        reserved_sats: Some(1_000),
     });
     // ANCHOR_END: stable-balance-config
     info!("Config: {:?}", config);
