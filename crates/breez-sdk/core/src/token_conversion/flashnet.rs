@@ -657,15 +657,18 @@ impl TokenConverter for FlashnetTokenConverter {
         token_identifier: Option<&String>,
         amount_out: u128,
     ) -> Result<Option<ConversionEstimate>, ConversionError> {
-        let Some(options) = options else {
+        let Some(options) = self
+            .get_conversion_options(options, token_identifier, amount_out)
+            .await?
+        else {
             return Ok(None);
         };
 
         let conversion_pool = self
-            .get_conversion_pool(options, token_identifier, amount_out)
+            .get_conversion_pool(&options, token_identifier, amount_out)
             .await?;
 
-        self.estimate_internal(&conversion_pool, options, amount_out)
+        self.estimate_internal(&conversion_pool, &options, amount_out)
             .await
     }
 
@@ -693,6 +696,50 @@ impl TokenConverter for FlashnetTokenConverter {
 }
 
 impl FlashnetTokenConverter {
+    /// Get conversion options for a payment, auto-populating from config if needed.
+    ///
+    /// Returns the provided options if set, or auto-populates from stable balance config
+    /// if configured and there's not enough sats balance to cover the payment.
+    async fn get_conversion_options(
+        &self,
+        options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        payment_amount: u128,
+    ) -> Result<Option<ConversionOptions>, ConversionError> {
+        // Use provided options if explicitly set
+        if options.is_some() {
+            return Ok(options.cloned());
+        }
+
+        // Don't auto-convert for token payments
+        if token_identifier.is_some() {
+            return Ok(None);
+        }
+
+        // Check if we should auto-populate conversion options
+        let Some(config) = &self.auto_conversion_config else {
+            return Ok(None);
+        };
+
+        let balance_sats = self.spark_wallet.get_balance().await?;
+
+        // Only auto-populate if there's not enough sats balance
+        if u128::from(balance_sats) >= payment_amount {
+            return Ok(None);
+        }
+
+        info!(
+            "Auto-populating conversion options: balance {balance_sats} sats > payment amount {payment_amount} sats"
+        );
+        Ok(Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: config.token_identifier.clone(),
+            },
+            max_slippage_bps: config.max_slippage_bps,
+            completion_timeout_secs: None,
+        }))
+    }
+
     /// Internal conversion implementation that accepts a pre-acquired guard.
     /// This allows `auto_convert` to use `try_lock` to skip if another conversion is in progress.
     #[allow(clippy::too_many_lines)]

@@ -1833,12 +1833,13 @@ impl BreezSdk {
                             .transpose()?,
                     )
                     .await?;
+                let total_amount = amount.saturating_add(u128::from(lightning_fee_sats));
                 let conversion_estimate = self
                     .token_converter
                     .validate(
                         request.conversion_options.as_ref(),
                         token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(lightning_fee_sats)),
+                        total_amount,
                     )
                     .await?;
 
@@ -1879,13 +1880,14 @@ impl BreezSdk {
                     let amount: u64 = amount_for_quote
                         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
                     // For conversion estimate, use fast fee as worst case
-                    let fee_sats_for_estimate = fee_quote.speed_fast.total_fee_sat();
+                    let total_amount = u128::from(amount)
+                        .saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat()));
                     let conversion_estimate = self
                         .token_converter
                         .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            u128::from(amount).saturating_add(u128::from(fee_sats_for_estimate)),
+                            total_amount,
                         )
                         .await?;
                     (

@@ -203,18 +203,13 @@ async fn test_stable_balance_auto_conversion(
         .payment_request;
 
     // Alice prepares payment using her tokens (Token → Bitcoin conversion)
+    // Conversion options are auto-populated from stable balance config
     let prepare_token_to_btc = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
             pay_amount: None,
-            conversion_options: Some(ConversionOptions {
-                conversion_type: ConversionType::ToBitcoin {
-                    from_token_identifier: REGTEST_TOKEN_ID.to_string(),
-                },
-                max_slippage_bps: Some(200), // 2%
-                completion_timeout_secs: None,
-            }),
+            conversion_options: None,
         })
         .await?;
 
@@ -329,8 +324,7 @@ async fn test_stable_balance_reserved_sats(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_spark_address.clone(),
-            amount: Some(5000),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5000 }),
             conversion_options: None,
         })
         .await?;
@@ -391,7 +385,7 @@ async fn test_stable_balance_reserved_sats(
     // ==========================================
     info!("--- Part 2: Alice pays Bob using reserved Bitcoin ---");
 
-    let payment_amount: u128 = 1_000;
+    let payment_amount: u64 = 1_000;
 
     // Bob creates a Spark address to receive
     let bob_spark_address = bob
@@ -407,15 +401,16 @@ async fn test_stable_balance_reserved_sats(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(payment_amount),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: payment_amount,
+            }),
             conversion_options: None, // No conversion - using reserved sats
         })
         .await?;
 
     info!(
-        "Alice prepared Bitcoin payment: amount={}",
-        prepare_btc.amount
+        "Alice prepared Bitcoin payment: amount={:?}",
+        prepare_btc.pay_amount
     );
 
     let send_result = alice
@@ -437,7 +432,8 @@ async fn test_stable_balance_reserved_sats(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
     assert_eq!(
-        bob_received.amount, payment_amount,
+        bob_received.amount,
+        u128::from(payment_amount),
         "Bob should receive the exact payment amount"
     );
 
