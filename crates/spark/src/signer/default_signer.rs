@@ -418,7 +418,7 @@ impl Signer for DefaultSigner {
         Ok(sig)
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
         let (binding_sk, hiding_sk) = {
@@ -462,14 +462,13 @@ impl Signer for DefaultSigner {
         &self,
         index: u32,
     ) -> Result<PrivateKeySource, SignerError> {
-        let secret_key = self.get_static_deposit_private_key(index).await?;
+        let secret_key = self.static_deposit_secret_key(index).await?;
         Ok(PrivateKeySource::new_encrypted(
             self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
         ))
     }
 
-    // Seems unavoidable to expose the static deposit secret key, as its used for claiming static deposits
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+    async fn static_deposit_secret_key(&self, index: u32) -> Result<SecretKey, SignerError> {
         let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {
             SignerError::Generic(format!("failed to create child from {index}: {e}"))
         })?;
@@ -483,15 +482,15 @@ impl Signer for DefaultSigner {
         Ok(private_key)
     }
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         let public_key = self
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await?
             .public_key(&self.secp);
         Ok(public_key)
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: &PrivateKeySource,
         new_signing_key: &PrivateKeySource,
@@ -863,7 +862,7 @@ pub(crate) mod tests {
     }
 
     #[async_test_all]
-    async fn test_subtract_private_keys_success() {
+    async fn test_subtract_secret_keys_success() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
 
@@ -889,7 +888,7 @@ pub(crate) mod tests {
 
         // Perform subtraction: A - B = C
         let result = signer
-            .subtract_private_keys(&source_a, &source_b)
+            .subtract_secret_keys(&source_a, &source_b)
             .await
             .expect("Failed to subtract private keys");
 
@@ -908,7 +907,7 @@ pub(crate) mod tests {
     }
 
     #[async_test_all]
-    async fn test_subtract_private_keys_same_key_error() {
+    async fn test_subtract_secret_keys_same_key_error() {
         let signer = create_test_signer();
         let mut rng = thread_rng();
 
@@ -928,7 +927,7 @@ pub(crate) mod tests {
         let source = PrivateKeySource::new_encrypted(encrypted_key);
 
         // Try to subtract the same key from itself
-        let result = signer.subtract_private_keys(&source, &source).await;
+        let result = signer.subtract_secret_keys(&source, &source).await;
 
         // Should return an error
         assert!(result.is_err());
@@ -1027,10 +1026,10 @@ pub(crate) mod tests {
     }
 
     #[async_test_all]
-    async fn test_generate_frost_signing_commitments_nonces_round_trip() {
+    async fn test_generate_random_signing_commitment_nonces_round_trip() {
         let signer = create_test_signer();
         let commitments = signer
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .expect("Failed to generate frost signing commitments");
 

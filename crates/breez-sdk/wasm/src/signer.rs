@@ -235,17 +235,17 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "eciesEncrypt")]
-    pub async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
+    pub async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
-            .ecies_encrypt(message, path)
+            .encrypt_ecies(message, path)
             .await
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
     #[wasm_bindgen(js_name = "eciesDecrypt")]
-    pub async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
+    pub async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
-            .ecies_decrypt(message, path)
+            .decrypt_ecies(message, path)
             .await
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
@@ -264,11 +264,11 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "generateFrostSigningCommitments")]
-    pub async fn generate_frost_signing_commitments(
+    pub async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, JsValue> {
         self.inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map(|c| c.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -308,37 +308,31 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "getStaticDepositPrivateKey")]
-    pub async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<PrivateKeyBytes, JsValue> {
+    pub async fn static_deposit_secret_key(&self, index: u32) -> Result<PrivateKeyBytes, JsValue> {
         self.inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
     #[wasm_bindgen(js_name = "getStaticDepositPublicKey")]
-    pub async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKeyBytes, JsValue> {
+    pub async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, JsValue> {
         self.inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map(|pk| pk.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
     #[wasm_bindgen(js_name = "subtractPrivateKeys")]
-    pub async fn subtract_private_keys(
+    pub async fn subtract_secret_keys(
         &self,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,
     ) -> Result<ExternalPrivateKeySource, JsValue> {
         self.inner
-            .subtract_private_keys(signing_key.into(), new_signing_key.into())
+            .subtract_secret_keys(signing_key.into(), new_signing_key.into())
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -352,7 +346,7 @@ impl DefaultSigner {
         num_shares: u32,
     ) -> Result<Box<[ExternalVerifiableSecretShare]>, JsValue> {
         self.inner
-            .split_secret(secret.into(), threshold, num_shares)
+            .split_secret_with_proofs(secret.into(), threshold, num_shares)
             .await
             .map(|shares| {
                 shares
@@ -406,7 +400,7 @@ impl DefaultSigner {
         request: ExternalAggregateFrostRequest,
     ) -> Result<ExternalFrostSignature, JsValue> {
         self.inner
-            .aggregate_frost_signatures(request.into())
+            .aggregate_frost(request.into())
             .await
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -457,12 +451,12 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.sign_ecdsa_recoverable(message, path).await
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        self.inner.ecies_encrypt(message, path).await
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        self.inner.encrypt_ecies(message, path).await
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        self.inner.ecies_decrypt(message, path).await
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        self.inner.decrypt_ecies(message, path).await
     }
 
     async fn sign_hash_schnorr(
@@ -473,10 +467,10 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.sign_hash_schnorr(hash, path).await
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<core_types::ExternalFrostCommitments, SignerError> {
-        self.inner.generate_frost_signing_commitments().await
+        self.inner.generate_random_signing_commitment().await
     }
 
     async fn get_public_key_for_node(
@@ -501,37 +495,39 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
             .await
     }
 
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret_key(
         &self,
         index: u32,
     ) -> Result<core_types::PrivateKeyBytes, SignerError> {
-        self.inner.get_static_deposit_private_key(index).await
+        self.inner.static_deposit_secret_key(index).await
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner.get_static_deposit_public_key(index).await
+        self.inner.static_deposit_signing_key(index).await
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: core_types::ExternalPrivateKeySource,
         new_signing_key: core_types::ExternalPrivateKeySource,
     ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
         self.inner
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secret_keys(signing_key, new_signing_key)
             .await
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: core_types::ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
     ) -> Result<Vec<core_types::ExternalVerifiableSecretShare>, SignerError> {
-        self.inner.split_secret(secret, threshold, num_shares).await
+        self.inner
+            .split_secret_with_proofs(secret, threshold, num_shares)
+            .await
     }
 
     async fn encrypt_private_key_for_receiver(
@@ -560,11 +556,11 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.sign_frost(request).await
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: core_types::ExternalAggregateFrostRequest,
     ) -> Result<core_types::ExternalFrostSignature, SignerError> {
-        self.inner.aggregate_frost_signatures(request).await
+        self.inner.aggregate_frost(request).await
     }
 
     async fn hmac_sha256(
@@ -647,10 +643,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(core_types::RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
-            .ecies_encrypt(message, path)
+            .encrypt_ecies(message, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -661,10 +657,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         })
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
-            .ecies_decrypt(message, path)
+            .decrypt_ecies(message, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -694,12 +690,12 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_sig.into())
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<core_types::ExternalFrostCommitments, SignerError> {
         let promise = self
             .inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -768,13 +764,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_source.into())
     }
 
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret_key(
         &self,
         index: u32,
     ) -> Result<core_types::PrivateKeyBytes, SignerError> {
         let promise = self
             .inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret_key(index)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -786,13 +782,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(core_types::PrivateKeyBytes { bytes })
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let promise = self
             .inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -804,7 +800,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_pubkey.into())
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secret_keys(
         &self,
         signing_key: core_types::ExternalPrivateKeySource,
         new_signing_key: core_types::ExternalPrivateKeySource,
@@ -813,7 +809,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let wasm_new_signing_key: ExternalPrivateKeySource = new_signing_key.into();
         let promise = self
             .inner
-            .subtract_private_keys(wasm_signing_key, wasm_new_signing_key)
+            .subtract_secret_keys(wasm_signing_key, wasm_new_signing_key)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -826,7 +822,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_result.into())
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: core_types::ExternalSecretToSplit,
         threshold: u32,
@@ -910,7 +906,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_share.into())
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: core_types::ExternalAggregateFrostRequest,
     ) -> Result<core_types::ExternalFrostSignature, SignerError> {
@@ -1001,14 +997,14 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesEncrypt", catch)]
-    pub fn ecies_encrypt(
+    pub fn encrypt_ecies(
         this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesDecrypt", catch)]
-    pub fn ecies_decrypt(
+    pub fn decrypt_ecies(
         this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
@@ -1022,7 +1018,7 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "generateFrostSigningCommitments", catch)]
-    pub fn generate_frost_signing_commitments(this: &JsExternalSigner) -> Result<Promise, JsValue>;
+    pub fn generate_random_signing_commitment(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getPublicKeyForNode", catch)]
     pub fn get_public_key_for_node(
@@ -1045,19 +1041,19 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPrivateKey", catch)]
-    pub fn get_static_deposit_private_key(
+    pub fn static_deposit_secret_key(
         this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPublicKey", catch)]
-    pub fn get_static_deposit_public_key(
+    pub fn static_deposit_signing_key(
         this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "subtractPrivateKeys", catch)]
-    pub fn subtract_private_keys(
+    pub fn subtract_secret_keys(
         this: &JsExternalSigner,
         signing_key: ExternalPrivateKeySource,
         new_signing_key: ExternalPrivateKeySource,

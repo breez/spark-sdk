@@ -228,7 +228,7 @@ impl DepositService {
         // TODO: Seems unavoidable to use the static deposit secret key here
         let deposit_secret_key = self
             .signer
-            .get_static_deposit_private_key(0)
+            .static_deposit_secret_key(0)
             .await
             .map_err(ServiceError::SignerError)?;
 
@@ -330,7 +330,7 @@ impl DepositService {
         );
 
         let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
-        let spend_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
+        let spend_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
 
         // Serialize the static deposit claim payload
         let payload = self.serialize_static_deposit_claim_payload(
@@ -350,7 +350,7 @@ impl DepositService {
         // Create the UTXO swap request
         let signing_public_key = self
             .signer
-            .get_static_deposit_public_key(0)
+            .static_deposit_signing_key(0)
             .await?
             .serialize()
             .to_vec();
@@ -396,7 +396,7 @@ impl DepositService {
             .ok_or(ServiceError::InvalidVerifyingKey)?;
         let static_deposit_private_key_source =
             self.signer.get_static_deposit_private_key_source(0).await?;
-        let static_deposit_public_key = self.signer.get_static_deposit_public_key(0).await?;
+        let static_deposit_public_key = self.signer.static_deposit_signing_key(0).await?;
 
         let spend_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
@@ -542,13 +542,13 @@ impl DepositService {
         };
 
         // Get random signing commitments
-        let cpfp_node_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
-        let direct_node_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
-        let cpfp_refund_nonce_commitment = self.signer.generate_frost_signing_commitments().await?;
+        let cpfp_node_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
+        let direct_node_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
+        let cpfp_refund_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
         let direct_refund_nonce_commitment =
-            self.signer.generate_frost_signing_commitments().await?;
+            self.signer.generate_random_signing_commitment().await?;
         let direct_from_cpfp_refund_nonce_commitment =
-            self.signer.generate_frost_signing_commitments().await?;
+            self.signer.generate_random_signing_commitment().await?;
 
         let tree_resp = self
             .operator_pool
