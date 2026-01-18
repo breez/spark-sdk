@@ -53,7 +53,8 @@ const exampleConfigureStableBalance = () => {
   config.stableBalanceConfig = {
     tokenIdentifier: '<token_identifier>',
     thresholdSats: BigInt(10_000),
-    maxSlippageBps: 100
+    maxSlippageBps: 100,
+    reservedSats: BigInt(1_000)
   }
   // ANCHOR_END: stable-balance-config
   console.log('Config:', config)

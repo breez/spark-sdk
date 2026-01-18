@@ -504,6 +504,13 @@ pub struct StableBalanceConfig {
     /// Defaults to 50 bps (0.5%) if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_slippage_bps: Option<u32>,
+
+    /// Amount of sats to keep as Bitcoin and not convert to stable tokens.
+    ///
+    /// This reserve ensures you can send Bitcoin payments without hitting
+    /// the minimum conversion limit. Defaults to the conversion minimum if not set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub reserved_sats: Option<u64>,
 }
 
 impl From<&StableBalanceConfig> for AutoConversionConfig {
@@ -512,6 +519,7 @@ impl From<&StableBalanceConfig> for AutoConversionConfig {
             token_identifier: config.token_identifier.clone(),
             threshold_sats: config.threshold_sats,
             max_slippage_bps: config.max_slippage_bps,
+            reserved_sats: config.reserved_sats,
         }
     }
 }

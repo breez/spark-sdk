@@ -53,7 +53,8 @@ Future<void> configureStableBalance() async {
       stableBalanceConfig: StableBalanceConfig(
           tokenIdentifier: "<token_identifier>",
           thresholdSats: BigInt.from(10000),
-          maxSlippageBps: 100
+          maxSlippageBps: 100,
+          reservedSats: BigInt.from(1000)
           ));
   // ANCHOR_END: stable-balance-config
   print(config);

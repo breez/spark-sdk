@@ -40,6 +40,8 @@ pub(crate) struct FlashnetTokenConverter {
     auto_conversion_config: Option<AutoConversionConfig>,
     /// Cached effective threshold for auto-conversion
     effective_threshold: OnceCell<u64>,
+    /// Cached effective reserved sats for auto-conversion
+    effective_reserved: OnceCell<u64>,
 }
 
 impl FlashnetTokenConverter {
@@ -77,6 +79,7 @@ impl FlashnetTokenConverter {
             conversion_lock: Arc::new(Mutex::new(())),
             auto_conversion_config,
             effective_threshold: OnceCell::new(),
+            effective_reserved: OnceCell::new(),
         };
 
         // Spawn the background refunder task
@@ -528,20 +531,26 @@ impl FlashnetTokenConverter {
         Ok((sent_payment_id, received_payment_id))
     }
 
-    /// Gets or initializes the effective threshold for auto-conversion.
+    /// Gets or initializes the effective threshold and reserved sats for auto-conversion.
     ///
-    /// On first call, fetches conversion limits and computes the effective threshold
-    /// as `max(user_threshold, min_from_amount)`. Subsequent calls return the cached value.
-    async fn get_or_init_threshold(
+    /// On first call, fetches conversion limits and computes:
+    /// - Effective threshold: `max(user_threshold, min_from_amount)`
+    /// - Effective reserved: user value if set, otherwise `min_from_amount`
+    ///
+    /// Subsequent calls return the cached values.
+    async fn get_or_init_effective_values(
         &self,
         config: &AutoConversionConfig,
-    ) -> Result<u64, ConversionError> {
-        // Return cached value if already initialized
-        if let Some(&threshold) = self.effective_threshold.get() {
-            return Ok(threshold);
+    ) -> Result<(u64, u64), ConversionError> {
+        // Return cached values if already initialized
+        if let (Some(&threshold), Some(&reserved)) = (
+            self.effective_threshold.get(),
+            self.effective_reserved.get(),
+        ) {
+            return Ok((threshold, reserved));
         }
 
-        // Fetch limits and compute effective threshold
+        // Fetch limits and compute effective values
         let limits = self
             .fetch_limits(&FetchConversionLimitsRequest {
                 conversion_type: ConversionType::FromBitcoin,
@@ -552,16 +561,23 @@ impl FlashnetTokenConverter {
         let min_from_amount =
             u64::try_from(limits.min_from_amount.unwrap_or(0)).unwrap_or(u64::MAX);
 
+        // Compute effective threshold: max(user_threshold, min_from_amount)
         let threshold = match config.threshold_sats {
             Some(t) if t >= min_from_amount => t,
             Some(_) | None => min_from_amount,
         };
 
-        // Store in the effective threshold
-        let _ = self.effective_threshold.set(threshold);
-        info!("Auto-conversion effective threshold initialized: {threshold} sats");
+        // Compute effective reserved: user value if set, otherwise min_from_amount
+        let reserved = config.reserved_sats.unwrap_or(min_from_amount);
 
-        Ok(threshold)
+        // Store in the caches
+        let _ = self.effective_threshold.set(threshold);
+        let _ = self.effective_reserved.set(reserved);
+        info!(
+            "Auto-conversion effective values initialized: threshold={threshold} sats, reserved={reserved} sats"
+        );
+
+        Ok((threshold, reserved))
     }
 }
 
@@ -580,20 +596,25 @@ impl TokenConverter for FlashnetTokenConverter {
             return Ok(false);
         };
 
-        // Lazy init: fetch limits on first call, use cached value thereafter
-        let threshold = self.get_or_init_threshold(config).await?;
+        // Lazy init: fetch limits on first call, use cached values thereafter
+        let (threshold, reserved) = self.get_or_init_effective_values(config).await?;
 
-        if balance_sats < threshold {
+        // Check if balance exceeds reserved + threshold
+        let trigger_amount = reserved.saturating_add(threshold);
+        if balance_sats <= trigger_amount {
             debug!(
-                "Auto-conversion skipped: balance {} < threshold {}",
-                balance_sats, threshold
+                "Auto-conversion skipped: balance {} <= reserved {} + threshold {}",
+                balance_sats, reserved, threshold
             );
             return Ok(false);
         }
 
+        // Convert only the amount above the reserve
+        let amount_to_convert = balance_sats.saturating_sub(reserved);
+
         info!(
-            "Auto-conversion triggered: converting {} sats to {}",
-            balance_sats, config.token_identifier
+            "Auto-conversion triggered: converting {} sats to {} (keeping {} sats reserved)",
+            amount_to_convert, config.token_identifier, reserved
         );
 
         let options = ConversionOptions {
@@ -609,7 +630,7 @@ impl TokenConverter for FlashnetTokenConverter {
                 &options,
                 &ConversionPurpose::AutoConversion,
                 Some(&config.token_identifier),
-                ConversionAmount::AmountIn(u128::from(balance_sats)),
+                ConversionAmount::AmountIn(u128::from(amount_to_convert)),
             )
             .await?;
 

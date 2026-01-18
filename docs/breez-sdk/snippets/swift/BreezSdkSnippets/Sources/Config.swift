@@ -47,7 +47,8 @@ func configureStableBalance() async throws {
     config.stableBalanceConfig = StableBalanceConfig(
         tokenIdentifier: "<token_identifier>",
         thresholdSats: 10_000,
-        maxSlippageBps: 100
+        maxSlippageBps: 100,
+        reservedSats: 1_000
     )
     // ANCHOR_END: stable-balance-config
     print("Config: \(config)")
