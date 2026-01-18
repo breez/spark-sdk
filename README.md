@@ -2,7 +2,7 @@
 
 ## **Overview**
 
-The Breez SDK provides developers with an end-to-end solution for integrating self-custodial Lightning into their apps and services.
+The Breez SDK provides developers with an end-to-end solution for integrating self-custodial bitcoin into their apps and services.
 It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
 
 **The Breez SDK is free for developers.**
@@ -10,7 +10,7 @@ It eliminates the need for third parties, simplifies the complexities of Bitcoin
 
 ## **What is the Breez SDK - Nodeless *(Spark Implementation)*?**
 
-It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning, utilizing the Bitcoin-native Layer 2 Spark with on-chain interoperability. Using the SDK you'll able to:
+It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating bitcoin, utilizing the Bitcoin-native Layer 2 Lightning & Spark with on-chain interoperability. Using the SDK you'll able to:
 
 - Send payments via various protocols such as: Bolt11, LNURL-Pay, Lightning address, BTC address, Spark address, BTKN
 - Receive payments via various protocols such as: Bolt11, BTC address, Spark address, BTKN
@@ -31,9 +31,9 @@ It’s a nodeless integration that offers a self-custodial, end-to-end solution 
 
 ## Getting Started 
 
-Head over to the [Breez SDK - Nodeless *(Spark Implementation)* documentation](https://sdk-doc-spark.breez.technology/) to start implementing Lightning in your app.
+Head over to the [Breez SDK documentation](https://sdk-doc-spark.breez.technology/) to start implementing bitcoin in your app.
 
-You'll need an API key to use the Breez SDK - Nodeless *(Spark Implementation)*. To request an API key is free — you just need to [complete this simple form](https://breez.technology/request-api-key/#contact-us-form-sdk).
+You'll need an API key to use the Breez SDK. To request an API key is free - you just need to [complete this simple form](https://breez.technology/request-api-key/#contact-us-form-sdk).
 
 
 ## **API**
@@ -61,7 +61,7 @@ Have a question for the team? Join our [Telegram channel](https://t.me/breezsdk)
 
 ## How Does Nodeless *(Spark Implementation)* Work?
 
-The Breez SDK – Nodeless (*Spark implementation*) uses Spark, a Bitcoin-native Layer 2 built on a shared signing protocol, to enable real-time, low-fee, self-custodial payments.
+The Breez SDK uses Spark, a Bitcoin-native Layer 2 built on a shared signing protocol, to enable real-time, low-fee, self-custodial payments.
 
 When sending a payment, Spark delegates the transfer of on-chain bitcoin to the recipient through a multi-signature process.
 Spark Operators help facilitate the transfer, but they cannot move funds without the user. This allows the payment to settle almost instantly, without requiring a blockchain confirmation.
