@@ -8,6 +8,27 @@ pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
 /// Default timeout for conversion operations in seconds
 pub const DEFAULT_CONVERSION_TIMEOUT_SECS: u32 = 30;
 
+pub struct AutoConversionConfig {
+    /// The token identifier to convert Bitcoin to
+    pub token_identifier: String,
+
+    /// The minimum sats balance that triggers auto-conversion.
+    ///
+    /// If not provided, uses the minimum from conversion limits.
+    /// If provided but less than the conversion limit minimum, the limit minimum is used.
+    pub threshold_sats: Option<u64>,
+
+    /// Maximum slippage in basis points (1/100 of a percent).
+    ///
+    /// Defaults to 50 bps (0.5%) if not set.
+    pub max_slippage_bps: Option<u32>,
+
+    /// Amount of sats to keep as Bitcoin reserve.
+    ///
+    /// If not provided, defaults to the conversion minimum.
+    pub reserved_sats: Option<u64>,
+}
+
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +55,18 @@ pub enum ConversionPurpose {
     },
     /// Conversion is for self-transfer
     SelfTransfer,
+    /// Conversion triggered automatically
+    AutoConversion,
+}
+
+/// Specifies how to determine the conversion amount.
+#[derive(Debug, Clone)]
+pub(crate) enum ConversionAmount {
+    /// Specify the minimum output amount - the input will be calculated.
+    /// Used for payment conversions where we know the required output.
+    MinAmountOut(u128),
+    /// Specify the exact input amount - used for auto-conversion where we know the sats balance.
+    AmountIn(u128),
 }
 
 /// The status of the conversion
