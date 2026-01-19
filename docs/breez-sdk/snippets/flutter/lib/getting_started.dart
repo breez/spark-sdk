@@ -33,6 +33,7 @@ Future<void> fetchBalance(BreezSdk sdk) async {
   final identityPubkey = info.identityPubkey;
   final balanceSats = info.balanceSats;
   // ANCHOR_END: fetch-balance
+  print(identityPubkey);
   print(balanceSats);
 }
 
