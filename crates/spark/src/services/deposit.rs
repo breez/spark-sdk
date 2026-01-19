@@ -22,7 +22,7 @@ use crate::{
         },
     },
     services::{Transfer, Utxo},
-    signer::{PrivateKeySource, Signer},
+    signer::{SecretKeySource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId},
     utils::{
@@ -395,7 +395,7 @@ impl DepositService {
             .map_err(|_| ServiceError::InvalidPublicKey)?
             .ok_or(ServiceError::InvalidVerifyingKey)?;
         let static_deposit_private_key_source =
-            self.signer.get_static_deposit_private_key_source(0).await?;
+            self.signer.static_deposit_secret_key_encrypted(0).await?;
         let static_deposit_public_key = self.signer.static_deposit_signing_key(0).await?;
 
         let spend_signature = sign_aggregate_frost(SignAggregateFrostParams {
@@ -502,10 +502,10 @@ impl DepositService {
         deposit_tx: Transaction,
         vout: u32,
     ) -> Result<Vec<TreeNode>, ServiceError> {
-        let signing_private_key = PrivateKeySource::Derived(deposit_leaf_id.clone());
+        let signing_private_key = SecretKeySource::Derived(deposit_leaf_id.clone());
         let signing_public_key = self
             .signer
-            .get_public_key_from_private_key_source(&signing_private_key)
+            .public_key_from_secret_key_source(&signing_private_key)
             .await?;
 
         let deposit_txid = deposit_tx.compute_txid();

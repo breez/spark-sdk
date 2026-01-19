@@ -26,7 +26,7 @@ pub use spark::{
     session_manager::*,
     signer::{
         AggregateFrostRequest, DefaultSigner, DefaultSignerError, EncryptedPrivateKey,
-        FrostSigningCommitmentsWithNonces, KeySet, KeySetType, PrivateKeySource, SecretShare,
+        FrostSigningCommitmentsWithNonces, KeySet, KeySetType, SecretKeySource, SecretShare,
         SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
     },
     ssp::*,

@@ -20,7 +20,7 @@ use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
 use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
-use crate::signer::PrivateKeySource;
+use crate::signer::SecretKeySource;
 use crate::ssp::BitcoinNetwork;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
@@ -216,8 +216,8 @@ pub(crate) fn map_signing_nonce_commitments(
 #[derive(Debug)]
 pub struct LeafKeyTweak {
     pub node: TreeNode,
-    pub signing_key: PrivateKeySource,
-    pub new_signing_key: PrivateKeySource,
+    pub signing_key: SecretKeySource,
+    pub new_signing_key: SecretKeySource,
 }
 
 // TODO: verify if the optional times should be optional
