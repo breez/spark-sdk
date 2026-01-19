@@ -6,11 +6,11 @@ use breez_sdk_spark::{
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
     GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
     LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
-    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, RefundDepositRequest, RegisterLightningAddressRequest,
-    SendPaymentMethod, SendPaymentOptions, SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus,
-    SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
+    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PayAmount, PaymentDetailsFilter,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -521,11 +521,23 @@ pub(crate) async fn execute_command(
                 }),
                 _ => None,
             };
+            // Convert amount and token_identifier to PayAmount
+            let pay_amount = match (amount, token_identifier) {
+                (Some(amt), Some(token_id)) => Some(PayAmount::Token {
+                    amount: amt,
+                    token_identifier: token_id,
+                }),
+                (Some(amt), None) => Some(PayAmount::Bitcoin {
+                    amount_sats: amt
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("Amount too large"))?,
+                }),
+                (None, _) => None,
+            };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
-                    amount,
-                    token_identifier,
+                    pay_amount,
                     conversion_options,
                 })
                 .await;
@@ -598,7 +610,7 @@ pub(crate) async fn execute_command(
 
                     let prepare_response = sdk
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                            amount_sats,
+                            pay_amount: PayAmount::Bitcoin { amount_sats },
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,

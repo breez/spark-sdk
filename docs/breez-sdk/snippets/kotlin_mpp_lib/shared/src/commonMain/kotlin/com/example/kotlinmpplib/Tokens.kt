@@ -95,16 +95,16 @@ class Tokens {
             // Set the amount of tokens you wish to send.
             // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
             // package)
-            val optionalAmount = BigInteger.fromLong(1_000L)
+            val amount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
-            // val optionalAmount = BigInteger.valueOf(1_000L)
+            // val amount = BigInteger.valueOf(1_000L)
+            val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
 
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
-                        amount = optionalAmount,
-                        tokenIdentifier = tokenIdentifier
+                        payAmount = optionalPayAmount,
                     )
                 )
 
@@ -183,9 +183,10 @@ class Tokens {
             // Set the amount of tokens you wish to send.
             // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
             // package)
-            val optionalAmount = BigInteger.fromLong(1_000L)
+            val amount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
-            // val optionalAmount = BigInteger.valueOf(1_000L)
+            // val amount = BigInteger.valueOf(1_000L)
+            val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
             // set to use Bitcoin funds to pay via conversion
             val optionalMaxSlippageBps = 50u
             val optionalCompletionTimeoutSecs = 30u
@@ -199,9 +200,8 @@ class Tokens {
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
-                        amount = optionalAmount,
-                        tokenIdentifier = tokenIdentifier,
-                        conversionOptions = conversionOptions
+                        payAmount = optionalPayAmount,
+                        conversionOptions = conversionOptions,
                     )
                 )
 

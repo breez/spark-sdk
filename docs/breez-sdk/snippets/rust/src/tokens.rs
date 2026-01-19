@@ -82,15 +82,14 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-token-payment
     let payment_request = "<spark address or invoice>".to_string();
     // Token identifier must match the invoice in case it specifies one.
-    let token_identifier = Some("<token identifier>".to_string());
+    let token_identifier = "<token identifier>".to_string();
     // Set the amount of tokens you wish to send.
-    let optional_amount = Some(1_000);
+    let optional_pay_amount = Some(PayAmount::Token { amount: 1_000, token_identifier });
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: optional_amount,
-            token_identifier,
+            pay_amount: optional_pay_amount,
             conversion_options: None,
         })
         .await?;
@@ -171,9 +170,9 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-with-conversion
     let payment_request = "<spark address or invoice>".to_string();
     // Token identifier must match the invoice in case it specifies one.
-    let token_identifier = Some("<token identifier>".to_string());
+    let token_identifier = "<token identifier>".to_string();
     // Set the amount of tokens you wish to send.
-    let optional_amount = Some(1_000);
+    let optional_pay_amount = Some(PayAmount::Token { amount: 1_000, token_identifier });
     // Set to use Bitcoin funds to pay via conversion
     let optional_max_slippage_bps = Some(50);
     let optional_completion_timeout_secs = Some(30);
@@ -186,8 +185,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            amount: optional_amount,
-            token_identifier,
+            pay_amount: optional_pay_amount,
             conversion_options,
         })
         .await?;

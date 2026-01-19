@@ -3,6 +3,8 @@ from breez_sdk_spark import (
     BreezSdk,
     InputType,
     LnurlPayRequest,
+    LnurlPayRequestDetails,
+    PayAmount,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
     ConversionOptions,
@@ -38,7 +40,7 @@ async def prepare_pay(sdk: BreezSdk):
             )
 
             request = PrepareLnurlPayRequest(
-                amount_sats=amount_sats,
+                pay_amount = PayAmount.BITCOIN(amount_sats=amount_sats),
                 pay_request=pay_request,
                 comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url,
@@ -82,3 +84,24 @@ async def pay(sdk: BreezSdk, prepare_response: PrepareLnurlPayResponse):
 
 
 # ANCHOR_END: lnurl-pay
+
+
+async def prepare_pay_drain(sdk: BreezSdk, pay_request: LnurlPayRequestDetails):
+    # ANCHOR: prepare-lnurl-pay-drain
+    optional_comment = "<comment>"
+    optional_validate_success_action_url = True
+    pay_amount = PayAmount.DRAIN()
+
+    request = PrepareLnurlPayRequest(
+        pay_amount=pay_amount,
+        pay_request=pay_request,
+        comment=optional_comment,
+        validate_success_action_url=optional_validate_success_action_url,
+        conversion_options=None,
+    )
+    prepare_response = await sdk.prepare_lnurl_pay(request=request)
+
+    # If the fees are acceptable, continue to create the LNURL Pay
+    fee_sats = prepare_response.fee_sats
+    logging.debug(f"Fees: {fee_sats} sats")
+    # ANCHOR_END: prepare-lnurl-pay-drain

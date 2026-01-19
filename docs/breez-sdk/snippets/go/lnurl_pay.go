@@ -21,7 +21,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 	switch inputType := input.(type) {
 	case breez_sdk_spark.InputTypeLightningAddress:
-		amountSats := uint64(5_000)
+		payAmount := breez_sdk_spark.PayAmountBitcoin{AmountSats: 5_000}
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
 		// Optionally set to use token funds to pay via token conversion
@@ -36,7 +36,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 		}
 
 		request := breez_sdk_spark.PrepareLnurlPayRequest{
-			AmountSats:               amountSats,
+			PayAmount:                payAmount,
 			PayRequest:               inputType.Field0.PayRequest,
 			Comment:                  &optionalComment,
 			ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
@@ -79,4 +79,30 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 	payment := response.Payment
 	// ANCHOR_END: lnurl-pay
 	return &payment, nil
+}
+
+func PrepareLnurlPayDrain(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
+	// ANCHOR: prepare-lnurl-pay-drain
+	payAmount := breez_sdk_spark.PayAmountDrain{}
+	optionalComment := "<comment>"
+	optionalValidateSuccessActionUrl := true
+
+	request := breez_sdk_spark.PrepareLnurlPayRequest{
+		PayAmount:                payAmount,
+		PayRequest:               payRequest,
+		Comment:                  &optionalComment,
+		ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
+		ConversionOptions:        nil,
+	}
+
+	response, err := sdk.PrepareLnurlPay(request)
+	if err != nil {
+		return nil, err
+	}
+
+	// If the fees are acceptable, continue to create the LNURL Pay
+	feeSats := response.FeeSats
+	log.Printf("Fees: %v sats", feeSats)
+	// ANCHOR_END: prepare-lnurl-pay-drain
+	return &response, nil
 }

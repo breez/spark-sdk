@@ -10,7 +10,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     let lnurl_pay_url = "lightning@address.com";
 
     if let Ok(InputType::LightningAddress(details)) = sdk.parse(lnurl_pay_url).await {
-        let amount_sats = 5_000;
+        let pay_amount = PayAmount::Bitcoin { amount_sats: 5_000 };
         let optional_comment = Some("<comment>".to_string());
         let optional_validate_success_action_url = Some(true);
         // Optionally set to use token funds to pay via token conversion
@@ -26,7 +26,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
 
         let prepare_response = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                amount_sats,
+                pay_amount,
                 pay_request: details.pay_request,
                 comment: optional_comment,
                 validate_success_action_url: optional_validate_success_action_url,
@@ -58,5 +58,28 @@ async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Resul
         .await?;
     // ANCHOR_END: lnurl-pay
     info!("Response: {response:?}");
+    Ok(())
+}
+
+async fn prepare_pay_drain(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) -> Result<()> {
+    // ANCHOR: prepare-lnurl-pay-drain
+    let optional_comment = Some("<comment>".to_string());
+    let optional_validate_success_action_url = Some(true);
+    let pay_amount = PayAmount::Drain;
+
+    let prepare_response = sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            pay_amount,
+            pay_request,
+            comment: optional_comment,
+            validate_success_action_url: optional_validate_success_action_url,
+            conversion_options: None,
+        })
+        .await?;
+
+    // If the fees are acceptable, continue to create the LNURL Pay
+    let fee_sats = prepare_response.fee_sats;
+    info!("Fees: {fee_sats} sats");
+    // ANCHOR_END: prepare-lnurl-pay-drain
     Ok(())
 }

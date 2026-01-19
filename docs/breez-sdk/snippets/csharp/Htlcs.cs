@@ -1,4 +1,3 @@
-using System.Numerics;
 using Breez.Sdk.Spark;
 
 namespace BreezSdkSnippets
@@ -10,10 +9,10 @@ namespace BreezSdkSnippets
             // ANCHOR: send-htlc-payment
             var paymentRequest = "<spark address>";
             // Set the amount you wish the pay the receiver
-            var amountSats = new BigInteger(50000);
+            var payAmount = new PayAmount.Bitcoin(amountSats: 50_000UL);
             var prepareRequest = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                amount: amountSats
+                payAmount: payAmount
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: prepareRequest);
 

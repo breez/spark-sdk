@@ -12,7 +12,17 @@ and also returns the fees related to the payment so they can be confirmed.
 
 Payments can be sent without holding Bitcoin by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.md">Converting tokens</a> for more information.
 
+### Setting the receiver amount
+
+When you want the payment recipient to receive a specific amount.
+
 {{#tabs lnurl_pay:prepare-lnurl-pay}}
+
+### Draining all funds
+
+When you want to send all funds from your wallet to the payment recipient.
+
+{{#tabs lnurl_pay:prepare-lnurl-pay-drain}}
 
 <h2 id="lnurl-payments">
     <a class="header" href="#lnurl-payments">LNURL Payments</a>

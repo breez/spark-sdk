@@ -288,9 +288,21 @@ pub enum _OnchainConfirmationSpeed {
     Slow,
 }
 
+#[frb(mirror(PayAmount))]
+pub enum _PayAmount {
+    Bitcoin {
+        amount_sats: u64,
+    },
+    Token {
+        amount: u128,
+        token_identifier: String,
+    },
+    Drain,
+}
+
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
-    pub amount_sats: u64,
+    pub pay_amount: PayAmount,
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
@@ -299,7 +311,7 @@ pub struct _PrepareLnurlPayRequest {
 
 #[frb(mirror(PrepareLnurlPayResponse))]
 pub struct _PrepareLnurlPayResponse {
-    pub amount_sats: u64,
+    pub pay_amount: PayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
@@ -311,16 +323,14 @@ pub struct _PrepareLnurlPayResponse {
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub amount: Option<u128>,
-    pub token_identifier: Option<String>,
+    pub pay_amount: Option<PayAmount>,
     pub conversion_options: Option<ConversionOptions>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub amount: u128,
-    pub token_identifier: Option<String>,
+    pub pay_amount: PayAmount,
     pub conversion_estimate: Option<ConversionEstimate>,
 }
 

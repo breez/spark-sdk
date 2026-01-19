@@ -12,7 +12,7 @@ class LnurlPay {
         try {
             val inputType = sdk.parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
-                val amountSats = 5_000.toULong()
+                val payAmount = PayAmount.Bitcoin(amountSats = 5_000.toULong())
                 val optionalComment = "<comment>"
                 val payRequest = inputType.v1.payRequest
                 val optionalValidateSuccessActionUrl = true
@@ -28,11 +28,11 @@ class LnurlPay {
                 )
 
                 val req = PrepareLnurlPayRequest(
-                    amountSats,
-                    payRequest,
-                    optionalComment,
-                    optionalValidateSuccessActionUrl,
-                    optionalConversionOptions
+                    payAmount = payAmount,
+                    payRequest = payRequest,
+                    comment = optionalComment,
+                    validateSuccessActionUrl = optionalValidateSuccessActionUrl,
+                    optionalConversionOptions,
                 )
                 val prepareResponse = sdk.prepareLnurlPay(req)
 
@@ -60,5 +60,26 @@ class LnurlPay {
             // handle error
         }
         // ANCHOR_END: lnurl-pay
+    }
+
+    suspend fun prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) {
+        // ANCHOR: prepare-lnurl-pay-drain
+        val optionalComment = "<comment>"
+        val optionalValidateSuccessActionUrl = true
+        val payAmount = PayAmount.Drain
+
+        val req = PrepareLnurlPayRequest(
+            payAmount = payAmount,
+            payRequest = payRequest,
+            comment = optionalComment,
+            validateSuccessActionUrl = optionalValidateSuccessActionUrl,
+            conversionOptions = null,
+        )
+        val prepareResponse = sdk.prepareLnurlPay(req)
+
+        // If the fees are acceptable, continue to create the LNURL Pay
+        val feeSats = prepareResponse.feeSats
+        // Log.v("Breez", "Fees: ${feeSats} sats")
+        // ANCHOR_END: prepare-lnurl-pay-drain
     }
 }

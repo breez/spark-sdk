@@ -60,8 +60,7 @@ async fn test_01_spark_transfer(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
             conversion_options: None,
         })
         .await?;
@@ -302,13 +301,12 @@ async fn test_03_lightning_invoice_payment(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: sender_amount.map(|a| a as u128),
-            token_identifier: None,
+            pay_amount: sender_amount.map(|a| PayAmount::Bitcoin { amount_sats: a }),
             conversion_options: None,
         })
         .await?;
 
-    info!("Payment prepared - amount: {} sats", prepare.amount);
+    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
 
     // The expected payment amount is either from the invoice or what Alice specified
     let expected_amount = invoice_amount_sats
@@ -561,8 +559,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
             conversion_options: None,
         })
         .await?;
@@ -654,8 +651,9 @@ async fn test_06_lightning_timeout_and_wait(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: Some(expected_amount as u128),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: expected_amount,
+            }),
             conversion_options: None,
         })
         .await?;
@@ -763,8 +761,7 @@ async fn test_07_spark_invoice(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
             conversion_options: None,
         })
         .await?;
@@ -925,13 +922,12 @@ async fn test_08_lightning_invoice_expiry_secs(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
             conversion_options: None,
         })
         .await?;
 
-    info!("Payment prepared - amount: {} sats", prepare.amount);
+    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
 
     // Alice sends the payment
     info!(

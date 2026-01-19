@@ -9,7 +9,7 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
 
   InputType inputType = await sdk.parse(input: lnurlPayUrl);
   if (inputType is InputType_LightningAddress) {
-    BigInt amountSats = BigInt.from(5000);
+    PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(5000));
     String optionalComment = "<comment>";
     bool optionalValidateSuccessActionUrl = true;
     // Optionally set to use token funds to pay via token conversion
@@ -24,7 +24,7 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
     );
 
     PrepareLnurlPayRequest request = PrepareLnurlPayRequest(
-      amountSats: amountSats,
+      payAmount: payAmount,
       payRequest: inputType.field0.payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
@@ -58,4 +58,26 @@ Future<void> lnurlPay(
   );
   // ANCHOR_END: lnurl-pay
   print(response);
+}
+
+Future<void> prepareLnurlPayDrain(BreezSdk sdk, LnurlPayRequestDetails payRequest) async {
+  // ANCHOR: prepare-lnurl-pay-drain
+  String optionalComment = "<comment>";
+  bool optionalValidateSuccessActionUrl = true;
+  PayAmount payAmount = PayAmount.drain();
+
+  PrepareLnurlPayRequest request = PrepareLnurlPayRequest(
+    payAmount: payAmount,
+    payRequest: payRequest,
+    comment: optionalComment,
+    validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+    conversionOptions: null,
+  );
+  PrepareLnurlPayResponse prepareResponse =
+      await sdk.prepareLnurlPay(request: request);
+
+  // If the fees are acceptable, continue to create the LNURL Pay
+  BigInt feeSats = prepareResponse.feeSats;
+  print("Fees: $feeSats sats");
+  // ANCHOR_END: prepare-lnurl-pay-drain
 }
