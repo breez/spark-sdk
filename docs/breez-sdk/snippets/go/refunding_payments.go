@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -12,7 +13,12 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 	request := breez_sdk_spark.ListUnclaimedDepositsRequest{}
 	response, err := sdk.ListUnclaimedDeposits(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -61,7 +67,12 @@ func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.De
 					MaxFee: &maxFee,
 				}
 				_, err := sdk.ClaimDeposit(claimRequest)
-				if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+				if err != nil {
+					var sdkErr *breez_sdk_spark.SdkError
+					if errors.As(err, &sdkErr) {
+						// Handle SdkError - can inspect specific variants if needed
+						// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+					}
 					return err
 				}
 			}
@@ -94,7 +105,12 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	}
 	response, err := sdk.RefundDeposit(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -140,7 +156,12 @@ func CustomClaimLogic(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.Dep
 					MaxFee: &maxFee,
 				}
 				_, err := sdk.ClaimDeposit(claimRequest)
-				if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+				if err != nil {
+					var sdkErr *breez_sdk_spark.SdkError
+					if errors.As(err, &sdkErr) {
+						// Handle SdkError - can inspect specific variants if needed
+						// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+					}
 					return err
 				}
 			}
@@ -153,7 +174,12 @@ func CustomClaimLogic(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.Dep
 func RecommendedFees(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: recommended-fees
 	response, err := sdk.RecommendedFees()
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	log.Printf("Fastest fee: %v sats/vByte", response.FastestFee)

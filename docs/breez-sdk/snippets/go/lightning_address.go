@@ -1,6 +1,8 @@
 package example
 
 import (
+	"errors"
+
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -25,6 +27,11 @@ func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, err
 
 	isAvailable, err := sdk.CheckLightningAddressAvailable(request)
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return false, err
 	}
 	// ANCHOR_END: check-lightning-address
@@ -44,6 +51,11 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 
 	addressInfo, err := sdk.RegisterLightningAddress(request)
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -58,6 +70,11 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	// ANCHOR: get-lightning-address
 	addressInfoOpt, err := sdk.GetLightningAddress()
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -76,6 +93,11 @@ func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: delete-lightning-address
 	err := sdk.DeleteLightningAddress()
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	// ANCHOR_END: delete-lightning-address
@@ -89,6 +111,11 @@ func AccessSenderComment(sdk *breez_sdk_spark.BreezSdk) error {
 		PaymentId: paymentID,
 	})
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	payment := response.Payment
@@ -113,6 +140,11 @@ func AccessNostrZap(sdk *breez_sdk_spark.BreezSdk) error {
 		PaymentId: paymentID,
 	})
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	payment := response.Payment

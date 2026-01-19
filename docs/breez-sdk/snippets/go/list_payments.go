@@ -1,6 +1,8 @@
 package example
 
 import (
+	"errors"
+
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -12,7 +14,12 @@ func GetPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error)
 	}
 	response, err := sdk.GetPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -25,7 +32,12 @@ func ListPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, er
 	// ANCHOR: list-payments
 	response, err := sdk.ListPayments(breez_sdk_spark.ListPaymentsRequest{})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -68,7 +80,12 @@ func ListPaymentsFiltered(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Pay
 	}
 	response, err := sdk.ListPayments(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

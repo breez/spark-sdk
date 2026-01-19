@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 	"strconv"
 
@@ -13,7 +14,12 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, erro
 
 	input, err := sdk.Parse(inputStr)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -15,7 +16,12 @@ func LnurlWithdraw(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LnurlWithdra
 
 	input, err := sdk.Parse(lnurlWithdrawUrl)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -34,7 +40,12 @@ func LnurlWithdraw(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LnurlWithdra
 
 		response, err := sdk.LnurlWithdraw(request)
 
-		if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		if err != nil {
+			var sdkErr *breez_sdk_spark.SdkError
+			if errors.As(err, &sdkErr) {
+				// Handle SdkError - can inspect specific variants if needed
+				// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+			}
 			return nil, err
 		}
 

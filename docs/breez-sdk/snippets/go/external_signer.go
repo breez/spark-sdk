@@ -1,6 +1,8 @@
 package example
 
 import (
+	"errors"
+
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -25,6 +27,11 @@ func createSigner() (breez_sdk_spark.ExternalSigner, error) {
 		&keySetConfig,
 	)
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -47,6 +54,11 @@ func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.
 		StorageDir: "./.data",
 	})
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

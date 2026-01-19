@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 	"math/big"
 
@@ -19,7 +20,12 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -49,7 +55,12 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -80,7 +91,12 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -106,7 +122,12 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -140,7 +161,12 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -169,7 +195,12 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 	}
 	response, err := sdk.SendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -192,7 +223,12 @@ func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk
 	}
 	response, err := sdk.SendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -210,7 +246,12 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	}
 	response, err := sdk.SendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
