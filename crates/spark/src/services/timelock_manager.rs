@@ -14,7 +14,7 @@ use crate::{
         },
     },
     services::{ServiceError, map_signing_nonce_commitments},
-    signer::{SecretKeySource, Signer},
+    signer::{SecretSource, Signer},
     tree::{TreeNode, TreeNodeId},
     utils::{
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
@@ -164,11 +164,8 @@ impl TimelockManager {
         info!("Renewing node: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_key = SecretKeySource::Derived(node.id.clone());
-        let signing_public_key = self
-            .signer
-            .public_key_from_secret_key_source(&signing_key)
-            .await?;
+        let signing_key = SecretSource::Derived(node.id.clone());
+        let signing_public_key = self.signer.public_key_from_secret(&signing_key).await?;
 
         let parent_node_tx = &parent_node.node_tx;
 
@@ -359,11 +356,8 @@ impl TimelockManager {
         info!("Renewing refund: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_key = SecretKeySource::Derived(node.id.clone());
-        let signing_public_key = self
-            .signer
-            .public_key_from_secret_key_source(&signing_key)
-            .await?;
+        let signing_key = SecretSource::Derived(node.id.clone());
+        let signing_public_key = self.signer.public_key_from_secret(&signing_key).await?;
 
         let parent_node_tx = &parent_node.node_tx;
         let node_tx = &node.node_tx;
@@ -517,11 +511,8 @@ impl TimelockManager {
         info!("Renewing zero timelock: {:?}", node.id);
         let mut signing_jobs = Vec::new();
 
-        let signing_key = SecretKeySource::Derived(node.id.clone());
-        let signing_public_key = self
-            .signer
-            .public_key_from_secret_key_source(&signing_key)
-            .await?;
+        let signing_key = SecretSource::Derived(node.id.clone());
+        let signing_public_key = self.signer.public_key_from_secret(&signing_key).await?;
 
         let node_tx = &node.node_tx;
 

@@ -34,27 +34,27 @@ pub trait Signer: Send + Sync + 'static {
 
     async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
 
-    async fn generate_random_key(&self) -> Result<SecretKeySource, SignerError>;
+    async fn generate_random_key(&self) -> Result<SecretSource, SignerError>;
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
-    async fn static_deposit_secret_key_encrypted(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<SecretKeySource, SignerError>;
+    ) -> Result<SecretSource, SignerError>;
 
-    async fn static_deposit_secret_key(&self, index: u32) -> Result<SecretKey, SignerError>;
+    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError>;
 
     async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///
     /// Returns the resulting private key (encrypted)
-    async fn subtract_secret_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &SecretKeySource,
-        new_signing_key: &SecretKeySource,
-    ) -> Result<SecretKeySource, SignerError>;
+        signing_key: &SecretSource,
+        new_signing_key: &SecretSource,
+    ) -> Result<SecretSource, SignerError>;
 
     /// Split a secret into threshold shares with proofs
     async fn split_secret_with_proofs(
@@ -65,15 +65,15 @@ pub trait Signer: Send + Sync + 'static {
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 
     /// Takes an encrypted private key (encrypted for us) and returns an encrypted private key (encrypted for receiver)
-    async fn encrypt_secret_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedPrivateKey,
+        private_key: &EncryptedSecret,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError>;
 
-    async fn public_key_from_secret_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &SecretKeySource,
+        private_key: &SecretSource,
     ) -> Result<PublicKey, SignerError>;
 
     /// Creates a FROST signature share for threshold signing

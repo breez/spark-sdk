@@ -1,11 +1,11 @@
 use crate::error::SignerError;
 
 use super::external_types::{
-    EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
+    EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedSecret,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
-    ExternalSecretKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, HashedMessageBytes, MessageBytes, PrivateKeyBytes,
-    PublicKeyBytes, RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes,
+    ExternalSecretSource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
+    ExternalVerifiableSecretShare, HashedMessageBytes, MessageBytes, PublicKeyBytes,
+    RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, SecretBytes,
 };
 
 /// External signer trait that can be implemented by users and passed to the SDK.
@@ -143,34 +143,36 @@ pub trait ExternalSigner: Send + Sync {
         id: ExternalTreeNodeId,
     ) -> Result<PublicKeyBytes, SignerError>;
 
-    /// Generates a random secret key.
+    /// Generates a random secret.
     ///
     /// # Returns
-    /// A randomly generated secret key source, or an error string
-    async fn generate_random_key(&self) -> Result<ExternalSecretKeySource, SignerError>;
+    /// A randomly generated secret source, or an error string
+    async fn generate_random_key(&self) -> Result<ExternalSecretSource, SignerError>;
 
-    /// Gets an encrypted static deposit secret key by index.
+    /// Gets an encrypted static deposit secret by index.
     ///
     /// # Arguments
     /// * `index` - The index of the static deposit key
     ///
     /// # Returns
-    /// The encrypted secret key, or an error string
-    async fn static_deposit_secret_key_encrypted(
+    /// The encrypted secret source, or an error string
+    ///
+    /// This is the encrypted version of: [JavaScript `getStaticDepositSecretKey`](https://docs.spark.money/wallets/spark-signer#get-static-deposit-secret-key)
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<ExternalSecretKeySource, SignerError>;
+    ) -> Result<ExternalSecretSource, SignerError>;
 
-    /// Gets a static deposit secret key by index.
+    /// Gets a static deposit secret by index.
     ///
     /// # Arguments
     /// * `index` - The index of the static deposit key
     ///
     /// # Returns
-    /// The 32-byte secret key, or an error string
+    /// The 32-byte secret, or an error string
     ///
     /// See also: [JavaScript `getStaticDepositSecretKey`](https://docs.spark.money/wallets/spark-signer#get-static-deposit-secret-key)
-    async fn static_deposit_secret_key(&self, index: u32) -> Result<PrivateKeyBytes, SignerError>;
+    async fn static_deposit_secret(&self, index: u32) -> Result<SecretBytes, SignerError>;
 
     /// Gets a static deposit public key by index.
     ///
@@ -183,24 +185,24 @@ pub trait ExternalSigner: Send + Sync {
     /// See also: [JavaScript `getStaticDepositSigningKey`](https://docs.spark.money/wallets/spark-signer#get-static-deposit-signing-key)
     async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, SignerError>;
 
-    /// Subtracts one secret key from another.
+    /// Subtracts one secret from another.
     ///
     /// This is a lower-level primitive used as part of key tweaking operations.
     ///
     /// # Arguments
-    /// * `signing_key` - The first secret key source
-    /// * `new_signing_key` - The second secret key source to subtract
+    /// * `signing_key` - The first secret source
+    /// * `new_signing_key` - The second secret source to subtract
     ///
     /// # Returns
-    /// The resulting secret key source, or an error string
+    /// The resulting secret source, or an error string
     ///
     /// See also: [JavaScript `subtractSplitAndEncrypt`](https://docs.spark.money/wallets/spark-signer#subtract,-split,-and-encrypt)
     /// (this method provides the subtraction step of that higher-level operation)
-    async fn subtract_secret_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: ExternalSecretKeySource,
-        new_signing_key: ExternalSecretKeySource,
-    ) -> Result<ExternalSecretKeySource, SignerError>;
+        signing_key: ExternalSecretSource,
+        new_signing_key: ExternalSecretSource,
+    ) -> Result<ExternalSecretSource, SignerError>;
 
     /// Splits a secret with proofs using Shamir's Secret Sharing.
     ///
@@ -220,30 +222,30 @@ pub trait ExternalSigner: Send + Sync {
         num_shares: u32,
     ) -> Result<Vec<ExternalVerifiableSecretShare>, SignerError>;
 
-    /// Encrypts a secret key for a specific receiver's public key.
+    /// Encrypts a secret for a specific receiver's public key.
     ///
     /// # Arguments
-    /// * `secret_key` - The encrypted secret key to re-encrypt
+    /// * `encrypted_secret` - The encrypted secret to re-encrypt
     /// * `receiver_public_key` - The receiver's 33-byte public key
     ///
     /// # Returns
     /// Encrypted data for the receiver, or an error string
-    async fn encrypt_secret_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        secret_key: ExternalEncryptedPrivateKey,
+        encrypted_secret: ExternalEncryptedSecret,
         receiver_public_key: PublicKeyBytes,
     ) -> Result<Vec<u8>, SignerError>;
 
-    /// Gets the public key from a secret key source.
+    /// Gets the public key from a secret source.
     ///
     /// # Arguments
-    /// * `secret_key` - The secret key source
+    /// * `secret` - The secret source
     ///
     /// # Returns
     /// The corresponding 33-byte public key, or an error string
-    async fn public_key_from_secret_key_source(
+    async fn public_key_from_secret(
         &self,
-        secret_key: ExternalSecretKeySource,
+        secret: ExternalSecretSource,
     ) -> Result<PublicKeyBytes, SignerError>;
 
     /// Signs using Frost protocol (multi-party signing).
