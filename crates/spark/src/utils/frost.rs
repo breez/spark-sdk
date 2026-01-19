@@ -7,7 +7,7 @@ use bitcoin::{Transaction, TxOut};
 use crate::bitcoin::sighash_from_tx;
 use crate::services::SigningResult;
 use crate::signer::{
-    AggregateFrostRequest, FrostSigningCommitmentsWithNonces, PrivateKeySource, SignerError,
+    AggregateFrostRequest, FrostSigningCommitmentsWithNonces, SecretKeySource, SignerError,
 };
 use crate::signer::{SignFrostRequest, Signer};
 
@@ -17,7 +17,7 @@ pub struct SignAggregateFrostParams<'a> {
     pub prev_out: &'a TxOut,
     pub signing_public_key: &'a PublicKey,
     pub aggregating_public_key: &'a PublicKey,
-    pub signing_private_key: &'a PrivateKeySource,
+    pub signing_private_key: &'a SecretKeySource,
     pub self_nonce_commitment: &'a FrostSigningCommitmentsWithNonces,
     pub adaptor_public_key: Option<&'a PublicKey>,
     pub verifying_key: &'a PublicKey,
