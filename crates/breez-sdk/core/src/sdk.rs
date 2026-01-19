@@ -337,8 +337,9 @@ impl BreezSdk {
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
-            sync_trigger: tokio::sync::broadcast::channel(10).0,
-            zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
+            // Increased from 10 to 1000 to handle burst of concurrent payments without backpressure
+            sync_trigger: tokio::sync::broadcast::channel(1000).0,
+            zap_receipt_trigger: tokio::sync::broadcast::channel(1000).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
@@ -2172,8 +2173,8 @@ impl BreezSdk {
     /// This method spawns the optimization work in a background task and returns
     /// immediately. Progress is reported via events.
     /// If optimization is already running, no new task will be started.
-    pub fn start_leaf_optimization(&self) {
-        self.spark_wallet.start_leaf_optimization();
+    pub async fn start_leaf_optimization(&self) {
+        self.spark_wallet.start_leaf_optimization().await;
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -2190,8 +2191,11 @@ impl BreezSdk {
     }
 
     /// Returns the current optimization progress snapshot.
-    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.spark_wallet.get_leaf_optimization_progress().into()
+    pub async fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.spark_wallet
+            .get_leaf_optimization_progress()
+            .await
+            .into()
     }
 }
 

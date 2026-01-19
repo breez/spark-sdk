@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Mutex, Notify, watch};
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     services::{ServiceError, Swap},
@@ -98,7 +98,7 @@ struct SwapPlan {
 /// Used to ensure the running state is always cleared even if the optimization fails.
 #[derive(Clone)]
 struct RunningGuard {
-    progress: Arc<std::sync::Mutex<OptimizationProgress>>,
+    progress: Arc<Mutex<OptimizationProgress>>,
     terminated: Arc<Notify>,
 }
 
@@ -113,9 +113,13 @@ impl RunningGuard {
 
 impl Drop for RunningGuard {
     fn drop(&mut self) {
-        let mut progress = self.progress.lock().unwrap();
-        *progress = OptimizationProgress::default();
-        drop(progress);
+        // Try to acquire lock without blocking. If it fails, we're in a bad state
+        // but we still need to notify waiters to prevent deadlocks.
+        if let Ok(mut progress) = self.progress.try_lock() {
+            *progress = OptimizationProgress::default();
+        } else {
+            warn!("Failed to acquire optimization progress lock in Drop - lock may be held elsewhere");
+        }
 
         self.terminated.notify_waiters();
     }
@@ -158,14 +162,14 @@ impl LeafOptimizer {
     }
 
     /// Returns the current optimization progress snapshot.
-    pub fn progress(&self) -> OptimizationProgress {
-        self.progress.lock().unwrap().clone()
+    pub async fn progress(&self) -> OptimizationProgress {
+        self.progress.lock().await.clone()
     }
 
     /// Checks if optimization is currently running and may have leaves in use.
     /// Used to determine if optimization should be cancelled when payments fail.
-    pub fn is_running(&self) -> bool {
-        self.progress.lock().unwrap().is_running
+    pub async fn is_running(&self) -> bool {
+        self.progress.lock().await.is_running
     }
 
     fn should_optimize(&self, leaves: &[TreeNode]) -> bool {
@@ -190,8 +194,8 @@ impl LeafOptimizer {
     ///
     /// Returns early (without spawning) if:
     /// - Optimization is already running
-    pub fn start(self: &Arc<Self>) {
-        let mut progress = self.progress.lock().unwrap();
+    pub async fn start(self: &Arc<Self>) {
+        let mut progress = self.progress.lock().await;
 
         // Check if already running
         if progress.is_running {
@@ -267,7 +271,7 @@ impl LeafOptimizer {
 
         // Update progress with rounds info (is_running already set by start())
         {
-            let mut progress = self.progress.lock().unwrap();
+            let mut progress = self.progress.lock().await;
             progress.current_round = 0;
             progress.total_rounds = total_rounds;
         }
@@ -312,7 +316,7 @@ impl LeafOptimizer {
     /// until the optimization has fully stopped and leaves are available again.
     pub async fn cancel(&self) -> Result<(), ServiceError> {
         // First check if optimization is running
-        if !self.progress.lock().unwrap().is_running {
+        if !self.progress.lock().await.is_running {
             debug!("No optimization running to cancel");
             return Ok(());
         }
@@ -327,7 +331,7 @@ impl LeafOptimizer {
 
         // Double-check: if optimization already stopped between our first check
         // and creating the notified future, we can return early
-        if !self.progress.lock().unwrap().is_running {
+        if !self.progress.lock().await.is_running {
             debug!("Optimization already stopped");
             return Ok(());
         }
@@ -383,7 +387,7 @@ impl LeafOptimizer {
 
             // Update progress with current round
             {
-                let mut progress = self.progress.lock().unwrap();
+                let mut progress = self.progress.lock().await;
                 *progress = OptimizationProgress {
                     is_running: true,
                     current_round: round,
@@ -902,11 +906,11 @@ mod tests {
 
         {
             let _guard = RunningGuard::new(Arc::clone(&progress), Arc::clone(&terminated));
-            assert!(progress.lock().unwrap().is_running);
+            assert!(progress.lock().await.is_running);
         } // guard dropped here
 
         // After drop, state should be cleared
-        let progress = progress.lock().unwrap();
+        let progress = progress.lock().await;
         assert!(!progress.is_running);
         assert_eq!(progress.current_round, 0);
         assert_eq!(progress.total_rounds, 0);
