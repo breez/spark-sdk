@@ -10,6 +10,7 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+    TokenTransactionType,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -267,11 +268,11 @@ impl SqliteStorage {
             ALTER TABLE payment_metadata DROP COLUMN token_conversion_info;
             ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
             ",
-            // Add tx_type column with a default value of 'Transfer'.
+            // Add tx_type column with a default value of 'transfer'.
             // Reset only the token sync position (not bitcoin offset) to trigger token re-sync.
             // This will update all token payment records with the correct tx_type values.
             // Note: This intentionally couples to the CachedSyncInfo schema at migration time.
-            "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT '\"Transfer\"';
+            "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer';
             UPDATE settings
             SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
             WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL;",
@@ -444,7 +445,7 @@ impl Storage for SqliteStorage {
                 } = payment_details_filter
                 {
                     payment_details_clauses.push("t.tx_type = ?".to_string());
-                    params.push(Box::new(serde_json::to_string(tx_type)?));
+                    params.push(Box::new(tx_type.to_string()));
                 }
 
                 if !payment_details_clauses.is_empty() {
@@ -572,7 +573,7 @@ impl Storage for SqliteStorage {
                         payment.id,
                         serde_json::to_string(&metadata)?,
                         tx_hash,
-                        serde_json::to_string(&tx_type)?,
+                        tx_type.to_string(),
                         invoice_details.as_ref().map(serde_json::to_string).transpose()?,
                     ],
                 )?;
@@ -1315,8 +1316,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type_str: String = row.get(20)?;
-            let tx_type = serde_json_from_str(&tx_type_str, 20)?;
+            let tx_type: TokenTransactionType = row.get(20)?;
             let invoice_details_str: Option<String> = row.get(21)?;
             let invoice_details = invoice_details_str
                 .map(|s| serde_json_from_str(&s, 21))
@@ -1382,6 +1382,26 @@ impl FromSql for PaymentMethod {
                     .parse()
                     .map_err(|()| FromSqlError::InvalidType)?;
                 Ok(payment_method)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for TokenTransactionType {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl FromSql for TokenTransactionType {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                let tx_type: TokenTransactionType =
+                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                Ok(tx_type)
             }
             _ => Err(FromSqlError::InvalidType),
         }

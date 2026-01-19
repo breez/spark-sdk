@@ -243,7 +243,7 @@ class SqliteStorage {
             paymentDetailsFilter.txType !== undefined
           ) {
             paymentDetailsClauses.push("t.tx_type = ?");
-            params.push(JSON.stringify(paymentDetailsFilter.txType));
+            params.push(paymentDetailsFilter.txType);
           }
 
           if (paymentDetailsClauses.length > 0) {
@@ -397,7 +397,7 @@ class SqliteStorage {
             id: payment.id,
             metadata: JSON.stringify(payment.details.metadata),
             txHash: payment.details.txHash,
-            txType: JSON.stringify(payment.details.txType),
+            txType: payment.details.txType,
             invoiceDetails: payment.details.invoiceDetails
               ? JSON.stringify(payment.details.invoiceDetails)
               : null,
@@ -759,7 +759,7 @@ class SqliteStorage {
         type: "token",
         metadata: JSON.parse(row.token_metadata),
         txHash: row.token_tx_hash,
-        txType: JSON.parse(row.token_tx_type),
+        txType: row.token_tx_type,
         invoiceDetails: row.token_invoice_details
           ? JSON.parse(row.token_invoice_details)
           : null,
