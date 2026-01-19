@@ -59,3 +59,4 @@ When a conversion fails due to exceeding the maximum slippage, the conversion wi
 <div class="warning">
 <h4>Developer note</h4>
 The conversion may result in some Bitcoin remaining in the wallet after the payment is sent. This remaining Bitcoin is to account for slippage in the conversion.
+</div>

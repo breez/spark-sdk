@@ -444,43 +444,7 @@ impl Storage for SqliteStorage {
         };
 
         let query = format!(
-            "SELECT p.id
-            ,       p.payment_type
-            ,       p.status
-            ,       p.amount
-            ,       p.fees
-            ,       p.timestamp
-            ,       p.method
-            ,       p.withdraw_tx_id
-            ,       p.deposit_tx_id
-            ,       p.spark
-            ,       l.invoice AS lightning_invoice
-            ,       l.payment_hash AS lightning_payment_hash
-            ,       l.destination_pubkey AS lightning_destination_pubkey
-            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
-            ,       l.preimage AS lightning_preimage
-            ,       pm.lnurl_pay_info
-            ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_info
-            ,       t.metadata AS token_metadata
-            ,       t.tx_hash AS token_tx_hash
-            ,       t.invoice_details AS token_invoice_details
-            ,       s.invoice_details AS spark_invoice_details
-            ,       s.htlc_details AS spark_htlc_details
-            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
-            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
-            ,       lrm.sender_comment AS lnurl_sender_comment
-             FROM payments p
-             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-             LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
-             {}
-             ORDER BY p.timestamp {} 
-             LIMIT {} OFFSET {}",
-            where_sql,
-            order_direction,
+            "{SELECT_PAYMENT_SQL} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT {} OFFSET {}",
             request.limit.unwrap_or(u32::MAX),
             request.offset.unwrap_or(0)
         );
@@ -672,43 +636,8 @@ impl Storage for SqliteStorage {
 
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let connection = self.get_connection()?;
-
-        let mut stmt = connection.prepare(
-            "SELECT p.id
-            ,       p.payment_type
-            ,       p.status
-            ,       p.amount
-            ,       p.fees
-            ,       p.timestamp
-            ,       p.method
-            ,       p.withdraw_tx_id
-            ,       p.deposit_tx_id
-            ,       p.spark
-            ,       l.invoice AS lightning_invoice
-            ,       l.payment_hash AS lightning_payment_hash
-            ,       l.destination_pubkey AS lightning_destination_pubkey
-            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
-            ,       l.preimage AS lightning_preimage
-            ,       pm.lnurl_pay_info
-            ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_info
-            ,       t.metadata AS token_metadata
-            ,       t.tx_hash AS token_tx_hash
-            ,       t.invoice_details AS token_invoice_details
-            ,       s.invoice_details AS spark_invoice_details
-            ,       s.htlc_details AS spark_htlc_details
-            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
-            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
-            ,       lrm.sender_comment AS lnurl_sender_comment
-             FROM payments p
-             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-             LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
-             WHERE p.id = ?",
-        )?;
-
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.id = ?");
+        let mut stmt = connection.prepare(&query)?;
         let payment = stmt.query_row(params![id], map_payment)?;
         Ok(payment)
     }
@@ -718,43 +647,8 @@ impl Storage for SqliteStorage {
         invoice: String,
     ) -> Result<Option<Payment>, StorageError> {
         let connection = self.get_connection()?;
-
-        let mut stmt = connection.prepare(
-            "SELECT p.id
-            ,       p.payment_type
-            ,       p.status
-            ,       p.amount
-            ,       p.fees
-            ,       p.timestamp
-            ,       p.method
-            ,       p.withdraw_tx_id
-            ,       p.deposit_tx_id
-            ,       p.spark
-            ,       l.invoice AS lightning_invoice
-            ,       l.payment_hash AS lightning_payment_hash
-            ,       l.destination_pubkey AS lightning_destination_pubkey
-            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
-            ,       l.preimage AS lightning_preimage
-            ,       pm.lnurl_pay_info
-            ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_info
-            ,       t.metadata AS token_metadata
-            ,       t.tx_hash AS token_tx_hash
-            ,       t.invoice_details AS token_invoice_details
-            ,       s.invoice_details AS spark_invoice_details
-            ,       s.htlc_details AS spark_htlc_details
-            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
-            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
-            ,       lrm.sender_comment AS lnurl_sender_comment
-             FROM payments p
-             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-             LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
-             WHERE l.invoice = ?",
-        )?;
-
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE l.invoice = ?");
+        let mut stmt = connection.prepare(&query)?;
         let payment = stmt.query_row(params![invoice], map_payment);
         match payment {
             Ok(payment) => Ok(Some(payment)),
@@ -788,41 +682,7 @@ impl Storage for SqliteStorage {
         let in_clause = placeholders.join(", ");
 
         let query = format!(
-            "SELECT p.id
-            ,       p.payment_type
-            ,       p.status
-            ,       p.amount
-            ,       p.fees
-            ,       p.timestamp
-            ,       p.method
-            ,       p.withdraw_tx_id
-            ,       p.deposit_tx_id
-            ,       p.spark
-            ,       l.invoice AS lightning_invoice
-            ,       l.payment_hash AS lightning_payment_hash
-            ,       l.destination_pubkey AS lightning_destination_pubkey
-            ,       COALESCE(l.description, pm.lnurl_description) AS lightning_description
-            ,       l.preimage AS lightning_preimage
-            ,       pm.lnurl_pay_info
-            ,       pm.lnurl_withdraw_info
-            ,       pm.conversion_info
-            ,       t.metadata AS token_metadata
-            ,       t.tx_hash AS token_tx_hash
-            ,       t.invoice_details AS token_invoice_details
-            ,       s.invoice_details AS spark_invoice_details
-            ,       s.htlc_details AS spark_htlc_details
-            ,       lrm.nostr_zap_request AS lnurl_nostr_zap_request
-            ,       lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt
-            ,       lrm.sender_comment AS lnurl_sender_comment
-            ,       pm.parent_payment_id
-             FROM payments p
-             LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-             LEFT JOIN payment_details_token t ON p.id = t.payment_id
-             LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-             LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-             LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
-             WHERE pm.parent_payment_id IN ({in_clause})
-             ORDER BY p.timestamp ASC"
+            "{SELECT_PAYMENT_SQL} WHERE pm.parent_payment_id IN ({in_clause}) ORDER BY p.timestamp ASC"
         );
 
         let mut stmt = connection.prepare(&query)?;
@@ -1328,6 +1188,43 @@ impl SyncStorage for SqliteStorage {
 fn map_sqlite_error(value: rusqlite::Error) -> SyncStorageError {
     SyncStorageError::Implementation(value.to_string())
 }
+
+/// Base query for payment lookups.
+/// Column indices 0-25 are used by `map_payment`, index 26 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+const SELECT_PAYMENT_SQL: &str = "
+    SELECT p.id,
+           p.payment_type,
+           p.status,
+           p.amount,
+           p.fees,
+           p.timestamp,
+           p.method,
+           p.withdraw_tx_id,
+           p.deposit_tx_id,
+           p.spark,
+           l.invoice AS lightning_invoice,
+           l.payment_hash AS lightning_payment_hash,
+           l.destination_pubkey AS lightning_destination_pubkey,
+           COALESCE(l.description, pm.lnurl_description) AS lightning_description,
+           l.preimage AS lightning_preimage,
+           pm.lnurl_pay_info,
+           pm.lnurl_withdraw_info,
+           pm.conversion_info,
+           t.metadata AS token_metadata,
+           t.tx_hash AS token_tx_hash,
+           t.invoice_details AS token_invoice_details,
+           s.invoice_details AS spark_invoice_details,
+           s.htlc_details AS spark_htlc_details,
+           lrm.nostr_zap_request AS lnurl_nostr_zap_request,
+           lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
+           lrm.sender_comment AS lnurl_sender_comment,
+           pm.parent_payment_id
+      FROM payments p
+      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+      LEFT JOIN payment_details_token t ON p.id = t.payment_id
+      LEFT JOIN payment_details_spark s ON p.id = s.payment_id
+      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
