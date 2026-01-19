@@ -8,6 +8,7 @@ pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
 /// Default timeout for conversion operations in seconds
 pub const DEFAULT_CONVERSION_TIMEOUT_SECS: u32 = 30;
 
+/// Internal representation of the `StableBalanceConfig` which is mapped during initialization
 pub struct AutoConversionConfig {
     /// The token identifier to convert Bitcoin to
     pub token_identifier: String,

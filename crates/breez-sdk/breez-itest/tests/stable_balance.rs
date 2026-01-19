@@ -166,8 +166,8 @@ async fn test_stable_balance_auto_conversion(
     );
 
     // Verify auto-conversion happened (sats decreased, tokens increased)
-    assert!(
-        alice_info_after_large.balance_sats < 100,
+    assert_eq!(
+        alice_info_after_large.balance_sats, 0,
         "Alice's sats should be converted (got {} sats)",
         alice_info_after_large.balance_sats
     );

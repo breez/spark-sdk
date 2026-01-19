@@ -599,11 +599,11 @@ impl TokenConverter for FlashnetTokenConverter {
         // Lazy init: fetch limits on first call, use cached values thereafter
         let (threshold, reserved) = self.get_or_init_effective_values(config).await?;
 
-        // Check if balance exceeds reserved + threshold
+        // Skip if balance is less than reserved + threshold
         let trigger_amount = reserved.saturating_add(threshold);
-        if balance_sats <= trigger_amount {
+        if balance_sats < trigger_amount {
             debug!(
-                "Auto-conversion skipped: balance {} <= reserved {} + threshold {}",
+                "Auto-conversion skipped: balance {} < reserved {} + threshold {}",
                 balance_sats, reserved, threshold
             );
             return Ok(false);
@@ -729,7 +729,7 @@ impl FlashnetTokenConverter {
         }
 
         info!(
-            "Auto-populating conversion options: balance {balance_sats} sats > payment amount {payment_amount} sats"
+            "Auto-populating conversion options: balance {balance_sats} sats < payment amount {payment_amount} sats"
         );
         Ok(Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {

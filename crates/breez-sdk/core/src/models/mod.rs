@@ -573,8 +573,15 @@ pub struct OptimizationConfig {
 
 /// Configuration for automatic conversion of Bitcoin to stable tokens.
 ///
-/// When configured, the SDK will automatically convert received Bitcoin payments
-/// to the specified token once the sats balance exceeds the threshold.
+/// When configured, the SDK automatically monitors the Bitcoin balance after each
+/// wallet sync. When the balance exceeds the configured threshold plus the reserved
+/// amount, the SDK automatically converts the excess balance (above the reserve)
+/// to the specified stable token.
+///
+/// When the balance is held in a stable token, Bitcoin payments can still be sent.
+/// The SDK automatically detects when there's not enough Bitcoin balance to cover a
+/// payment and auto-populates the token-to-Bitcoin conversion options to facilitate
+/// the payment.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct StableBalanceConfig {
