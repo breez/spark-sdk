@@ -5,7 +5,7 @@
 
 Once connected, you can retrieve the current state of the SDK at any time using `get_info`. This returns:
 
-- **Spark identity public key** - The wallet's unique identity on the Spark network
+- **Spark identity public key** - The wallet's unique identity on the Spark network as a hex string
 - **Bitcoin balance** - The balance in satoshis
 - **Token balances** - Balances of any tokens held in the wallet
 
