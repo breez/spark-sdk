@@ -92,7 +92,9 @@ impl Swap {
             leaf_key_tweaks.push(LeafKeyTweak {
                 node: leaf.clone(),
                 signing_key: SecretSource::Derived(leaf.id.clone()),
-                new_signing_key: self.signer.generate_random_key().await?,
+                new_signing_key: SecretSource::Encrypted(
+                    self.signer.generate_random_secret().await?,
+                ),
             });
         }
 

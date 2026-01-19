@@ -182,11 +182,13 @@ impl BreezSigner for ExternalSignerAdapter {
         pk_bytes.to_public_key()
     }
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::SecretSource, SdkError> {
-        let key_ext = self.external.generate_random_key().await.map_err(|e| {
-            SdkError::Signer(format!("External signer generate_random_key failed: {e}"))
+    async fn generate_random_secret(&self) -> Result<spark_wallet::EncryptedSecret, SdkError> {
+        let key_ext = self.external.generate_random_secret().await.map_err(|e| {
+            SdkError::Signer(format!(
+                "External signer generate_random_secret failed: {e}"
+            ))
         })?;
-        key_ext.to_secret_source()
+        key_ext.to_encrypted_private_key()
     }
 
     async fn static_deposit_secret_encrypted(

@@ -447,11 +447,12 @@ impl Signer for DefaultSigner {
         Ok(public_key)
     }
 
-    async fn generate_random_key(&self) -> Result<SecretSource, SignerError> {
+    async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError> {
         let (secret_key, _) = self.secp.generate_keypair(&mut thread_rng());
-        Ok(SecretSource::new_encrypted(
-            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
-        ))
+        Ok(EncryptedSecret::new(self.encrypt_private_key_ecies(
+            &secret_key,
+            &self.get_identity_public_key().await?,
+        )?))
     }
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
