@@ -37,6 +37,7 @@ const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
   const info = await sdk.getInfo({
     ensureSynced: false
   })
+  const identityPubkey = info.identityPubkey
   const balanceSats = info.balanceSats
   // ANCHOR_END: fetch-balance
 }

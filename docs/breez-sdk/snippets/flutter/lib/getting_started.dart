@@ -30,6 +30,7 @@ Future<void> fetchBalance(BreezSdk sdk) async {
   // ensureSynced: true will ensure the SDK is synced with the Spark network
   // before returning the balance
   final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
+  final identityPubkey = info.identityPubkey;
   final balanceSats = info.balanceSats;
   // ANCHOR_END: fetch-balance
   print(balanceSats);

@@ -1172,6 +1172,7 @@ impl BreezSdk {
             .await?
             .unwrap_or_default();
         Ok(GetInfoResponse {
+            identity_pubkey: self.spark_wallet.get_identity_public_key().to_string(),
             balance_sats: account_info.balance_sats,
             token_balances: account_info.token_balances,
         })

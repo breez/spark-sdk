@@ -41,6 +41,7 @@ async def fetch_balance(sdk: BreezSdk):
         # ensure_synced: True will ensure the SDK is synced with the Spark network
         # before returning the balance
         info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
+        identity_pubkey = info.identity_pubkey
         balance_sats = info.balance_sats
     except Exception as error:
         logging.error(error)

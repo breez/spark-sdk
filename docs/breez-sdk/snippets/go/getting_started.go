@@ -46,8 +46,9 @@ func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
 		return err
 	}
 
+	identityPubkey := info.IdentityPubkey
 	balanceSats := info.BalanceSats
-	log.Printf("Balance: %v sats", balanceSats)
+	log.Printf("Identity pubkey: %v, Balance: %v sats", identityPubkey, balanceSats)
 	// ANCHOR_END: fetch-balance
 	return nil
 }

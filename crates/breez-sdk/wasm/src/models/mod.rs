@@ -654,6 +654,7 @@ pub struct GetInfoRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoResponse)]
 pub struct GetInfoResponse {
+    pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
 }

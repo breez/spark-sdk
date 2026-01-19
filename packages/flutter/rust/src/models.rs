@@ -130,6 +130,7 @@ pub struct _GetInfoRequest {
 
 #[frb(mirror(GetInfoResponse))]
 pub struct _GetInfoResponse {
+    pub identity_pubkey: String,
     pub balance_sats: u64,
     pub token_balances: HashMap<String, TokenBalance>,
 }

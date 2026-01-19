@@ -39,6 +39,7 @@ pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
             ensure_synced: Some(false),
         })
         .await?;
+    let identity_pubkey = &info.identity_pubkey;
     let balance_sats = info.balance_sats;
     // ANCHOR_END: fetch-balance
     info!("Balance: {balance_sats} sats");

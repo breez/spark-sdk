@@ -32,6 +32,7 @@ namespace BreezSdkSnippets
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
             var info = await sdk.GetInfo(request: new GetInfoRequest(ensureSynced: false));
+            var identityPubkey = info.identityPubkey;
             var balanceSats = info.balanceSats;
             // ANCHOR_END: fetch-balance
         }
