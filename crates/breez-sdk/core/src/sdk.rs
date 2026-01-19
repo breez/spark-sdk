@@ -1369,25 +1369,26 @@ impl BreezSdk {
 
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
-        let mut payment = Box::pin(self.maybe_convert_token_send_payment(
-            SendPaymentRequest {
-                prepare_response: PrepareSendPaymentResponse {
-                    payment_method: SendPaymentMethod::Bolt11Invoice {
-                        invoice_details: request.prepare_response.invoice_details,
-                        spark_transfer_fee_sats: None,
-                        lightning_fee_sats: request.prepare_response.fee_sats,
+        let mut payment = self
+            .maybe_convert_token_send_payment(
+                SendPaymentRequest {
+                    prepare_response: PrepareSendPaymentResponse {
+                        payment_method: SendPaymentMethod::Bolt11Invoice {
+                            invoice_details: request.prepare_response.invoice_details,
+                            spark_transfer_fee_sats: None,
+                            lightning_fee_sats: request.prepare_response.fee_sats,
+                        },
+                        amount: request.prepare_response.amount_sats.into(),
+                        token_identifier: None,
+                        conversion_estimate: request.prepare_response.conversion_estimate,
                     },
-                    amount: request.prepare_response.amount_sats.into(),
-                    token_identifier: None,
-                    conversion_estimate: request.prepare_response.conversion_estimate,
+                    options: None,
+                    idempotency_key: request.idempotency_key,
                 },
-                options: None,
-                idempotency_key: request.idempotency_key,
-            },
-            true,
-        ))
-        .await?
-        .payment;
+                true,
+            )
+            .await?
+            .payment;
 
         let success_action = process_success_action(
             &payment,
@@ -1766,7 +1767,7 @@ impl BreezSdk {
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
-        Box::pin(self.maybe_convert_token_send_payment(request, false)).await
+        self.maybe_convert_token_send_payment(request, false).await
     }
 
     pub async fn fetch_conversion_limits(
@@ -2224,14 +2225,14 @@ impl BreezSdk {
             ..
         }) = &request.prepare_response.conversion_estimate
         {
-            Box::pin(self.convert_token_send_payment_internal(
+            self.convert_token_send_payment_internal(
                 conversion_options,
                 &request,
                 &mut suppress_payment_event,
-            ))
+            )
             .await
         } else {
-            Box::pin(self.send_payment_internal(&request)).await
+            self.send_payment_internal(&request).await
         };
         // Emit payment status event and trigger wallet state sync
         if let Ok(response) = &res {
@@ -2377,7 +2378,7 @@ impl BreezSdk {
             return Ok(SendPaymentResponse { payment });
         }
         // Now send the actual payment
-        let response = Box::pin(self.send_payment_internal(request)).await?;
+        let response = self.send_payment_internal(request).await?;
         // Merge payment metadata to link the payments
         self.merge_payment_metadata(
             conversion_response.sent_payment_id,
@@ -2437,12 +2438,12 @@ impl BreezSdk {
                 lightning_fee_sats,
                 ..
             } => {
-                Box::pin(self.send_bolt11_invoice(
+                self.send_bolt11_invoice(
                     invoice_details,
                     *spark_transfer_fee_sats,
                     *lightning_fee_sats,
                     request,
-                ))
+                )
                 .await
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
@@ -2730,46 +2731,52 @@ impl BreezSdk {
             .add_event_listener(Box::new(InternalEventListener::new(tx)))
             .await;
 
-        // First check if we already have the completed payment in storage
-        let payment = match &identifier {
-            WaitForPaymentIdentifier::PaymentId(payment_id) => self
-                .storage
-                .get_payment_by_id(payment_id.clone())
-                .await
-                .ok(),
-            WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-                self.storage
-                    .get_payment_by_invoice(payment_request.clone())
-                    .await?
-            }
-        };
-        if let Some(payment) = payment
-            && payment.status == PaymentStatus::Completed
-        {
-            self.remove_event_listener(&id).await;
-            return Ok(payment);
-        }
-
-        let timeout_res = timeout(Duration::from_secs(completion_timeout_secs.into()), async {
-            loop {
-                let Some(event) = rx.recv().await else {
-                    return Err(SdkError::Generic("Event channel closed".to_string()));
-                };
-
-                let SdkEvent::PaymentSucceeded { payment } = event else {
-                    continue;
-                };
-
-                if is_payment_match(&payment, &identifier) {
-                    return Ok(payment);
+        // Ensure listener is always removed, even on error paths
+        let result = async {
+            // First check if we already have the completed payment in storage
+            let payment = match &identifier {
+                WaitForPaymentIdentifier::PaymentId(payment_id) => self
+                    .storage
+                    .get_payment_by_id(payment_id.clone())
+                    .await
+                    .ok(),
+                WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
+                    self.storage
+                        .get_payment_by_invoice(payment_request.clone())
+                        .await?
                 }
+            };
+            if let Some(payment) = payment
+                && payment.status == PaymentStatus::Completed
+            {
+                return Ok(payment);
             }
-        })
-        .await
-        .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()));
 
+            let timeout_res = timeout(Duration::from_secs(completion_timeout_secs.into()), async {
+                loop {
+                    let Some(event) = rx.recv().await else {
+                        return Err(SdkError::Generic("Event channel closed".to_string()));
+                    };
+
+                    let SdkEvent::PaymentSucceeded { payment } = event else {
+                        continue;
+                    };
+
+                    if is_payment_match(&payment, &identifier) {
+                        return Ok(payment);
+                    }
+                }
+            })
+            .await
+            .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()));
+
+            timeout_res?
+        }
+        .await;
+
+        // Always remove listener, regardless of success or error
         self.remove_event_listener(&id).await;
-        timeout_res?
+        result
     }
 
     async fn merge_payment_metadata(
