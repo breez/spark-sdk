@@ -327,7 +327,7 @@ class MigrationManager {
           // Add tx_type column with a default value of 'transfer'.
           // Delete sync cache to trigger token re-sync which will update all records with correct tx_type.
           // Note: This intentionally couples to the CachedSyncInfo schema at migration time.
-          `ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT '"transfer"'`,
+          `ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'`,
           `UPDATE settings
            SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
            WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL`,

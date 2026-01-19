@@ -400,15 +400,25 @@ pub enum TokenTransactionType {
     Burn,
 }
 
+impl fmt::Display for TokenTransactionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenTransactionType::Transfer => write!(f, "transfer"),
+            TokenTransactionType::Mint => write!(f, "mint"),
+            TokenTransactionType::Burn => write!(f, "burn"),
+        }
+    }
+}
+
 impl FromStr for TokenTransactionType {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Transfer" => Ok(TokenTransactionType::Transfer),
-            "Mint" => Ok(TokenTransactionType::Mint),
-            "Burn" => Ok(TokenTransactionType::Burn),
-            _ => Err("Invalid token transaction type".to_string()),
+        match s.to_lowercase().as_str() {
+            "transfer" => Ok(TokenTransactionType::Transfer),
+            "mint" => Ok(TokenTransactionType::Mint),
+            "burn" => Ok(TokenTransactionType::Burn),
+            _ => Err(format!("Invalid token transaction type '{s}'")),
         }
     }
 }
