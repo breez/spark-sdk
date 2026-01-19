@@ -67,9 +67,7 @@ pub async fn prepare_leaf_refund_signing_data(
         leaf_data_map.insert(
             leaf_key.node.id.clone(),
             LeafRefundSigningData {
-                signing_public_key: signer
-                    .public_key_from_secret_key_source(&leaf_key.signing_key)
-                    .await?,
+                signing_public_key: signer.public_key_from_secret(&leaf_key.signing_key).await?,
                 signing_private_key: leaf_key.signing_key.clone(),
                 receiving_public_key,
                 tx: leaf_key.node.node_tx.clone(),
@@ -160,9 +158,7 @@ pub async fn sign_refunds(
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
-        let signing_public_key = signer
-            .public_key_from_secret_key_source(&leaf.signing_key)
-            .await?;
+        let signing_public_key = signer.public_key_from_secret(&leaf.signing_key).await?;
 
         let cpfp_signed_tx = sign_refund(
             signer,

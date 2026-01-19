@@ -1,6 +1,6 @@
 use crate::SdkError;
 use crate::signer::external_types::{
-    ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey, ExternalSecretKeySource,
+    ExternalAggregateFrostRequest, ExternalEncryptedSecret, ExternalSecretSource,
     ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId, MessageBytes,
     PublicKeyBytes, derivation_path_to_string,
 };
@@ -182,41 +182,36 @@ impl BreezSigner for ExternalSignerAdapter {
         pk_bytes.to_public_key()
     }
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::SecretKeySource, SdkError> {
+    async fn generate_random_key(&self) -> Result<spark_wallet::SecretSource, SdkError> {
         let key_ext = self.external.generate_random_key().await.map_err(|e| {
             SdkError::Signer(format!("External signer generate_random_key failed: {e}"))
         })?;
-        key_ext.to_private_key_source()
+        key_ext.to_secret_source()
     }
 
-    async fn static_deposit_secret_key_encrypted(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<spark_wallet::SecretKeySource, SdkError> {
+    ) -> Result<spark_wallet::SecretSource, SdkError> {
         let key_ext = self
             .external
-            .static_deposit_secret_key_encrypted(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer static_deposit_secret_key_encrypted failed: {e}"
+                    "External signer static_deposit_secret_encrypted failed: {e}"
                 ))
             })?;
-        key_ext.to_private_key_source()
+        key_ext.to_secret_source()
     }
 
-    async fn static_deposit_secret_key(
-        &self,
-        index: u32,
-    ) -> Result<secp256k1::SecretKey, SdkError> {
+    async fn static_deposit_secret(&self, index: u32) -> Result<secp256k1::SecretKey, SdkError> {
         let key_bytes = self
             .external
-            .static_deposit_secret_key(index)
+            .static_deposit_secret(index)
             .await
             .map_err(|e| {
-                SdkError::Signer(format!(
-                    "External signer static_deposit_secret_key failed: {e}"
-                ))
+                SdkError::Signer(format!("External signer static_deposit_secret failed: {e}"))
             })?;
 
         key_bytes
@@ -240,23 +235,22 @@ impl BreezSigner for ExternalSignerAdapter {
         pk_bytes.to_public_key()
     }
 
-    async fn subtract_secret_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &spark_wallet::SecretKeySource,
-        new_signing_key: &spark_wallet::SecretKeySource,
-    ) -> Result<spark_wallet::SecretKeySource, SdkError> {
-        let signing_key_ext = ExternalSecretKeySource::from_private_key_source(signing_key)?;
-        let new_signing_key_ext =
-            ExternalSecretKeySource::from_private_key_source(new_signing_key)?;
+        signing_key: &spark_wallet::SecretSource,
+        new_signing_key: &spark_wallet::SecretSource,
+    ) -> Result<spark_wallet::SecretSource, SdkError> {
+        let signing_key_ext = ExternalSecretSource::from_secret_source(signing_key)?;
+        let new_signing_key_ext = ExternalSecretSource::from_secret_source(new_signing_key)?;
 
         let result_ext = self
             .external
-            .subtract_secret_keys(signing_key_ext, new_signing_key_ext)
+            .subtract_secrets(signing_key_ext, new_signing_key_ext)
             .await
             .map_err(|e| {
-                SdkError::Signer(format!("External signer subtract_secret_keys failed: {e}"))
+                SdkError::Signer(format!("External signer subtract_secrets failed: {e}"))
             })?;
-        result_ext.to_private_key_source()
+        result_ext.to_secret_source()
     }
 
     async fn split_secret_with_proofs(
@@ -285,36 +279,36 @@ impl BreezSigner for ExternalSignerAdapter {
             .collect()
     }
 
-    async fn encrypt_secret_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &spark_wallet::EncryptedPrivateKey,
+        private_key: &spark_wallet::EncryptedSecret,
         receiver_public_key: &secp256k1::PublicKey,
     ) -> Result<Vec<u8>, SdkError> {
-        let private_key_ext = ExternalEncryptedPrivateKey::from_encrypted_private_key(private_key)?;
+        let private_key_ext = ExternalEncryptedSecret::from_encrypted_secret(private_key)?;
         let receiver_pk_bytes = PublicKeyBytes::from_public_key(receiver_public_key);
 
         self.external
-            .encrypt_secret_key_for_receiver(private_key_ext, receiver_pk_bytes)
+            .encrypt_secret_for_receiver(private_key_ext, receiver_pk_bytes)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer encrypt_secret_key_for_receiver failed: {e}"
+                    "External signer encrypt_secret_for_receiver failed: {e}"
                 ))
             })
     }
 
-    async fn public_key_from_secret_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &spark_wallet::SecretKeySource,
+        private_key: &spark_wallet::SecretSource,
     ) -> Result<secp256k1::PublicKey, SdkError> {
-        let private_key_ext = ExternalSecretKeySource::from_private_key_source(private_key)?;
+        let private_key_ext = ExternalSecretSource::from_secret_source(private_key)?;
         let pk_bytes = self
             .external
-            .public_key_from_secret_key_source(private_key_ext)
+            .public_key_from_secret(private_key_ext)
             .await
             .map_err(|e| {
                 SdkError::Signer(format!(
-                    "External signer public_key_from_secret_key_source failed: {e}"
+                    "External signer public_key_from_secret failed: {e}"
                 ))
             })?;
         pk_bytes.to_public_key()

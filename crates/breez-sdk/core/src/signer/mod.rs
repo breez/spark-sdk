@@ -58,26 +58,25 @@ pub trait BreezSigner: Send + Sync {
         id: &spark_wallet::TreeNodeId,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::SecretKeySource, SdkError>;
+    async fn generate_random_key(&self) -> Result<spark_wallet::SecretSource, SdkError>;
 
-    async fn static_deposit_secret_key_encrypted(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<spark_wallet::SecretKeySource, SdkError>;
+    ) -> Result<spark_wallet::SecretSource, SdkError>;
 
-    async fn static_deposit_secret_key(&self, index: u32)
-    -> Result<secp256k1::SecretKey, SdkError>;
+    async fn static_deposit_secret(&self, index: u32) -> Result<secp256k1::SecretKey, SdkError>;
 
     async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn subtract_secret_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &spark_wallet::SecretKeySource,
-        new_signing_key: &spark_wallet::SecretKeySource,
-    ) -> Result<spark_wallet::SecretKeySource, SdkError>;
+        signing_key: &spark_wallet::SecretSource,
+        new_signing_key: &spark_wallet::SecretSource,
+    ) -> Result<spark_wallet::SecretSource, SdkError>;
 
     async fn split_secret_with_proofs(
         &self,
@@ -86,15 +85,15 @@ pub trait BreezSigner: Send + Sync {
         num_shares: usize,
     ) -> Result<Vec<spark_wallet::VerifiableSecretShare>, SdkError>;
 
-    async fn encrypt_secret_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &spark_wallet::EncryptedPrivateKey,
+        private_key: &spark_wallet::EncryptedSecret,
         receiver_public_key: &secp256k1::PublicKey,
     ) -> Result<Vec<u8>, SdkError>;
 
-    async fn public_key_from_secret_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &spark_wallet::SecretKeySource,
+        private_key: &spark_wallet::SecretSource,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
     async fn sign_frost<'a>(

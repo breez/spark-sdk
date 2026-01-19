@@ -11,7 +11,7 @@ use crate::{
         rpc::spark::{StartTransferRequest, TransferFilter, transfer_filter::Participant},
     },
     services::{LeafKeyTweak, ServiceError, Transfer, TransferId, TransferService},
-    signer::{SecretKeySource, Signer, from_bytes_to_scalar},
+    signer::{SecretSource, Signer, from_bytes_to_scalar},
     ssp::{CompleteLeavesSwapInput, RequestLeavesSwapInput, ServiceProvider, UserLeafInput},
     tree::TreeNode,
     utils::{
@@ -91,7 +91,7 @@ impl Swap {
         for leaf in leaves {
             leaf_key_tweaks.push(LeafKeyTweak {
                 node: leaf.clone(),
-                signing_key: SecretKeySource::Derived(leaf.id.clone()),
+                signing_key: SecretSource::Derived(leaf.id.clone()),
                 new_signing_key: self.signer.generate_random_key().await?,
             });
         }
