@@ -58,7 +58,7 @@ pub trait BreezSigner: Send + Sync {
         id: &spark_wallet::TreeNodeId,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::SecretSource, SdkError>;
+    async fn generate_random_secret(&self) -> Result<spark_wallet::EncryptedSecret, SdkError>;
 
     async fn static_deposit_secret_encrypted(
         &self,

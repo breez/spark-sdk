@@ -34,7 +34,7 @@ pub trait Signer: Send + Sync + 'static {
 
     async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
 
-    async fn generate_random_key(&self) -> Result<SecretSource, SignerError>;
+    async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError>;
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 

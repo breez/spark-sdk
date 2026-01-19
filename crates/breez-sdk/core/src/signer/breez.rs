@@ -154,9 +154,9 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::SecretSource, SdkError> {
+    async fn generate_random_secret(&self) -> Result<spark_wallet::EncryptedSecret, SdkError> {
         self.spark_signer
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }

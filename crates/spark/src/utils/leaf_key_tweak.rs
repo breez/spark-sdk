@@ -18,12 +18,12 @@ pub async fn prepare_leaf_key_tweaks_to_send(
         let our_key = signing_key_source
             .clone()
             .unwrap_or(SecretSource::Derived(leaf.id.clone()));
-        let ephemeral_key = signer.generate_random_key().await?;
+        let ephemeral_key = signer.generate_random_secret().await?;
 
         tweaks.push(LeafKeyTweak {
             node: leaf.clone(),
             signing_key: our_key,
-            new_signing_key: ephemeral_key,
+            new_signing_key: SecretSource::Encrypted(ephemeral_key),
         });
     }
 

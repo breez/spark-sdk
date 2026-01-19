@@ -203,13 +203,13 @@ impl ExternalSigner for DefaultExternalSigner {
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
-    async fn generate_random_key(&self) -> Result<ExternalSecretSource, SignerError> {
+    async fn generate_random_secret(&self) -> Result<ExternalEncryptedSecret, SignerError> {
         let key = self
             .inner
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        ExternalSecretSource::from_secret_source(&key)
+        ExternalEncryptedSecret::from_encrypted_secret(&key)
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
@@ -586,29 +586,21 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_generate_random_key() {
+    async fn test_generate_random_secret() {
         let (external, _internal) = create_test_signer();
 
-        let key1 = external.generate_random_key().await.unwrap();
-        let key2 = external.generate_random_key().await.unwrap();
+        let key1 = external.generate_random_secret().await.unwrap();
+        let key2 = external.generate_random_secret().await.unwrap();
 
         // Verify we can convert them
-        let _internal_key1 = key1.to_secret_source().unwrap();
-        let _internal_key2 = key2.to_secret_source().unwrap();
+        let _internal_key1 = key1.to_encrypted_private_key().unwrap();
+        let _internal_key2 = key2.to_encrypted_private_key().unwrap();
 
         // Random keys should be different (encrypted, so ciphertext should differ)
-        match (&key1, &key2) {
-            (
-                ExternalSecretSource::Encrypted { key: k1 },
-                ExternalSecretSource::Encrypted { key: k2 },
-            ) => {
-                assert_ne!(
-                    k1.ciphertext, k2.ciphertext,
-                    "Random keys should be different"
-                );
-            }
-            _ => panic!("Random keys should be encrypted"),
-        }
+        assert_ne!(
+            key1.ciphertext, key2.ciphertext,
+            "Random keys should be different"
+        );
     }
 
     #[macros::async_test_all]
@@ -696,7 +688,8 @@ mod tests {
         // Create a simple FROST signing request
         let message = b"test frost signing message";
         let public_key = internal.identity_public_key().unwrap();
-        let private_key_source = internal.generate_random_key().await.unwrap();
+        let private_key_encrypted = internal.generate_random_secret().await.unwrap();
+        let private_key_source = spark_wallet::SecretSource::Encrypted(private_key_encrypted);
         let verifying_key = public_key;
 
         // Create statechain commitments (using just one participant for simplicity)

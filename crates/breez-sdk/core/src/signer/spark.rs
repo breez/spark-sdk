@@ -67,9 +67,9 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn generate_random_key(&self) -> Result<SecretSource, SignerError> {
+    async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError> {
         self.signer
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }

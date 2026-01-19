@@ -286,10 +286,10 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "generateRandomKey")]
-    pub async fn generate_random_key(&self) -> Result<ExternalSecretSource, JsValue> {
+    #[wasm_bindgen(js_name = "generateRandomSecret")]
+    pub async fn generate_random_secret(&self) -> Result<ExternalEncryptedSecret, JsValue> {
         self.inner
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -480,8 +480,10 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.get_public_key_for_node(id).await
     }
 
-    async fn generate_random_key(&self) -> Result<core_types::ExternalSecretSource, SignerError> {
-        self.inner.generate_random_key().await
+    async fn generate_random_secret(
+        &self,
+    ) -> Result<core_types::ExternalEncryptedSecret, SignerError> {
+        self.inner.generate_random_secret().await
     }
 
     async fn static_deposit_secret_encrypted(
@@ -721,18 +723,20 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_pubkey.into())
     }
 
-    async fn generate_random_key(&self) -> Result<core_types::ExternalSecretSource, SignerError> {
+    async fn generate_random_secret(
+        &self,
+    ) -> Result<core_types::ExternalEncryptedSecret, SignerError> {
         let promise = self
             .inner
-            .generate_random_key()
+            .generate_random_secret()
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let wasm_source: ExternalSecretSource =
+        let wasm_source: ExternalEncryptedSecret =
             serde_wasm_bindgen::from_value(result).map_err(|e| {
-                SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
+                SignerError::Generic(format!("Failed to deserialize encrypted secret: {}", e))
             })?;
         Ok(wasm_source.into())
     }
@@ -1018,8 +1022,8 @@ extern "C" {
         id: ExternalTreeNodeId,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "generateRandomKey", catch)]
-    pub fn generate_random_key(this: &JsExternalSigner) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = "generateRandomSecret", catch)]
+    pub fn generate_random_secret(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositSecretSource", catch)]
     pub fn static_deposit_secret_encrypted(
