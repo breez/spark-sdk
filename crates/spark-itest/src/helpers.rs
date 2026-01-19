@@ -154,7 +154,7 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
     }
 }
 
-pub async fn deposit_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture) -> Result<()> {
+pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture) -> Result<()> {
     // Generate a deposit address
     let deposit_address = wallet.generate_deposit_address(false).await?;
     info!("Generated deposit address: {}", deposit_address);

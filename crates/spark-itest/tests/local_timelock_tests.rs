@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rstest::*;
-use spark_itest::helpers::{WalletsFixture, deposit_wallet, wait_for_event, wallets};
+use spark_itest::helpers::{WalletsFixture, deposit_to_wallet, wait_for_event, wallets};
 use spark_wallet::{SparkWallet, WalletEvent};
 use tracing::info;
 
@@ -13,7 +13,7 @@ async fn test_renew_timelocks(#[future] wallets: WalletsFixture) -> Result<()> {
     let mut alice = fixture.alice_wallet;
     let mut bob = fixture.bob_wallet;
 
-    deposit_wallet(&alice, &fixture.fixtures.bitcoind).await?;
+    deposit_to_wallet(&alice, &fixture.fixtures.bitcoind).await?;
 
     // Get the total balance that will be sent back and forth
     let total_balance = alice.get_balance().await?;

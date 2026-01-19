@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bitcoin::Amount;
 use rstest::*;
-use spark_itest::helpers::{WalletsFixture, deposit_wallet, wallets};
+use spark_itest::helpers::{WalletsFixture, deposit_to_wallet, wallets};
 use tracing::info;
 
 #[rstest]
@@ -30,7 +30,7 @@ async fn test_claim_unconfirmed_deposit(#[future] wallets: WalletsFixture) -> Re
     let wallet = fixture.alice_wallet;
     let bitcoind = &fixture.fixtures.bitcoind;
 
-    deposit_wallet(&wallet, bitcoind).await?;
+    deposit_to_wallet(&wallet, bitcoind).await?;
 
     Ok(())
 }
