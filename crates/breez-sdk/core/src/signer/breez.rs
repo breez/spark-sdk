@@ -154,19 +154,19 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+    async fn generate_random_key(&self) -> Result<spark_wallet::SecretKeySource, SdkError> {
         self.spark_signer
             .generate_random_key()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_key_encrypted(
         &self,
         index: u32,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+    ) -> Result<spark_wallet::SecretKeySource, SdkError> {
         self.spark_signer
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_key_encrypted(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
@@ -193,9 +193,9 @@ impl BreezSigner for BreezSignerImpl {
 
     async fn subtract_secret_keys(
         &self,
-        signing_key: &spark_wallet::PrivateKeySource,
-        new_signing_key: &spark_wallet::PrivateKeySource,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+        signing_key: &spark_wallet::SecretKeySource,
+        new_signing_key: &spark_wallet::SecretKeySource,
+    ) -> Result<spark_wallet::SecretKeySource, SdkError> {
         self.spark_signer
             .subtract_secret_keys(signing_key, new_signing_key)
             .await
@@ -214,23 +214,23 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_key_for_receiver(
         &self,
         private_key: &spark_wallet::EncryptedPrivateKey,
         receiver_public_key: &secp256k1::PublicKey,
     ) -> Result<Vec<u8>, SdkError> {
         self.spark_signer
-            .encrypt_private_key_for_receiver(private_key, receiver_public_key)
+            .encrypt_secret_key_for_receiver(private_key, receiver_public_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret_key_source(
         &self,
-        private_key: &spark_wallet::PrivateKeySource,
+        private_key: &spark_wallet::SecretKeySource,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         self.spark_signer
-            .get_public_key_from_private_key_source(private_key)
+            .public_key_from_secret_key_source(private_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }

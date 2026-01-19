@@ -11,7 +11,7 @@ use crate::Network;
 use crate::bitcoin::sighash_from_tx;
 use crate::operator::rpc as operator_rpc;
 use crate::services::{ServiceError, SignedTx};
-use crate::signer::{FrostSigningCommitmentsWithNonces, PrivateKeySource, SignFrostRequest};
+use crate::signer::{FrostSigningCommitmentsWithNonces, SecretKeySource, SignFrostRequest};
 use crate::{
     signer::{Signer, SignerError},
     tree::TreeNodeId,
@@ -73,7 +73,7 @@ pub async fn sign_signing_jobs(
     for (i, signing_job) in signing_jobs.iter().enumerate() {
         let sighash = sighash_from_tx(&signing_job.tx, 0, &signing_job.parent_tx_out)
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        let private_key = PrivateKeySource::Derived(signing_job.node_id.clone());
+        let private_key = SecretKeySource::Derived(signing_job.node_id.clone());
         let user_signature = signer
             .sign_frost(SignFrostRequest {
                 message: sighash.to_raw_hash().to_byte_array().as_ref(),

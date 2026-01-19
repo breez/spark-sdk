@@ -58,12 +58,12 @@ pub trait BreezSigner: Send + Sync {
         id: &spark_wallet::TreeNodeId,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::PrivateKeySource, SdkError>;
+    async fn generate_random_key(&self) -> Result<spark_wallet::SecretKeySource, SdkError>;
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_key_encrypted(
         &self,
         index: u32,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError>;
+    ) -> Result<spark_wallet::SecretKeySource, SdkError>;
 
     async fn static_deposit_secret_key(&self, index: u32)
     -> Result<secp256k1::SecretKey, SdkError>;
@@ -75,9 +75,9 @@ pub trait BreezSigner: Send + Sync {
 
     async fn subtract_secret_keys(
         &self,
-        signing_key: &spark_wallet::PrivateKeySource,
-        new_signing_key: &spark_wallet::PrivateKeySource,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError>;
+        signing_key: &spark_wallet::SecretKeySource,
+        new_signing_key: &spark_wallet::SecretKeySource,
+    ) -> Result<spark_wallet::SecretKeySource, SdkError>;
 
     async fn split_secret_with_proofs(
         &self,
@@ -86,15 +86,15 @@ pub trait BreezSigner: Send + Sync {
         num_shares: usize,
     ) -> Result<Vec<spark_wallet::VerifiableSecretShare>, SdkError>;
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_key_for_receiver(
         &self,
         private_key: &spark_wallet::EncryptedPrivateKey,
         receiver_public_key: &secp256k1::PublicKey,
     ) -> Result<Vec<u8>, SdkError>;
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret_key_source(
         &self,
-        private_key: &spark_wallet::PrivateKeySource,
+        private_key: &spark_wallet::SecretKeySource,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
     async fn sign_frost<'a>(
