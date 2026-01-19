@@ -234,7 +234,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "eciesEncrypt")]
+    #[wasm_bindgen(js_name = "encryptEcies")]
     pub async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
             .encrypt_ecies(message, path)
@@ -242,7 +242,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "eciesDecrypt")]
+    #[wasm_bindgen(js_name = "decryptEcies")]
     pub async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
             .decrypt_ecies(message, path)
@@ -263,7 +263,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "generateFrostSigningCommitments")]
+    #[wasm_bindgen(js_name = "generateRandomSigningCommitment")]
     pub async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, JsValue> {
@@ -295,7 +295,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositSecretSource")]
+    #[wasm_bindgen(js_name = "staticDepositSecretEncrypted")]
     pub async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
@@ -307,7 +307,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositPrivateKey")]
+    #[wasm_bindgen(js_name = "staticDepositSecret")]
     pub async fn static_deposit_secret(&self, index: u32) -> Result<SecretBytes, JsValue> {
         self.inner
             .static_deposit_secret(index)
@@ -316,7 +316,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositPublicKey")]
+    #[wasm_bindgen(js_name = "staticDepositSigningKey")]
     pub async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, JsValue> {
         self.inner
             .static_deposit_signing_key(index)
@@ -325,7 +325,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "subtractPrivateKeys")]
+    #[wasm_bindgen(js_name = "subtractSecrets")]
     pub async fn subtract_secrets(
         &self,
         signing_key: ExternalSecretSource,
@@ -370,7 +370,7 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getPublicKeyFromSecretSource")]
+    #[wasm_bindgen(js_name = "publicKeyFromSecret")]
     pub async fn public_key_from_secret(
         &self,
         private_key: ExternalSecretSource,
@@ -949,19 +949,19 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
     signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
     signEcdsaRecoverable(message: MessageBytes, path: string): Promise<RecoverableEcdsaSignatureBytes>;
-    eciesEncrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
-    eciesDecrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
+    encryptEcies(message: Uint8Array, path: string): Promise<Uint8Array>;
+    decryptEcies(message: Uint8Array, path: string): Promise<Uint8Array>;
     signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
-    generateFrostSigningCommitments(): Promise<ExternalFrostCommitments>;
+    generateRandomSigningCommitment(): Promise<ExternalFrostCommitments>;
     getPublicKeyForNode(id: ExternalTreeNodeId): Promise<PublicKeyBytes>;
-    generateRandomKey(): Promise<ExternalSecretSource>;
-    getStaticDepositSecretSource(index: number): Promise<ExternalSecretSource>;
-    getStaticDepositPrivateKey(index: number): Promise<SecretBytes>;
-    getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
-    subtractPrivateKeys(signingKey: ExternalSecretSource, newSigningKey: ExternalSecretSource): Promise<ExternalSecretSource>;
+    generateRandomSecret(): Promise<ExternalEncryptedSecret>;
+    staticDepositSecretEncrypted(index: number): Promise<ExternalSecretSource>;
+    staticDepositSecret(index: number): Promise<SecretBytes>;
+    staticDepositSigningKey(index: number): Promise<PublicKeyBytes>;
+    subtractSecrets(signingKey: ExternalSecretSource, newSigningKey: ExternalSecretSource): Promise<ExternalSecretSource>;
     splitSecretWithProofs(secret: ExternalSecretToSplit, threshold: number, numShares: number): Promise<ExternalVerifiableSecretShare[]>;
     encryptPrivateKeyForReceiver(privateKey: ExternalEncryptedSecret, receiverPublicKey: PublicKeyBytes): Promise<Uint8Array>;
-    getPublicKeyFromSecretSource(privateKey: ExternalSecretSource): Promise<PublicKeyBytes>;
+    publicKeyFromSecret(privateKey: ExternalSecretSource): Promise<PublicKeyBytes>;
     signFrost(request: ExternalSignFrostRequest): Promise<ExternalFrostSignatureShare>;
     aggregateFrost(request: ExternalAggregateFrostRequest): Promise<ExternalFrostSignature>;
     hmacSha256(message: Uint8Array, path: string): Promise<HashedMessageBytes>;
