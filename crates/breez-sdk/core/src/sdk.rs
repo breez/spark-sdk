@@ -1341,7 +1341,7 @@ impl BreezSdk {
                 payment_request: success_data.pr,
                 amount: Some(request.amount_sats.into()),
                 token_identifier: None,
-                conversion_options: None,
+                conversion_options: request.conversion_options.clone(),
             })
             .await?;
 
@@ -1363,6 +1363,7 @@ impl BreezSdk {
             invoice_details,
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
+            conversion_estimate: prepare_response.conversion_estimate,
         })
     }
 
@@ -1378,7 +1379,7 @@ impl BreezSdk {
                     },
                     amount: request.prepare_response.amount_sats.into(),
                     token_identifier: None,
-                    conversion_estimate: None,
+                    conversion_estimate: request.prepare_response.conversion_estimate,
                 },
                 options: None,
                 idempotency_key: request.idempotency_key,

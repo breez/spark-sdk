@@ -308,6 +308,7 @@ async fn test_05_lnurl_payment_flow(
             pay_request: details.pay_request,
             comment: Some(payment_comment.to_string()),
             validate_success_action_url: None,
+            conversion_options: None,
         })
         .await?;
 
