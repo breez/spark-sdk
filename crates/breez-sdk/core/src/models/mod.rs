@@ -225,6 +225,95 @@ pub struct Payment {
     pub method: PaymentMethod,
     /// Details of the payment
     pub details: Option<PaymentDetails>,
+    /// If set, this payment involved a conversion before the payment
+    pub conversion_details: Option<ConversionDetails>,
+}
+
+/// Outlines the steps involved in a conversion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConversionDetails {
+    /// First step is converting from the available asset
+    pub from: ConversionStep,
+    /// Second step is converting to the requested asset
+    pub to: ConversionStep,
+}
+
+/// Conversions have one send and one receive payment that are associated to the
+/// ongoing payment via the `parent_payment_id` in the payment metadata. These payments
+/// are queried from the storage by the SDK, then converted.
+impl TryFrom<&Vec<Payment>> for ConversionDetails {
+    type Error = SdkError;
+    fn try_from(payments: &Vec<Payment>) -> Result<Self, Self::Error> {
+        let from = payments
+            .iter()
+            .find(|p| p.payment_type == PaymentType::Send)
+            .ok_or(SdkError::Generic(
+                "From step of conversion not found".to_string(),
+            ))?;
+        let to = payments
+            .iter()
+            .find(|p| p.payment_type == PaymentType::Receive)
+            .ok_or(SdkError::Generic(
+                "To step of conversion not found".to_string(),
+            ))?;
+        Ok(ConversionDetails {
+            from: from.try_into()?,
+            to: to.try_into()?,
+        })
+    }
+}
+
+/// A single step in a conversion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConversionStep {
+    /// The underlying payment id of the conversion step
+    pub payment_id: String,
+    /// Payment amount in satoshis or token base units
+    pub amount: u128,
+    /// Fee paid in satoshis or token base units
+    /// This represents the payment fee + the conversion fee
+    pub fee: u128,
+    /// Method of payment
+    pub method: PaymentMethod,
+    /// Token metadata if a token is used for payment
+    pub token_metadata: Option<TokenMetadata>,
+}
+
+/// Converts a Spark or Token payment into a `ConversionStep`.
+/// Fees are a sum of the payment fee and the conversion fee, if applicable,
+/// from the payment details. Token metadata should only be set for a token payment.
+impl TryFrom<&Payment> for ConversionStep {
+    type Error = SdkError;
+    fn try_from(payment: &Payment) -> Result<Self, Self::Error> {
+        let (conversion_info, token_metadata) = match &payment.details {
+            Some(PaymentDetails::Spark {
+                conversion_info: Some(info),
+                ..
+            }) => (info, None),
+            Some(PaymentDetails::Token {
+                conversion_info: Some(info),
+                metadata,
+                ..
+            }) => (info, Some(metadata.clone())),
+            _ => {
+                return Err(SdkError::Generic(format!(
+                    "No conversion info available for payment {}",
+                    payment.id
+                )));
+            }
+        };
+        Ok(ConversionStep {
+            payment_id: payment.id.clone(),
+            amount: payment.amount,
+            fee: payment
+                .fees
+                .saturating_add(conversion_info.fee.unwrap_or(0)),
+            method: payment.method,
+            token_metadata,
+        })
+    }
 }
 
 #[cfg(feature = "uniffi")]

@@ -172,6 +172,7 @@ async fn test_migration_from_v2_to_v3() {
         timestamp: 1234567891,
         method: breez_sdk_spark::PaymentMethod::Lightning,
         details: None,
+        conversion_details: None,
     };
 
     breez_sdk_spark::Storage::insert_payment(&storage, new_payment.clone())

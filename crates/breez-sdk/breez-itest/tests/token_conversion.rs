@@ -102,13 +102,44 @@ async fn test_token_conversion_success(
         "Alice sent Bitcoin→Token payment: status={:?}, method={:?}",
         send_btc_to_token.payment.status, send_btc_to_token.payment.method
     );
-
     assert!(
         matches!(
             send_btc_to_token.payment.status,
             PaymentStatus::Completed | PaymentStatus::Pending
         ),
         "Bitcoin to Token payment should be completed or pending"
+    );
+
+    // Check payment conversion details
+    let btc_to_token_conversion_details = send_btc_to_token.payment.conversion_details.unwrap();
+    assert_eq!(
+        btc_to_token_conversion_details.from.method,
+        PaymentMethod::Spark,
+        "From step should be a spark payment"
+    );
+    assert!(
+        btc_to_token_conversion_details.from.fee > 0,
+        "From step should have a fee"
+    );
+    assert!(
+        btc_to_token_conversion_details
+            .from
+            .token_metadata
+            .is_none(),
+        "From step should have no token metadata"
+    );
+    assert_eq!(
+        btc_to_token_conversion_details.to.method,
+        PaymentMethod::Token,
+        "To step should be a token payment"
+    );
+    assert_eq!(
+        btc_to_token_conversion_details.to.fee, 0,
+        "To step should have no fee"
+    );
+    assert!(
+        btc_to_token_conversion_details.to.token_metadata.is_some(),
+        "To step should have token metadata"
     );
 
     // Wait for Bob to receive the token payment
@@ -125,6 +156,10 @@ async fn test_token_conversion_success(
         bob_received_payment.method,
         PaymentMethod::Token,
         "Bob should receive a token payment"
+    );
+    assert!(
+        bob_received_payment.conversion_details.is_none(),
+        "Should contain no conversion_details"
     );
 
     // Verify Bob received tokens
@@ -226,13 +261,44 @@ async fn test_token_conversion_success(
         "Bob sent Token→Bitcoin payment: status={:?}, method={:?}",
         send_token_to_btc.payment.status, send_token_to_btc.payment.method
     );
-
     assert!(
         matches!(
             send_token_to_btc.payment.status,
             PaymentStatus::Completed | PaymentStatus::Pending
         ),
         "Token to Bitcoin payment should be completed or pending"
+    );
+
+    // Check payment conversion details
+    let token_to_btc_conversion_details = send_token_to_btc.payment.conversion_details.unwrap();
+    assert_eq!(
+        token_to_btc_conversion_details.from.method,
+        PaymentMethod::Token,
+        "From step should be a token payment"
+    );
+    assert!(
+        token_to_btc_conversion_details.from.fee > 0,
+        "From step should have a fee"
+    );
+    assert!(
+        token_to_btc_conversion_details
+            .from
+            .token_metadata
+            .is_some(),
+        "From step should have token metadata"
+    );
+    assert_eq!(
+        token_to_btc_conversion_details.to.method,
+        PaymentMethod::Spark,
+        "To step should be a spark payment"
+    );
+    assert_eq!(
+        token_to_btc_conversion_details.to.fee, 0,
+        "To step should have no fee"
+    );
+    assert!(
+        token_to_btc_conversion_details.to.token_metadata.is_none(),
+        "To step should have no token metadata"
     );
 
     // Wait for Alice to receive the Bitcoin payment
@@ -248,6 +314,10 @@ async fn test_token_conversion_success(
     assert_eq!(
         alice_received_payment.amount, token_to_sats_success_amount as u128,
         "Alice should receive the exact invoice amount"
+    );
+    assert!(
+        alice_received_payment.conversion_details.is_none(),
+        "Should contain no conversion_details"
     );
 
     // Verify Alice received Bitcoin

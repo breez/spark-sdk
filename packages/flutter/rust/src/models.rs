@@ -516,6 +516,22 @@ pub struct _Payment {
     pub timestamp: u64,
     pub method: PaymentMethod,
     pub details: Option<PaymentDetails>,
+    pub conversion_details: Option<ConversionDetails>,
+}
+
+#[frb(mirror(ConversionDetails))]
+pub struct _ConversionDetails {
+    pub from: ConversionStep,
+    pub to: ConversionStep,
+}
+
+#[frb(mirror(ConversionStep))]
+pub struct _ConversionStep {
+    pub payment_id: String,
+    pub amount: u128,
+    pub fee: u128,
+    pub method: PaymentMethod,
+    pub token_metadata: Option<TokenMetadata>,
 }
 
 #[frb(mirror(PaymentDetails))]
