@@ -249,4 +249,26 @@ impl BreezSdk {
     ) -> Result<FetchConversionLimitsResponse, SdkError> {
         self.inner.fetch_conversion_limits(request).await
     }
+
+    pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
+        self.inner.add_contact(request).await
+    }
+
+    pub async fn update_contact(
+        &self,
+        request: UpdateContactRequest,
+    ) -> Result<Contact, SdkError> {
+        self.inner.update_contact(request).await
+    }
+
+    pub async fn delete_contact(&self, id: String) -> Result<(), SdkError> {
+        self.inner.delete_contact(id).await
+    }
+
+    pub async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, SdkError> {
+        self.inner.list_contacts(request).await
+    }
 }

@@ -1307,6 +1307,140 @@ class SqliteStorage {
       );
     }
   }
+
+  // ===== Contact Operations =====
+
+  listContacts(request) {
+    try {
+      const offset = request.offset !== null && request.offset !== undefined ? request.offset : 0;
+      const limit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
+      const nameFilter = request.name !== null && request.name !== undefined ? request.name : null;
+
+      let rows;
+      if (nameFilter !== null) {
+        const stmt = this.db.prepare(`
+          SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+          FROM contacts
+          WHERE name = ?
+          ORDER BY name ASC
+          LIMIT ? OFFSET ?
+        `);
+        rows = stmt.all(nameFilter, limit, offset);
+      } else {
+        const stmt = this.db.prepare(`
+          SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+          FROM contacts
+          ORDER BY name ASC
+          LIMIT ? OFFSET ?
+        `);
+        rows = stmt.all(limit, offset);
+      }
+
+      return Promise.resolve(rows);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to list contacts: ${error.message}`, error)
+      );
+    }
+  }
+
+  getContact(id) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+        FROM contacts
+        WHERE id = ?
+      `);
+      const row = stmt.get(id);
+      return Promise.resolve(row || null);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to get contact: ${error.message}`, error)
+      );
+    }
+  }
+
+  insertContact(contact) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        contact.id,
+        contact.name,
+        contact.paymentIdentifier,
+        contact.createdAt,
+        contact.updatedAt
+      );
+
+      return Promise.resolve();
+    } catch (error) {
+      // Check for UNIQUE constraint violation (SQLITE_CONSTRAINT_UNIQUE = 2067)
+      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return Promise.reject(
+          new StorageError("Duplicate contact", error)
+        );
+      }
+      return Promise.reject(
+        new StorageError(`Failed to insert contact: ${error.message}`, error)
+      );
+    }
+  }
+
+  updateContact(contact) {
+    try {
+      const updateStmt = this.db.prepare(`
+        UPDATE contacts
+        SET name = ?, payment_identifier = ?, updated_at = ?
+        WHERE id = ?
+      `);
+
+      const result = updateStmt.run(
+        contact.name,
+        contact.paymentIdentifier,
+        contact.updatedAt,
+        contact.id
+      );
+
+      if (result.changes === 0) {
+        return Promise.reject(new StorageError("Contact not found"));
+      }
+
+      // Fetch and return the updated record
+      const selectStmt = this.db.prepare(`
+        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+        FROM contacts
+        WHERE id = ?
+      `);
+
+      const updated = selectStmt.get(contact.id);
+      return Promise.resolve(updated);
+    } catch (error) {
+      // Check for UNIQUE constraint violation
+      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+        return Promise.reject(
+          new StorageError("Duplicate contact", error)
+        );
+      }
+      return Promise.reject(
+        new StorageError(`Failed to update contact: ${error.message}`, error)
+      );
+    }
+  }
+
+  deleteContact(id) {
+    try {
+      const stmt = this.db.prepare("DELETE FROM contacts WHERE id = ?");
+      stmt.run(id);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to delete contact: ${error.message}`, error)
+      );
+    }
+  }
 }
 
 async function createDefaultStorage(dataDir, logger = null) {

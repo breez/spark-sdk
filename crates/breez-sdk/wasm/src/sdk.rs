@@ -341,4 +341,30 @@ impl BreezSdk {
             .await?
             .into())
     }
+
+    #[wasm_bindgen(js_name = "addContact")]
+    pub async fn add_contact(&self, request: AddContactRequest) -> WasmResult<Contact> {
+        Ok(self.sdk.add_contact(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "updateContact")]
+    pub async fn update_contact(&self, request: UpdateContactRequest) -> WasmResult<Contact> {
+        Ok(self.sdk.update_contact(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "deleteContact")]
+    pub async fn delete_contact(&self, id: String) -> WasmResult<()> {
+        Ok(self.sdk.delete_contact(id).await?)
+    }
+
+    #[wasm_bindgen(js_name = "listContacts")]
+    pub async fn list_contacts(&self, request: ListContactsRequest) -> WasmResult<Vec<Contact>> {
+        Ok(self
+            .sdk
+            .list_contacts(request.into())
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
 }

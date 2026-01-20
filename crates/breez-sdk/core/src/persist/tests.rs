@@ -2721,3 +2721,217 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
     );
     assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
 }
+
+#[allow(clippy::too_many_lines)]
+pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
+    use crate::{Contact, ListContactsRequest, StorageError};
+
+    // Test insert
+    let c1 = Contact {
+        id: "c1".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c1.clone()).await.unwrap();
+
+    // Test get_contact
+    let fetched = storage.get_contact("c1".to_string()).await.unwrap();
+    assert_eq!(fetched.id, "c1");
+    assert_eq!(fetched.name, "Alice");
+    assert_eq!(fetched.payment_identifier, "alice@example.com");
+    assert_eq!(fetched.created_at, 1000);
+    assert_eq!(fetched.updated_at, 1000);
+
+    // Test get_contact not found
+    assert!(matches!(
+        storage.get_contact("nonexistent".to_string()).await,
+        Err(StorageError::NotFound)
+    ));
+
+    // Test list
+    let contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].name, "Alice");
+
+    // Test update - returns Contact with preserved created_at
+    let to_update = Contact {
+        id: "c1".to_string(),
+        name: "Alice B".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 0, // Should be ignored
+        updated_at: 2000,
+    };
+    let updated = storage.update_contact(to_update).await.unwrap();
+    assert_eq!(updated.name, "Alice B");
+    assert_eq!(updated.created_at, 1000); // Verify created_at preserved
+
+    // Test delete
+    storage.delete_contact("c1".to_string()).await.unwrap();
+    let contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert!(contacts.is_empty());
+
+    // Test duplicate insert (relies on UNIQUE constraint)
+    let c2 = Contact {
+        id: "c2".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c2).await.unwrap();
+    let c3 = Contact {
+        id: "c3".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    assert!(matches!(
+        storage.insert_contact(c3).await,
+        Err(StorageError::Duplicate)
+    ));
+
+    // Test update to duplicate
+    let c4 = Contact {
+        id: "c4".to_string(),
+        name: "Carol".to_string(),
+        payment_identifier: "carol@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c4).await.unwrap();
+    let c4_dup = Contact {
+        id: "c4".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 0,
+        updated_at: 2000,
+    };
+    assert!(matches!(
+        storage.update_contact(c4_dup).await,
+        Err(StorageError::Duplicate)
+    ));
+
+    // Test update not found
+    let missing = Contact {
+        id: "missing".to_string(),
+        name: "X".to_string(),
+        payment_identifier: "x@example.com".to_string(),
+        created_at: 0,
+        updated_at: 1000,
+    };
+    assert!(matches!(
+        storage.update_contact(missing).await,
+        Err(StorageError::NotFound)
+    ));
+
+    // Test pagination
+    storage.delete_contact("c2".to_string()).await.unwrap();
+    storage.delete_contact("c4".to_string()).await.unwrap();
+    for i in 0..5 {
+        let c = Contact {
+            id: format!("p{i}"),
+            name: format!("User{i}"),
+            payment_identifier: format!("u{i}@example.com"),
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        storage.insert_contact(c).await.unwrap();
+    }
+    let page1 = storage
+        .list_contacts(ListContactsRequest {
+            offset: Some(0),
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page1.len(), 2);
+    let page2 = storage
+        .list_contacts(ListContactsRequest {
+            offset: Some(2),
+            limit: Some(2),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page2.len(), 2);
+    assert_ne!(page1[0].id, page2[0].id);
+}
+
+pub async fn test_contacts_name_filter(storage: Box<dyn Storage>) {
+    use crate::{Contact, ListContactsRequest};
+
+    // Insert test contacts
+    let c1 = Contact {
+        id: "c1".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    let c2 = Contact {
+        id: "c2".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    let c3 = Contact {
+        id: "c3".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice2@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c1).await.unwrap();
+    storage.insert_contact(c2).await.unwrap();
+    storage.insert_contact(c3).await.unwrap();
+
+    // Filter by name "Alice" - should return 2 contacts
+    let alice_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("Alice".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(alice_contacts.len(), 2);
+    assert!(alice_contacts.iter().all(|c| c.name == "Alice"));
+
+    // Filter by name "Bob" - should return 1 contact
+    let bob_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("Bob".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(bob_contacts.len(), 1);
+    assert_eq!(bob_contacts[0].name, "Bob");
+
+    // Filter by name "NonExistent" - should return 0 contacts
+    let no_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("NonExistent".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(no_contacts.is_empty());
+
+    // No filter - should return all 3 contacts
+    let all_contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(all_contacts.len(), 3);
+}

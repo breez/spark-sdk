@@ -8,9 +8,9 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
-    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
-    TokenTransactionType,
+    AssetFilter, Contact, ConversionInfo, DepositInfo, ListContactsRequest, ListPaymentsRequest,
+    LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter,
+    PaymentMethod, TokenTransactionType,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -285,6 +285,14 @@ impl SqliteStorage {
              DELETE FROM sync_state;
              UPDATE sync_revision SET revision = 0;
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
+            "CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(name, payment_identifier)
+            );",
         ]
     }
 }
@@ -846,6 +854,126 @@ impl Storage for SqliteStorage {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        let limit = request.limit.unwrap_or(u32::MAX);
+        let offset = request.offset.unwrap_or(0);
+        let connection = self.get_connection()?;
+        let (query, params): (String, Vec<Box<dyn ToSql>>) = if let Some(ref name) = request.name {
+            (
+                format!(
+                    "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE name = ? ORDER BY name ASC LIMIT {limit} OFFSET {offset}"
+                ),
+                vec![Box::new(name.clone())],
+            )
+        } else {
+            (
+                format!(
+                    "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts ORDER BY name ASC LIMIT {limit} OFFSET {offset}"
+                ),
+                vec![],
+            )
+        };
+
+        let mut stmt = connection.prepare(&query)?;
+        let param_refs: Vec<&dyn ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
+        let contacts = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(Contact {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    payment_identifier: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(contacts)
+    }
+
+    async fn get_contact(&self, id: String) -> Result<Contact, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = ?",
+        )?;
+        stmt.query_row(params![id], |row| {
+            Ok(Contact {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                payment_identifier: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => StorageError::NotFound,
+            other => other.into(),
+        })
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        match connection.execute(
+            "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            params![
+                contact.id,
+                contact.name,
+                contact.payment_identifier,
+                contact.created_at,
+                contact.updated_at,
+            ],
+        ) {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
+                // SQLITE_CONSTRAINT_UNIQUE
+                Err(StorageError::Duplicate)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let connection = self.get_connection()?;
+        match connection.execute(
+            "UPDATE contacts SET name = ?, payment_identifier = ?, updated_at = ? WHERE id = ?",
+            params![
+                contact.name,
+                contact.payment_identifier,
+                contact.updated_at,
+                contact.id,
+            ],
+        ) {
+            Ok(0) => return Err(StorageError::NotFound),
+            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
+                return Err(StorageError::Duplicate);
+            }
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        // Fetch and return updated record with preserved created_at
+        let mut stmt = connection.prepare(
+            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = ?",
+        )?;
+        let updated = stmt.query_row(params![contact.id], |row| {
+            Ok(Contact {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                payment_identifier: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        Ok(updated)
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        connection.execute("DELETE FROM contacts WHERE id = ?", params![id])?;
         Ok(())
     }
 
@@ -1900,5 +2028,21 @@ mod tests {
             "Should find only the Transfer payment"
         );
         assert_eq!(transfer_payments[0].id, "token-migration-test");
+    }
+
+    #[tokio::test]
+    async fn test_contacts_crud() {
+        let temp_dir = create_temp_dir("contacts_crud");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_contacts_crud(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_contacts_name_filter() {
+        let temp_dir = create_temp_dir("contacts_name_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_contacts_name_filter(Box::new(storage)).await;
     }
 }

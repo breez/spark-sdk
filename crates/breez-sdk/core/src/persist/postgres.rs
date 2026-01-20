@@ -16,8 +16,9 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::{
-    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
-    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+    AssetFilter, Contact, ConversionInfo, DepositInfo, ListContactsRequest, ListPaymentsRequest,
+    LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter,
+    PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -700,6 +701,15 @@ impl PostgresStorage {
                 "UPDATE sync_revision SET revision = 0",
                 "DELETE FROM settings WHERE key = 'sync_initial_complete'",
             ],
+            // Migration 6: Contacts table
+            &["CREATE TABLE IF NOT EXISTS contacts (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    payment_identifier TEXT NOT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE(name, payment_identifier)
+                )"],
         ]
     }
 }
@@ -1344,6 +1354,147 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let limit = i64::from(request.limit.unwrap_or(u32::MAX));
+        let offset = i64::from(request.offset.unwrap_or(0));
+
+        let rows = if let Some(ref name) = request.name {
+            client
+                .query(
+                    "SELECT id, name, payment_identifier, created_at, updated_at
+                     FROM contacts WHERE name = $1 ORDER BY name ASC LIMIT $2 OFFSET $3",
+                    &[name, &limit, &offset],
+                )
+                .await?
+        } else {
+            client
+                .query(
+                    "SELECT id, name, payment_identifier, created_at, updated_at
+                     FROM contacts ORDER BY name ASC LIMIT $1 OFFSET $2",
+                    &[&limit, &offset],
+                )
+                .await?
+        };
+
+        let mut contacts = Vec::new();
+        for row in rows {
+            contacts.push(Contact {
+                id: row.get(0),
+                name: row.get(1),
+                payment_identifier: row.get(2),
+                created_at: u64::try_from(row.get::<_, i64>(3))?,
+                updated_at: u64::try_from(row.get::<_, i64>(4))?,
+            });
+        }
+        Ok(contacts)
+    }
+
+    async fn get_contact(&self, id: String) -> Result<Contact, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let row = client
+            .query_opt(
+                "SELECT id, name, payment_identifier, created_at, updated_at
+                 FROM contacts WHERE id = $1",
+                &[&id],
+            )
+            .await?
+            .ok_or(StorageError::NotFound)?;
+        Ok(Contact {
+            id: row.get(0),
+            name: row.get(1),
+            payment_identifier: row.get(2),
+            created_at: u64::try_from(row.get::<_, i64>(3))?,
+            updated_at: u64::try_from(row.get::<_, i64>(4))?,
+        })
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let result = client
+            .execute(
+                "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[
+                    &contact.id,
+                    &contact.name,
+                    &contact.payment_identifier,
+                    &i64::try_from(contact.created_at)?,
+                    &i64::try_from(contact.updated_at)?,
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Check for unique constraint violation (SQLSTATE 23505)
+                if let Some(code) = e.code()
+                    && code == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                {
+                    Err(StorageError::Duplicate)
+                } else {
+                    Err(map_db_error(e))
+                }
+            }
+        }
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let result = client
+            .execute(
+                "UPDATE contacts SET name = $1, payment_identifier = $2, updated_at = $3 WHERE id = $4",
+                &[
+                    &contact.name,
+                    &contact.payment_identifier,
+                    &i64::try_from(contact.updated_at)?,
+                    &contact.id,
+                ],
+            )
+            .await;
+
+        match result {
+            Ok(0) => return Err(StorageError::NotFound),
+            Err(e) => {
+                if let Some(code) = e.code()
+                    && code == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                {
+                    return Err(StorageError::Duplicate);
+                }
+                return Err(map_db_error(e));
+            }
+            Ok(_) => {}
+        }
+
+        // Fetch and return updated record with preserved created_at
+        let row = client
+            .query_one(
+                "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = $1",
+                &[&contact.id],
+            )
+            .await?;
+
+        Ok(Contact {
+            id: row.get(0),
+            name: row.get(1),
+            payment_identifier: row.get(2),
+            created_at: u64::try_from(row.get::<_, i64>(3))?,
+            updated_at: u64::try_from(row.get::<_, i64>(4))?,
+        })
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        client
+            .execute("DELETE FROM contacts WHERE id = $1", &[&id])
+            .await?;
+        Ok(())
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -1401,6 +1552,7 @@ impl Storage for PostgresStorage {
     ) -> Result<(), StorageError> {
         let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
+        // Delete from sync_outgoing using local_revision (the change's revision number)
         let tx = client
             .transaction()
             .await
@@ -2073,6 +2225,18 @@ mod tests {
     async fn test_sync_storage() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_sync_storage(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_contacts_crud() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_contacts_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_contacts_name_filter() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_contacts_name_filter(Box::new(fixture.storage)).await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.

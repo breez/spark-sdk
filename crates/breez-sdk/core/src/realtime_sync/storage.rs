@@ -11,16 +11,17 @@ use breez_sdk_common::sync::{
     SyncService,
 };
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(2, 0, 0);
 use serde_json::Value;
 use tracing::{debug, error, warn};
 
 use crate::{
-    DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-    Storage, StorageError, UpdateDepositPayload,
+    Contact, DepositInfo, EventEmitter, ListContactsRequest, ListPaymentsRequest, Payment,
+    PaymentDetails, PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
     events::InternalSyncedEvent,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
+use serde::{Deserialize, Serialize};
 use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
@@ -28,12 +29,16 @@ const RECOVERY_APPLIED_SCHEMA_VERSION_KEY: &str = "recovery_applied_schema_versi
 
 enum RecordType {
     PaymentMetadata,
+    Contact,
+    ContactDeletion,
 }
 
 impl Display for RecordType {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
+            RecordType::Contact => "Contact",
+            RecordType::ContactDeletion => "ContactDeletion",
         };
         write!(f, "{s}")
     }
@@ -45,9 +50,27 @@ impl FromStr for RecordType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
+            "Contact" => Ok(RecordType::Contact),
+            "ContactDeletion" => Ok(RecordType::ContactDeletion),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
+}
+
+/// Internal sync model for contacts
+#[derive(Serialize, Deserialize)]
+struct ContactSyncData {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Minimal sync model for contact deletion
+#[derive(Serialize, Deserialize)]
+struct ContactDeletionData {
+    pub deleted_at: u64,
 }
 
 pub struct SyncedStorage {
@@ -203,9 +226,23 @@ impl SyncedStorage {
             return Ok(());
         };
 
-        let RecordType::PaymentMetadata = record_type;
-        self.handle_payment_metadata_update(change.new_state.data, change.new_state.id.data_id)
-            .await
+        match record_type {
+            RecordType::PaymentMetadata => {
+                self.handle_payment_metadata_update(
+                    change.new_state.data,
+                    change.new_state.id.data_id,
+                )
+                .await
+            }
+            RecordType::Contact => {
+                self.handle_contact_update(change.new_state.data, change.new_state.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.new_state.id.data_id)
+                    .await
+            }
+        }
     }
 
     /// Hook when an outgoing change is replayed, to ensure data consistency.
@@ -226,9 +263,22 @@ impl SyncedStorage {
             return Ok(());
         };
 
-        let RecordType::PaymentMetadata = record_type;
-        self.handle_payment_metadata_update(change.change.updated_fields, change.change.id.data_id)
-            .await
+        match record_type {
+            RecordType::PaymentMetadata => {
+                self.handle_payment_metadata_update(
+                    change.change.updated_fields,
+                    change.change.id.data_id,
+                )
+                .await
+            }
+            RecordType::Contact => {
+                self.handle_contact_update(change.change.updated_fields, change.change.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.change.id.data_id).await
+            }
+        }
     }
 
     async fn handle_payment_metadata_update(
@@ -245,6 +295,37 @@ impl SyncedStorage {
         self.inner
             .insert_payment_metadata(data_id, metadata)
             .await?;
+        Ok(())
+    }
+
+    async fn handle_contact_update(
+        &self,
+        updated_fields: HashMap<String, Value>,
+        data_id: String,
+    ) -> anyhow::Result<()> {
+        let sync_data: ContactSyncData = serde_json::from_value(
+            serde_json::to_value(&updated_fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let contact = Contact {
+            id: data_id,
+            name: sync_data.name,
+            payment_identifier: sync_data.payment_identifier,
+            created_at: sync_data.created_at,
+            updated_at: sync_data.updated_at,
+        };
+        // Upsert: try update, if fails try insert
+        if self.inner.update_contact(contact.clone()).await.is_err() {
+            let _ = self.inner.insert_contact(contact).await;
+        }
+        Ok(())
+    }
+
+    async fn handle_contact_deletion(&self, data_id: String) -> anyhow::Result<()> {
+        // Ignore not-found errors when deleting
+        let _ = self.inner.delete_contact(data_id).await;
         Ok(())
     }
 
@@ -330,15 +411,17 @@ impl SyncedStorage {
                 }
             };
 
-            match record_type {
+            if let Err(e) = match record_type {
                 RecordType::PaymentMetadata => {
-                    if let Err(e) = self
-                        .handle_payment_metadata_update(data, record.id.data_id)
+                    self.handle_payment_metadata_update(data, record.id.data_id)
                         .await
-                    {
-                        error!("Failed to apply sync state record: {e}");
-                    }
                 }
+                RecordType::Contact => self.handle_contact_update(data, record.id.data_id).await,
+                RecordType::ContactDeletion => {
+                    self.handle_contact_deletion(record.id.data_id).await
+                }
+            } {
+                error!("Failed to apply sync state record: {e}");
             }
         }
 
@@ -450,6 +533,84 @@ impl Storage for SyncedStorage {
         metadata: Vec<crate::persist::SetLnurlMetadataItem>,
     ) -> Result<(), StorageError> {
         self.inner.set_lnurl_metadata(metadata).await
+    }
+
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        self.inner.list_contacts(request).await
+    }
+
+    async fn get_contact(&self, id: String) -> Result<Contact, StorageError> {
+        self.inner.get_contact(id).await
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            payment_identifier: contact.payment_identifier.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.insert_contact(contact).await
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            payment_identifier: contact.payment_identifier.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.update_contact(contact).await
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let deletion_data = ContactDeletionData { deleted_at: now };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::ContactDeletion.to_string(), &id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&deletion_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.delete_contact(id).await
     }
 
     async fn add_outgoing_change(
@@ -600,7 +761,7 @@ mod tests {
         let change = make_incoming_change(
             "FutureType",
             "id1",
-            SchemaVersion::new(2, 0, 0),
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
             HashMap::new(),
         );
         let result = synced.handle_incoming_change(change).await;
@@ -616,12 +777,8 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
         let synced = create_test_synced_storage(Arc::clone(&storage));
 
-        let change = make_incoming_change(
-            "UnknownType",
-            "id1",
-            SchemaVersion::new(1, 0, 0),
-            HashMap::new(),
-        );
+        let change =
+            make_incoming_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
         let result = synced.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
@@ -646,8 +803,12 @@ mod tests {
             "lnurl_pay_info".to_string(),
             serde_json::json!({"ln_address": "test@example.com"}),
         );
-        let change =
-            make_incoming_change("PaymentMetadata", "id1", SchemaVersion::new(2, 0, 0), data);
+        let change = make_incoming_change(
+            "PaymentMetadata",
+            "id1",
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            data,
+        );
         let result = synced.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
@@ -679,8 +840,16 @@ mod tests {
             "lnurl_pay_info".to_string(),
             serde_json::json!({"ln_address": "test@example.com"}),
         );
-        let change =
-            make_incoming_change("PaymentMetadata", "pay1", SchemaVersion::new(1, 1, 0), data);
+        let change = make_incoming_change(
+            "PaymentMetadata",
+            "pay1",
+            SchemaVersion::new(
+                CURRENT_SCHEMA_VERSION.major,
+                CURRENT_SCHEMA_VERSION.minor + 1,
+                0,
+            ),
+            data,
+        );
         let result = synced.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
@@ -705,7 +874,7 @@ mod tests {
         let change = make_outgoing_change(
             "FutureType",
             "id1",
-            SchemaVersion::new(2, 0, 0),
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
             HashMap::new(),
         );
         let result = synced.handle_outgoing_change(change).await;
@@ -721,12 +890,8 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
         let synced = create_test_synced_storage(Arc::clone(&storage));
 
-        let change = make_outgoing_change(
-            "UnknownType",
-            "id1",
-            SchemaVersion::new(1, 0, 0),
-            HashMap::new(),
-        );
+        let change =
+            make_outgoing_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
         let result = synced.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
@@ -790,7 +955,7 @@ mod tests {
                 "pay2".to_string(),
             ),
             revision: 2,
-            schema_version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION.to_string(),
             data: new_data,
         };
         storage
@@ -833,7 +998,7 @@ mod tests {
         let record_unknown = crate::sync_storage::Record {
             id: crate::sync_storage::RecordId::new("FutureType".to_string(), "id1".to_string()),
             revision: 1,
-            schema_version: "1.0.0".to_string(),
+            schema_version: CURRENT_SCHEMA_VERSION.to_string(),
             data: HashMap::new(),
         };
         storage
@@ -848,7 +1013,7 @@ mod tests {
                 "id2".to_string(),
             ),
             revision: 2,
-            schema_version: "2.0.0".to_string(),
+            schema_version: SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0).to_string(),
             data: HashMap::new(),
         };
         storage

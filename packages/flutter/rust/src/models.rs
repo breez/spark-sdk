@@ -1125,3 +1125,32 @@ pub struct _SparkStatus {
     pub status: ServiceStatus,
     pub last_updated: u64,
 }
+
+#[frb(mirror(Contact))]
+pub struct _Contact {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[frb(mirror(AddContactRequest))]
+pub struct _AddContactRequest {
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[frb(mirror(UpdateContactRequest))]
+pub struct _UpdateContactRequest {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[frb(mirror(ListContactsRequest))]
+pub struct _ListContactsRequest {
+    pub name: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
