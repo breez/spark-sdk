@@ -8,8 +8,9 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
-    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+    AssetFilter, Contact, ConversionInfo, DepositInfo, ListContactsRequest, ListPaymentsRequest,
+    LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter,
+    PaymentMethod,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -267,6 +268,14 @@ impl SqliteStorage {
             ALTER TABLE payment_metadata DROP COLUMN token_conversion_info;
             ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
             ",
+            "CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                lightning_address TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(name, lightning_address)
+            );",
         ]
     }
 }
@@ -809,6 +818,104 @@ impl Storage for SqliteStorage {
                 ],
             )?;
         }
+        Ok(())
+    }
+
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        let limit = request.limit.unwrap_or(u32::MAX);
+        let offset = request.offset.unwrap_or(0);
+        let connection = self.get_connection()?;
+        let mut query =
+            "SELECT id, name, lightning_address, created_at, updated_at FROM contacts".to_string();
+
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        if let Some(ref name_filter) = request.name_filter {
+            query.push_str(" WHERE name LIKE ?");
+            params.push(Box::new(format!("%{name_filter}%")));
+        }
+
+        query.push_str(&format!(
+            " ORDER BY name ASC LIMIT {limit} OFFSET {offset}"
+        ));
+
+        let mut stmt = connection.prepare(&query)?;
+        let param_refs: Vec<&dyn ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
+        let contacts = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(Contact {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    lightning_address: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(contacts)
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        match connection.execute(
+            "INSERT INTO contacts (id, name, lightning_address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            params![
+                contact.id,
+                contact.name,
+                contact.lightning_address,
+                contact.created_at,
+                contact.updated_at,
+            ],
+        ) {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
+                // SQLITE_CONSTRAINT_UNIQUE
+                Err(StorageError::Duplicate)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let connection = self.get_connection()?;
+        match connection.execute(
+            "UPDATE contacts SET name = ?, lightning_address = ?, updated_at = ? WHERE id = ?",
+            params![
+                contact.name,
+                contact.lightning_address,
+                contact.updated_at,
+                contact.id,
+            ],
+        ) {
+            Ok(0) => return Err(StorageError::NotFound),
+            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
+                return Err(StorageError::Duplicate);
+            }
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        // Fetch and return updated record with preserved created_at
+        let mut stmt = connection.prepare(
+            "SELECT id, name, lightning_address, created_at, updated_at FROM contacts WHERE id = ?",
+        )?;
+        let updated = stmt.query_row(params![contact.id], |row| {
+            Ok(Contact {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                lightning_address: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        Ok(updated)
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        connection.execute("DELETE FROM contacts WHERE id = ?", params![id])?;
         Ok(())
     }
 
@@ -1573,5 +1680,13 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_sync_storage(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_contacts_crud() {
+        let temp_dir = create_temp_dir("contacts_crud");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_contacts_crud(Box::new(storage)).await;
     }
 }

@@ -321,6 +321,17 @@ class MigrationManager {
           `ALTER TABLE payment_metadata DROP COLUMN token_conversion_info`,
           `ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT`]
       },
+      {
+        name: "Create contacts table",
+        sql: `CREATE TABLE contacts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          lightning_address TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(name, lightning_address)
+        )`
+      },
     ];
   }
 }
