@@ -28,7 +28,7 @@ Payments can be sent without holding Bitcoin by converting on-the-fly as a step 
 
 For BOLT11 invoices the amount can be optionally set. The amount set in the request is only taken into account if it's an amountless invoice.
 
-If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee.
+If the invoice also contains a Spark address, the payment can be sent directly via a Spark transfer instead. When this is the case, the prepare response includes the Spark transfer fee. Note that only one fee is paid: either the Lightning fee or the Spark transfer fee, depending on which payment method is ultimately used. See [Lightning](send_payment.md#lightning-1) for how to select the payment method.
 
 {{#tabs send_payment:prepare-send-payment-lightning-bolt11}}
 
