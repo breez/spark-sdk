@@ -59,7 +59,7 @@ impl std::str::FromStr for SchemaVersion {
     }
 }
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,

@@ -135,3 +135,10 @@ async fn test_sync_storage() {
 
     breez_sdk_spark::storage_tests::test_sqlite_sync_storage(Box::new(storage)).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_contacts_crud() {
+    let storage = create_test_storage("contacts_crud").await;
+
+    breez_sdk_spark::storage_tests::test_contacts_crud(Box::new(storage)).await;
+}

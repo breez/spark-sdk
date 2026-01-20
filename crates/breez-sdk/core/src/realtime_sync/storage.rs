@@ -12,21 +12,28 @@ use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::{
-    DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-    Storage, StorageError, UpdateDepositPayload, events::InternalSyncedEvent,
+    Contact, DepositInfo, EventEmitter, ListContactsRequest, ListPaymentsRequest, Payment,
+    PaymentDetails, PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
+    events::InternalSyncedEvent,
 };
 use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
+use serde::{Deserialize, Serialize};
+
 enum RecordType {
     PaymentMetadata,
+    Contact,
+    ContactDeletion,
 }
 
 impl Display for RecordType {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
+            RecordType::Contact => "Contact",
+            RecordType::ContactDeletion => "ContactDeletion",
         };
         write!(f, "{s}")
     }
@@ -38,9 +45,27 @@ impl FromStr for RecordType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
+            "Contact" => Ok(RecordType::Contact),
+            "ContactDeletion" => Ok(RecordType::ContactDeletion),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
+}
+
+/// Internal sync model for contacts
+#[derive(Serialize, Deserialize)]
+struct ContactSyncData {
+    pub id: String,
+    pub name: String,
+    pub lightning_address: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Minimal sync model for contact deletion
+#[derive(Serialize, Deserialize)]
+struct ContactDeletionData {
+    pub deleted_at: u64,
 }
 
 pub struct SyncedStorage {
@@ -186,6 +211,14 @@ impl SyncedStorage {
                 )
                 .await
             }
+            RecordType::Contact => {
+                self.handle_contact_update(change.new_state.data, change.new_state.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.new_state.id.data_id)
+                    .await
+            }
         }
     }
 
@@ -200,6 +233,13 @@ impl SyncedStorage {
                     change.change.id.data_id,
                 )
                 .await
+            }
+            RecordType::Contact => {
+                self.handle_contact_update(change.change.updated_fields, change.change.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.change.id.data_id).await
             }
         }
     }
@@ -216,6 +256,37 @@ impl SyncedStorage {
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         self.inner.set_payment_metadata(data_id, metadata).await?;
+        Ok(())
+    }
+
+    async fn handle_contact_update(
+        &self,
+        updated_fields: HashMap<String, Value>,
+        data_id: String,
+    ) -> anyhow::Result<()> {
+        let sync_data: ContactSyncData = serde_json::from_value(
+            serde_json::to_value(&updated_fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let contact = Contact {
+            id: data_id,
+            name: sync_data.name,
+            lightning_address: sync_data.lightning_address,
+            created_at: sync_data.created_at,
+            updated_at: sync_data.updated_at,
+        };
+        // Upsert: try update, if fails try insert
+        if self.inner.update_contact(contact.clone()).await.is_err() {
+            let _ = self.inner.insert_contact(contact).await;
+        }
+        Ok(())
+    }
+
+    async fn handle_contact_deletion(&self, data_id: String) -> anyhow::Result<()> {
+        // Ignore not-found errors when deleting
+        let _ = self.inner.delete_contact(data_id).await;
         Ok(())
     }
 }
@@ -313,5 +384,76 @@ impl Storage for SyncedStorage {
         metadata: Vec<crate::persist::SetLnurlMetadataItem>,
     ) -> Result<(), StorageError> {
         self.inner.set_lnurl_metadata(metadata).await
+    }
+
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        self.inner.list_contacts(request).await
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            lightning_address: contact.lightning_address.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.insert_contact(contact).await
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            lightning_address: contact.lightning_address.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.update_contact(contact).await
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let deletion_data = ContactDeletionData { deleted_at: now };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::ContactDeletion.to_string(), &id),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&deletion_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.delete_contact(id).await
     }
 }

@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
+    Contact, ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo,
+    ListContactsRequest, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, TokenBalance,
+    TokenMetadata, models::Payment,
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -66,6 +67,12 @@ pub enum StorageError {
 
     #[error("Failed to serialize/deserialize data: {0}")]
     Serialization(String),
+
+    #[error("Duplicate entry")]
+    Duplicate,
+
+    #[error("Not found")]
+    NotFound,
 }
 
 impl From<serde_json::Error> for StorageError {
@@ -225,6 +232,21 @@ pub trait Storage: Send + Sync {
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<(), StorageError>;
+
+    /// Lists contacts from storage with optional pagination
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError>;
+
+    /// Inserts a new contact into storage
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError>;
+
+    /// Updates an existing contact in storage, returns the updated contact
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError>;
+
+    /// Deletes a contact by its ID
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {
