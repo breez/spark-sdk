@@ -333,6 +333,17 @@ class MigrationManager {
            WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL`,
         ],
       },
+      {
+        name: "Create contacts table",
+        sql: `CREATE TABLE contacts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          lightning_address TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(name, lightning_address)
+        )`
+      },
     ];
   }
 }
