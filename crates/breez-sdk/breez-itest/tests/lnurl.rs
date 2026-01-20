@@ -304,7 +304,7 @@ async fn test_05_lnurl_payment_flow(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            pay_amount: PayAmount::Bitcoin {
+            pay_amount: BitcoinPayAmount::Bitcoin {
                 amount_sats: payment_amount_sats,
             },
             pay_request: details.pay_request,
@@ -314,7 +314,7 @@ async fn test_05_lnurl_payment_flow(
         })
         .await?;
 
-    let PayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
+    let BitcoinPayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
         panic!("Expected Bitcoin payment amount");
     };
     info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
@@ -748,7 +748,7 @@ async fn test_07_lnurl_drain_payment(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            pay_amount: PayAmount::Drain,
+            pay_amount: BitcoinPayAmount::Drain,
             pay_request: details.pay_request,
             comment: Some("Drain test from Alice".to_string()),
             validate_success_action_url: None,
@@ -893,7 +893,7 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
     ) -> Result<u64> {
         let prepare = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                pay_amount: PayAmount::Bitcoin {
+                pay_amount: BitcoinPayAmount::Bitcoin {
                     amount_sats: amount,
                 },
                 pay_request: pay_request.clone(),
@@ -1036,7 +1036,7 @@ async fn test_08_lnurl_drain_with_fee_overpayment(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            pay_amount: PayAmount::Drain,
+            pay_amount: BitcoinPayAmount::Drain,
             pay_request: details.pay_request,
             comment: Some("Drain with overpayment test".to_string()),
             validate_success_action_url: None,

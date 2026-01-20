@@ -773,9 +773,15 @@ pub enum PayAmount {
     Drain,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BitcoinPayAmount)]
+pub enum BitcoinPayAmount {
+    Bitcoin { amount_sats: u64 },
+    Drain,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayRequest)]
 pub struct PrepareLnurlPayRequest {
-    pub pay_amount: PayAmount,
+    pub pay_amount: BitcoinPayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
@@ -784,7 +790,7 @@ pub struct PrepareLnurlPayRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayResponse)]
 pub struct PrepareLnurlPayResponse {
-    pub pay_amount: PayAmount,
+    pub pay_amount: BitcoinPayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,

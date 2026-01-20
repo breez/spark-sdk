@@ -12,7 +12,7 @@ class LnurlPay {
         try {
             val inputType = sdk.parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
-                val payAmount = PayAmount.Bitcoin(amountSats = 5_000.toULong())
+                val payAmount = BitcoinPayAmount.Bitcoin(amountSats = 5_000.toULong())
                 val optionalComment = "<comment>"
                 val payRequest = inputType.v1.payRequest
                 val optionalValidateSuccessActionUrl = true
@@ -66,7 +66,7 @@ class LnurlPay {
         // ANCHOR: prepare-lnurl-pay-drain
         val optionalComment = "<comment>"
         val optionalValidateSuccessActionUrl = true
-        val payAmount = PayAmount.Drain
+        val payAmount = BitcoinPayAmount.Drain
 
         val req = PrepareLnurlPayRequest(
             payAmount = payAmount,

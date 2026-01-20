@@ -9,7 +9,7 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
 
   InputType inputType = await sdk.parse(input: lnurlPayUrl);
   if (inputType is InputType_LightningAddress) {
-    PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(5000));
+    BitcoinPayAmount payAmount = BitcoinPayAmount.bitcoin(amountSats: BigInt.from(5000));
     String optionalComment = "<comment>";
     bool optionalValidateSuccessActionUrl = true;
     // Optionally set to use token funds to pay via token conversion
@@ -64,7 +64,7 @@ Future<void> prepareLnurlPayDrain(BreezSdk sdk, LnurlPayRequestDetails payReques
   // ANCHOR: prepare-lnurl-pay-drain
   String optionalComment = "<comment>";
   bool optionalValidateSuccessActionUrl = true;
-  PayAmount payAmount = PayAmount.drain();
+  BitcoinPayAmount payAmount = BitcoinPayAmount.drain();
 
   PrepareLnurlPayRequest request = PrepareLnurlPayRequest(
     payAmount: payAmount,

@@ -300,9 +300,15 @@ pub enum _PayAmount {
     Drain,
 }
 
+#[frb(mirror(BitcoinPayAmount))]
+pub enum _BitcoinPayAmount {
+    Bitcoin { amount_sats: u64 },
+    Drain,
+}
+
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
-    pub pay_amount: PayAmount,
+    pub pay_amount: BitcoinPayAmount,
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
@@ -311,7 +317,7 @@ pub struct _PrepareLnurlPayRequest {
 
 #[frb(mirror(PrepareLnurlPayResponse))]
 pub struct _PrepareLnurlPayResponse {
-    pub pay_amount: PayAmount,
+    pub pay_amount: BitcoinPayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,

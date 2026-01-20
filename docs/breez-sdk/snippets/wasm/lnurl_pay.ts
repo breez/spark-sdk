@@ -2,7 +2,7 @@ import type {
   BreezSdk,
   LnurlPayRequestDetails,
   PrepareLnurlPayResponse,
-  PayAmount,
+  BitcoinPayAmount,
   ConversionOptions
 } from '@breeztech/breez-sdk-spark'
 
@@ -15,7 +15,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
 
   const input = await sdk.parse(lnurlPayUrl)
   if (input.type === 'lightningAddress') {
-    const payAmount: PayAmount = {
+    const payAmount: BitcoinPayAmount = {
       type: 'bitcoin',
       amountSats: 5_000
     }
@@ -59,7 +59,7 @@ const examplePrepareLnurlPayDrain = async (sdk: BreezSdk, payRequest: LnurlPayRe
   // ANCHOR: prepare-lnurl-pay-drain
   const optionalComment = '<comment>'
   const optionalValidateSuccessActionUrl = true
-  const payAmount: PayAmount = { type: 'drain' }
+  const payAmount: BitcoinPayAmount = { type: 'drain' }
 
   const prepareResponse = await sdk.prepareLnurlPay({
     payAmount,

@@ -38,13 +38,13 @@ use web_time::Instant;
 use x509_parser::parse_x509_certificate;
 
 use crate::{
-    AssetFilter, BitcoinAddressDetails, BitcoinChainService, Bolt11InvoiceDetails,
-    CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest,
-    ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, ConversionEstimate,
-    ConversionOptions, ConversionPurpose, ConversionType, DepositInfo, ExternalInputParser,
-    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
-    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    AssetFilter, BitcoinAddressDetails, BitcoinChainService, BitcoinPayAmount,
+    Bolt11InvoiceDetails, CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse,
+    ClaimDepositRequest, ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
+    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, DepositInfo,
+    ExternalInputParser, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
+    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlAuthRequestDetails,
     LnurlCallbackStatus, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo,
     LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, MaxFee, Network, OnchainConfirmationSpeed,
@@ -1321,15 +1321,9 @@ impl BreezSdk {
         &self,
         request: PrepareLnurlPayRequest,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        // Validate pay_amount - Token is not supported for LNURL
         let amount_sats: u64 = match &request.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => *amount_sats,
-            PayAmount::Token { .. } => {
-                return Err(SdkError::InvalidInput(
-                    "Token payments are not supported for LNURL".to_string(),
-                ));
-            }
-            PayAmount::Drain => {
+            BitcoinPayAmount::Bitcoin { amount_sats } => *amount_sats,
+            BitcoinPayAmount::Drain => {
                 return self.prepare_lnurl_pay_drain(request).await;
             }
         };
@@ -1370,7 +1364,7 @@ impl BreezSdk {
         };
 
         Ok(PrepareLnurlPayResponse {
-            pay_amount: PayAmount::Bitcoin { amount_sats },
+            pay_amount: BitcoinPayAmount::Bitcoin { amount_sats },
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
@@ -1386,8 +1380,8 @@ impl BreezSdk {
 
         // Extract amount from pay_amount
         let amount_sats = match &request.prepare_response.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => *amount_sats,
-            PayAmount::Drain => {
+            BitcoinPayAmount::Bitcoin { amount_sats } => *amount_sats,
+            BitcoinPayAmount::Drain => {
                 // For drain, extract amount from the invoice (set during prepare)
                 request
                     .prepare_response
@@ -1396,15 +1390,13 @@ impl BreezSdk {
                     .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
                     / 1000
             }
-            PayAmount::Token { .. } => {
-                return Err(SdkError::Generic(
-                    "Token payments are not supported for LNURL".to_string(),
-                ));
-            }
         };
 
         // Calculate amount override for drain operations
-        let amount_override = if matches!(request.prepare_response.pay_amount, PayAmount::Drain) {
+        let amount_override = if matches!(
+            request.prepare_response.pay_amount,
+            BitcoinPayAmount::Drain
+        ) {
             // Re-estimate current fee for the invoice
             let current_fee = self
                 .spark_wallet
@@ -2677,7 +2669,7 @@ impl BreezSdk {
         };
 
         Ok(PrepareLnurlPayResponse {
-            pay_amount: PayAmount::Drain,
+            pay_amount: BitcoinPayAmount::Drain,
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,

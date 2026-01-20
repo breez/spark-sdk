@@ -21,7 +21,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 	switch inputType := input.(type) {
 	case breez_sdk_spark.InputTypeLightningAddress:
-		payAmount := breez_sdk_spark.PayAmountBitcoin{AmountSats: 5_000}
+		payAmount := breez_sdk_spark.BitcoinPayAmountBitcoin{AmountSats: 5_000}
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
 		// Optionally set to use token funds to pay via token conversion
@@ -83,7 +83,7 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 
 func PrepareLnurlPayDrain(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
 	// ANCHOR: prepare-lnurl-pay-drain
-	payAmount := breez_sdk_spark.PayAmountDrain{}
+	payAmount := breez_sdk_spark.BitcoinPayAmountDrain{}
 	optionalComment := "<comment>"
 	optionalValidateSuccessActionUrl := true
 

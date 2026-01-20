@@ -4,7 +4,7 @@ from breez_sdk_spark import (
     InputType,
     LnurlPayRequest,
     LnurlPayRequestDetails,
-    PayAmount,
+    BitcoinPayAmount,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
     ConversionOptions,
@@ -40,7 +40,7 @@ async def prepare_pay(sdk: BreezSdk):
             )
 
             request = PrepareLnurlPayRequest(
-                pay_amount = PayAmount.BITCOIN(amount_sats=amount_sats),
+                pay_amount = BitcoinPayAmount.BITCOIN(amount_sats=amount_sats),
                 pay_request=pay_request,
                 comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url,
@@ -90,7 +90,7 @@ async def prepare_pay_drain(sdk: BreezSdk, pay_request: LnurlPayRequestDetails):
     # ANCHOR: prepare-lnurl-pay-drain
     optional_comment = "<comment>"
     optional_validate_success_action_url = True
-    pay_amount = PayAmount.DRAIN()
+    pay_amount = BitcoinPayAmount.DRAIN()
 
     request = PrepareLnurlPayRequest(
         pay_amount=pay_amount,

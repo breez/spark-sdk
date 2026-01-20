@@ -17,7 +17,7 @@ namespace BreezSdkSnippets
             if (parsedInput is InputType.LightningAddress lightningAddress)
             {
                 var details = lightningAddress.v1;
-                var payAmount = new PayAmount.Bitcoin(amountSats: 5_000UL);
+                var payAmount = new BitcoinPayAmount.Bitcoin(amountSats: 5_000UL);
                 var optionalComment = "<comment>";
                 var payRequest = details.payRequest;
                 var optionalValidateSuccessActionUrl = true;
@@ -60,7 +60,7 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-lnurl-pay-drain
             var optionalComment = "<comment>";
             var optionalValidateSuccessActionUrl = true;
-            var payAmount = new PayAmount.Drain();
+            var payAmount = new BitcoinPayAmount.Drain();
 
             var request = new PrepareLnurlPayRequest(
                 payAmount: payAmount,

@@ -853,9 +853,8 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    /// The amount to send. Use `PayAmount::Drain` to drain all funds.
-    /// Note: `PayAmount::Token` is not supported for LNURL (returns error).
-    pub pay_amount: PayAmount,
+    /// The amount to send. Use `BitcoinPayAmount::Drain` to drain all funds.
+    pub pay_amount: BitcoinPayAmount,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub comment: Option<String>,
@@ -869,7 +868,7 @@ pub struct PrepareLnurlPayRequest {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
-    pub pay_amount: PayAmount,
+    pub pay_amount: BitcoinPayAmount,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     /// The fee in satoshis. For drain operations, this represents the total drain fee
@@ -975,6 +974,16 @@ pub enum PayAmount {
         token_identifier: String,
     },
     /// Drain all Bitcoin funds (only supported for Bitcoin Address and LNURL)
+    Drain,
+}
+
+/// Specifies a Bitcoin-only amount for LNURL payments (no token support)
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BitcoinPayAmount {
+    /// A specific Bitcoin amount in satoshis (must be > 0)
+    Bitcoin { amount_sats: u64 },
+    /// Drain all Bitcoin funds
     Drain,
 }
 

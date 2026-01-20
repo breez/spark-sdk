@@ -10,7 +10,7 @@ func preparePay(sdk: BreezSdk) async throws {
 
     let inputType = try await sdk.parse(input: lnurlPayUrl)
     if case .lightningAddress(v1: let details) = inputType {
-        let payAmount = PayAmount.bitcoin(amountSats: 5_000)
+        let payAmount = BitcoinPayAmount.bitcoin(amountSats: 5_000)
         let optionalComment = "<comment>"
         let payRequest = details.payRequest
         let optionalValidateSuccessActionUrl = true
@@ -51,7 +51,7 @@ func prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) asy
     // ANCHOR: prepare-lnurl-pay-drain
     let optionalComment = "<comment>"
     let optionalValidateSuccessActionUrl = true
-    let payAmount = PayAmount.drain
+    let payAmount = BitcoinPayAmount.drain
 
     let request = PrepareLnurlPayRequest(
         payAmount: payAmount,

@@ -10,7 +10,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     let lnurl_pay_url = "lightning@address.com";
 
     if let Ok(InputType::LightningAddress(details)) = sdk.parse(lnurl_pay_url).await {
-        let pay_amount = PayAmount::Bitcoin { amount_sats: 5_000 };
+        let pay_amount = BitcoinPayAmount::Bitcoin { amount_sats: 5_000 };
         let optional_comment = Some("<comment>".to_string());
         let optional_validate_success_action_url = Some(true);
         // Optionally set to use token funds to pay via token conversion
@@ -65,7 +65,7 @@ async fn prepare_pay_drain(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) 
     // ANCHOR: prepare-lnurl-pay-drain
     let optional_comment = Some("<comment>".to_string());
     let optional_validate_success_action_url = Some(true);
-    let pay_amount = PayAmount::Drain;
+    let pay_amount = BitcoinPayAmount::Drain;
 
     let prepare_response = sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {

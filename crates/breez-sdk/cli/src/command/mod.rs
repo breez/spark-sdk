@@ -2,7 +2,7 @@ mod issuer;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
+    AssetFilter, BitcoinPayAmount, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
     GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
     LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
@@ -610,7 +610,7 @@ pub(crate) async fn execute_command(
 
                     let prepare_response = sdk
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                            pay_amount: PayAmount::Bitcoin { amount_sats },
+                            pay_amount: BitcoinPayAmount::Bitcoin { amount_sats },
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,
