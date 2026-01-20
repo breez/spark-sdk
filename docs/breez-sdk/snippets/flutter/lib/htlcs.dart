@@ -6,9 +6,10 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
   // ANCHOR: send-htlc-payment
   String paymentRequest = "<spark address>";
   // Set the amount you wish the pay the receiver
-  BigInt amountSats = BigInt.from(50000);
+  var payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
   final prepareRequest = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest, amount: amountSats);
+      paymentRequest: paymentRequest,
+      payAmount: payAmount);
   final prepareResponse = await sdk.prepareSendPayment(request: prepareRequest);
 
   // If the fees are acceptable, continue to create the HTLC Payment

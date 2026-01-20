@@ -97,12 +97,14 @@ async fn test_01_token_transfer(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(5),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 5,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
             conversion_options: None,
         })
         .await?;
-    info!("Prepare response amount: {} (token units)", prepare.amount);
+    info!("Prepare response pay_amount: {:?}", prepare.pay_amount);
 
     let send_resp = alice
         .sdk
@@ -300,20 +302,19 @@ async fn test_02_token_invoice(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None, // Amount comes from invoice
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None, // Amount comes from invoice
             conversion_options: None,
         })
         .await?;
 
     info!(
-        "Alice's prepare response - amount: {}",
-        prepare_response.amount
+        "Alice's prepare response - pay_amount: {:?}",
+        prepare_response.pay_amount
     );
-    assert_eq!(
-        prepare_response.amount, 20,
-        "Prepare response should show invoice amount"
-    );
+    let PayAmount::Token { amount, .. } = prepare_response.pay_amount else {
+        panic!("Expected Token pay_amount");
+    };
+    assert_eq!(amount, 20, "Prepare response should show invoice amount");
 
     let send_resp = alice
         .sdk
@@ -580,8 +581,10 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address,
-            amount: Some(100),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 100,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
             conversion_options: None,
         })
         .await?;
@@ -658,8 +661,10 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_address.clone(),
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 50,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
             conversion_options: None,
         })
         .await;
@@ -717,8 +722,10 @@ async fn test_04_token_freeze_unfreeze(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_address,
-            amount: Some(50),
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: Some(PayAmount::Token {
+                amount: 50,
+                token_identifier: token_metadata.identifier.clone(),
+            }),
             conversion_options: None,
         })
         .await?;
@@ -791,8 +798,7 @@ async fn test_05_invoice_expiry(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None,
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None,
             conversion_options: None,
         })
         .await?;
@@ -807,8 +813,7 @@ async fn test_05_invoice_expiry(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.payment_request.clone(),
-            amount: None,
-            token_identifier: Some(token_metadata.identifier.clone()),
+            pay_amount: None,
             conversion_options: None,
         })
         .await;

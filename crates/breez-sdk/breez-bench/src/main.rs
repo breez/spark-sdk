@@ -22,9 +22,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use breez_sdk_spark::{
-    BreezSdk, EventListener, GetInfoRequest, Network, PaymentType, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent, Seed, SendPaymentRequest,
-    SyncWalletRequest, default_config,
+    BreezSdk, EventListener, GetInfoRequest, Network, PayAmount, PaymentType,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent,
+    Seed, SendPaymentRequest, SyncWalletRequest, default_config,
 };
 use tokio::sync::mpsc;
 
@@ -310,8 +310,9 @@ async fn main() -> Result<()> {
                     .sdk
                     .prepare_send_payment(PrepareSendPaymentRequest {
                         payment_request: sender_address.clone(),
-                        amount: Some(receiver_balance as u128),
-                        token_identifier: None,
+                        pay_amount: Some(PayAmount::Bitcoin {
+                            amount_sats: receiver_balance,
+                        }),
                         conversion_options: None,
                     })
                     .await?;
@@ -458,8 +459,9 @@ async fn main() -> Result<()> {
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: receiver_address.clone(),
-                amount: Some(payment_spec.amount_sats as u128),
-                token_identifier: None,
+                pay_amount: Some(PayAmount::Bitcoin {
+                    amount_sats: payment_spec.amount_sats,
+                }),
                 conversion_options: None,
             })
             .await;
@@ -840,8 +842,9 @@ async fn return_funds_to_sender(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: sender_address.to_string(),
-            amount: Some(amount as u128),
-            token_identifier: None,
+            pay_amount: Some(PayAmount::Bitcoin {
+                amount_sats: amount,
+            }),
             conversion_options: None,
         })
         .await?;

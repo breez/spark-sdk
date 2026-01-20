@@ -10,7 +10,7 @@ func preparePay(sdk: BreezSdk) async throws {
 
     let inputType = try await sdk.parse(input: lnurlPayUrl)
     if case .lightningAddress(v1: let details) = inputType {
-        let amountSats: UInt64 = 5_000
+        let payAmount = BitcoinPayAmount.bitcoin(amountSats: 5_000)
         let optionalComment = "<comment>"
         let payRequest = details.payRequest
         let optionalValidateSuccessActionUrl = true
@@ -26,7 +26,7 @@ func preparePay(sdk: BreezSdk) async throws {
         )
 
         let request = PrepareLnurlPayRequest(
-            amountSats: amountSats,
+            payAmount: payAmount,
             payRequest: payRequest,
             comment: optionalComment,
             validateSuccessActionUrl: optionalValidateSuccessActionUrl,
@@ -40,11 +40,32 @@ func preparePay(sdk: BreezSdk) async throws {
             print("Estimated conversion fee: \(conversionEstimate.fee) token base units")
         }
 
-        let feesSat = prepareResponse.feeSats
-        print("Fees: \(feesSat) sats")
+        let feeSats = prepareResponse.feeSats
+        print("Fees: \(feeSats) sats")
     }
 
     // ANCHOR_END: prepare-lnurl-pay
+}
+
+func prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) async throws {
+    // ANCHOR: prepare-lnurl-pay-drain
+    let optionalComment = "<comment>"
+    let optionalValidateSuccessActionUrl = true
+    let payAmount = BitcoinPayAmount.drain
+
+    let request = PrepareLnurlPayRequest(
+        payAmount: payAmount,
+        payRequest: payRequest,
+        comment: optionalComment,
+        validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+        conversionOptions: nil
+    )
+    let response = try await sdk.prepareLnurlPay(request: request)
+
+    // If the fees are acceptable, continue to create the LNURL Pay
+    let feeSats = response.feeSats
+    print("Fees: \(feeSats) sats")
+    // ANCHOR_END: prepare-lnurl-pay-drain
 }
 
 func pay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) async throws {

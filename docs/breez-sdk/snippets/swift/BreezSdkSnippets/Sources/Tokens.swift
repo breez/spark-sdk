@@ -78,13 +78,12 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // Token identifier must match the invoice in case it specifies one.
     let tokenIdentifier = "<token identifier>"
     // Set the amount of tokens you wish to send. (requires 'import BigNumber')
-    let optionalAmount = BInt(1_000)
+    let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: optionalAmount,
-            tokenIdentifier: tokenIdentifier
+            payAmount: optionalPayAmount
         ))
 
     // If the fees are acceptable, continue to send the token payment
@@ -148,7 +147,7 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
     // Token identifier must match the invoice in case it specifies one.
     let tokenIdentifier = "<token identifier>"
     // Set the amount of tokens you wish to send. (requires 'import BigNumber')
-    let optionalAmount = BInt(1_000)
+    let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
     // Set to use Bitcoin funds to pay via conversion
     let optionalMaxSlippageBps = UInt32(50)
     let optionalCompletionTimeoutSecs = UInt32(30)
@@ -161,8 +160,7 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            amount: optionalAmount,
-            tokenIdentifier: tokenIdentifier,
+            payAmount: optionalPayAmount,
             conversionOptions: conversionOptions
         ))
 

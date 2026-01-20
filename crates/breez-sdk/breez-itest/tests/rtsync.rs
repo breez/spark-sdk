@@ -152,7 +152,9 @@ async fn test_01_rtsync_lnurl_info_sync(
     let prepare_response = alice1
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: 10_000,
+            pay_amount: BitcoinPayAmount::Bitcoin {
+                amount_sats: 10_000,
+            },
             pay_request: details.pay_request,
             comment: Some(ln_address_comment.clone()),
             validate_success_action_url: None,
@@ -160,10 +162,10 @@ async fn test_01_rtsync_lnurl_info_sync(
         })
         .await?;
 
-    info!(
-        "Alice1 prepared payment for {} sats",
-        prepare_response.amount_sats
-    );
+    let BitcoinPayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
+        panic!("Expected Bitcoin payment amount");
+    };
+    info!("Alice1 prepared payment for {amount_sats} sats");
 
     let pay_response = alice1
         .sdk

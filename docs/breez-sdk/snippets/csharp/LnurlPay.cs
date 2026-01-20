@@ -17,7 +17,7 @@ namespace BreezSdkSnippets
             if (parsedInput is InputType.LightningAddress lightningAddress)
             {
                 var details = lightningAddress.v1;
-                var amountSats = 5_000UL;
+                var payAmount = new BitcoinPayAmount.Bitcoin(amountSats: 5_000UL);
                 var optionalComment = "<comment>";
                 var payRequest = details.payRequest;
                 var optionalValidateSuccessActionUrl = true;
@@ -33,7 +33,7 @@ namespace BreezSdkSnippets
                 );
 
                 var request = new PrepareLnurlPayRequest(
-                    amountSats: amountSats,
+                    payAmount: payAmount,
                     payRequest: payRequest,
                     comment: optionalComment,
                     validateSuccessActionUrl: optionalValidateSuccessActionUrl,
@@ -53,6 +53,28 @@ namespace BreezSdkSnippets
                 Console.WriteLine($"Fees: {feeSats} sats");
             }
             // ANCHOR_END: prepare-lnurl-pay
+        }
+
+        async Task PrepareLnurlPayDrain(BreezSdk sdk, LnurlPayRequestDetails payRequest)
+        {
+            // ANCHOR: prepare-lnurl-pay-drain
+            var optionalComment = "<comment>";
+            var optionalValidateSuccessActionUrl = true;
+            var payAmount = new BitcoinPayAmount.Drain();
+
+            var request = new PrepareLnurlPayRequest(
+                payAmount: payAmount,
+                payRequest: payRequest,
+                comment: optionalComment,
+                validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+                conversionOptions: null
+            );
+            var prepareResponse = await sdk.PrepareLnurlPay(request: request);
+
+            // If the fees are acceptable, continue to create the LNURL Pay
+            var feeSats = prepareResponse.feeSats;
+            Console.WriteLine($"Fees: {feeSats} sats");
+            // ANCHOR_END: prepare-lnurl-pay-drain
         }
 
         async Task Pay(BreezSdk sdk, PrepareLnurlPayResponse prepareResponse)

@@ -148,6 +148,23 @@ cargo xtask check-doc-snippets --package {language}
 - Create each language file following the import/structure patterns in conventions
 - May need to update build files (Cargo.toml, go.mod, etc.) - verify will catch this
 
+## Stale Bindings vs Snippet Errors
+
+**CRITICAL:** When `--skip-build` fails with errors like:
+- "unknown field X" / "missing field X"
+- "no such parameter"
+- "does not contain a definition for X"
+- "undefined_named_parameter"
+
+This usually means **bindings are stale**, NOT that snippets are wrong. The SDK interface was updated but bindings weren't regenerated.
+
+**Solution:** Run WITHOUT `--skip-build` to rebuild bindings:
+```bash
+cargo xtask check-doc-snippets --package {language}
+```
+
+**Do NOT** modify snippets to remove "missing" fields until you've rebuilt bindings first. If the field exists in Rust core (`crates/breez-sdk/core/src/models.rs`), the bindings just need regeneration.
+
 ## Important Notes
 
 - **ANCHOR names must be identical** across all languages
@@ -155,4 +172,3 @@ cargo xtask check-doc-snippets --package {language}
 - **Rust first, then parallel** - Rust must complete before spawning other agents
 - **Single message for parallel agents** - spawn all 8 in one tool call block
 - **Verify after all agents complete** - not interleaved with agent spawning
-- If `--skip-build` fails with missing types, run without it once to rebuild bindings

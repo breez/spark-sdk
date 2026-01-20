@@ -3,7 +3,6 @@ package example
 import (
 	"errors"
 	"log"
-	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -11,12 +10,14 @@ import (
 func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-lightning-bolt11
 	paymentRequest := "<bolt11 invoice>"
-	// Optionally set the amount you wish the pay the receiver
-	optionalAmountSats := new(big.Int).SetInt64(5_000)
+	// Optionally set the amount you wish to pay the receiver
+	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
+		AmountSats: 5_000,
+	}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		Amount:         &optionalAmountSats,
+		PayAmount:      &optionalPayAmount,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -46,12 +47,14 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-onchain
 	paymentRequest := "<bitcoin address>"
-	// Set the amount you wish the pay the receiver
-	amountSats := new(big.Int).SetInt64(50_000)
+	// Set the amount you wish to pay the receiver
+	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
+		AmountSats: 50_000,
+	}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		Amount:         &amountSats,
+		PayAmount:      &payAmount,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -64,16 +67,16 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 		return nil, err
 	}
 
-	// If the fees are acceptable, continue to create the Send Payment
+	// Review the fee quote for each confirmation speed
 	switch paymentMethod := response.PaymentMethod.(type) {
 	case breez_sdk_spark.SendPaymentMethodBitcoinAddress:
 		feeQuote := paymentMethod.FeeQuote
-		slowFeeQuote := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
-		mediumFeeQuote := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
-		fastFeeQuote := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
-		log.Printf("Slow Fees: %v sats", slowFeeQuote)
-		log.Printf("Medium Fees: %v sats", mediumFeeQuote)
-		log.Printf("Fast Fees: %v sats", fastFeeQuote)
+		slowFeeSats := feeQuote.SpeedSlow.UserFeeSat + feeQuote.SpeedSlow.L1BroadcastFeeSat
+		mediumFeeSats := feeQuote.SpeedMedium.UserFeeSat + feeQuote.SpeedMedium.L1BroadcastFeeSat
+		fastFeeSats := feeQuote.SpeedFast.UserFeeSat + feeQuote.SpeedFast.L1BroadcastFeeSat
+		log.Printf("Slow fee: %v sats", slowFeeSats)
+		log.Printf("Medium fee: %v sats", mediumFeeSats)
+		log.Printf("Fast fee: %v sats", fastFeeSats)
 	}
 	// ANCHOR_END: prepare-send-payment-onchain
 	return &response, nil
@@ -82,12 +85,14 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-address
 	paymentRequest := "<spark address>"
-	// Set the amount you wish the pay the receiver
-	amountSats := new(big.Int).SetInt64(50_000)
+	// Set the amount you wish to pay the receiver
+	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
+		AmountSats: 50_000,
+	}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		Amount:         &amountSats,
+		PayAmount:      &payAmount,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -113,12 +118,14 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-invoice
 	paymentRequest := "<spark invoice>"
-	// Optionally set the amount you wish the pay the receiver
-	optionalAmountSats := new(big.Int).SetInt64(50_000)
+	// Optionally set the amount you wish to pay the receiver
+	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
+		AmountSats: 50_000,
+	}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest: paymentRequest,
-		Amount:         &optionalAmountSats,
+		PayAmount:      &optionalPayAmount,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -211,10 +218,10 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 
 func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-onchain
+	// Select the confirmation speed for the on-chain transaction
 	var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBitcoinAddress{
 		ConfirmationSpeed: breez_sdk_spark.OnchainConfirmationSpeedMedium,
 	}
-
 	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
@@ -258,4 +265,26 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	payment := response.Payment
 	// ANCHOR_END: send-payment-spark
 	return &payment, nil
+}
+
+func PrepareSendPaymentDrain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-drain
+	// Use PayAmountDrain to send all available funds
+	paymentRequest := "<payment request>"
+	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountDrain{}
+
+	request := breez_sdk_spark.PrepareSendPaymentRequest{
+		PaymentRequest: paymentRequest,
+		PayAmount:      &payAmount,
+	}
+	response, err := sdk.PrepareSendPayment(request)
+
+	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		return nil, err
+	}
+
+	// The response contains PayAmountDrain to indicate this is a drain operation
+	log.Printf("Pay amount: %v", response.PayAmount)
+	// ANCHOR_END: prepare-send-payment-drain
+	return &response, nil
 }

@@ -304,7 +304,9 @@ async fn test_05_lnurl_payment_flow(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: payment_amount_sats,
+            pay_amount: BitcoinPayAmount::Bitcoin {
+                amount_sats: payment_amount_sats,
+            },
             pay_request: details.pay_request,
             comment: Some(payment_comment.to_string()),
             validate_success_action_url: None,
@@ -312,10 +314,10 @@ async fn test_05_lnurl_payment_flow(
         })
         .await?;
 
-    info!(
-        "Alice prepared payment for {} sats to {}",
-        prepare_response.amount_sats, bob_lightning_address
-    );
+    let BitcoinPayAmount::Bitcoin { amount_sats } = prepare_response.pay_amount else {
+        panic!("Expected Bitcoin payment amount");
+    };
+    info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
 
     // Alice sends the payment
     let pay_response = alice
@@ -530,8 +532,7 @@ async fn test_06_client_side_zap_receipt(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: invoice.clone(),
-            amount: None,
-            token_identifier: None,
+            pay_amount: None,
             conversion_options: None,
         })
         .await?;
@@ -685,4 +686,433 @@ fn percent_encode(input: &str) -> Cow<'_, str> {
         }
     }
     Cow::Owned(result)
+}
+
+/// Test LNURL drain payment - sends entire balance via LNURL
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_07_lnurl_drain_payment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_07_lnurl_drain_payment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    let username = "bobdrain";
+    let description = "Bob's drain test Lightning address";
+
+    // Bob registers a Lightning address
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address;
+    info!(
+        "Bob registered Lightning address: {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with a specific amount for testing
+    let funding_amount = 10_000u64;
+    receive_and_fund(&mut alice, funding_amount, false).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {} sats", alice_balance);
+
+    // Alice parses Bob's Lightning address
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    info!("Alice parsed Lightning address successfully");
+    info!(
+        "LNURL min_sendable: {} msats, max_sendable: {} msats",
+        details.pay_request.min_sendable, details.pay_request.max_sendable
+    );
+
+    // Alice prepares LNURL drain (sends entire balance)
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            pay_amount: BitcoinPayAmount::Drain,
+            pay_request: details.pay_request,
+            comment: Some("Drain test from Alice".to_string()),
+            validate_success_action_url: None,
+            conversion_options: None,
+        })
+        .await?;
+
+    // For drain, amount is in invoice details
+    let drain_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
+    info!(
+        "Alice prepared drain payment: {drain_amount_sats} sats (fee: {} sats)",
+        prepare_response.fee_sats
+    );
+
+    // Verify the drain amount is exactly balance - fees
+    let expected_drain = alice_balance.saturating_sub(prepare_response.fee_sats);
+    assert_eq!(
+        drain_amount_sats, expected_drain,
+        "Drain amount should be exactly balance - fees"
+    );
+
+    // Alice sends the drain payment
+    let pay_response = alice
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response: prepare_response.clone(),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice initiated drain payment to Bob");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice's side");
+
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Payment completed on Bob's side");
+
+    // Verify Alice's balance is now zero
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+
+    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
+
+    // Verify payment details
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    assert_eq!(alice_payment.amount, expected_drain.into());
+    assert_eq!(alice_payment.fees, prepare_response.fee_sats.into());
+
+    info!("=== Test test_07_lnurl_drain_payment PASSED ===");
+    Ok(())
+}
+
+/// Test LNURL drain payment with fee overpayment - verifies drain works when fee steps down
+///
+/// This test specifically targets the scenario where:
+/// - fee(balance) > fee(balance - fee(balance))
+/// - The SDK must overpay the fee to fully drain the balance
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_08_lnurl_drain_with_fee_overpayment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_08_lnurl_drain_with_fee_overpayment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    let username = "boboverpay";
+    let description = "Bob's overpayment test Lightning address";
+
+    // Bob registers a Lightning address
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address;
+    info!(
+        "Bob registered Lightning address: {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with max faucet amount to have room for searching
+    let funding_amount = 50_000u64;
+    receive_and_fund(&mut alice, funding_amount, false).await?;
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {} sats", alice_balance);
+
+    // Parse Bob's Lightning address to get the pay request
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    let min_sendable_sats = details.pay_request.min_sendable.div_ceil(1000);
+    info!(
+        "LNURL min_sendable: {} sats, max_sendable: {} sats",
+        min_sendable_sats,
+        details.pay_request.max_sendable / 1000
+    );
+
+    // Search for a balance where fee stepping occurs using binary search
+    // We look for the fee tier boundary - stepping naturally occurs there
+    info!("Searching for fee tier boundary using binary search...");
+
+    // Helper to get fee for an amount
+    async fn get_fee(
+        sdk: &BreezSdk,
+        pay_request: &LnurlPayRequestDetails,
+        amount: u64,
+    ) -> Result<u64> {
+        let prepare = sdk
+            .prepare_lnurl_pay(PrepareLnurlPayRequest {
+                pay_amount: BitcoinPayAmount::Bitcoin {
+                    amount_sats: amount,
+                },
+                pay_request: pay_request.clone(),
+                comment: None,
+                validate_success_action_url: None,
+                conversion_options: None,
+            })
+            .await?;
+        Ok(prepare.fee_sats)
+    }
+
+    let fee_at_min = get_fee(&alice.sdk, &details.pay_request, min_sendable_sats).await?;
+    let fee_at_max = get_fee(&alice.sdk, &details.pay_request, alice_balance).await?;
+
+    info!(
+        "Fee at min ({} sats): {} sats, fee at max ({} sats): {} sats",
+        min_sendable_sats, fee_at_min, alice_balance, fee_at_max
+    );
+
+    if fee_at_min >= fee_at_max {
+        anyhow::bail!(
+            "No fee tier boundary found - fees are constant or decreasing ({} -> {})",
+            fee_at_min,
+            fee_at_max
+        );
+    }
+
+    // Binary search to find where fee changes
+    let mut low = min_sendable_sats;
+    let mut high = alice_balance;
+    let fee_low = fee_at_min;
+
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        let fee_mid = get_fee(&alice.sdk, &details.pay_request, mid).await?;
+        debug!(
+            "Binary search: low={}, mid={}, high={}, fee_mid={}",
+            low, mid, high, fee_mid
+        );
+        if fee_mid == fee_low {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+
+    // high is now the boundary where fee increases
+    let target_balance = high;
+    let fee1 = get_fee(&alice.sdk, &details.pay_request, target_balance).await?;
+    let adjusted = target_balance.saturating_sub(fee1);
+    let fee2 = get_fee(&alice.sdk, &details.pay_request, adjusted).await?;
+
+    info!(
+        "Found fee tier boundary at {} sats: fee1={}, fee2={} (for adjusted={})",
+        target_balance, fee1, fee2, adjusted
+    );
+
+    if fee2 >= fee1 {
+        anyhow::bail!(
+            "Fee stepping not found at boundary: fee({})={}, fee({})={}",
+            target_balance,
+            fee1,
+            adjusted,
+            fee2
+        );
+    }
+
+    let (expected_fee1, expected_fee2) = (fee1, fee2);
+
+    info!(
+        "Using stepping balance: {} sats (fee will step from {} to {})",
+        target_balance, expected_fee1, expected_fee2
+    );
+
+    // Adjust Alice's balance to target using Spark transfer
+    if alice_balance > target_balance {
+        let excess = alice_balance - target_balance;
+        info!(
+            "Adjusting Alice's balance: sending {} sats to Bob via Spark",
+            excess
+        );
+
+        // Bob creates a Spark address
+        let bob_spark_address = bob
+            .sdk
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::SparkAddress,
+            })
+            .await?
+            .payment_request;
+
+        // Alice sends excess to Bob
+        let prepare = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: bob_spark_address,
+                pay_amount: Some(PayAmount::Bitcoin {
+                    amount_sats: excess,
+                }),
+                conversion_options: None,
+            })
+            .await?;
+
+        alice
+            .sdk
+            .send_payment(SendPaymentRequest {
+                prepare_response: prepare,
+                options: None,
+                idempotency_key: None,
+            })
+            .await?;
+
+        // Wait for Spark transfer to complete
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+        // Sync and verify
+        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        let new_balance = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+
+        info!(
+            "Alice balance after adjustment: {} sats (target was {})",
+            new_balance, target_balance
+        );
+        assert_eq!(
+            new_balance, target_balance,
+            "Alice's balance should match target"
+        );
+    }
+
+    // Execute drain
+    info!("Executing drain with fee overpayment...");
+
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            pay_amount: BitcoinPayAmount::Drain,
+            pay_request: details.pay_request,
+            comment: Some("Drain with overpayment test".to_string()),
+            validate_success_action_url: None,
+            conversion_options: None,
+        })
+        .await?;
+
+    // For drain, amount is in invoice details
+    let drain_amount_sats = prepare_response.invoice_details.amount_msat.unwrap() / 1000;
+    info!(
+        "Prepared drain: amount={drain_amount_sats} sats, fee={} sats",
+        prepare_response.fee_sats
+    );
+
+    // The fee should be expected_fee1 (the higher fee for full balance)
+    assert_eq!(
+        prepare_response.fee_sats, expected_fee1,
+        "Drain fee should match expected fee for full balance"
+    );
+
+    // Execute the drain
+    let pay_response = alice
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response: prepare_response.clone(),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Drain payment initiated");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Drain completed on Alice's side");
+
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Drain completed on Bob's side");
+
+    // Verify Alice's balance is zero
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+
+    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
+
+    // Verify Bob received the expected amount (the invoice amount, not more)
+    assert_eq!(
+        bob_payment.amount,
+        drain_amount_sats.into(),
+        "Bob should receive exactly the prepared amount"
+    );
+
+    // Verify payment details
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+
+    info!(
+        "Fee overpayment test passed! Expected overpayment: {} sats",
+        expected_fee1 - expected_fee2
+    );
+    info!("=== Test test_08_lnurl_drain_with_fee_overpayment PASSED ===");
+    Ok(())
 }

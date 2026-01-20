@@ -1,19 +1,24 @@
 import type {
   BreezSdk,
+  LnurlPayRequestDetails,
   PrepareLnurlPayResponse,
+  BitcoinPayAmount,
   ConversionOptions
 } from '@breeztech/breez-sdk-spark'
 
 const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-lnurl-pay
-  // Endpoint can also be of the
+  // Endpoint can also be of the form:
   // lnurlp://domain.com/lnurl-pay?key=val
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   const lnurlPayUrl = 'lightning@address.com'
 
   const input = await sdk.parse(lnurlPayUrl)
   if (input.type === 'lightningAddress') {
-    const amountSats = 5_000
+    const payAmount: BitcoinPayAmount = {
+      type: 'bitcoin',
+      amountSats: 5_000
+    }
     const optionalComment = '<comment>'
     const payRequest = input.payRequest
     const optionalValidateSuccessActionUrl = true
@@ -30,7 +35,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
     }
 
     const prepareResponse = await sdk.prepareLnurlPay({
-      amountSats,
+      payAmount,
       payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
@@ -48,6 +53,26 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
     console.log(`Fees: ${feeSats} sats`)
   }
   // ANCHOR_END: prepare-lnurl-pay
+}
+
+const examplePrepareLnurlPayDrain = async (sdk: BreezSdk, payRequest: LnurlPayRequestDetails) => {
+  // ANCHOR: prepare-lnurl-pay-drain
+  const optionalComment = '<comment>'
+  const optionalValidateSuccessActionUrl = true
+  const payAmount: BitcoinPayAmount = { type: 'drain' }
+
+  const prepareResponse = await sdk.prepareLnurlPay({
+    payAmount,
+    payRequest,
+    comment: optionalComment,
+    validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+    conversionOptions: undefined
+  })
+
+  // If the fees are acceptable, continue to create the LNURL Pay
+  const feeSats = prepareResponse.feeSats
+  console.log(`Fees: ${feeSats} sats`)
+  // ANCHOR_END: prepare-lnurl-pay-drain
 }
 
 const exampleLnurlPay = async (sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) => {
