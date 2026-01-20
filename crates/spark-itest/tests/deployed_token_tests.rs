@@ -1,8 +1,13 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use rand::Rng;
 use rstest::*;
 use spark_itest::helpers::wait_for_event;
-use spark_wallet::{DefaultSigner, Network, SelectionStrategy, TransferTokenOutput, WalletEvent};
+use spark_wallet::{
+    DefaultSigner, Network, SelectionStrategy, SparkWallet, SparkWalletConfig, TransferTokenOutput,
+    WalletEvent,
+};
 use tracing::info;
 
 /// Test creating many outputs via self-sends then send all to Bob
@@ -10,9 +15,6 @@ use tracing::info;
 #[tokio::test]
 #[test_log::test]
 async fn test_many_outputs() -> Result<()> {
-    use spark_wallet::{SparkWallet, SparkWalletConfig};
-    use std::sync::Arc;
-
     info!("=== Starting test_many_outputs ===");
 
     // Use production operators for this test since they have DKG keys for test issuers
