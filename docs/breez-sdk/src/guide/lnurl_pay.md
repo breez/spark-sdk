@@ -42,6 +42,10 @@ Once the payment has been prepared and the fees are accepted, the payment can be
 By default when the LNURL-pay results in a success action with a URL, the URL is validated to check if there is a mismatch with the LNURL callback domain. You can disable this behaviour by setting the optional validation <code>PrepareLnurlPayRequest</code> param to false.
 </div>
 
+## Managing contacts
+
+You can save frequently used Lightning addresses and other payment identifiers as contacts for quick access. See [Managing contacts](contacts.md) for details.
+
 ## Supported Specs
 
 - [LUD-01](https://github.com/lnurl/luds/blob/luds/01.md) LNURL bech32 encoding

@@ -34,6 +34,7 @@
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [Using LNURL-Auth](guide/lnurl_auth.md)
 - [User settings](guide/user_settings.md)
+- [Managing contacts](guide/contacts.md)
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [Buying Bitcoin](guide/buy_bitcoin.md)

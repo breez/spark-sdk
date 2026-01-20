@@ -5,7 +5,7 @@ Once the SDK is initialized, you can directly begin sending payments. The send p
 1. [Preparing the Payment](send_payment.md#preparing-payments)
 2. [Sending the Payment](send_payment.md#sending-payments)
 
-For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md).
+For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md). You can save frequently used recipients as contacts for quick access. See [Managing contacts](contacts.md).
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Preparing Payments</a>

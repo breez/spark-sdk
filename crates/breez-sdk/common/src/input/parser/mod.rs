@@ -33,6 +33,23 @@ const LNURL_HRP: &str = "lnurl";
 
 mod percent_encode;
 
+/// Validates lightning address format without network calls.
+/// Returns true if format is valid: user@domain where user contains only `[a-z0-9-_.]`
+pub fn validate_lightning_address_format(input: &str) -> bool {
+    let Some((user, domain)) = input.split_once('@') else {
+        return false;
+    };
+    let user = user.to_lowercase();
+    let domain = domain.to_lowercase();
+    if !user
+        .chars()
+        .all(|c| c.is_alphanumeric() || ['-', '_', '.'].contains(&c))
+    {
+        return false;
+    }
+    reqwest::Url::parse(&format!("https://{domain}")).is_ok()
+}
+
 pub async fn parse(
     input: &str,
     external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -199,22 +216,19 @@ where
     }
 
     async fn parse_lightning_address(&self, input: &str) -> Option<LightningAddressDetails> {
-        if !input.contains('@') {
+        // Strip the optional ₿ prefix before validation
+        let cleaned_input = input.strip_prefix('₿').unwrap_or(input);
+
+        // Validate format using the shared validation function
+        if !validate_lightning_address_format(cleaned_input) {
             return None;
         }
 
-        let (user, domain) = input.strip_prefix('₿').unwrap_or(input).split_once('@')?;
+        let (user, domain) = cleaned_input.split_once('@')?;
 
         // It is safe to downcase the domains since they are case-insensitive.
         // https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2
         let (user, domain) = (user.to_lowercase(), domain.to_lowercase());
-
-        if !user
-            .chars()
-            .all(|c| c.is_alphanumeric() || ['-', '_', '.'].contains(&c))
-        {
-            return None;
-        }
 
         // Use http:// for Tor or local domains (latter being commonly used for testing)
         let scheme = if has_extension(&domain, "onion")

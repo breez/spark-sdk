@@ -14,12 +14,13 @@ use serde_json::Value;
 use tracing::{Instrument, debug, error, warn};
 
 use crate::{
-    DepositInfo, EventEmitter, Payment, PaymentDetails, PaymentMetadata, Storage, StorageError,
-    UpdateDepositPayload,
+    Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
+    PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
     events::InternalSyncedEvent,
     persist::StorageListPaymentsRequest,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
+use serde::{Deserialize, Serialize};
 use tokio_with_wasm::alias as tokio;
 
 const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
@@ -28,12 +29,16 @@ const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
 enum RecordType {
     PaymentMetadata,
+    Contact,
+    ContactDeletion,
 }
 
 impl Display for RecordType {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
+            RecordType::Contact => "Contact",
+            RecordType::ContactDeletion => "ContactDeletion",
         };
         write!(f, "{s}")
     }
@@ -45,9 +50,27 @@ impl FromStr for RecordType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
+            "Contact" => Ok(RecordType::Contact),
+            "ContactDeletion" => Ok(RecordType::ContactDeletion),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
+}
+
+/// Internal sync model for contacts
+#[derive(Serialize, Deserialize)]
+struct ContactSyncData {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Minimal sync model for contact deletion
+#[derive(Serialize, Deserialize)]
+struct ContactDeletionData {
+    pub deleted_at: u64,
 }
 
 pub struct SyncedStorage {
@@ -220,22 +243,45 @@ impl SyncedStorage {
             );
             return Ok(RecordOutcome::Deferred);
         };
+
         match record_type {
             RecordType::PaymentMetadata => {
                 self.handle_payment_metadata_update(
                     change.new_state.data,
                     change.new_state.id.data_id,
                 )
-                .await?;
-                Ok(RecordOutcome::Completed)
+                .await
             }
-        }
+            RecordType::Contact => {
+                self.handle_contact_update(change.new_state.data, change.new_state.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.new_state.id.data_id)
+                    .await
+            }
+        }?;
+        Ok(RecordOutcome::Completed)
     }
 
     /// Hook when an outgoing change is replayed, to ensure data consistency.
     async fn handle_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
-        let record_type =
-            RecordType::from_str(&change.change.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
+        if change.change.schema_version.major > CURRENT_SCHEMA_VERSION.major {
+            warn!(
+                "Skipping outgoing record '{}:{}': newer schema version {}",
+                change.change.id.r#type, change.change.id.data_id, change.change.schema_version
+            );
+            return Ok(());
+        }
+
+        let Ok(record_type) = RecordType::from_str(&change.change.id.r#type) else {
+            error!(
+                "Unknown record type '{}' with compatible schema version {}",
+                change.change.id.r#type, change.change.schema_version
+            );
+            return Ok(());
+        };
+
         match record_type {
             RecordType::PaymentMetadata => {
                 self.handle_payment_metadata_update(
@@ -243,6 +289,13 @@ impl SyncedStorage {
                     change.change.id.data_id,
                 )
                 .await
+            }
+            RecordType::Contact => {
+                self.handle_contact_update(change.change.updated_fields, change.change.id.data_id)
+                    .await
+            }
+            RecordType::ContactDeletion => {
+                self.handle_contact_deletion(change.change.id.data_id).await
             }
         }
     }
@@ -261,6 +314,37 @@ impl SyncedStorage {
         self.inner
             .insert_payment_metadata(data_id, metadata)
             .await?;
+        Ok(())
+    }
+
+    async fn handle_contact_update(
+        &self,
+        updated_fields: HashMap<String, Value>,
+        data_id: String,
+    ) -> anyhow::Result<()> {
+        let sync_data: ContactSyncData = serde_json::from_value(
+            serde_json::to_value(&updated_fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let contact = Contact {
+            id: data_id,
+            name: sync_data.name,
+            payment_identifier: sync_data.payment_identifier,
+            created_at: sync_data.created_at,
+            updated_at: sync_data.updated_at,
+        };
+        // Upsert: try update, if fails try insert
+        if self.inner.update_contact(contact.clone()).await.is_err() {
+            let _ = self.inner.insert_contact(contact).await;
+        }
+        Ok(())
+    }
+
+    async fn handle_contact_deletion(&self, data_id: String) -> anyhow::Result<()> {
+        // Ignore not-found errors when deleting
+        let _ = self.inner.delete_contact(data_id).await;
         Ok(())
     }
 }
@@ -363,6 +447,84 @@ impl Storage for SyncedStorage {
         self.inner.set_lnurl_metadata(metadata).await
     }
 
+    async fn list_contacts(
+        &self,
+        request: ListContactsRequest,
+    ) -> Result<Vec<Contact>, StorageError> {
+        self.inner.list_contacts(request).await
+    }
+
+    async fn get_contact(&self, id: String) -> Result<Contact, StorageError> {
+        self.inner.get_contact(id).await
+    }
+
+    async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            payment_identifier: contact.payment_identifier.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.insert_contact(contact).await
+    }
+
+    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        let sync_data = ContactSyncData {
+            id: contact.id.clone(),
+            name: contact.name.clone(),
+            payment_identifier: contact.payment_identifier.clone(),
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+        };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&sync_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.update_contact(contact).await
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let now = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let deletion_data = ContactDeletionData { deleted_at: now };
+        self.sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(RecordType::ContactDeletion.to_string(), &id),
+                schema_version: SchemaVersion::new(2, 0, 0),
+                updated_fields: serde_json::from_value(
+                    serde_json::to_value(&deletion_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            })
+            .await
+            .map_err(|e| StorageError::Implementation(e.to_string()))?;
+        self.inner.delete_contact(id).await
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -409,5 +571,235 @@ impl Storage for SyncedStorage {
 
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
         self.inner.update_record_from_incoming(record).await
+    }
+}
+
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
+mod tests {
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+    use breez_sdk_common::sync::{
+        Record as ModelRecord, RecordChange as ModelRecordChange, RecordId as ModelRecordId,
+    };
+    use std::path::PathBuf;
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn create_test_synced_storage(storage: Arc<dyn Storage>) -> SyncedStorage {
+        let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> = Arc::new(
+            crate::sync_storage::SyncStorageWrapper::new(Arc::clone(&storage)),
+        );
+        let sync_service = Arc::new(SyncService::new(sync_storage));
+        let event_emitter = Arc::new(EventEmitter::new(true));
+        SyncedStorage::new(storage, sync_service, event_emitter)
+    }
+
+    fn make_incoming_change(
+        record_type: &str,
+        data_id: &str,
+        schema_version: SchemaVersion,
+        data: HashMap<String, Value>,
+    ) -> CommonIncomingChange {
+        CommonIncomingChange {
+            new_state: ModelRecord {
+                id: ModelRecordId::new(record_type, data_id),
+                revision: 1,
+                schema_version,
+                data,
+            },
+            old_state: None,
+        }
+    }
+
+    fn make_outgoing_change(
+        record_type: &str,
+        data_id: &str,
+        schema_version: SchemaVersion,
+        updated_fields: HashMap<String, Value>,
+    ) -> CommonOutgoingChange {
+        CommonOutgoingChange {
+            change: ModelRecordChange {
+                id: ModelRecordId::new(record_type, data_id),
+                schema_version,
+                updated_fields,
+                local_revision: 1,
+            },
+            parent: None,
+        }
+    }
+
+    fn make_test_lightning_payment(id: &str) -> crate::Payment {
+        crate::Payment {
+            id: id.to_string(),
+            payment_type: crate::PaymentType::Send,
+            status: crate::PaymentStatus::Completed,
+            amount: 100,
+            fees: 0,
+            timestamp: 1000,
+            method: crate::PaymentMethod::Lightning,
+            details: Some(crate::PaymentDetails::Lightning {
+                invoice: "lnbc1test".to_string(),
+                payment_hash: "abc123".to_string(),
+                destination_pubkey: "02def456".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+            }),
+            conversion_details: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_incoming_unknown_type_newer_schema() {
+        let temp_dir = create_temp_dir("incoming_unknown_newer");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_incoming_change(
+            "FutureType",
+            "id1",
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment was created as a side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_incoming_unknown_type_compatible_schema() {
+        let temp_dir = create_temp_dir("incoming_unknown_compat");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change =
+            make_incoming_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata was written
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_incoming_known_type_newer_major_version() {
+        let temp_dir = create_temp_dir("incoming_known_newer_major");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        // Insert a payment so we can verify metadata was NOT written
+        storage
+            .insert_payment(make_test_lightning_payment("id1"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::json!({"ln_address": "test@example.com"}),
+        );
+        let change = make_incoming_change(
+            "PaymentMetadata",
+            "id1",
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            data,
+        );
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify metadata was NOT applied despite known type (newer major version)
+        let payment = storage.get_payment_by_id("id1".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment.details {
+            assert!(
+                lnurl_pay_info.is_none(),
+                "lnurl_pay_info should not be set for newer major version"
+            );
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_incoming_known_type_newer_minor_version_applied() {
+        let temp_dir = create_temp_dir("incoming_known_newer_minor");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        storage
+            .insert_payment(make_test_lightning_payment("pay1"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::json!({"ln_address": "test@example.com"}),
+        );
+        let change = make_incoming_change(
+            "PaymentMetadata",
+            "pay1",
+            SchemaVersion::new(
+                CURRENT_SCHEMA_VERSION.major,
+                CURRENT_SCHEMA_VERSION.minor + 1,
+                0,
+            ),
+            data,
+        );
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify metadata WAS applied (compatible minor version bump)
+        let payment = storage.get_payment_by_id("pay1".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment.details {
+            let info = lnurl_pay_info
+                .as_ref()
+                .expect("lnurl_pay_info should be set");
+            assert_eq!(info.ln_address.as_deref(), Some("test@example.com"));
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_unknown_type_newer_schema() {
+        let temp_dir = create_temp_dir("outgoing_unknown_newer");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_outgoing_change(
+            "FutureType",
+            "id1",
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_unknown_type_compatible_schema() {
+        let temp_dir = create_temp_dir("outgoing_unknown_compat");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change =
+            make_outgoing_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
     }
 }
