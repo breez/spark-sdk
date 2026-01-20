@@ -516,25 +516,20 @@ impl DepositService {
 
         let NodeTransactions {
             cpfp_tx: cpfp_root_tx,
-            direct_tx: direct_root_tx,
+            direct_tx: _,
         } = create_root_node_txs(&deposit_tx, vout)?;
 
         let RefundTransactions {
             cpfp_tx: cpfp_refund_tx,
-            direct_tx: direct_refund_tx,
+            direct_tx: _,
             direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
         } = create_initial_timelock_refund_txs(
             &cpfp_root_tx,
-            Some(&direct_root_tx),
+            None,
             &signing_public_key,
             self.network,
         );
 
-        let Some(direct_refund_tx) = direct_refund_tx else {
-            return Err(ServiceError::Generic(
-                "Direct refund transaction is missing".to_string(),
-            ));
-        };
         let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx else {
             return Err(ServiceError::Generic(
                 "Direct from CPFP refund transaction is missing".to_string(),
@@ -543,10 +538,7 @@ impl DepositService {
 
         // Get random signing commitments
         let cpfp_node_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let direct_node_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
         let cpfp_refund_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let direct_refund_nonce_commitment =
-            self.signer.generate_random_signing_commitment().await?;
         let direct_from_cpfp_refund_nonce_commitment =
             self.signer.generate_random_signing_commitment().await?;
 
@@ -576,20 +568,8 @@ impl DepositService {
                         cpfp_refund_nonce_commitment.commitments.try_into()?,
                     ),
                 }),
-                direct_root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: serialize(&direct_root_tx),
-                    signing_nonce_commitment: Some(
-                        direct_node_nonce_commitment.commitments.try_into()?,
-                    ),
-                }),
-                direct_refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: serialize(&direct_refund_tx),
-                    signing_nonce_commitment: Some(
-                        direct_refund_nonce_commitment.commitments.try_into()?,
-                    ),
-                }),
+                direct_root_tx_signing_job: None,
+                direct_refund_tx_signing_job: None,
                 direct_from_cpfp_refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
                     raw_tx: serialize(&direct_from_cpfp_refund_tx),
@@ -612,20 +592,8 @@ impl DepositService {
             .map(|sr| sr.try_into())
             .transpose()?
             .ok_or(ServiceError::MissingTreeSignatures)?;
-        let direct_node_signing_result = root_node_signature_shares
-            .direct_node_tx_signing_result
-            .as_ref()
-            .map(|sr| sr.try_into())
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
         let cpfp_refund_signing_result = root_node_signature_shares
             .refund_tx_signing_result
-            .as_ref()
-            .map(|sr| sr.try_into())
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
-        let direct_refund_signing_result = root_node_signature_shares
-            .direct_refund_tx_signing_result
             .as_ref()
             .map(|sr| sr.try_into())
             .transpose()?
@@ -659,20 +627,6 @@ impl DepositService {
         })
         .await?;
 
-        let direct_root_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            tx: &direct_root_tx,
-            prev_out: deposit_tx_out,
-            signing_public_key: &signing_public_key,
-            aggregating_public_key: &signing_public_key,
-            signing_private_key: &signing_private_key,
-            self_nonce_commitment: &direct_node_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: verifying_public_key,
-            signing_result: direct_node_signing_result,
-        })
-        .await?;
-
         let cpfp_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
             tx: &cpfp_refund_tx,
@@ -684,20 +638,6 @@ impl DepositService {
             adaptor_public_key: None,
             verifying_key: verifying_public_key,
             signing_result: cpfp_refund_signing_result,
-        })
-        .await?;
-
-        let direct_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            tx: &direct_refund_tx,
-            prev_out: &direct_root_tx.output[0],
-            signing_public_key: &signing_public_key,
-            aggregating_public_key: &signing_public_key,
-            signing_private_key: &signing_private_key,
-            self_nonce_commitment: &direct_refund_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: verifying_public_key,
-            signing_result: direct_refund_signing_result,
         })
         .await?;
 
@@ -731,14 +671,8 @@ impl DepositService {
                         .serialize()
                         .map_err(|_| ServiceError::InvalidSignatureShare)?
                         .to_vec(),
-                    direct_node_tx_signature: direct_root_signature
-                        .serialize()
-                        .map_err(|_| ServiceError::InvalidSignatureShare)?
-                        .to_vec(),
-                    direct_refund_tx_signature: direct_refund_signature
-                        .serialize()
-                        .map_err(|_| ServiceError::InvalidSignatureShare)?
-                        .to_vec(),
+                    direct_node_tx_signature: Vec::new(),
+                    direct_refund_tx_signature: Vec::new(),
                     direct_from_cpfp_refund_tx_signature: direct_from_cpfp_refund_signature
                         .serialize()
                         .map_err(|_| ServiceError::InvalidSignatureShare)?
@@ -774,14 +708,8 @@ impl DepositService {
                         deserialize(&node.refund_tx)
                             .map_err(|_| ServiceError::InvalidTransaction)?,
                     ),
-                    direct_tx: Some(
-                        deserialize(&node.direct_tx)
-                            .map_err(|_| ServiceError::InvalidTransaction)?,
-                    ),
-                    direct_refund_tx: Some(
-                        deserialize(&node.direct_refund_tx)
-                            .map_err(|_| ServiceError::InvalidTransaction)?,
-                    ),
+                    direct_tx: None,
+                    direct_refund_tx: None,
                     direct_from_cpfp_refund_tx: Some(
                         deserialize(&node.direct_from_cpfp_refund_tx)
                             .map_err(|_| ServiceError::InvalidTransaction)?,
