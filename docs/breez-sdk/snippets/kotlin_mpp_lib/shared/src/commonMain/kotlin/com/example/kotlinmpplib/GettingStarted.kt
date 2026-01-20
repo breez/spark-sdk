@@ -31,6 +31,7 @@ class GettingStarted {
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
             val info = sdk.getInfo(GetInfoRequest(false))
+            val identityPubkey = info.identityPubkey
             val balanceSats = info.balanceSats
         } catch (e: Exception) {
             // handle error

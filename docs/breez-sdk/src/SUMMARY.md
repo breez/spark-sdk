@@ -8,7 +8,7 @@
   - [Testing and development](guide/testing.md)
   - [Initializing the SDK](guide/initializing.md)
     - [Customizing the SDK](guide/customizing.md)
-  - [Fetching the balance](guide/get_info.md)
+  - [Getting the SDK info](guide/get_info.md)
   - [Listening to events](guide/events.md)
   - [Adding logging](guide/logging.md)
 - [Payment fundamentals](guide/payments.md)

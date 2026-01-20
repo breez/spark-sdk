@@ -719,6 +719,8 @@ pub struct GetInfoRequest {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoResponse {
+    /// The identity public key of the wallet as a hex string
+    pub identity_pubkey: String,
     /// The balance in satoshis
     pub balance_sats: u64,
     /// The balances of the tokens in the wallet keyed by the token identifier

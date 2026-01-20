@@ -30,6 +30,7 @@ func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
         request: GetInfoRequest(
             ensureSynced: false
         ))
+    let identityPubkey = info.identityPubkey
     let balanceSats = info.balanceSats
     // ANCHOR_END: fetch-balance
     print(balanceSats)
