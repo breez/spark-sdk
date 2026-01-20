@@ -29,8 +29,18 @@ pub struct RecoverableEcdsaSignatureBytes {
     pub bytes: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::PrivateKeyBytes)]
-pub struct PrivateKeyBytes {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::SecretBytes)]
+pub struct SecretBytes {
+    pub bytes: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::HashedMessageBytes)]
+pub struct HashedMessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::MessageBytes)]
+pub struct MessageBytes {
     pub bytes: Vec<u8>,
 }
 
@@ -39,20 +49,20 @@ pub struct ExternalTreeNodeId {
     pub id: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalEncryptedPrivateKey)]
-pub struct ExternalEncryptedPrivateKey {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalEncryptedSecret)]
+pub struct ExternalEncryptedSecret {
     pub ciphertext: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalPrivateKeySource)]
-pub enum ExternalPrivateKeySource {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretSource)]
+pub enum ExternalSecretSource {
     Derived { node_id: ExternalTreeNodeId },
-    Encrypted { key: ExternalEncryptedPrivateKey },
+    Encrypted { key: ExternalEncryptedSecret },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretToSplit)]
 pub enum ExternalSecretToSplit {
-    PrivateKey { source: ExternalPrivateKeySource },
+    SecretSource { source: ExternalSecretSource },
     Preimage { data: Vec<u8> },
 }
 
@@ -116,7 +126,7 @@ pub struct IdentifierPublicKeyPair {
 pub struct ExternalSignFrostRequest {
     pub message: Vec<u8>,
     pub public_key: Vec<u8>,
-    pub private_key: ExternalPrivateKeySource,
+    pub secret: ExternalSecretSource,
     pub verifying_key: Vec<u8>,
     pub self_nonce_commitment: ExternalFrostCommitments,
     pub statechain_commitments: Vec<IdentifierCommitmentPair>,
@@ -201,11 +211,11 @@ impl DefaultSigner {
     #[wasm_bindgen(js_name = "signEcdsa")]
     pub async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<EcdsaSignatureBytes, JsValue> {
         self.inner
-            .sign_ecdsa(message, path)
+            .sign_ecdsa(message.into(), path)
             .await
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -214,28 +224,28 @@ impl DefaultSigner {
     #[wasm_bindgen(js_name = "signEcdsaRecoverable")]
     pub async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<RecoverableEcdsaSignatureBytes, JsValue> {
         self.inner
-            .sign_ecdsa_recoverable(message, path)
+            .sign_ecdsa_recoverable(message.into(), path)
             .await
             .map(|sig| sig.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "eciesEncrypt")]
-    pub async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
+    #[wasm_bindgen(js_name = "encryptEcies")]
+    pub async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
-            .ecies_encrypt(message, path)
+            .encrypt_ecies(message, path)
             .await
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "eciesDecrypt")]
-    pub async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
+    #[wasm_bindgen(js_name = "decryptEcies")]
+    pub async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, JsValue> {
         self.inner
-            .ecies_decrypt(message, path)
+            .decrypt_ecies(message, path)
             .await
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
@@ -253,12 +263,12 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "generateFrostSigningCommitments")]
-    pub async fn generate_frost_signing_commitments(
+    #[wasm_bindgen(js_name = "generateRandomSigningCommitment")]
+    pub async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, JsValue> {
         self.inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map(|c| c.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -276,59 +286,53 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "generateRandomKey")]
-    pub async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, JsValue> {
+    #[wasm_bindgen(js_name = "generateRandomSecret")]
+    pub async fn generate_random_secret(&self) -> Result<ExternalEncryptedSecret, JsValue> {
         self.inner
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositPrivateKeySource")]
-    pub async fn get_static_deposit_private_key_source(
+    #[wasm_bindgen(js_name = "staticDepositSecretEncrypted")]
+    pub async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<ExternalPrivateKeySource, JsValue> {
+    ) -> Result<ExternalSecretSource, JsValue> {
         self.inner
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositPrivateKey")]
-    pub async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<PrivateKeyBytes, JsValue> {
+    #[wasm_bindgen(js_name = "staticDepositSecret")]
+    pub async fn static_deposit_secret(&self, index: u32) -> Result<SecretBytes, JsValue> {
         self.inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret(index)
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getStaticDepositPublicKey")]
-    pub async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKeyBytes, JsValue> {
+    #[wasm_bindgen(js_name = "staticDepositSigningKey")]
+    pub async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, JsValue> {
         self.inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map(|pk| pk.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "subtractPrivateKeys")]
-    pub async fn subtract_private_keys(
+    #[wasm_bindgen(js_name = "subtractSecrets")]
+    pub async fn subtract_secrets(
         &self,
-        signing_key: ExternalPrivateKeySource,
-        new_signing_key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, JsValue> {
+        signing_key: ExternalSecretSource,
+        new_signing_key: ExternalSecretSource,
+    ) -> Result<ExternalSecretSource, JsValue> {
         self.inner
-            .subtract_private_keys(signing_key.into(), new_signing_key.into())
+            .subtract_secrets(signing_key.into(), new_signing_key.into())
             .await
             .map(|k| k.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -342,7 +346,7 @@ impl DefaultSigner {
         num_shares: u32,
     ) -> Result<Box<[ExternalVerifiableSecretShare]>, JsValue> {
         self.inner
-            .split_secret(secret.into(), threshold, num_shares)
+            .split_secret_with_proofs(secret.into(), threshold, num_shares)
             .await
             .map(|shares| {
                 shares
@@ -355,24 +359,24 @@ impl DefaultSigner {
     }
 
     #[wasm_bindgen(js_name = "encryptPrivateKeyForReceiver")]
-    pub async fn encrypt_private_key_for_receiver(
+    pub async fn encrypt_secret_for_receiver(
         &self,
-        private_key: ExternalEncryptedPrivateKey,
+        private_key: ExternalEncryptedSecret,
         receiver_public_key: PublicKeyBytes,
     ) -> Result<Vec<u8>, JsValue> {
         self.inner
-            .encrypt_private_key_for_receiver(private_key.into(), receiver_public_key.into())
+            .encrypt_secret_for_receiver(private_key.into(), receiver_public_key.into())
             .await
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
-    #[wasm_bindgen(js_name = "getPublicKeyFromPrivateKeySource")]
-    pub async fn get_public_key_from_private_key_source(
+    #[wasm_bindgen(js_name = "publicKeyFromSecret")]
+    pub async fn public_key_from_secret(
         &self,
-        private_key: ExternalPrivateKeySource,
+        private_key: ExternalSecretSource,
     ) -> Result<PublicKeyBytes, JsValue> {
         self.inner
-            .get_public_key_from_private_key_source(private_key.into())
+            .public_key_from_secret(private_key.into())
             .await
             .map(|pk| pk.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
@@ -396,9 +400,22 @@ impl DefaultSigner {
         request: ExternalAggregateFrostRequest,
     ) -> Result<ExternalFrostSignature, JsValue> {
         self.inner
-            .aggregate_frost_signatures(request.into())
+            .aggregate_frost(request.into())
             .await
             .map(|sig| sig.into())
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
+    #[wasm_bindgen(js_name = "hmacSha256")]
+    pub async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, JsValue> {
+        self.inner
+            .hmac_sha256(message, path)
+            .await
+            .map(|h| h.into())
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 }
@@ -420,7 +437,7 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
         self.inner.sign_ecdsa(message, path).await
@@ -428,18 +445,18 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
         self.inner.sign_ecdsa_recoverable(message, path).await
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        self.inner.ecies_encrypt(message, path).await
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        self.inner.encrypt_ecies(message, path).await
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
-        self.inner.ecies_decrypt(message, path).await
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+        self.inner.decrypt_ecies(message, path).await
     }
 
     async fn sign_hash_schnorr(
@@ -450,10 +467,10 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.sign_hash_schnorr(hash, path).await
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<core_types::ExternalFrostCommitments, SignerError> {
-        self.inner.generate_frost_signing_commitments().await
+        self.inner.generate_random_signing_commitment().await
     }
 
     async fn get_public_key_for_node(
@@ -463,71 +480,69 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.get_public_key_for_node(id).await
     }
 
-    async fn generate_random_key(
+    async fn generate_random_secret(
         &self,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
-        self.inner.generate_random_key().await
+    ) -> Result<core_types::ExternalEncryptedSecret, SignerError> {
+        self.inner.generate_random_secret().await
     }
 
-    async fn get_static_deposit_private_key_source(
-        &self,
-        index: u32,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
-        self.inner
-            .get_static_deposit_private_key_source(index)
-            .await
-    }
-
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<core_types::PrivateKeyBytes, SignerError> {
-        self.inner.get_static_deposit_private_key(index).await
+    ) -> Result<core_types::ExternalSecretSource, SignerError> {
+        self.inner.static_deposit_secret_encrypted(index).await
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_secret(
+        &self,
+        index: u32,
+    ) -> Result<core_types::SecretBytes, SignerError> {
+        self.inner.static_deposit_secret(index).await
+    }
+
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner.get_static_deposit_public_key(index).await
+        self.inner.static_deposit_signing_key(index).await
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: core_types::ExternalPrivateKeySource,
-        new_signing_key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
+        signing_key: core_types::ExternalSecretSource,
+        new_signing_key: core_types::ExternalSecretSource,
+    ) -> Result<core_types::ExternalSecretSource, SignerError> {
         self.inner
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secrets(signing_key, new_signing_key)
             .await
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: core_types::ExternalSecretToSplit,
         threshold: u32,
         num_shares: u32,
     ) -> Result<Vec<core_types::ExternalVerifiableSecretShare>, SignerError> {
-        self.inner.split_secret(secret, threshold, num_shares).await
+        self.inner
+            .split_secret_with_proofs(secret, threshold, num_shares)
+            .await
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: core_types::ExternalEncryptedPrivateKey,
+        private_key: core_types::ExternalEncryptedSecret,
         receiver_public_key: core_types::PublicKeyBytes,
     ) -> Result<Vec<u8>, SignerError> {
         self.inner
-            .encrypt_private_key_for_receiver(private_key, receiver_public_key)
+            .encrypt_secret_for_receiver(private_key, receiver_public_key)
             .await
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: core_types::ExternalPrivateKeySource,
+        private_key: core_types::ExternalSecretSource,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner
-            .get_public_key_from_private_key_source(private_key)
-            .await
+        self.inner.public_key_from_secret(private_key).await
     }
 
     async fn sign_frost(
@@ -537,11 +552,19 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         self.inner.sign_frost(request).await
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: core_types::ExternalAggregateFrostRequest,
     ) -> Result<core_types::ExternalFrostSignature, SignerError> {
-        self.inner.aggregate_frost_signatures(request).await
+        self.inner.aggregate_frost(request).await
+    }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::HashedMessageBytes, SignerError> {
+        self.inner.hmac_sha256(message, path).await
     }
 }
 
@@ -576,12 +599,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
         let promise = self
             .inner
-            .sign_ecdsa(message, path)
+            .sign_ecdsa(wasm_msg, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -594,12 +618,13 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: core_types::MessageBytes,
         path: String,
     ) -> Result<core_types::RecoverableEcdsaSignatureBytes, SignerError> {
+        let wasm_msg: MessageBytes = message.into();
         let promise = self
             .inner
-            .sign_ecdsa_recoverable(message, path)
+            .sign_ecdsa_recoverable(wasm_msg, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -614,10 +639,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(core_types::RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
-            .ecies_encrypt(message, path)
+            .encrypt_ecies(message, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -628,10 +653,10 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         })
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let promise = self
             .inner
-            .ecies_decrypt(message, path)
+            .decrypt_ecies(message, path)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -661,12 +686,12 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_sig.into())
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<core_types::ExternalFrostCommitments, SignerError> {
         let promise = self
             .inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -698,50 +723,50 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_pubkey.into())
     }
 
-    async fn generate_random_key(
+    async fn generate_random_secret(
         &self,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
+    ) -> Result<core_types::ExternalEncryptedSecret, SignerError> {
         let promise = self
             .inner
-            .generate_random_key()
+            .generate_random_secret()
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let wasm_source: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| {
-                SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
+        let wasm_source: ExternalEncryptedSecret =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize encrypted secret: {}", e))
             })?;
         Ok(wasm_source.into())
     }
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
+    ) -> Result<core_types::ExternalSecretSource, SignerError> {
         let promise = self
             .inner
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let wasm_source: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| {
+        let wasm_source: ExternalSecretSource =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
                 SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
             })?;
         Ok(wasm_source.into())
     }
 
-    async fn get_static_deposit_private_key(
+    async fn static_deposit_secret(
         &self,
         index: u32,
-    ) -> Result<core_types::PrivateKeyBytes, SignerError> {
+    ) -> Result<core_types::SecretBytes, SignerError> {
         let promise = self
             .inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret(index)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -750,16 +775,16 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
             SignerError::Generic(format!("Failed to deserialize private key: {}", e))
         })?;
-        Ok(core_types::PrivateKeyBytes { bytes })
+        Ok(core_types::SecretBytes { bytes })
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
         let promise = self
             .inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -771,29 +796,29 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_pubkey.into())
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: core_types::ExternalPrivateKeySource,
-        new_signing_key: core_types::ExternalPrivateKeySource,
-    ) -> Result<core_types::ExternalPrivateKeySource, SignerError> {
-        let wasm_signing_key: ExternalPrivateKeySource = signing_key.into();
-        let wasm_new_signing_key: ExternalPrivateKeySource = new_signing_key.into();
+        signing_key: core_types::ExternalSecretSource,
+        new_signing_key: core_types::ExternalSecretSource,
+    ) -> Result<core_types::ExternalSecretSource, SignerError> {
+        let wasm_signing_key: ExternalSecretSource = signing_key.into();
+        let wasm_new_signing_key: ExternalSecretSource = new_signing_key.into();
         let promise = self
             .inner
-            .subtract_private_keys(wasm_signing_key, wasm_new_signing_key)
+            .subtract_secrets(wasm_signing_key, wasm_new_signing_key)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
             .await
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        let wasm_result: ExternalPrivateKeySource = serde_wasm_bindgen::from_value(result)
-            .map_err(|e| {
+        let wasm_result: ExternalSecretSource =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
                 SignerError::Generic(format!("Failed to deserialize private key source: {}", e))
             })?;
         Ok(wasm_result.into())
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: core_types::ExternalSecretToSplit,
         threshold: u32,
@@ -815,16 +840,16 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_shares.into_iter().map(|s| s.into()).collect())
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: core_types::ExternalEncryptedPrivateKey,
+        private_key: core_types::ExternalEncryptedSecret,
         receiver_public_key: core_types::PublicKeyBytes,
     ) -> Result<Vec<u8>, SignerError> {
-        let wasm_private_key: ExternalEncryptedPrivateKey = private_key.into();
+        let wasm_private_key: ExternalEncryptedSecret = private_key.into();
         let wasm_receiver_pubkey: PublicKeyBytes = receiver_public_key.into();
         let promise = self
             .inner
-            .encrypt_private_key_for_receiver(wasm_private_key, wasm_receiver_pubkey)
+            .encrypt_secret_for_receiver(wasm_private_key, wasm_receiver_pubkey)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -835,14 +860,14 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         })
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: core_types::ExternalPrivateKeySource,
+        private_key: core_types::ExternalSecretSource,
     ) -> Result<core_types::PublicKeyBytes, SignerError> {
-        let wasm_private_key: ExternalPrivateKeySource = private_key.into();
+        let wasm_private_key: ExternalSecretSource = private_key.into();
         let promise = self
             .inner
-            .get_public_key_from_private_key_source(wasm_private_key)
+            .public_key_from_secret(wasm_private_key)
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -877,7 +902,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         Ok(wasm_share.into())
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: core_types::ExternalAggregateFrostRequest,
     ) -> Result<core_types::ExternalFrostSignature, SignerError> {
@@ -896,29 +921,50 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
             })?;
         Ok(wasm_sig.into())
     }
+
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<core_types::HashedMessageBytes, SignerError> {
+        let promise = self
+            .inner
+            .hmac_sha256(message, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_hash: HashedMessageBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize HMAC-SHA256 hash: {}", e))
+            })?;
+        Ok(wasm_hash.into())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
 const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
     identityPublicKey(): PublicKeyBytes;
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
-    signEcdsa(message: Uint8Array, path: string): Promise<EcdsaSignatureBytes>;
-    signEcdsaRecoverable(message: Uint8Array, path: string): Promise<RecoverableEcdsaSignatureBytes>;
-    eciesEncrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
-    eciesDecrypt(message: Uint8Array, path: string): Promise<Uint8Array>;
+    signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
+    signEcdsaRecoverable(message: MessageBytes, path: string): Promise<RecoverableEcdsaSignatureBytes>;
+    encryptEcies(message: Uint8Array, path: string): Promise<Uint8Array>;
+    decryptEcies(message: Uint8Array, path: string): Promise<Uint8Array>;
     signHashSchnorr(hash: Uint8Array, path: string): Promise<SchnorrSignatureBytes>;
-    generateFrostSigningCommitments(): Promise<ExternalFrostCommitments>;
+    generateRandomSigningCommitment(): Promise<ExternalFrostCommitments>;
     getPublicKeyForNode(id: ExternalTreeNodeId): Promise<PublicKeyBytes>;
-    generateRandomKey(): Promise<ExternalPrivateKeySource>;
-    getStaticDepositPrivateKeySource(index: number): Promise<ExternalPrivateKeySource>;
-    getStaticDepositPrivateKey(index: number): Promise<PrivateKeyBytes>;
-    getStaticDepositPublicKey(index: number): Promise<PublicKeyBytes>;
-    subtractPrivateKeys(signingKey: ExternalPrivateKeySource, newSigningKey: ExternalPrivateKeySource): Promise<ExternalPrivateKeySource>;
+    generateRandomSecret(): Promise<ExternalEncryptedSecret>;
+    staticDepositSecretEncrypted(index: number): Promise<ExternalSecretSource>;
+    staticDepositSecret(index: number): Promise<SecretBytes>;
+    staticDepositSigningKey(index: number): Promise<PublicKeyBytes>;
+    subtractSecrets(signingKey: ExternalSecretSource, newSigningKey: ExternalSecretSource): Promise<ExternalSecretSource>;
     splitSecretWithProofs(secret: ExternalSecretToSplit, threshold: number, numShares: number): Promise<ExternalVerifiableSecretShare[]>;
-    encryptPrivateKeyForReceiver(privateKey: ExternalEncryptedPrivateKey, receiverPublicKey: PublicKeyBytes): Promise<Uint8Array>;
-    getPublicKeyFromPrivateKeySource(privateKey: ExternalPrivateKeySource): Promise<PublicKeyBytes>;
+    encryptPrivateKeyForReceiver(privateKey: ExternalEncryptedSecret, receiverPublicKey: PublicKeyBytes): Promise<Uint8Array>;
+    publicKeyFromSecret(privateKey: ExternalSecretSource): Promise<PublicKeyBytes>;
     signFrost(request: ExternalSignFrostRequest): Promise<ExternalFrostSignatureShare>;
     aggregateFrost(request: ExternalAggregateFrostRequest): Promise<ExternalFrostSignature>;
+    hmacSha256(message: Uint8Array, path: string): Promise<HashedMessageBytes>;
 }"#;
 
 #[wasm_bindgen]
@@ -935,26 +981,26 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
         this: &JsExternalSigner,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsaRecoverable", catch)]
     pub fn sign_ecdsa_recoverable(
         this: &JsExternalSigner,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesEncrypt", catch)]
-    pub fn ecies_encrypt(
+    pub fn encrypt_ecies(
         this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesDecrypt", catch)]
-    pub fn ecies_decrypt(
+    pub fn decrypt_ecies(
         this: &JsExternalSigner,
         message: Vec<u8>,
         path: String,
@@ -968,7 +1014,7 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "generateFrostSigningCommitments", catch)]
-    pub fn generate_frost_signing_commitments(this: &JsExternalSigner) -> Result<Promise, JsValue>;
+    pub fn generate_random_signing_commitment(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getPublicKeyForNode", catch)]
     pub fn get_public_key_for_node(
@@ -976,37 +1022,29 @@ extern "C" {
         id: ExternalTreeNodeId,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "generateRandomKey", catch)]
-    pub fn generate_random_key(this: &JsExternalSigner) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = "generateRandomSecret", catch)]
+    pub fn generate_random_secret(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(
-        structural,
-        method,
-        js_name = "getStaticDepositPrivateKeySource",
-        catch
-    )]
-    pub fn get_static_deposit_private_key_source(
+    #[wasm_bindgen(structural, method, js_name = "getStaticDepositSecretSource", catch)]
+    pub fn static_deposit_secret_encrypted(
         this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPrivateKey", catch)]
-    pub fn get_static_deposit_private_key(
-        this: &JsExternalSigner,
-        index: u32,
-    ) -> Result<Promise, JsValue>;
+    pub fn static_deposit_secret(this: &JsExternalSigner, index: u32) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getStaticDepositPublicKey", catch)]
-    pub fn get_static_deposit_public_key(
+    pub fn static_deposit_signing_key(
         this: &JsExternalSigner,
         index: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "subtractPrivateKeys", catch)]
-    pub fn subtract_private_keys(
+    pub fn subtract_secrets(
         this: &JsExternalSigner,
-        signing_key: ExternalPrivateKeySource,
-        new_signing_key: ExternalPrivateKeySource,
+        signing_key: ExternalSecretSource,
+        new_signing_key: ExternalSecretSource,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "splitSecretWithProofs", catch)]
@@ -1018,21 +1056,16 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "encryptPrivateKeyForReceiver", catch)]
-    pub fn encrypt_private_key_for_receiver(
+    pub fn encrypt_secret_for_receiver(
         this: &JsExternalSigner,
-        private_key: ExternalEncryptedPrivateKey,
+        private_key: ExternalEncryptedSecret,
         receiver_public_key: PublicKeyBytes,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(
-        structural,
-        method,
-        js_name = "getPublicKeyFromPrivateKeySource",
-        catch
-    )]
-    pub fn get_public_key_from_private_key_source(
+    #[wasm_bindgen(structural, method, js_name = "getPublicKeyFromSecretSource", catch)]
+    pub fn public_key_from_secret(
         this: &JsExternalSigner,
-        private_key: ExternalPrivateKeySource,
+        private_key: ExternalSecretSource,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
@@ -1045,5 +1078,12 @@ extern "C" {
     pub fn aggregate_frost(
         this: &JsExternalSigner,
         request: ExternalAggregateFrostRequest,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "hmacSha256", catch)]
+    pub fn hmac_sha256(
+        this: &JsExternalSigner,
+        message: Vec<u8>,
+        path: String,
     ) -> Result<Promise, JsValue>;
 }

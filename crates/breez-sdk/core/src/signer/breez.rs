@@ -1,6 +1,6 @@
 use crate::{Seed, error::SdkError, models::Config};
 use bitcoin::bip32::DerivationPath;
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
 use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
 use spark_wallet::{DefaultSigner, KeySet, KeySetType, Signer};
 
@@ -58,7 +58,7 @@ impl BreezSigner for BreezSignerImpl {
 
     async fn sign_ecdsa(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
         let derived = self
@@ -66,40 +66,25 @@ impl BreezSigner for BreezSignerImpl {
             .identity_master_key
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let digest = bitcoin::hashes::sha256::Hash::hash(message);
-        let message = Message::from_digest(digest.to_byte_array());
-        Ok(self.secp.sign_ecdsa(&message, &derived.private_key))
+        Ok(self.secp.sign_ecdsa_low_r(&message, &derived.private_key))
     }
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: &[u8],
+        message: Message,
         path: &DerivationPath,
-    ) -> Result<Vec<u8>, SdkError> {
+    ) -> Result<secp256k1::ecdsa::RecoverableSignature, SdkError> {
         let derived = self
             .key_set
             .identity_master_key
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let digest = bitcoin::hashes::sha256::Hash::hash(
-            bitcoin::hashes::sha256::Hash::hash(message).as_ref(),
-        );
-        let (recovery_id, sig) = self
+        Ok(self
             .secp
-            .sign_ecdsa_recoverable(
-                &Message::from_digest(digest.to_byte_array()),
-                &derived.private_key,
-            )
-            .serialize_compact();
-
-        let mut complete_signature = vec![31u8.saturating_add(
-            u8::try_from(recovery_id.to_i32()).map_err(|e| SdkError::Generic(e.to_string()))?,
-        )];
-        complete_signature.extend_from_slice(&sig);
-        Ok(complete_signature)
+            .sign_ecdsa_recoverable(&message, &derived.private_key))
     }
 
-    async fn ecies_encrypt(
+    async fn encrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
@@ -114,7 +99,7 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|err| SdkError::Generic(format!("Could not encrypt data: {err}")))
     }
 
-    async fn ecies_decrypt(
+    async fn decrypt_ecies(
         &self,
         message: &[u8],
         path: &DerivationPath,
@@ -150,11 +135,11 @@ impl BreezSigner for BreezSignerImpl {
             .sign_schnorr_with_rng(&message, &keypair, &mut rng))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {
         self.spark_signer
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
@@ -169,50 +154,47 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn generate_random_key(&self) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+    async fn generate_random_secret(&self) -> Result<spark_wallet::EncryptedSecret, SdkError> {
         self.spark_signer
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+    ) -> Result<spark_wallet::SecretSource, SdkError> {
         self.spark_signer
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<secp256k1::SecretKey, SdkError> {
+    async fn static_deposit_secret(&self, index: u32) -> Result<secp256k1::SecretKey, SdkError> {
         self.spark_signer
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_public_key(
+    async fn static_deposit_signing_key(
         &self,
         index: u32,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         self.spark_signer
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &spark_wallet::PrivateKeySource,
-        new_signing_key: &spark_wallet::PrivateKeySource,
-    ) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+        signing_key: &spark_wallet::SecretSource,
+        new_signing_key: &spark_wallet::SecretSource,
+    ) -> Result<spark_wallet::SecretSource, SdkError> {
         self.spark_signer
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secrets(signing_key, new_signing_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
@@ -229,23 +211,23 @@ impl BreezSigner for BreezSignerImpl {
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &spark_wallet::EncryptedPrivateKey,
+        private_key: &spark_wallet::EncryptedSecret,
         receiver_public_key: &secp256k1::PublicKey,
     ) -> Result<Vec<u8>, SdkError> {
         self.spark_signer
-            .encrypt_private_key_for_receiver(private_key, receiver_public_key)
+            .encrypt_secret_for_receiver(private_key, receiver_public_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &spark_wallet::PrivateKeySource,
+        private_key: &spark_wallet::SecretSource,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         self.spark_signer
-            .get_public_key_from_private_key_source(private_key)
+            .public_key_from_secret(private_key)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
     }
@@ -268,5 +250,21 @@ impl BreezSigner for BreezSignerImpl {
             .aggregate_frost(request)
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))
+    }
+
+    async fn hmac_sha256(
+        &self,
+        key_path: &DerivationPath,
+        input: &[u8],
+    ) -> Result<Hmac<sha256::Hash>, SdkError> {
+        let derived = self
+            .key_set
+            .identity_master_key
+            .derive_priv(&self.secp, key_path)
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+
+        let mut engine = HmacEngine::<sha256::Hash>::new(&derived.private_key.secret_bytes());
+        engine.input(input);
+        Ok(Hmac::<sha256::Hash>::from_engine(engine))
     }
 }

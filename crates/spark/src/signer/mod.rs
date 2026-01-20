@@ -28,33 +28,33 @@ pub trait Signer: Send + Sync + 'static {
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
 
     async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
 
-    async fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError>;
+    async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError>;
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<PrivateKeySource, SignerError>;
+    ) -> Result<SecretSource, SignerError>;
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError>;
+    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError>;
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///
     /// Returns the resulting private key (encrypted)
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &PrivateKeySource,
-        new_signing_key: &PrivateKeySource,
-    ) -> Result<PrivateKeySource, SignerError>;
+        signing_key: &SecretSource,
+        new_signing_key: &SecretSource,
+    ) -> Result<SecretSource, SignerError>;
 
     /// Split a secret into threshold shares with proofs
     async fn split_secret_with_proofs(
@@ -65,15 +65,15 @@ pub trait Signer: Send + Sync + 'static {
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 
     /// Takes an encrypted private key (encrypted for us) and returns an encrypted private key (encrypted for receiver)
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedPrivateKey,
+        private_key: &EncryptedSecret,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError>;
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &PrivateKeySource,
+        private_key: &SecretSource,
     ) -> Result<PublicKey, SignerError>;
 
     /// Creates a FROST signature share for threshold signing

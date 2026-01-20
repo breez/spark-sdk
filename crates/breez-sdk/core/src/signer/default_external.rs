@@ -2,11 +2,11 @@ use crate::error::SignerError;
 #[cfg(test)]
 use crate::signer::external_types::derivation_path_to_string;
 use crate::signer::external_types::{
-    EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedPrivateKey,
+    EcdsaSignatureBytes, ExternalAggregateFrostRequest, ExternalEncryptedSecret,
     ExternalFrostCommitments, ExternalFrostSignature, ExternalFrostSignatureShare,
-    ExternalPrivateKeySource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
-    ExternalVerifiableSecretShare, PrivateKeyBytes, PublicKeyBytes, RecoverableEcdsaSignatureBytes,
-    SchnorrSignatureBytes, string_to_derivation_path,
+    ExternalSecretSource, ExternalSecretToSplit, ExternalSignFrostRequest, ExternalTreeNodeId,
+    ExternalVerifiableSecretShare, HashedMessageBytes, MessageBytes, PublicKeyBytes,
+    RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, SecretBytes, string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
@@ -77,14 +77,20 @@ impl ExternalSigner for DefaultExternalSigner {
 
     async fn sign_ecdsa(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<EcdsaSignatureBytes, SignerError> {
+        use bitcoin::secp256k1::Message;
+
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
+        let digest = message
+            .to_digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let msg = Message::from_digest(digest);
         let sig = self
             .inner
-            .sign_ecdsa(&message, &derivation_path)
+            .sign_ecdsa(msg, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(EcdsaSignatureBytes::from_signature(&sig))
@@ -92,33 +98,50 @@ impl ExternalSigner for DefaultExternalSigner {
 
     async fn sign_ecdsa_recoverable(
         &self,
-        message: Vec<u8>,
+        message: MessageBytes,
         path: String,
     ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
+        use bitcoin::secp256k1::Message;
+
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
-        let bytes = self
+        let digest = message
+            .to_digest()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let msg = Message::from_digest(digest);
+        let sig = self
             .inner
-            .sign_ecdsa_recoverable(&message, &derivation_path)
+            .sign_ecdsa_recoverable(msg, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
+
+        // Serialize the recoverable signature: recovery_id (31 + id) + 64-byte signature
+        let (recovery_id, sig_bytes) = sig.serialize_compact();
+        let mut bytes =
+            vec![
+                31u8.saturating_add(
+                    u8::try_from(recovery_id.to_i32())
+                        .map_err(|e| SignerError::Generic(e.to_string()))?,
+                ),
+            ];
+        bytes.extend_from_slice(&sig_bytes);
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
-    async fn ecies_encrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn encrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
-            .ecies_encrypt(&message, &derivation_path)
+            .encrypt_ecies(&message, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn ecies_decrypt(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
+    async fn decrypt_ecies(&self, message: Vec<u8>, path: String) -> Result<Vec<u8>, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
-            .ecies_decrypt(&message, &derivation_path)
+            .decrypt_ecies(&message, &derivation_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -138,12 +161,27 @@ impl ExternalSigner for DefaultExternalSigner {
         Ok(SchnorrSignatureBytes::from_signature(&sig))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn hmac_sha256(
+        &self,
+        message: Vec<u8>,
+        path: String,
+    ) -> Result<HashedMessageBytes, SignerError> {
+        let derivation_path =
+            string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
+        let sig = self
+            .inner
+            .hmac_sha256(&derivation_path, &message)
+            .await
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(HashedMessageBytes::from_hmac(&sig))
+    }
+
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<ExternalFrostCommitments, SignerError> {
         let commitments = self
             .inner
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         ExternalFrostCommitments::from_frost_commitments(&commitments)
@@ -165,74 +203,68 @@ impl ExternalSigner for DefaultExternalSigner {
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
-    async fn generate_random_key(&self) -> Result<ExternalPrivateKeySource, SignerError> {
+    async fn generate_random_secret(&self) -> Result<ExternalEncryptedSecret, SignerError> {
         let key = self
             .inner
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        ExternalPrivateKeySource::from_private_key_source(&key)
+        ExternalEncryptedSecret::from_encrypted_secret(&key)
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<ExternalPrivateKeySource, SignerError> {
+    ) -> Result<ExternalSecretSource, SignerError> {
         let key = self
             .inner
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        ExternalPrivateKeySource::from_private_key_source(&key)
+        ExternalSecretSource::from_secret_source(&key)
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(
-        &self,
-        index: u32,
-    ) -> Result<PrivateKeyBytes, SignerError> {
+    async fn static_deposit_secret(&self, index: u32) -> Result<SecretBytes, SignerError> {
         let secret = self
             .inner
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(PrivateKeyBytes::from_secret_key(&secret))
+        Ok(SecretBytes::from_secret_key(&secret))
     }
 
-    async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKeyBytes, SignerError> {
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKeyBytes, SignerError> {
         let pk = self
             .inner
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: ExternalPrivateKeySource,
-        new_signing_key: ExternalPrivateKeySource,
-    ) -> Result<ExternalPrivateKeySource, SignerError> {
+        signing_key: ExternalSecretSource,
+        new_signing_key: ExternalSecretSource,
+    ) -> Result<ExternalSecretSource, SignerError> {
         let sk = signing_key
-            .to_private_key_source()
+            .to_secret_source()
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         let nsk = new_signing_key
-            .to_private_key_source()
+            .to_secret_source()
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         let result = self
             .inner
-            .subtract_private_keys(&sk, &nsk)
+            .subtract_secrets(&sk, &nsk)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        ExternalPrivateKeySource::from_private_key_source(&result)
+        ExternalSecretSource::from_secret_source(&result)
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn split_secret(
+    async fn split_secret_with_proofs(
         &self,
         secret: ExternalSecretToSplit,
         threshold: u32,
@@ -256,33 +288,33 @@ impl ExternalSigner for DefaultExternalSigner {
             .collect()
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: ExternalEncryptedPrivateKey,
+        encrypted_secret: ExternalEncryptedSecret,
         receiver_public_key: PublicKeyBytes,
     ) -> Result<Vec<u8>, SignerError> {
-        let pk_internal = private_key
+        let pk_internal = encrypted_secret
             .to_encrypted_private_key()
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         let receiver_pk = receiver_public_key
             .to_public_key()
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         self.inner
-            .encrypt_private_key_for_receiver(&pk_internal, &receiver_pk)
+            .encrypt_secret_for_receiver(&pk_internal, &receiver_pk)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: ExternalPrivateKeySource,
+        secret: ExternalSecretSource,
     ) -> Result<PublicKeyBytes, SignerError> {
-        let pk_source = private_key
-            .to_private_key_source()
+        let pk_source = secret
+            .to_secret_source()
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         let pk = self
             .inner
-            .get_public_key_from_private_key_source(&pk_source)
+            .public_key_from_secret(&pk_source)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(PublicKeyBytes::from_public_key(&pk))
@@ -304,7 +336,7 @@ impl ExternalSigner for DefaultExternalSigner {
         ExternalFrostSignatureShare::from_signature_share(&share).map_err(|e| e.to_string().into())
     }
 
-    async fn aggregate_frost_signatures(
+    async fn aggregate_frost(
         &self,
         request: ExternalAggregateFrostRequest,
     ) -> Result<ExternalFrostSignature, SignerError> {
@@ -397,17 +429,21 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_sign_ecdsa() {
+        use bitcoin::secp256k1::Message;
+
         let (external, internal) = create_test_signer();
 
         let message = b"test message";
         let path = DerivationPath::from_str("m/0'/0'/0'").unwrap();
         let path_str = derivation_path_to_string(&path);
 
-        let external_sig = external
-            .sign_ecdsa(message.to_vec(), path_str)
-            .await
-            .unwrap();
-        let internal_sig = internal.sign_ecdsa(message, &path).await.unwrap();
+        // Hash the message first (as required by the new API)
+        let hash = bitcoin::hashes::sha256::Hash::hash(message);
+        let msg_bytes = MessageBytes::new(hash.to_byte_array().to_vec());
+        let msg = Message::from_digest(hash.to_byte_array());
+
+        let external_sig = external.sign_ecdsa(msg_bytes, path_str).await.unwrap();
+        let internal_sig = internal.sign_ecdsa(msg, &path).await.unwrap();
 
         assert_eq!(
             external_sig.to_signature().unwrap(),
@@ -418,29 +454,41 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_sign_ecdsa_recoverable() {
+        use bitcoin::secp256k1::Message;
+
         let (external, internal) = create_test_signer();
 
         let message = b"test message";
         let path = DerivationPath::from_str("m/0'/0'/0'").unwrap();
         let path_str = derivation_path_to_string(&path);
 
+        // Double-hash the message (as it was done internally before)
+        let hash = bitcoin::hashes::sha256::Hash::hash(
+            bitcoin::hashes::sha256::Hash::hash(message).as_ref(),
+        );
+        let msg_bytes = MessageBytes::new(hash.to_byte_array().to_vec());
+        let msg = Message::from_digest(hash.to_byte_array());
+
         let external_sig = external
-            .sign_ecdsa_recoverable(message.to_vec(), path_str)
+            .sign_ecdsa_recoverable(msg_bytes, path_str)
             .await
             .unwrap();
-        let internal_sig = internal
-            .sign_ecdsa_recoverable(message, &path)
-            .await
-            .unwrap();
+        let internal_sig = internal.sign_ecdsa_recoverable(msg, &path).await.unwrap();
+
+        // Serialize internal signature for comparison
+        let (recovery_id, sig_bytes) = internal_sig.serialize_compact();
+        let mut internal_bytes =
+            vec![31u8.saturating_add(u8::try_from(recovery_id.to_i32()).unwrap())];
+        internal_bytes.extend_from_slice(&sig_bytes);
 
         assert_eq!(
-            external_sig.bytes, internal_sig,
+            external_sig.bytes, internal_bytes,
             "Recoverable ECDSA signatures should match"
         );
     }
 
     #[macros::async_test_all]
-    async fn test_ecies_encrypt_decrypt() {
+    async fn test_encrypt_decrypt_ecies() {
         let (external, internal) = create_test_signer();
 
         let message = b"secret message";
@@ -449,18 +497,18 @@ mod tests {
 
         // Test encryption
         let external_encrypted = external
-            .ecies_encrypt(message.to_vec(), path_str.clone())
+            .encrypt_ecies(message.to_vec(), path_str.clone())
             .await
             .unwrap();
-        let internal_encrypted = internal.ecies_encrypt(message, &path).await.unwrap();
+        let internal_encrypted = internal.encrypt_ecies(message, &path).await.unwrap();
 
         // Both should be able to decrypt
         let external_decrypted = external
-            .ecies_decrypt(external_encrypted.clone(), path_str.clone())
+            .decrypt_ecies(external_encrypted.clone(), path_str.clone())
             .await
             .unwrap();
         let internal_decrypted = internal
-            .ecies_decrypt(&internal_encrypted, &path)
+            .decrypt_ecies(&internal_encrypted, &path)
             .await
             .unwrap();
 
@@ -538,29 +586,21 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_generate_random_key() {
+    async fn test_generate_random_secret() {
         let (external, _internal) = create_test_signer();
 
-        let key1 = external.generate_random_key().await.unwrap();
-        let key2 = external.generate_random_key().await.unwrap();
+        let key1 = external.generate_random_secret().await.unwrap();
+        let key2 = external.generate_random_secret().await.unwrap();
 
         // Verify we can convert them
-        let _internal_key1 = key1.to_private_key_source().unwrap();
-        let _internal_key2 = key2.to_private_key_source().unwrap();
+        let _internal_key1 = key1.to_encrypted_private_key().unwrap();
+        let _internal_key2 = key2.to_encrypted_private_key().unwrap();
 
         // Random keys should be different (encrypted, so ciphertext should differ)
-        match (&key1, &key2) {
-            (
-                ExternalPrivateKeySource::Encrypted { key: k1 },
-                ExternalPrivateKeySource::Encrypted { key: k2 },
-            ) => {
-                assert_ne!(
-                    k1.ciphertext, k2.ciphertext,
-                    "Random keys should be different"
-                );
-            }
-            _ => panic!("Random keys should be encrypted"),
-        }
+        assert_ne!(
+            key1.ciphertext, key2.ciphertext,
+            "Random keys should be different"
+        );
     }
 
     #[macros::async_test_all]
@@ -571,33 +611,27 @@ mod tests {
 
         // Test private key source
         let external_source = external
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .unwrap();
         let internal_source = internal
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .unwrap();
 
         // Static deposit keys are encrypted, not derived
         assert!(matches!(
             external_source,
-            ExternalPrivateKeySource::Encrypted { .. }
+            ExternalSecretSource::Encrypted { .. }
         ));
         assert!(matches!(
             internal_source,
-            spark_wallet::PrivateKeySource::Encrypted(_)
+            spark_wallet::SecretSource::Encrypted(_)
         ));
 
         // Test private key
-        let ext_secret_key = external
-            .get_static_deposit_private_key(index)
-            .await
-            .unwrap();
-        let int_secret_key = internal
-            .get_static_deposit_private_key(index)
-            .await
-            .unwrap();
+        let ext_secret_key = external.static_deposit_secret(index).await.unwrap();
+        let int_secret_key = internal.static_deposit_secret(index).await.unwrap();
 
         assert_eq!(
             ext_secret_key.bytes,
@@ -606,8 +640,8 @@ mod tests {
         );
 
         // Test public key
-        let ext_public_key = external.get_static_deposit_public_key(index).await.unwrap();
-        let int_public_key = internal.get_static_deposit_public_key(index).await.unwrap();
+        let ext_public_key = external.static_deposit_signing_key(index).await.unwrap();
+        let int_public_key = internal.static_deposit_signing_key(index).await.unwrap();
 
         assert_eq!(
             ext_public_key.to_public_key().unwrap(),
@@ -617,22 +651,19 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_get_public_key_from_private_key_source() {
+    async fn test_public_key_from_secret() {
         let (external, internal) = create_test_signer();
 
-        let source = external
-            .get_static_deposit_private_key_source(0)
-            .await
-            .unwrap();
+        let source = external.static_deposit_secret_encrypted(0).await.unwrap();
 
         let external_pk = external
-            .get_public_key_from_private_key_source(source.clone())
+            .public_key_from_secret(source.clone())
             .await
             .unwrap();
 
-        let internal_source = source.to_private_key_source().unwrap();
+        let internal_source = source.to_secret_source().unwrap();
         let internal_pk = internal
-            .get_public_key_from_private_key_source(&internal_source)
+            .public_key_from_secret(&internal_source)
             .await
             .unwrap();
 
@@ -650,14 +681,15 @@ mod tests {
         let (external, internal) = create_test_signer();
 
         // Generate commitments for both signers
-        let _external_commitments = external.generate_frost_signing_commitments().await.unwrap();
+        let _external_commitments = external.generate_random_signing_commitment().await.unwrap();
         let internal_commitments_full =
-            internal.generate_frost_signing_commitments().await.unwrap();
+            internal.generate_random_signing_commitment().await.unwrap();
 
         // Create a simple FROST signing request
         let message = b"test frost signing message";
         let public_key = internal.identity_public_key().unwrap();
-        let private_key_source = internal.generate_random_key().await.unwrap();
+        let private_key_encrypted = internal.generate_random_secret().await.unwrap();
+        let private_key_source = spark_wallet::SecretSource::Encrypted(private_key_encrypted);
         let verifying_key = public_key;
 
         // Create statechain commitments (using just one participant for simplicity)

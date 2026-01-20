@@ -606,7 +606,7 @@ impl SparkWallet {
     ) -> Result<Address, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
         let signing_public_key = if is_static {
-            self.signer.get_static_deposit_public_key(0).await?
+            self.signer.static_deposit_signing_key(0).await?
         } else {
             self.signer.get_public_key_for_node(&leaf_id).await?
         };

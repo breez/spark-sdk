@@ -1,7 +1,6 @@
 use spark_wallet::{
-    AggregateFrostRequest, EncryptedPrivateKey, FrostSigningCommitmentsWithNonces,
-    PrivateKeySource, SecretToSplit, SignFrostRequest, Signer, SignerError, TreeNodeId,
-    VerifiableSecretShare,
+    AggregateFrostRequest, EncryptedSecret, FrostSigningCommitmentsWithNonces, SecretSource,
+    SecretToSplit, SignFrostRequest, Signer, SignerError, TreeNodeId, VerifiableSecretShare,
 };
 use std::sync::Arc;
 
@@ -29,9 +28,14 @@ impl Signer for SparkSigner {
         &self,
         message: &[u8],
     ) -> Result<secp256k1::ecdsa::Signature, SignerError> {
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::Message;
+
         let identity_path = DerivationPath::master();
+        let hash = sha256::Hash::hash(message);
+        let msg = Message::from_digest(hash.to_byte_array());
         self.signer
-            .sign_ecdsa(message, &identity_path)
+            .sign_ecdsa(msg, &identity_path)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -47,11 +51,11 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn generate_frost_signing_commitments(
+    async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {
         self.signer
-            .generate_frost_signing_commitments()
+            .generate_random_signing_commitment()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -63,9 +67,9 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn generate_random_key(&self) -> Result<PrivateKeySource, SignerError> {
+    async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError> {
         self.signer
-            .generate_random_key()
+            .generate_random_secret()
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -76,37 +80,37 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key_source(
+    async fn static_deposit_secret_encrypted(
         &self,
         index: u32,
-    ) -> Result<PrivateKeySource, SignerError> {
+    ) -> Result<SecretSource, SignerError> {
         self.signer
-            .get_static_deposit_private_key_source(index)
+            .static_deposit_secret_encrypted(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_private_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError> {
         self.signer
-            .get_static_deposit_private_key(index)
+            .static_deposit_secret(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError> {
         self.signer
-            .get_static_deposit_public_key(index)
+            .static_deposit_signing_key(index)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn subtract_private_keys(
+    async fn subtract_secrets(
         &self,
-        signing_key: &PrivateKeySource,
-        new_signing_key: &PrivateKeySource,
-    ) -> Result<PrivateKeySource, SignerError> {
+        signing_key: &SecretSource,
+        new_signing_key: &SecretSource,
+    ) -> Result<SecretSource, SignerError> {
         self.signer
-            .subtract_private_keys(signing_key, new_signing_key)
+            .subtract_secrets(signing_key, new_signing_key)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
@@ -123,23 +127,23 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn encrypt_private_key_for_receiver(
+    async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedPrivateKey,
+        private_key: &EncryptedSecret,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError> {
         self.signer
-            .encrypt_private_key_for_receiver(private_key, receiver_public_key)
+            .encrypt_secret_for_receiver(private_key, receiver_public_key)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
-    async fn get_public_key_from_private_key_source(
+    async fn public_key_from_secret(
         &self,
-        private_key: &PrivateKeySource,
+        private_key: &SecretSource,
     ) -> Result<PublicKey, SignerError> {
         self.signer
-            .get_public_key_from_private_key_source(private_key)
+            .public_key_from_secret(private_key)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))
     }

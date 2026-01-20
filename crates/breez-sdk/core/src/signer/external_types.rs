@@ -3,6 +3,7 @@
 //! These types are designed to be simpler and FFI-safe, using basic types like
 //! Vec<u8> and String instead of complex Rust types.
 use bitcoin::bip32::DerivationPath;
+use bitcoin::hashes::{Hash, Hmac, sha256};
 use bitcoin::secp256k1;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -69,6 +70,47 @@ impl SchnorrSignatureBytes {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HashedMessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl HashedMessageBytes {
+    pub fn from_hmac(hmac: &Hmac<sha256::Hash>) -> Self {
+        Self {
+            bytes: hmac.to_byte_array().to_vec(),
+        }
+    }
+
+    pub fn to_hmac(&self) -> Result<Hmac<sha256::Hash>, SdkError> {
+        Hmac::<sha256::Hash>::from_slice(&self.bytes)
+            .map_err(|e| SdkError::Generic(format!("Invalid HMAC bytes: {e}")))
+    }
+}
+
+/// FFI-safe representation of a 32-byte message digest for ECDSA signing
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct MessageBytes {
+    pub bytes: Vec<u8>,
+}
+
+impl MessageBytes {
+    /// Create `MessageBytes` from a 32-byte digest
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Convert to 32-byte array for `secp256k1::Message`
+    pub fn to_digest(&self) -> Result<[u8; 32], SdkError> {
+        self.bytes
+            .clone()
+            .try_into()
+            .map_err(|_| SdkError::Generic("Message digest must be 32 bytes".to_string()))
+    }
+}
+
 /// FFI-safe representation of a recoverable ECDSA signature (65 bytes: 1 recovery byte + 64 signature bytes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -85,11 +127,11 @@ impl RecoverableEcdsaSignatureBytes {
 /// FFI-safe representation of a private key (32 bytes)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PrivateKeyBytes {
+pub struct SecretBytes {
     pub bytes: Vec<u8>,
 }
 
-impl PrivateKeyBytes {
+impl SecretBytes {
     pub fn from_secret_key(sk: &secp256k1::SecretKey) -> Self {
         Self {
             bytes: sk.secret_bytes().to_vec(),
@@ -131,60 +173,54 @@ impl ExternalTreeNodeId {
     }
 }
 
-/// FFI-safe representation of `spark_wallet::EncryptedPrivateKey`
+/// FFI-safe representation of `spark_wallet::EncryptedSecret`
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ExternalEncryptedPrivateKey {
+pub struct ExternalEncryptedSecret {
     /// The encrypted ciphertext
     pub ciphertext: Vec<u8>,
 }
 
-impl ExternalEncryptedPrivateKey {
-    pub fn from_encrypted_private_key(
-        key: &spark_wallet::EncryptedPrivateKey,
-    ) -> Result<Self, SdkError> {
+impl ExternalEncryptedSecret {
+    pub fn from_encrypted_secret(key: &spark_wallet::EncryptedSecret) -> Result<Self, SdkError> {
         Ok(Self {
             ciphertext: key.as_slice().to_vec(),
         })
     }
 
-    pub fn to_encrypted_private_key(&self) -> Result<spark_wallet::EncryptedPrivateKey, SdkError> {
-        Ok(spark_wallet::EncryptedPrivateKey::new(
-            self.ciphertext.clone(),
-        ))
+    pub fn to_encrypted_private_key(&self) -> Result<spark_wallet::EncryptedSecret, SdkError> {
+        Ok(spark_wallet::EncryptedSecret::new(self.ciphertext.clone()))
     }
 }
 
-/// FFI-safe representation of `spark_wallet::PrivateKeySource`
+/// FFI-safe representation of `spark_wallet::SecretSource`
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ExternalPrivateKeySource {
+pub enum ExternalSecretSource {
     /// Private key derived from a tree node
     Derived { node_id: ExternalTreeNodeId },
     /// Encrypted private key
-    Encrypted { key: ExternalEncryptedPrivateKey },
+    Encrypted { key: ExternalEncryptedSecret },
 }
 
-impl ExternalPrivateKeySource {
-    pub fn from_private_key_source(
-        source: &spark_wallet::PrivateKeySource,
-    ) -> Result<Self, SdkError> {
+impl ExternalSecretSource {
+    pub fn from_secret_source(source: &spark_wallet::SecretSource) -> Result<Self, SdkError> {
         match source {
-            spark_wallet::PrivateKeySource::Derived(node_id) => Ok(Self::Derived {
+            spark_wallet::SecretSource::Derived(node_id) => Ok(Self::Derived {
                 node_id: ExternalTreeNodeId::from_tree_node_id(node_id)?,
             }),
-            spark_wallet::PrivateKeySource::Encrypted(key) => Ok(Self::Encrypted {
-                key: ExternalEncryptedPrivateKey::from_encrypted_private_key(key)?,
+            spark_wallet::SecretSource::Encrypted(key) => Ok(Self::Encrypted {
+                key: ExternalEncryptedSecret::from_encrypted_secret(key)?,
             }),
         }
     }
 
-    pub fn to_private_key_source(&self) -> Result<spark_wallet::PrivateKeySource, SdkError> {
+    pub fn to_secret_source(&self) -> Result<spark_wallet::SecretSource, SdkError> {
         match self {
-            Self::Derived { node_id } => Ok(spark_wallet::PrivateKeySource::Derived(
+            Self::Derived { node_id } => Ok(spark_wallet::SecretSource::Derived(
                 node_id.to_tree_node_id()?,
             )),
-            Self::Encrypted { key } => Ok(spark_wallet::PrivateKeySource::Encrypted(
+            Self::Encrypted { key } => Ok(spark_wallet::SecretSource::Encrypted(
                 key.to_encrypted_private_key()?,
             )),
         }
@@ -195,8 +231,8 @@ impl ExternalPrivateKeySource {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ExternalSecretToSplit {
-    /// A private key to split
-    PrivateKey { source: ExternalPrivateKeySource },
+    /// A secret source to split
+    SecretSource { source: ExternalSecretSource },
     /// A preimage to split (32 bytes)
     Preimage { data: Vec<u8> },
 }
@@ -204,8 +240,8 @@ pub enum ExternalSecretToSplit {
 impl ExternalSecretToSplit {
     pub fn from_secret_to_split(secret: &spark_wallet::SecretToSplit) -> Result<Self, SdkError> {
         match secret {
-            spark_wallet::SecretToSplit::PrivateKey(source) => Ok(Self::PrivateKey {
-                source: ExternalPrivateKeySource::from_private_key_source(source)?,
+            spark_wallet::SecretToSplit::SecretSource(source) => Ok(Self::SecretSource {
+                source: ExternalSecretSource::from_secret_source(source)?,
             }),
             spark_wallet::SecretToSplit::Preimage(data) => {
                 Ok(Self::Preimage { data: data.clone() })
@@ -215,8 +251,8 @@ impl ExternalSecretToSplit {
 
     pub fn to_secret_to_split(&self) -> Result<spark_wallet::SecretToSplit, SdkError> {
         match self {
-            Self::PrivateKey { source } => Ok(spark_wallet::SecretToSplit::PrivateKey(
-                source.to_private_key_source()?,
+            Self::SecretSource { source } => Ok(spark_wallet::SecretToSplit::SecretSource(
+                source.to_secret_source()?,
             )),
             Self::Preimage { data } => Ok(spark_wallet::SecretToSplit::Preimage(data.clone())),
         }
@@ -516,7 +552,7 @@ pub struct ExternalSignFrostRequest {
     /// The public key (33 bytes compressed)
     pub public_key: Vec<u8>,
     /// The private key source
-    pub private_key: ExternalPrivateKeySource,
+    pub secret: ExternalSecretSource,
     /// The verifying key (33 bytes compressed)
     pub verifying_key: Vec<u8>,
     /// The self nonce commitment
@@ -545,7 +581,7 @@ impl ExternalSignFrostRequest {
         Ok(Self {
             message: request.message.to_vec(),
             public_key: request.public_key.serialize().to_vec(),
-            private_key: ExternalPrivateKeySource::from_private_key_source(request.private_key)?,
+            secret: ExternalSecretSource::from_secret_source(request.private_key)?,
             verifying_key: request.verifying_key.serialize().to_vec(),
             self_nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
                 request.self_nonce_commitment,
@@ -590,7 +626,7 @@ impl ExternalSignFrostRequest {
         Ok(spark_wallet::SignFrostRequest {
             message: Box::leak(self.message.clone().into_boxed_slice()),
             public_key: Box::leak(Box::new(public_key)),
-            private_key: Box::leak(Box::new(self.private_key.to_private_key_source()?)),
+            private_key: Box::leak(Box::new(self.secret.to_secret_source()?)),
             verifying_key: Box::leak(Box::new(verifying_key)),
             self_nonce_commitment: Box::leak(Box::new(
                 self.self_nonce_commitment.to_frost_commitments()?,

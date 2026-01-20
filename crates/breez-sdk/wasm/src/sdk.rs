@@ -154,6 +154,14 @@ impl BreezSdk {
         Ok(self.sdk.lnurl_withdraw(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "lnurlAuth")]
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> WasmResult<LnurlCallbackStatus> {
+        Ok(self.sdk.lnurl_auth(request_data.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "sendPayment")]
     pub async fn send_payment(
         &self,

@@ -28,9 +28,9 @@ pub struct VerifiableSecretShare {
 }
 
 #[derive(Clone, Debug)]
-pub struct EncryptedPrivateKey(Vec<u8>);
+pub struct EncryptedSecret(Vec<u8>);
 
-impl EncryptedPrivateKey {
+impl EncryptedSecret {
     pub fn new(ciphertext: Vec<u8>) -> Self {
         Self(ciphertext)
     }
@@ -41,19 +41,19 @@ impl EncryptedPrivateKey {
 }
 
 #[derive(Clone, Debug)]
-pub enum PrivateKeySource {
+pub enum SecretSource {
     Derived(TreeNodeId),
-    Encrypted(EncryptedPrivateKey),
+    Encrypted(EncryptedSecret),
 }
 
-impl PrivateKeySource {
+impl SecretSource {
     pub fn new_encrypted(ciphertext: Vec<u8>) -> Self {
-        Self::Encrypted(EncryptedPrivateKey::new(ciphertext))
+        Self::Encrypted(EncryptedSecret::new(ciphertext))
     }
 }
 
 pub enum SecretToSplit {
-    PrivateKey(PrivateKeySource),
+    SecretSource(SecretSource),
     Preimage(Vec<u8>),
 }
 
@@ -66,7 +66,7 @@ pub struct FrostSigningCommitmentsWithNonces {
 pub struct SignFrostRequest<'a> {
     pub message: &'a [u8],
     pub public_key: &'a PublicKey,
-    pub private_key: &'a PrivateKeySource,
+    pub private_key: &'a SecretSource,
     pub verifying_key: &'a PublicKey,
     pub self_nonce_commitment: &'a FrostSigningCommitmentsWithNonces,
     pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
