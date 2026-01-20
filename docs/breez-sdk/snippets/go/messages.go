@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -17,7 +18,12 @@ func SignMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.SignMessageRes
 		Compact: compact,
 	}
 	signMessageResponse, err := sdk.SignMessage(signMessageRequest)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -42,7 +48,12 @@ func CheckMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.CheckMessageR
 		Signature: signature,
 	}
 	checkMessageResponse, err := sdk.CheckMessage(checkMessageRequest)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

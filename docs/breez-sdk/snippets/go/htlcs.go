@@ -3,6 +3,7 @@ package example
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log"
 	"math/big"
 
@@ -20,7 +21,12 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 	}
 	prepareResponse, err := sdk.PrepareSendPayment(prepareRequest)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -54,7 +60,12 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 	}
 	sendResponse, err := sdk.SendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -87,7 +98,12 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 
 	response, err := sdk.ListPayments(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -104,7 +120,12 @@ func ClaimHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, 
 	}
 	response, err := sdk.ClaimHtlcPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

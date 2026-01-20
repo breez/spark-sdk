@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -33,6 +34,11 @@ func authenticate(sdk *breez_sdk_spark.BreezSdk, requestData breez_sdk_spark.Lnu
 	// Perform LNURL authentication
 	result, err := sdk.LnurlAuth(requestData)
 	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		log.Printf("Authentication error: %v", err)
 		return
 	}

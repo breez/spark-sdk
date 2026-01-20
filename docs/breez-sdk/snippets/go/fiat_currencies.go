@@ -1,6 +1,8 @@
 package example
 
 import (
+	"errors"
+
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
@@ -8,7 +10,12 @@ func ListFiatCurrencies(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.FiatC
 	// ANCHOR: list-fiat-currencies
 	response, err := sdk.ListFiatCurrencies()
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	// ANCHOR_END: list-fiat-currencies
@@ -19,7 +26,12 @@ func ListFiatRates(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Rate, erro
 	// ANCHOR: list-fiat-rates
 	response, err := sdk.ListFiatRates()
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	// ANCHOR_END: list-fiat-rates

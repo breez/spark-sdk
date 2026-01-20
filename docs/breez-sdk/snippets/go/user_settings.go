@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -10,7 +11,12 @@ func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: get-user-settings
 	userSettings, err := sdk.GetUserSettings()
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -26,7 +32,12 @@ func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	// ANCHOR_END: update-user-settings

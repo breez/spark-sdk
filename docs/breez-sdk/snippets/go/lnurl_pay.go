@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -15,7 +16,12 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 	input, err := sdk.Parse(lnurlPayUrl)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -45,7 +51,12 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 		prepareResponse, err := sdk.PrepareLnurlPay(request)
 
-		if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+		if err != nil {
+			var sdkErr *breez_sdk_spark.SdkError
+			if errors.As(err, &sdkErr) {
+				// Handle SdkError - can inspect specific variants if needed
+				// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+			}
 			return nil, err
 		}
 
@@ -72,7 +83,12 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 	}
 
 	response, err := sdk.LnurlPay(request)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 

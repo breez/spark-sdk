@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 	"math/big"
 
@@ -24,7 +25,12 @@ func CreateToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Tok
 		MaxSupply:   new(big.Int).SetInt64(1_000_000),
 	}
 	tokenMetadata, err := tokenIssuer.CreateIssuerToken(request)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	log.Printf("Token identifier: %v", tokenMetadata.Identifier)
@@ -66,7 +72,12 @@ func MintToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payme
 		Amount: new(big.Int).SetInt64(1_000),
 	}
 	payment, err := tokenIssuer.MintIssuerToken(request)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	// ANCHOR_END: mint-token
@@ -79,7 +90,12 @@ func BurnToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payme
 		Amount: new(big.Int).SetInt64(1_000),
 	}
 	payment, err := tokenIssuer.BurnIssuerToken(request)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	// ANCHOR_END: burn-token
@@ -89,13 +105,23 @@ func BurnToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payme
 func GetTokenMetadata(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.TokenMetadata, error) {
 	// ANCHOR: get-token-metadata
 	tokenBalance, err := tokenIssuer.GetIssuerTokenBalance()
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	log.Printf("Token balance: %v", tokenBalance.Balance)
 
 	tokenMetadata, err := tokenIssuer.GetIssuerTokenMetadata()
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 	log.Printf("Token ticker: %v", tokenMetadata.Ticker)
@@ -111,7 +137,12 @@ func FreezeToken(tokenIssuer *breez_sdk_spark.TokenIssuer) error {
 		Address: sparkAddress,
 	}
 	freezeResponse, err := tokenIssuer.FreezeIssuerToken(freezeRequest)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -120,7 +151,12 @@ func FreezeToken(tokenIssuer *breez_sdk_spark.TokenIssuer) error {
 		Address: sparkAddress,
 	}
 	unfreezeResponse, err := tokenIssuer.UnfreezeIssuerToken(unfreezeRequest)
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 	// ANCHOR_END: freeze-token

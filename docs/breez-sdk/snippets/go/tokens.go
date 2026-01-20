@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 	"math/big"
 
@@ -16,7 +17,12 @@ func FetchTokenBalances(sdk *breez_sdk_spark.BreezSdk) error {
 		EnsureSynced: &ensureSynced,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -40,7 +46,12 @@ func FetchTokenMetadata(sdk *breez_sdk_spark.BreezSdk) error {
 		TokenIdentifiers: tokenIdentifiers,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -78,7 +89,12 @@ func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_
 
 	response, err := sdk.ReceivePayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
@@ -104,7 +120,12 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 		TokenIdentifier: &tokenIdentifier,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -124,7 +145,12 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 		Options:         nil,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -143,7 +169,12 @@ func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
 		TokenIdentifier: &tokenIdentifier,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -163,7 +194,12 @@ func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
 		TokenIdentifier: nil,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
@@ -200,7 +236,12 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 		ConversionOptions: conversionOptions,
 	})
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return err
 	}
 
