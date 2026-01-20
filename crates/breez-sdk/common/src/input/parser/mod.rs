@@ -883,6 +883,5 @@ fn parse_silent_payment_address(
     None
 }
 
-
 #[cfg(test)]
 mod tests;

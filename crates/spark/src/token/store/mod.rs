@@ -428,6 +428,5 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     }
 }
 
-
 #[cfg(test)]
 mod tests;

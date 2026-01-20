@@ -493,6 +493,5 @@ pub(crate) struct StaticDepositAddress {
     pub(crate) address: String,
 }
 
-
 #[cfg(feature = "test-utils")]
 pub mod tests;
