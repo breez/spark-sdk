@@ -26,7 +26,15 @@ POST_MODE=$(echo "$ARGUMENTS" | grep -q '\-\-post' && echo "true" || echo "false
 
 # Default to current branch's PR
 if [ -z "$PR_NUMBER" ]; then
-  PR_NUMBER=$(gh pr view --json number -q .number)
+  PR_NUMBER=$(gh pr view --json number -q .number 2>&1)
+  if [[ "$PR_NUMBER" == *"no pull requests found"* ]]; then
+    echo "❌ No PR found for current branch '$(git branch --show-current)'"
+    echo ""
+    echo "The /review command requires an open PR. Options:"
+    echo "  1. Push your branch and create a PR first"
+    echo "  2. Specify a PR number: /review <pr-number>"
+    exit 1
+  fi
 fi
 
 # Get PR details, CI status, and existing feedback
