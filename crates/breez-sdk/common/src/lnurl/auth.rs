@@ -1,8 +1,8 @@
 use bitcoin::bip32::ChildNumber;
 use bitcoin::secp256k1::PublicKey;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use url::Url;
 
 use crate::rest::{RestClient, RestResponse, parse_json};
 
@@ -89,7 +89,7 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     Ok(parse_json(&body)?)
 }
 
-pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
+pub fn validate_request(url: &url::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
     let query_pairs = url.query_pairs();
 
     let k1 = query_pairs

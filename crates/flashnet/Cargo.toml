@@ -8,13 +8,9 @@ publish = false
 workspace = true
 
 [features]
-default = ["default-tls"]
+default = []
 # Enable browser wasm-pack tests
 browser-tests = []
-# TLS features
-default-tls = ["reqwest/default-tls"]
-rustls-tls = ["reqwest/rustls-tls"]
-native-tls = ["reqwest/native-tls"]
 
 [dependencies]
 bitcoin.workspace = true
@@ -22,7 +18,6 @@ hex.workspace = true
 jwt = "0.16.0"
 macros.workspace = true
 rand.workspace = true
-reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_qs = "1.0.0-rc.3"
@@ -36,10 +31,12 @@ web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+bitreq.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+reqwest.workspace = true
 getrandom = { version = "0.2", features = ["js"] }
 tokio = { workspace = true, features = ["macros"] }
 

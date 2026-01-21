@@ -36,6 +36,20 @@ impl FlashnetError {
     }
 }
 
+// Native: bitreq error conversion
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl From<bitreq::Error> for FlashnetError {
+    fn from(err: bitreq::Error) -> Self {
+        let err_str = format!("{err:?}");
+        Self::Network {
+            reason: err_str,
+            code: None,
+        }
+    }
+}
+
+// WASM: reqwest error conversion
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 impl From<reqwest::Error> for FlashnetError {
     fn from(err: reqwest::Error) -> Self {
         let mut err_str = err.to_string();

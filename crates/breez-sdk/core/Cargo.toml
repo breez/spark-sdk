@@ -4,7 +4,6 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = ["default-tls"]
 browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "dep:uniffi",
@@ -12,10 +11,6 @@ uniffi = [
 ]
 openssl-vendored = ["openssl"]
 test-utils = []
-# TLS features
-default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls", "flashnet/default-tls"]
-rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls", "flashnet/rustls-tls"]
-native-tls = ["reqwest/native-tls", "breez-sdk-common/native-tls", "flashnet/native-tls"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -39,7 +34,6 @@ lnurl-models.workspace = true
 macros.workspace = true
 nostr.workspace = true
 openssl = { workspace = true, optional = true }
-reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-wallet.workspace = true

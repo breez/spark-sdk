@@ -5,7 +5,6 @@ use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
 };
 use clap::Subcommand;
-use reqwest::header::CONTENT_TYPE;
 use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
 use crate::config::Config;
@@ -166,22 +165,32 @@ pub async fn handle_command(
     Ok(())
 }
 
+fn make_basic_auth_header(username: &str, password: &str) -> String {
+    use std::io::Write;
+    let credentials = format!("{username}:{password}");
+    let mut encoder =
+        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
+    encoder.write_all(credentials.as_bytes()).unwrap();
+    format!("Basic {}", encoder.into_inner())
+}
+
 async fn get_transaction(
     config: &Config,
     txid: String,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
     let url = format!("{}/tx/{}/hex", config.mempool_url, txid);
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .basic_auth(
-            config.mempool_username.clone(),
-            Some(config.mempool_password.clone()),
-        )
-        .send()
-        .await?;
-    let hex = response.text().await?;
-    let tx = deserialize_hex(&hex)?;
+    let auth_header = make_basic_auth_header(&config.mempool_username, &config.mempool_password);
+
+    let response = bitreq::get(&url)
+        .with_header("Authorization", &auth_header)
+        .send_async()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e:?}"))?;
+
+    let hex = response
+        .as_str()
+        .map_err(|e| format!("Failed to read response: {e:?}"))?;
+    let tx = deserialize_hex(hex)?;
     Ok(tx)
 }
 
@@ -191,19 +200,20 @@ async fn broadcast_transaction(
 ) -> Result<Txid, Box<dyn std::error::Error>> {
     let tx_hex = serialize_hex(&tx);
     let url = format!("{}/tx", config.mempool_url);
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&url)
-        .basic_auth(
-            config.mempool_username.clone(),
-            Some(config.mempool_password.clone()),
-        )
-        .header(CONTENT_TYPE, "text/plain")
-        .body(tx_hex.clone())
-        .send()
-        .await?;
-    let text = response.text().await?;
-    let txid = Txid::from_str(&text).map_err(|_| {
+    let auth_header = make_basic_auth_header(&config.mempool_username, &config.mempool_password);
+
+    let response = bitreq::post(&url)
+        .with_header("Authorization", &auth_header)
+        .with_header("Content-Type", "text/plain")
+        .with_body(tx_hex.clone())
+        .send_async()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e:?}"))?;
+
+    let text = response
+        .as_str()
+        .map_err(|e| format!("Failed to read response: {e:?}"))?;
+    let txid = Txid::from_str(text).map_err(|_| {
         println!("Refund tx hex: {tx_hex}");
         format!("Failed to parse txid from response: {text}")
     })?;

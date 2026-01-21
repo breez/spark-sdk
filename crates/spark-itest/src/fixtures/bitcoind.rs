@@ -4,7 +4,6 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use testcontainers::{
@@ -34,7 +33,6 @@ pub struct BitcoindFixture {
     pub rpcuser: String,
     pub rpcpassword: String,
     pub mining_address: Address,
-    client: Client,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -42,6 +40,15 @@ struct RpcResponse<T> {
     result: Option<T>,
     error: Option<Value>,
     // id: Value,
+}
+
+fn make_basic_auth_header(username: &str, password: &str) -> String {
+    use std::io::Write;
+    let credentials = format!("{username}:{password}");
+    let mut encoder =
+        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
+    encoder.write_all(credentials.as_bytes()).unwrap();
+    format!("Basic {}", encoder.into_inner())
 }
 
 impl BitcoindFixture {
@@ -104,7 +111,6 @@ impl BitcoindFixture {
             rpcpassword: REGTEST_RPC_PASSWORD.to_string(),
             mining_address: Address::from_str(DEFAULT_MINING_ADDRESS)?
                 .require_network(Network::Regtest)?,
-            client: Client::new(),
         };
 
         info!("Created bitcoind container. Ensure wallet created.");
@@ -245,22 +251,30 @@ impl BitcoindFixture {
             "params": params,
         });
 
-        let response = self
-            .client
-            .post(&self.rpc_url)
-            .basic_auth(&self.rpcuser, Some(&self.rpcpassword))
-            .json(&request)
-            .send()
-            .await?;
+        let auth_header = make_basic_auth_header(&self.rpcuser, &self.rpcpassword);
+        let body = serde_json::to_string(&request)?;
 
-        if !response.status().is_success() {
+        let response = bitreq::post(&self.rpc_url)
+            .with_header("Authorization", &auth_header)
+            .with_header("Content-Type", "application/json")
+            .with_body(body)
+            .send_async()
+            .await
+            .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let status = response.status_code as u16;
+        if !(200..300).contains(&status) {
             return Err(anyhow::anyhow!(
                 "bitcoind returned error status: {}",
-                response.status()
+                status
             ));
         }
 
-        let response: RpcResponse<T> = response.json().await?;
+        let response_text = response
+            .as_str()
+            .map_err(|e| anyhow::anyhow!("Failed to read response: {e:?}"))?;
+        let response: RpcResponse<T> = serde_json::from_str(response_text)?;
         match (response.result, response.error) {
             (Some(result), None) => Ok(result),
             (None, Some(error)) => Err(anyhow::anyhow!("RPC error: {:?}", error)),

@@ -1,8 +1,6 @@
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
-use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
 
@@ -48,7 +46,6 @@ impl Default for FaucetConfig {
 
 /// Client for interacting with a regtest faucet
 pub struct RegtestFaucet {
-    client: Client,
     config: FaucetConfig,
 }
 
@@ -87,6 +84,15 @@ struct GraphQLError {
     message: String,
 }
 
+fn make_basic_auth_header(username: &str, password: &str) -> String {
+    use std::io::Write;
+    let credentials = format!("{username}:{password}");
+    let mut encoder =
+        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
+    encoder.write_all(credentials.as_bytes()).unwrap();
+    format!("Basic {}", encoder.into_inner())
+}
+
 impl RegtestFaucet {
     /// Create a new faucet client with default configuration
     pub fn new() -> Result<Self> {
@@ -95,13 +101,8 @@ impl RegtestFaucet {
 
     /// Create a new faucet client with custom configuration
     pub fn with_config(config: FaucetConfig) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("Failed to create HTTP client")?;
-
         info!("Initialized faucet client with URL: {}", config.url);
-        Ok(Self { client, config })
+        Ok(Self { config })
     }
 
     /// Fund an address with the specified amount
@@ -138,25 +139,35 @@ impl RegtestFaucet {
 
         debug!("Sending GraphQL request: {:?}", request_body);
 
-        let mut req = self.client.post(&self.config.url).json(&request_body);
+        let body_json =
+            serde_json::to_string(&request_body).context("Failed to serialize request body")?;
+
+        let mut req = bitreq::post(&self.config.url)
+            .with_header("Content-Type", "application/json")
+            .with_body(body_json)
+            .with_timeout(30);
 
         // Add basic authentication if username and password are configured
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-            req = req.basic_auth(username, Some(password));
+            let auth_header = make_basic_auth_header(username, password);
+            req = req.with_header("Authorization", &auth_header);
         }
-        req = req.header("Content-Type", "application/json");
 
-        let response = req.send().await.context("Failed to send faucet request")?;
+        let response = req
+            .send_async()
+            .await
+            .context("Failed to send faucet request")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let status = response.status_code as u16;
+        if !(200..300).contains(&status) {
+            let body = response.as_str().unwrap_or_default();
             bail!("Faucet request failed with status {}: {}", status, body);
         }
 
-        let response_text = response.text().await?;
+        let response_text = response.as_str().context("Failed to read response body")?;
         let graphql_response: GraphQLResponse =
-            serde_json::from_str(&response_text).context(response_text)?;
+            serde_json::from_str(response_text).context(response_text.to_string())?;
 
         // Check for GraphQL errors
         if let Some(errors) = graphql_response.errors {

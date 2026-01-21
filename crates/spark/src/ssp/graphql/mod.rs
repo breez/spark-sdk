@@ -1,5 +1,6 @@
 mod client;
 mod error;
+mod http;
 pub(crate) mod models;
 mod queries;
 

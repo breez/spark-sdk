@@ -509,14 +509,22 @@ async fn test_06_client_side_zap_receipt(
 
     info!("Calling LNURL callback with zap request: {callback_url}");
 
-    let client = reqwest::Client::new();
-    let callback_response = client.get(&callback_url).send().await?;
+    let response = bitreq::get(&callback_url)
+        .send_async()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to send callback request: {e:?}"))?;
 
-    if !callback_response.status().is_success() {
-        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let status = response.status_code as u16;
+    if !(200..300).contains(&status) {
+        anyhow::bail!("Callback request failed: {}", status);
     }
 
-    let callback_json: serde_json::Value = callback_response.json().await?;
+    let callback_json: serde_json::Value = serde_json::from_str(
+        response
+            .as_str()
+            .map_err(|e| anyhow::anyhow!("Failed to read response: {e:?}"))?,
+    )?;
     info!("Callback response: {}", callback_json);
 
     // Extract the invoice from the callback response
