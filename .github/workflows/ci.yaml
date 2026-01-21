@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# NOTE: When modifying jobs, update .claude/skills/pr-review/ci-reference.md
+# so PR reviewers know what CI validates vs what needs human review.
+# Example prompt: claude "Update ci-reference.md based on my changes to ci.yaml"
+
 jobs:
   clippy:
     name: Clippy
