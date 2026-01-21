@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use thiserror::Error;
 
 use crate::{operator::rpc::OperatorRpcError, signer::SignerError};
@@ -24,6 +26,17 @@ pub enum TreeServiceError {
 
     #[error("Service error: {0}")]
     ServiceError(#[from] crate::services::ServiceError),
+
+    #[error("store processor has shut down")]
+    ProcessorShutdown,
+
+    #[error(
+        "too many concurrent reservations (max: {max_concurrent}), timed out after {timeout:?}"
+    )]
+    ResourceBusy {
+        max_concurrent: usize,
+        timeout: Duration,
+    },
 
     #[error("generic error: {0}")]
     Generic(String),

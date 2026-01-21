@@ -3,10 +3,6 @@
 //! Measures payment/transfer performance.
 //! Supports both regtest (with automatic funding) and mainnet (with persistent wallets).
 
-mod operation_detector;
-mod scenarios;
-mod stats;
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -28,13 +24,16 @@ use breez_sdk_spark::{
 };
 use tokio::sync::mpsc;
 
-use operation_detector::{OperationDetectionGuard, OperationDetectorLayer, create_operation_flag};
-use scenarios::{
+use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
+use breez_bench::operation_detector::{
+    OperationDetectionGuard, OperationDetectorLayer, create_operation_flag,
+};
+use breez_bench::scenarios::{
     DEFAULT_MAX_AMOUNT, DEFAULT_MAX_DELAY_MS, DEFAULT_MIN_AMOUNT, DEFAULT_MIN_DELAY_MS,
     DEFAULT_PAYMENT_COUNT, DEFAULT_RETURN_INTERVAL, DEFAULT_SEED, MAX_INITIAL_FUNDING,
     ScenarioConfig, ScenarioPreset, generate_payments,
 };
-use stats::{BenchmarkResults, PaymentMeasurement};
+use breez_bench::stats::{BenchmarkResults, PaymentMeasurement};
 
 const PHRASE_FILE_NAME: &str = "phrase";
 const MIN_BALANCE_FOR_BENCHMARK: u64 = 10_000; // Minimum sats needed to run benchmark
@@ -172,7 +171,7 @@ async fn main() -> Result<()> {
     info!("Network: {:?}", network);
 
     // Parse scenario preset
-    let preset = ScenarioPreset::from_str(&args.scenario).unwrap_or_else(|| {
+    let preset = ScenarioPreset::parse(&args.scenario).unwrap_or_else(|| {
         warn!("Unknown scenario '{}', using 'random'", args.scenario);
         ScenarioPreset::Random
     });
@@ -800,37 +799,6 @@ async fn wait_for_payment_event(
     }
 }
 
-/// Wait for SDK sync event
-async fn wait_for_synced_event(
-    event_rx: &mut mpsc::Receiver<SdkEvent>,
-    timeout_secs: u64,
-) -> Result<()> {
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            bail!(
-                "Timeout waiting for Synced event after {} seconds",
-                timeout_secs
-            );
-        }
-
-        match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(SdkEvent::Synced)) => {
-                return Ok(());
-            }
-            Ok(Some(_)) => continue,
-            Ok(None) => bail!("Event channel closed"),
-            Err(_) => bail!(
-                "Timeout waiting for Synced event after {} seconds",
-                timeout_secs
-            ),
-        }
-    }
-}
-
 /// Return funds from receiver to sender
 async fn return_funds_to_sender(
     receiver: &mut BenchSdkInstance,
@@ -917,44 +885,6 @@ async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, min_balance: u64) 
     info!("Funded. New balance: {} sats", final_info.balance_sats);
 
     Ok(())
-}
-
-/// Wait for deposit claim event
-async fn wait_for_claimed_event(
-    event_rx: &mut mpsc::Receiver<SdkEvent>,
-    timeout_secs: u64,
-) -> Result<()> {
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            bail!(
-                "Timeout waiting for ClaimedDeposits event after {} seconds",
-                timeout_secs
-            );
-        }
-
-        match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(SdkEvent::ClaimedDeposits { claimed_deposits })) => {
-                info!("Claimed {} deposits", claimed_deposits.len());
-                return Ok(());
-            }
-            Ok(Some(SdkEvent::UnclaimedDeposits { unclaimed_deposits })) => {
-                bail!(
-                    "Deposit claim failed: {} unclaimed deposits",
-                    unclaimed_deposits.len()
-                );
-            }
-            Ok(Some(_)) => continue,
-            Ok(None) => bail!("Event channel closed"),
-            Err(_) => bail!(
-                "Timeout waiting for ClaimedDeposits event after {} seconds",
-                timeout_secs
-            ),
-        }
-    }
 }
 
 /// Wait for balance to reach minimum
