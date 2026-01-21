@@ -10,9 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# NOTE: When modifying jobs, update .claude/skills/pr-review/ci-reference.md
-# so PR reviewers know what CI validates vs what needs human review.
-# Example prompt: claude "Update ci-reference.md based on my changes to ci.yaml"
+# IMPORTANT: When adding/removing/modifying CI jobs, update the PR review reference doc:
+#   .claude/skills/pr-review/docs/ci-reference.md
+#
+# Why: The pr-reviewer agent uses ci-reference.md to avoid flagging issues CI already catches.
+#      Keeping it synchronized prevents duplicate/obsolete review feedback.
+#
+# How: After changing this file, run:
+#   claude "Update .claude/skills/pr-review/docs/ci-reference.md based on my changes to .github/workflows/ci.yaml"
 
 jobs:
   clippy:
