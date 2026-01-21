@@ -3,9 +3,17 @@ name = "breez-sdk-bench"
 edition = "2024"
 version.workspace = true
 
+[lib]
+name = "breez_bench"
+path = "src/lib.rs"
+
 [[bin]]
 name = "breez-sdk-bench"
-path = "src/main.rs"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "parallel-perf"
+path = "src/bin/parallel_perf.rs"
 
 [dependencies]
 # Reuse all test infrastructure from breez-itest
@@ -17,6 +25,7 @@ breez-sdk-spark = { workspace = true }
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
 async-trait.workspace = true
+futures.workspace = true
 
 # CLI
 clap = { workspace = true, features = ["derive"] }

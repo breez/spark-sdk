@@ -7,7 +7,10 @@ pub use error::TreeServiceError;
 pub use select_helper::{select_leaves_by_target_amounts, with_reserved_leaves};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
-pub use store::InMemoryTreeStore;
+pub use store::{
+    DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
+};
+use tokio_with_wasm::alias::sync::watch;
 use tracing::trace;
 
 use std::str::FromStr;
@@ -204,6 +207,41 @@ pub struct SigningKeyshare {
 }
 
 pub type LeavesReservationId = String;
+
+/// Result of a reservation attempt.
+#[derive(Debug, Clone)]
+pub enum ReserveResult {
+    /// Reservation succeeded.
+    Success(LeavesReservation),
+    /// Not enough balance even with pending changes - fail immediately.
+    InsufficientFunds,
+    /// Not enough available balance but pending would help - caller should wait.
+    WaitForPending {
+        /// Amount that would satisfy this request.
+        needed: u64,
+        /// Current available balance.
+        available: u64,
+        /// Pending balance that will become available.
+        pending: u64,
+    },
+}
+
+impl ReserveResult {
+    /// Converts `ReserveResult` into a `Result<LeavesReservation, TreeServiceError>`.
+    ///
+    /// - `Success` returns `Ok(reservation)`
+    /// - `InsufficientFunds` returns `Err(TreeServiceError::InsufficientFunds)`
+    /// - `WaitForPending` returns an error (unexpected after swap completion)
+    pub fn into_result(self) -> Result<LeavesReservation, TreeServiceError> {
+        match self {
+            ReserveResult::Success(r) => Ok(r),
+            ReserveResult::InsufficientFunds => Err(TreeServiceError::InsufficientFunds),
+            ReserveResult::WaitForPending { .. } => Err(TreeServiceError::Generic(
+                "Unexpected WaitForPending after swap".into(),
+            )),
+        }
+    }
+}
 
 /// The purpose of a leaf reservation, which determines how the reserved
 /// leaves are treated in balance calculations and whether they are removed on refresh.
@@ -404,54 +442,6 @@ pub trait TreeStore: Send + Sync {
         missing_operators_leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError>;
 
-    /// Reserves leaves that match the specified target amounts.
-    ///
-    /// This method selects and reserves leaves from the available pool that
-    /// can satisfy the target amounts. Reserved leaves are temporarily removed
-    /// from the available pool to prevent double-spending until the reservation
-    /// is either finalized or cancelled.
-    ///
-    /// # Parameters
-    ///
-    /// * `target_amounts` - Optional target amounts for selection. If `None`,
-    ///   behavior is implementation-specific
-    /// * `exact_only` - If `true`, only exact matches are allowed. If `false`,
-    ///   approximate matches may be acceptable
-    /// * `purpose` - The purpose of the reservation, which determines how
-    ///   reserved leaves affect balance calculations
-    ///
-    /// # Returns
-    ///
-    /// * `Result<LeavesReservation, TreeServiceError>` - A reservation containing
-    ///   the selected leaves and a unique reservation ID, or an error if no
-    ///   suitable leaves can be found
-    ///
-    /// # Errors
-    ///
-    /// Returns a `TreeServiceError` if:
-    /// * No leaves can satisfy the target amounts
-    /// * Insufficient funds are available
-    /// * The target amounts are invalid
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
-    ///
-    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
-    /// let target = TargetAmounts::new_amount_and_fee(50_000, Some(1_000));
-    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
-    /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
-    /// # Ok(())
-    /// # }
-    /// ```
-    async fn reserve_leaves(
-        &self,
-        target_amounts: Option<&TargetAmounts>,
-        exact_only: bool,
-        purpose: ReservationPurpose,
-    ) -> Result<LeavesReservation, TreeServiceError>;
-
     /// Cancels a leaf reservation and returns the leaves to the available pool.
     ///
     /// This method releases a previously created reservation, making the reserved
@@ -477,14 +467,14 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose, ReserveResult};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
     /// let target = TargetAmounts::new_amount_and_fee(25_000, None);
-    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
-    ///
-    /// // Later, if the transaction is cancelled
-    /// store.cancel_reservation(&reservation.id).await?;
+    /// if let ReserveResult::Success(reservation) = store.try_reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await? {
+    ///     // Later, if the transaction is cancelled
+    ///     store.cancel_reservation(&reservation.id).await?;
+    /// }
     /// # Ok(())
     /// # }
     /// ```
@@ -516,14 +506,14 @@ pub trait TreeStore: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose};
+    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose, ReserveResult};
     ///
     /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
     /// let target = TargetAmounts::new_amount_and_fee(100_000, Some(2_000));
-    /// let reservation = store.reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await?;
-    ///
-    /// // After successfully using the leaves in a transaction
-    /// store.finalize_reservation(&reservation.id, None).await?;
+    /// if let ReserveResult::Success(reservation) = store.try_reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await? {
+    ///     // After successfully using the leaves in a transaction
+    ///     store.finalize_reservation(&reservation.id, None).await?;
+    /// }
     /// # Ok(())
     /// # }
     /// ```
@@ -532,6 +522,62 @@ pub trait TreeStore: Send + Sync {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
+
+    /// Attempts to reserve leaves. Returns `ReserveResult` indicating:
+    /// - `Success`: reservation completed
+    /// - `InsufficientFunds`: not enough even with pending
+    /// - `WaitForPending`: should wait for balance change
+    ///
+    /// Automatically tracks pending balance when reserved > needed.
+    ///
+    /// # Parameters
+    ///
+    /// * `target_amounts` - Optional target amounts for selection
+    /// * `exact_only` - If `true`, only exact matches are allowed
+    /// * `purpose` - The purpose of the reservation
+    ///
+    /// # Returns
+    ///
+    /// * `Result<ReserveResult, TreeServiceError>` - The result of the reservation attempt
+    async fn try_reserve_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+        exact_only: bool,
+        purpose: ReservationPurpose,
+    ) -> Result<ReserveResult, TreeServiceError>;
+
+    /// Subscribe to balance change notifications.
+    ///
+    /// Returns a `watch::Receiver` that will receive the current available
+    /// balance whenever it changes. Callers can use `changed().await` to
+    /// wait for balance changes.
+    fn subscribe_balance_changes(&self) -> watch::Receiver<u64>;
+
+    /// Updates a reservation after a swap operation.
+    ///
+    /// This method is used when a swap has been performed and we need to
+    /// update the reservation to use specific leaves from the swap output.
+    /// The operation:
+    /// 1. Updates the reservation to use the provided reserved_leaves
+    /// 2. Adds the change_leaves to the available pool
+    ///
+    /// The reservation's permit is preserved - no new permit is needed.
+    ///
+    /// # Parameters
+    ///
+    /// * `reservation_id` - The ID of the existing reservation to update
+    /// * `reserved_leaves` - The exact leaves to keep in the reservation
+    /// * `change_leaves` - The leaves to add to the available pool (change from swap)
+    ///
+    /// # Returns
+    ///
+    /// * `Result<LeavesReservation, TreeServiceError>` - The updated reservation
+    async fn update_reservation(
+        &self,
+        reservation_id: &LeavesReservationId,
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
+    ) -> Result<LeavesReservation, TreeServiceError>;
 }
 
 #[macros::async_trait]

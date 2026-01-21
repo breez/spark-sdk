@@ -316,7 +316,7 @@ async fn test_token_conversion_failure(
     let bob = bob_sdk.await?;
 
     // Fund Alice with Bitcoin (used for both parts)
-    ensure_funded(&mut alice, 10_000).await?;
+    ensure_funded(&mut alice, 20_000).await?;
 
     let alice_initial_balance = alice
         .sdk

@@ -1,24 +1,35 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::sync::Mutex;
-use tracing::{error, trace, warn};
+use tokio_with_wasm::alias as tokio;
+use tokio_with_wasm::alias::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tracing::{trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, TargetAmounts, TreeNode,
-    TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore, select_helper,
+    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
+    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
+    select_helper,
 };
 
-#[derive(Default)]
-pub struct InMemoryTreeStore {
-    leaves: Mutex<LeavesState>,
-}
+/// Default maximum number of concurrent reservations allowed.
+pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 10;
 
-/// Entry in the reservation map, containing leaves and the purpose of the reservation.
-#[derive(Clone)]
+/// Default timeout for acquiring a reservation permit.
+pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
+/// The permit is automatically released when this entry is dropped.
 struct ReservationEntry {
     leaves: Vec<TreeNode>,
     purpose: ReservationPurpose,
+    /// Semaphore permit held for the duration of this reservation.
+    /// Dropped automatically when the reservation is cancelled or finalized.
+    _permit: OwnedSemaphorePermit,
+    /// Expected change amount that will become available after swap completes.
+    /// Used for calculating pending balance.
+    pending_change_amount: u64,
 }
 
 #[derive(Default)]
@@ -28,24 +39,259 @@ struct LeavesState {
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
 }
 
-#[macros::async_trait]
-impl TreeStore for InMemoryTreeStore {
-    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+impl LeavesState {
+    /// Calculate the available balance (unreserved available leaves).
+    fn available_balance(&self) -> u64 {
         self.leaves
-            .lock()
-            .await
+            .values()
+            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+            .map(|leaf| leaf.value)
+            .sum()
+    }
+
+    /// Calculate the total pending balance from in-flight swaps.
+    fn pending_balance(&self) -> u64 {
+        self.leaves_reservations
+            .values()
+            .map(|entry| entry.pending_change_amount)
+            .sum()
+    }
+}
+
+/// Commands sent to the store processor.
+enum StoreCommand {
+    AddLeaves {
+        leaves: Vec<TreeNode>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
+    GetLeaves {
+        response_tx: oneshot::Sender<Result<Leaves, TreeServiceError>>,
+    },
+    SetLeaves {
+        leaves: Vec<TreeNode>,
+        missing_operators_leaves: Vec<TreeNode>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
+    TryReserveLeaves {
+        target_amounts: Option<TargetAmounts>,
+        exact_only: bool,
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+        response_tx: oneshot::Sender<Result<ReserveResult, TreeServiceError>>,
+    },
+    CancelReservation {
+        id: LeavesReservationId,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
+    FinalizeReservation {
+        id: LeavesReservationId,
+        new_leaves: Option<Vec<TreeNode>>,
+        response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
+    },
+    UpdateReservation {
+        reservation_id: LeavesReservationId,
+        reserved_leaves: Vec<TreeNode>,
+        change_leaves: Vec<TreeNode>,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
+    #[cfg(test)]
+    GetReservation {
+        id: LeavesReservationId,
+        response_tx: oneshot::Sender<Option<Vec<TreeNode>>>,
+    },
+}
+
+/// Queue-based in-memory tree store.
+///
+/// Uses a single processor task to handle all state mutations, eliminating
+/// mutex contention. Balance change notifications are broadcast via a watch channel.
+/// Concurrent reservations are limited by a configurable semaphore.
+///
+/// # Lifecycle
+///
+/// The store spawns a background processor task in `new()`. This task runs until
+/// the command channel is closed, which happens automatically when the
+/// `InMemoryTreeStore` is dropped (dropping the `command_tx` sender closes the channel).
+/// No explicit shutdown is required.
+///
+/// # Backpressure
+///
+/// The command channel is bounded to 1024 messages. If the channel fills up
+/// (e.g., under extreme load), senders will wait until space is available.
+/// This provides natural backpressure to prevent unbounded memory growth.
+pub struct InMemoryTreeStore {
+    command_tx: mpsc::Sender<StoreCommand>,
+    /// Watch channel for balance change notifications.
+    balance_changed_rx: watch::Receiver<u64>,
+    /// Semaphore to limit concurrent reservations.
+    reservation_semaphore: Arc<Semaphore>,
+    /// Maximum concurrent reservations (stored for trace logging).
+    max_concurrent_reservations: usize,
+    /// Timeout for acquiring a reservation permit.
+    reservation_timeout: Duration,
+}
+
+impl InMemoryTreeStore {
+    /// Creates a new `InMemoryTreeStore` with default configuration.
+    ///
+    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`] and [`DEFAULT_RESERVATION_TIMEOUT`].
+    pub fn new() -> Self {
+        Self::with_config(
+            DEFAULT_MAX_CONCURRENT_RESERVATIONS,
+            DEFAULT_RESERVATION_TIMEOUT,
+        )
+    }
+
+    /// Creates a new `InMemoryTreeStore` with custom configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_concurrent_reservations` - Maximum number of concurrent reservations allowed.
+    ///   Additional reservation attempts will wait up to `reservation_timeout`.
+    /// * `reservation_timeout` - How long to wait for a reservation permit before
+    ///   returning [`TreeServiceError::ResourceBusy`].
+    pub fn with_config(max_concurrent_reservations: usize, reservation_timeout: Duration) -> Self {
+        // Bounded channel provides backpressure under extreme load
+        let (command_tx, command_rx) = mpsc::channel(1024);
+        let (balance_changed_tx, balance_changed_rx) = watch::channel(0u64);
+        let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
+
+        // Spawn the processor task - it will exit when command_tx is dropped
+        tokio::spawn(Self::run_processor(command_rx, balance_changed_tx));
+
+        Self {
+            command_tx,
+            balance_changed_rx,
+            reservation_semaphore,
+            max_concurrent_reservations,
+            reservation_timeout,
+        }
+    }
+
+    /// Main processor loop that handles all commands sequentially.
+    async fn run_processor(
+        mut command_rx: mpsc::Receiver<StoreCommand>,
+        balance_changed_tx: watch::Sender<u64>,
+    ) {
+        let mut state = LeavesState::default();
+
+        while let Some(command) = command_rx.recv().await {
+            let balance_before = state.available_balance();
+            let pending_before = state.pending_balance();
+            // Track if we should always notify (e.g., after swap update)
+            let mut force_notify = false;
+
+            match command {
+                StoreCommand::AddLeaves {
+                    leaves,
+                    response_tx,
+                } => {
+                    let result = Self::process_add_leaves(&mut state, &leaves);
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::GetLeaves { response_tx } => {
+                    let result = Self::process_get_leaves(&state);
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::SetLeaves {
+                    leaves,
+                    missing_operators_leaves,
+                    response_tx,
+                } => {
+                    let result =
+                        Self::process_set_leaves(&mut state, &leaves, &missing_operators_leaves);
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::TryReserveLeaves {
+                    target_amounts,
+                    exact_only,
+                    purpose,
+                    permit,
+                    response_tx,
+                } => {
+                    let result = Self::process_try_reserve_leaves(
+                        &mut state,
+                        target_amounts.as_ref(),
+                        exact_only,
+                        purpose,
+                        permit,
+                    );
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::CancelReservation { id, response_tx } => {
+                    // Permit is automatically released when ReservationEntry is dropped
+                    Self::process_cancel_reservation(&mut state, &id);
+                    let _ = response_tx.send(Ok(()));
+                }
+                StoreCommand::FinalizeReservation {
+                    id,
+                    new_leaves,
+                    response_tx,
+                } => {
+                    // Permit is automatically released when ReservationEntry is dropped
+                    Self::process_finalize_reservation(&mut state, &id, new_leaves.as_deref());
+                    let _ = response_tx.send(Ok(()));
+                }
+                StoreCommand::UpdateReservation {
+                    reservation_id,
+                    reserved_leaves,
+                    change_leaves,
+                    response_tx,
+                } => {
+                    let result = Self::process_update_reservation(
+                        &mut state,
+                        &reservation_id,
+                        &reserved_leaves,
+                        &change_leaves,
+                    );
+                    // Always notify after swap update - waiters need to know a swap completed
+                    // even if the net balance didn't change (e.g., swap returned exact amount)
+                    if result.is_ok() {
+                        force_notify = true;
+                    }
+                    let _ = response_tx.send(result);
+                }
+                #[cfg(test)]
+                StoreCommand::GetReservation { id, response_tx } => {
+                    let result = state
+                        .leaves_reservations
+                        .get(&id)
+                        .map(|entry| entry.leaves.clone());
+                    let _ = response_tx.send(result);
+                }
+            }
+
+            // Notify waiters if available or pending balance changed, or if forced
+            let balance_after = state.available_balance();
+            let pending_after = state.pending_balance();
+            let should_notify =
+                balance_after != balance_before || pending_after != pending_before || force_notify;
+
+            if should_notify {
+                trace!(
+                    "Sending balance notification: available {}→{}, pending {}→{}, force={}",
+                    balance_before, balance_after, pending_before, pending_after, force_notify
+                );
+                let _ = balance_changed_tx.send(balance_after);
+            }
+        }
+    }
+
+    fn process_add_leaves(
+        state: &mut LeavesState,
+        leaves: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
+        state
             .leaves
             .extend(leaves.iter().map(|l| (l.id.clone(), l.clone())));
         Ok(())
     }
 
-    async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
-        let leaves = self.leaves.lock().await;
-
+    fn process_get_leaves(state: &LeavesState) -> Result<Leaves, TreeServiceError> {
         // Separate reserved leaves by purpose
         let mut reserved_for_payment = Vec::new();
         let mut reserved_for_swap = Vec::new();
-        for entry in leaves.leaves_reservations.values() {
+        for entry in state.leaves_reservations.values() {
             match entry.purpose {
                 ReservationPurpose::Payment => {
                     reserved_for_payment.extend(entry.leaves.iter().cloned());
@@ -57,19 +303,19 @@ impl TreeStore for InMemoryTreeStore {
         }
 
         Ok(Leaves {
-            available: leaves
+            available: state
                 .leaves
                 .values()
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
                 .cloned()
                 .collect(),
-            not_available: leaves
+            not_available: state
                 .leaves
                 .values()
                 .filter(|leaf| leaf.status != TreeNodeStatus::Available)
                 .cloned()
                 .collect(),
-            available_missing_from_operators: leaves
+            available_missing_from_operators: state
                 .missing_operators_leaves
                 .values()
                 .filter(|leaf| leaf.status == TreeNodeStatus::Available)
@@ -80,174 +326,244 @@ impl TreeStore for InMemoryTreeStore {
         })
     }
 
-    async fn set_leaves(
-        &self,
+    fn process_set_leaves(
+        state: &mut LeavesState,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        let mut leaves_state = self.leaves.lock().await;
-        leaves_state.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
-        leaves_state.missing_operators_leaves = missing_operators_leaves
+        state.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
+        state.missing_operators_leaves = missing_operators_leaves
             .iter()
             .map(|l| (l.id.clone(), l.clone()))
             .collect();
 
-        for (key, entry) in leaves_state.leaves_reservations.clone().iter() {
-            // remove leaves not existing in the main pool, except for Swap reservations
-            let mut filtered_leaves: Vec<TreeNode> =
-                if matches!(entry.purpose, ReservationPurpose::Swap) {
-                    entry.leaves.clone()
-                } else {
-                    entry
-                        .leaves
-                        .iter()
-                        .filter(|l| {
-                            leaves_state.leaves.contains_key(&l.id)
-                                || leaves_state.missing_operators_leaves.contains_key(&l.id)
-                        })
-                        .cloned()
-                        .collect()
-                };
+        for (key, entry) in state.leaves_reservations.iter_mut() {
+            // Try to update reserved leaves with fresh data from the pool.
+            // If a leaf is no longer in the pool (e.g., being swapped), keep the original.
+            // IMPORTANT: Never remove reservations here - they might be in the middle of a swap
+            // where leaves have been transferred but the swap hasn't completed yet.
+            // Reservations should only be removed by explicit cancel/finalize.
 
-            // update reserved leaves that just got updated in the main pool
-            for l in filtered_leaves.iter_mut() {
-                if let Some(leaf) = leaves_state.leaves.remove(&l.id) {
+            // Update leaves that exist in the refreshed pool
+            for l in entry.leaves.iter_mut() {
+                if let Some(leaf) = state.leaves.remove(&l.id) {
+                    *l = leaf;
+                } else if let Some(leaf) = state.missing_operators_leaves.remove(&l.id) {
                     *l = leaf;
                 }
-                if let Some(leaf) = leaves_state.missing_operators_leaves.remove(&l.id) {
-                    *l = leaf;
-                }
+                // If leaf is not in either pool, keep the original (it might be in-flight)
             }
-            if filtered_leaves.is_empty() {
-                leaves_state.leaves_reservations.remove(key);
-            } else {
-                leaves_state.leaves_reservations.insert(
-                    key.clone(),
-                    ReservationEntry {
-                        leaves: filtered_leaves,
-                        purpose: entry.purpose,
-                    },
-                );
-            }
+
+            trace!(
+                "Updated reservation {}: refreshed {} leaves",
+                key,
+                entry.leaves.len()
+            );
         }
         trace!("Updated {:?} leaves in the local state", leaves.len());
         Ok(())
     }
 
-    async fn reserve_leaves(
-        &self,
+    /// Try to reserve - returns `WaitForPending` if should wait.
+    /// Automatically tracks pending when reserved > needed.
+    /// On success, the permit is stored in the reservation entry.
+    /// On non-success, the permit is dropped immediately, releasing the semaphore slot.
+    fn process_try_reserve_leaves(
+        state: &mut LeavesState,
         target_amounts: Option<&TargetAmounts>,
         exact_only: bool,
         purpose: ReservationPurpose,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        trace!("Reserving leaves for amounts: {target_amounts:?}, purpose: {purpose:?}");
-        let reservation = {
-            // Filter available leaves from the state
-            let leaves: Vec<TreeNode> = self.get_leaves().await?.available.into_iter().collect();
-            // Select leaves that match the target amounts
-            let target_leaves_res =
-                select_helper::select_leaves_by_target_amounts(&leaves, target_amounts);
-            let selected = match target_leaves_res {
-                Ok(target_leaves) => {
-                    // Successfully selected target leaves
-                    trace!("Successfully selected target leaves");
-                    [
-                        target_leaves.amount_leaves,
-                        target_leaves.fee_leaves.unwrap_or_default(),
-                    ]
-                    .concat()
-                }
-                Err(_) if !exact_only => {
-                    trace!("No exact match found, selecting leaves by minimum amount");
-                    let target_amount_sat = target_amounts.map_or(0, |ta| ta.total_sats());
-                    let Some(selected) =
-                        select_helper::select_leaves_by_minimum_amount(&leaves, target_amount_sat)?
-                    else {
-                        return Err(TreeServiceError::UnselectableAmount);
-                    };
-                    selected
-                }
-                Err(e) => {
-                    error!("Failed to select target leaves: {e:?}");
-                    return Err(e);
-                }
-            };
+        permit: OwnedSemaphorePermit,
+    ) -> Result<ReserveResult, TreeServiceError> {
+        let target_amount = target_amounts.map_or(0, |ta| ta.total_sats());
+        let available = state.available_balance();
+        let pending = state.pending_balance();
 
-            let reservation_id = self.reserve_leaves_internal(&selected, purpose).await?;
-            LeavesReservation::new(selected, reservation_id)
-        };
+        // Filter available leaves
+        let leaves: Vec<TreeNode> = state
+            .leaves
+            .values()
+            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
+            .cloned()
+            .collect();
 
-        Ok(reservation)
-    }
+        let selected = select_helper::select_leaves_by_target_amounts(&leaves, target_amounts);
 
-    // move leaves back from the reserved pool to the main pool
-    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
-        let mut leaves_state = self.leaves.lock().await;
-        if let Some(entry) = leaves_state.leaves_reservations.remove(id) {
-            for leaf in entry.leaves {
-                leaves_state.leaves.insert(leaf.id.clone(), leaf.clone());
+        match selected {
+            Ok(target_leaves) => {
+                // Can satisfy exactly - no pending change needed
+                let selected = [
+                    target_leaves.amount_leaves,
+                    target_leaves.fee_leaves.unwrap_or_default(),
+                ]
+                .concat();
+                let id = Self::reserve_internal(state, &selected, purpose, permit, 0)?;
+                Ok(ReserveResult::Success(LeavesReservation::new(selected, id)))
+            }
+            Err(_) if !exact_only => {
+                // Try minimum amount selection (may reserve more than needed)
+                if let Ok(Some(selected)) =
+                    select_helper::select_leaves_by_minimum_amount(&leaves, target_amount)
+                {
+                    let reserved_amount: u64 = selected.iter().map(|l| l.value).sum();
+
+                    // Calculate pending change if we reserved more than needed
+                    let pending_change_amount =
+                        if reserved_amount > target_amount && target_amount > 0 {
+                            reserved_amount - target_amount
+                        } else {
+                            0
+                        };
+
+                    let id = Self::reserve_internal(
+                        state,
+                        &selected,
+                        purpose,
+                        permit,
+                        pending_change_amount,
+                    )?;
+
+                    return Ok(ReserveResult::Success(LeavesReservation::new(selected, id)));
+                }
+
+                // Can't satisfy now - check if waiting would help
+                // Permit is dropped here, releasing the semaphore slot
+                if available + pending >= target_amount {
+                    Ok(ReserveResult::WaitForPending {
+                        needed: target_amount,
+                        available,
+                        pending,
+                    })
+                } else {
+                    Ok(ReserveResult::InsufficientFunds)
+                }
+            }
+            Err(_) => {
+                // Exact only and can't satisfy
+                // Permit is dropped here, releasing the semaphore slot
+                if available + pending >= target_amount {
+                    Ok(ReserveResult::WaitForPending {
+                        needed: target_amount,
+                        available,
+                        pending,
+                    })
+                } else {
+                    Ok(ReserveResult::InsufficientFunds)
+                }
             }
         }
-        trace!("Canceled leaves reservation: {}", id);
-        Ok(())
     }
 
-    // remove the leaves from the reserved pool, they are now considered used and
-    // not available anymore.
-    // If resulting_leaves are provided, they are added to the main pool.
-    async fn finalize_reservation(
-        &self,
+    /// Cancel a reservation and return leaves to the pool.
+    /// The permit is automatically released when the ReservationEntry is dropped.
+    fn process_cancel_reservation(state: &mut LeavesState, id: &LeavesReservationId) {
+        // Return leaves to pool - permit and pending change are dropped with the entry
+        if let Some(entry) = state.leaves_reservations.remove(id) {
+            for leaf in entry.leaves {
+                state.leaves.insert(leaf.id.clone(), leaf);
+            }
+            trace!("Canceled leaves reservation: {}", id);
+        }
+    }
+
+    /// Finalize a reservation (leaves are consumed) and optionally add new leaves.
+    /// The permit is automatically released when the ReservationEntry is dropped.
+    fn process_finalize_reservation(
+        state: &mut LeavesState,
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
-    ) -> Result<(), TreeServiceError> {
-        let mut leaves_state = self.leaves.lock().await;
-        if leaves_state.leaves_reservations.remove(id).is_none() {
+    ) {
+        // Remove reservation (leaves are consumed) - permit and pending change are dropped with the entry
+        if state.leaves_reservations.remove(id).is_none() {
             warn!("Tried to finalize a non existing reservation");
         }
+
+        // Add new leaves (e.g., change from swap)
         if let Some(resulting_leaves) = new_leaves {
-            leaves_state
+            state
                 .leaves
-                .extend(resulting_leaves.iter().map(|l| (l.id.clone(), l.clone())))
+                .extend(resulting_leaves.iter().map(|l| (l.id.clone(), l.clone())));
         }
         trace!("Finalized leaves reservation: {}", id);
-        Ok(())
-    }
-}
-
-impl InMemoryTreeStore {
-    pub fn new() -> Self {
-        InMemoryTreeStore {
-            leaves: Mutex::new(LeavesState::default()),
-        }
     }
 
-    // Reserves leaves by moving them from the main pool to the reserved pool.
-    // If accept_new_leaves is true, allows reserving leaves that are not in the main pool.
-    // If false, only allows reserving leaves that are already in the main pool.
-    async fn reserve_leaves_internal(
-        &self,
+    /// Updates a reservation after a swap operation.
+    /// Replaces the reservation's leaves with `reserved_leaves` and adds
+    /// `change_leaves` to the available pool.
+    /// The permit is preserved from the original reservation.
+    fn process_update_reservation(
+        state: &mut LeavesState,
+        reservation_id: &LeavesReservationId,
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        // Remove the existing reservation to get the permit
+        let old_entry = state
+            .leaves_reservations
+            .remove(reservation_id)
+            .ok_or_else(|| {
+                TreeServiceError::Generic(format!("Reservation {} not found", reservation_id))
+            })?;
+        let purpose = old_entry.purpose;
+        let permit = old_entry._permit;
+
+        // Add change leaves to the available pool
+        state
+            .leaves
+            .extend(change_leaves.iter().map(|l| (l.id.clone(), l.clone())));
+
+        // Re-insert the reservation with updated leaves but same permit
+        // Pending change is cleared since the swap completed
+        let reserved = reserved_leaves.to_vec();
+        state.leaves_reservations.insert(
+            reservation_id.clone(),
+            ReservationEntry {
+                leaves: reserved.clone(),
+                purpose,
+                _permit: permit,
+                pending_change_amount: 0,
+            },
+        );
+
+        trace!(
+            "Updated reservation {}: reserved {} leaves, added {} change leaves to pool",
+            reservation_id,
+            reserved.len(),
+            change_leaves.len()
+        );
+
+        Ok(LeavesReservation::new(reserved, reservation_id.clone()))
+    }
+
+    /// Internal helper to reserve leaves (moves them from main pool to reservations).
+    /// The permit is stored in the reservation entry and released when the entry is dropped.
+    fn reserve_internal(
+        state: &mut LeavesState,
         leaves: &[TreeNode],
         purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+        pending_change_amount: u64,
     ) -> Result<LeavesReservationId, TreeServiceError> {
-        let mut leaves_state = self.leaves.lock().await;
         if leaves.is_empty() {
             return Err(TreeServiceError::NonReservableLeaves);
         }
         for leaf in leaves {
-            if !leaves_state.leaves.contains_key(&leaf.id) {
+            if !state.leaves.contains_key(&leaf.id) {
                 return Err(TreeServiceError::NonReservableLeaves);
             }
         }
         let id = Uuid::now_v7().to_string();
-        leaves_state.leaves_reservations.insert(
+        state.leaves_reservations.insert(
             id.clone(),
             ReservationEntry {
                 leaves: leaves.to_vec(),
                 purpose,
+                _permit: permit,
+                pending_change_amount,
             },
         );
         for leaf in leaves {
-            leaves_state.leaves.remove(&leaf.id);
+            state.leaves.remove(&leaf.id);
         }
         trace!("New leaves reservation {}: {:?}", id, leaves);
         Ok(id)
@@ -255,11 +571,168 @@ impl InMemoryTreeStore {
 
     #[cfg(test)]
     async fn get_reservation(&self, id: &LeavesReservationId) -> Option<Vec<TreeNode>> {
-        let leaves_state = self.leaves.lock().await;
-        leaves_state
-            .leaves_reservations
-            .get(id)
-            .map(|entry| entry.leaves.clone())
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::GetReservation {
+                id: id.clone(),
+                response_tx,
+            })
+            .await
+            .ok()?;
+        response_rx.await.ok()?
+    }
+}
+
+impl Default for InMemoryTreeStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[macros::async_trait]
+impl TreeStore for InMemoryTreeStore {
+    async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::AddLeaves {
+                leaves: leaves.to_vec(),
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::GetLeaves { response_tx })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    async fn set_leaves(
+        &self,
+        leaves: &[TreeNode],
+        missing_operators_leaves: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::SetLeaves {
+                leaves: leaves.to_vec(),
+                missing_operators_leaves: missing_operators_leaves.to_vec(),
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::CancelReservation {
+                id: id.clone(),
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    async fn finalize_reservation(
+        &self,
+        id: &LeavesReservationId,
+        new_leaves: Option<&[TreeNode]>,
+    ) -> Result<(), TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::FinalizeReservation {
+                id: id.clone(),
+                new_leaves: new_leaves.map(|l| l.to_vec()),
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    async fn try_reserve_leaves(
+        &self,
+        target_amounts: Option<&TargetAmounts>,
+        exact_only: bool,
+        purpose: ReservationPurpose,
+    ) -> Result<ReserveResult, TreeServiceError> {
+        // Acquire permit with timeout (waits if max_concurrent_reservations are already in use)
+        let available_permits = self.reservation_semaphore.available_permits();
+        trace!(
+            "try_reserve_leaves: waiting for permit (available: {}/{})",
+            available_permits, self.max_concurrent_reservations
+        );
+
+        let permit = tokio_with_wasm::alias::time::timeout(
+            self.reservation_timeout,
+            self.reservation_semaphore.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| TreeServiceError::ResourceBusy {
+            max_concurrent: self.max_concurrent_reservations,
+            timeout: self.reservation_timeout,
+        })?
+        .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        trace!("try_reserve_leaves: acquired permit");
+
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::TryReserveLeaves {
+                target_amounts: target_amounts.cloned(),
+                exact_only,
+                purpose,
+                permit,
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+    }
+
+    fn subscribe_balance_changes(&self) -> watch::Receiver<u64> {
+        self.balance_changed_rx.clone()
+    }
+
+    async fn update_reservation(
+        &self,
+        reservation_id: &LeavesReservationId,
+        reserved_leaves: &[TreeNode],
+        change_leaves: &[TreeNode],
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(StoreCommand::UpdateReservation {
+                reservation_id: reservation_id.clone(),
+                reserved_leaves: reserved_leaves.to_vec(),
+                change_leaves: change_leaves.to_vec(),
+                response_tx,
+            })
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
     }
 }
 
@@ -312,11 +785,30 @@ mod tests {
         }
     }
 
+    /// Helper function to reserve leaves in tests.
+    /// Wraps try_reserve_leaves and expects success.
+    async fn reserve_leaves(
+        state: &InMemoryTreeStore,
+        target_amounts: Option<&TargetAmounts>,
+        exact_only: bool,
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        match state
+            .try_reserve_leaves(target_amounts, exact_only, purpose)
+            .await?
+        {
+            ReserveResult::Success(reservation) => Ok(reservation),
+            ReserveResult::InsufficientFunds => Err(TreeServiceError::InsufficientFunds),
+            ReserveResult::WaitForPending { .. } => Err(TreeServiceError::Generic(
+                "Unexpected WaitForPending".into(),
+            )),
+        }
+    }
+
     #[async_test_all]
     async fn test_new() {
         let state: InMemoryTreeStore = InMemoryTreeStore::new();
-        assert!(state.leaves.lock().await.leaves.is_empty());
-        assert!(state.leaves.lock().await.leaves_reservations.is_empty());
+        assert!(state.get_leaves().await.unwrap().available.is_empty());
     }
 
     #[async_test_all]
@@ -388,14 +880,14 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         // Reserve some leaves
-        let reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(600, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(600, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Update leaves with new data (including updated versions of reserved leaves)
         let non_existing_operator_leaf = create_test_tree_node("node7", 1000); // Updated value
@@ -411,30 +903,36 @@ mod tests {
             .await
             .unwrap();
 
-        // Check that reserved leaves were updated with new data
+        // Check that reserved leaves were updated with new data where available.
+        // With the new behavior, reservations are NEVER removed by set_leaves.
+        // Leaves that exist in the pool are updated; others keep their original values.
         let reservation = state.get_reservation(&reservation.id).await.unwrap();
-        assert_eq!(reservation.len(), 2);
-
-        // Find the leaves by their updated values (order may vary by selection algorithm)
-        let node1_leaf = reservation.iter().find(|l| l.value == 150);
-        let node2_leaf = reservation.iter().find(|l| l.value == 250);
-
-        assert!(
-            node1_leaf.is_some(),
-            "node1 with updated value 150 should exist"
-        );
-        assert!(
-            node2_leaf.is_some(),
-            "node2 with updated value 250 should exist"
-        );
-        assert_eq!(
-            node1_leaf.unwrap().status,
-            crate::tree::TreeNodeStatus::TransferLocked
-        );
+        // All 3 original leaves are preserved (node3 keeps original value since not in pool)
+        assert_eq!(reservation.len(), 3);
+        // Find each leaf and verify
+        let node1 = reservation
+            .iter()
+            .find(|l| l.id.to_string() == "node1")
+            .unwrap();
+        let node2 = reservation
+            .iter()
+            .find(|l| l.id.to_string() == "node2")
+            .unwrap();
+        let node3 = reservation
+            .iter()
+            .find(|l| l.id.to_string() == "node3")
+            .unwrap();
+        assert_eq!(node1.value, 150); // Updated
+        assert_eq!(node1.status, crate::tree::TreeNodeStatus::TransferLocked);
+        assert_eq!(node2.value, 250); // Updated
+        assert_eq!(node3.value, 300); // Original (not in new pool)
 
         // Check main pool
         let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.payment_reserved_balance(), 400);
+        // Reserved balance is now 150 + 250 + 300 = 700 (but node3 was updated before reservation)
+        // Actually the original test reserved all 3 nodes (100+200+300=600)
+        // After set_leaves, the reservation has updated values: 150+250+300=700
+        assert_eq!(all_leaves.payment_reserved_balance(), 700);
         assert_eq!(all_leaves.available_balance(), 400);
         assert_eq!(all_leaves.missing_operators_balance(), 1000);
         // balance() excludes payment-reserved leaves
@@ -449,7 +947,9 @@ mod tests {
     }
 
     #[async_test_all]
-    async fn test_set_leaves_removes_non_existing_from_reservations() {
+    async fn test_set_leaves_preserves_reservations_for_in_flight_swaps() {
+        // Test that reservations are preserved even when leaves are no longer in the pool.
+        // This is important for swaps where leaves are transferred but the swap hasn't completed.
         let state = InMemoryTreeStore::new();
         let leaves = vec![
             create_test_tree_node("node1", 100),
@@ -457,24 +957,37 @@ mod tests {
         ];
         state.add_leaves(&leaves).await.unwrap();
 
-        // Reserve leaves
-        let reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        // Reserve leaves (simulating start of a swap)
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Set new leaves that don't include the reserved ones
+        // (simulating a refresh while swap is in progress)
         let new_leaves = vec![create_test_tree_node("node3", 300)];
         state.set_leaves(&new_leaves, &[]).await.unwrap();
 
-        // Reserved leaves should be removed since they don't exist in main pool
-        let leaves_state = state.leaves.lock().await;
-        let reservation = leaves_state.leaves_reservations.get(&reservation.id);
-        assert!(reservation.is_none());
+        // Reservation should be PRESERVED (not removed) - the swap might still complete
+        let reserved = state.get_reservation(&reservation.id).await;
+        assert!(reserved.is_some());
+        // The reserved leaves keep their original values since they're not in the new pool
+        let reserved = reserved.unwrap();
+        assert_eq!(reserved.len(), 2);
+        assert!(
+            reserved
+                .iter()
+                .any(|l| l.id.to_string() == "node1" && l.value == 100)
+        );
+        assert!(
+            reserved
+                .iter()
+                .any(|l| l.id.to_string() == "node2" && l.value == 200)
+        );
     }
 
     #[async_test_all]
@@ -486,14 +999,14 @@ mod tests {
         ];
         state.add_leaves(&leaves).await.unwrap();
 
-        let reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Check that reservation was created
         let reserved = state.get_reservation(&reservation.id).await.unwrap();
@@ -514,14 +1027,14 @@ mod tests {
         ];
         state.add_leaves(&leaves).await.unwrap();
 
-        let reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Cancel the reservation
         state.cancel_reservation(&reservation.id).await.unwrap();
@@ -544,9 +1057,8 @@ mod tests {
         // Should not panic or cause issues
         state.cancel_reservation(&fake_id).await.unwrap();
 
-        let leaves_state = state.leaves.lock().await;
-        assert!(leaves_state.leaves_reservations.is_empty());
-        assert!(leaves_state.leaves.is_empty());
+        let main_leaves = state.get_leaves().await.unwrap().available;
+        assert!(main_leaves.is_empty());
     }
 
     #[async_test_all]
@@ -558,14 +1070,14 @@ mod tests {
         ];
         state.add_leaves(&leaves).await.unwrap();
 
-        let reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Finalize the reservation
         state
@@ -590,10 +1102,6 @@ mod tests {
         // Should not panic or cause issues
         state.finalize_reservation(&fake_id, None).await.unwrap();
 
-        let leaves_state = state.leaves.lock().await;
-        assert!(leaves_state.leaves_reservations.is_empty());
-        drop(leaves_state);
-
         let main_leaves = state.get_leaves().await.unwrap().available;
         assert!(main_leaves.is_empty());
     }
@@ -609,22 +1117,22 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         // Create multiple reservations
-        let reservation1 = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        let reservation2 = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(200, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let reservation1 = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        let reservation2 = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(200, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Check both reservations exist
         assert!(state.get_reservation(&reservation1.id).await.is_some());
@@ -663,23 +1171,23 @@ mod tests {
         let leaf = create_test_tree_node("node1", 100);
         state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
-        let r1 = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let r1 = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
         state.cancel_reservation(&r1.id).await.unwrap();
-        let r2 = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let r2 = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         assert_ne!(r1.id, r2.id);
     }
@@ -690,30 +1198,29 @@ mod tests {
         let leaf = create_test_tree_node("node1", 100);
         state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
 
-        state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        let result = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap_err();
+        reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        let result = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(result, TreeServiceError::InsufficientFunds));
     }
 
     #[async_test_all]
     async fn test_reserve_leaves_empty() {
         let state = InMemoryTreeStore::new();
-        let err = state
-            .reserve_leaves(None, false, ReservationPurpose::Payment)
+        let err = reserve_leaves(&state, None, false, ReservationPurpose::Payment)
             .await
             .unwrap_err();
 
@@ -731,14 +1238,14 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         // Reserve some leaves for swap
-        let _reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                true,
-                ReservationPurpose::Swap,
-            )
-            .await
-            .unwrap();
+        let _reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
 
         // Check that swap-reserved leaves are included in balance
         let all_leaves = state.get_leaves().await.unwrap();
@@ -759,14 +1266,14 @@ mod tests {
         state.add_leaves(&leaves).await.unwrap();
 
         // Reserve some leaves for payment
-        let _reservation = state
-            .reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
+        let _reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
 
         // Check that payment-reserved leaves are excluded from balance
         let all_leaves = state.get_leaves().await.unwrap();
@@ -774,5 +1281,341 @@ mod tests {
         assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
         // balance() should NOT include payment-reserved leaves
         assert_eq!(all_leaves.balance(), 300); // only available
+    }
+
+    // Tests for try_reserve_leaves and balance notifications
+
+    #[async_test_all]
+    async fn test_try_reserve_success() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        let result = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                true,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, ReserveResult::Success(_)));
+        if let ReserveResult::Success(reservation) = result {
+            assert_eq!(reservation.sum(), 100);
+        }
+    }
+
+    #[async_test_all]
+    async fn test_try_reserve_insufficient_funds() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        let result = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(500, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(result, ReserveResult::InsufficientFunds));
+    }
+
+    #[async_test_all]
+    async fn test_try_reserve_wait_for_pending() {
+        let state = InMemoryTreeStore::new();
+        // Add a single 1000 sat leaf
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve with target 100 - store will reserve 1000 and auto-track pending=900
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(r1, ReserveResult::Success(_)));
+
+        // Try to reserve 300 more - should get WaitForPending since pending=900 > 300
+        let r2 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        match r2 {
+            ReserveResult::WaitForPending {
+                needed,
+                available,
+                pending,
+            } => {
+                assert_eq!(needed, 300);
+                assert_eq!(available, 0);
+                assert_eq!(pending, 900);
+            }
+            _ => panic!("Expected WaitForPending, got {:?}", r2),
+        }
+    }
+
+    #[async_test_all]
+    async fn test_try_reserve_fail_immediately_when_insufficient() {
+        let state = InMemoryTreeStore::new();
+        // Add 100 sat leaf
+        let leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve it for 50 sats - pending will be 50
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(50, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(r1, ReserveResult::Success(_)));
+
+        // Request 500 - more than available + pending (0 + 50 < 500)
+        let result = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(500, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, ReserveResult::InsufficientFunds));
+    }
+
+    #[async_test_all]
+    async fn test_balance_change_notification() {
+        let state = InMemoryTreeStore::new();
+        let mut rx = state.subscribe_balance_changes();
+
+        // Add leaves
+        let leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Wait for notification with timeout
+        let result =
+            tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), async {
+                rx.changed().await.ok();
+                *rx.borrow()
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 100);
+    }
+
+    #[async_test_all]
+    async fn test_pending_cleared_on_cancel() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve with target 100 - auto-tracks pending=900
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        let reservation_id = match r1 {
+            ReserveResult::Success(r) => r.id,
+            _ => panic!("Expected Success"),
+        };
+
+        // Cancel the reservation - pending should be cleared
+        state.cancel_reservation(&reservation_id).await.unwrap();
+
+        // Try to reserve 300 - should succeed since 1000 sat leaf is back
+        let r2 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        // Now 1000 sat leaf is back, so we should succeed
+        assert!(matches!(r2, ReserveResult::Success(_)));
+    }
+
+    #[async_test_all]
+    async fn test_pending_cleared_on_finalize() {
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve with target 100 - auto-tracks pending=900
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        let reservation_id = match r1 {
+            ReserveResult::Success(r) => r.id,
+            _ => panic!("Expected Success"),
+        };
+
+        // Finalize with new leaves (the change from swap)
+        let change_leaf = create_test_tree_node("node2", 900);
+        state
+            .finalize_reservation(&reservation_id, Some(&[change_leaf]))
+            .await
+            .unwrap();
+
+        // Try to reserve 300 - should succeed since change is now available
+        let r2 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(300, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(r2, ReserveResult::Success(_)));
+    }
+
+    #[async_test_all]
+    async fn test_notification_after_swap_with_exact_amount() {
+        // This test verifies that waiters are notified even when a swap returns
+        // exactly the target amount (net balance doesn't change)
+        let state = InMemoryTreeStore::new();
+        let mut rx = state.subscribe_balance_changes();
+
+        // Add a single 1000 sat leaf
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Consume the initial notification
+        let _ = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        // Reserve it with target 100 - will reserve all 1000, pending=900
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        let reservation_id = match r1 {
+            ReserveResult::Success(r) => r.id,
+            _ => panic!("Expected Success"),
+        };
+
+        // Consume the reservation notification
+        let _ = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        // Simulate a swap that returns exactly the target amount (100 sats)
+        // This is the scenario that was causing hanging - balance goes 0 -> 100 -> 0
+        let swap_result_leaf = create_test_tree_node("node2", 100);
+        // reserved_leaves: the leaf we want to keep (100 sats)
+        // change_leaves: empty (no change since swap returned exact amount)
+        state
+            .update_reservation(&reservation_id, &[swap_result_leaf], &[])
+            .await
+            .unwrap();
+
+        // Verify that we still get a notification even though net balance is 0 -> 0
+        let notification_result = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        // The notification should be received (not timeout)
+        assert!(
+            notification_result.is_ok(),
+            "Expected notification after swap update with exact amount"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_notification_on_pending_balance_change() {
+        // Test that notifications are sent when pending balance changes
+        let state = InMemoryTreeStore::new();
+        let mut rx = state.subscribe_balance_changes();
+
+        // Add a single 1000 sat leaf
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Consume initial notification
+        let _ = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        // Reserve with target 100 - pending=900 (since we reserved 1000 for 100 target)
+        let r1 = state
+            .try_reserve_leaves(
+                Some(&TargetAmounts::new_amount_and_fee(100, None)),
+                false,
+                ReservationPurpose::Payment,
+            )
+            .await
+            .unwrap();
+
+        // Consume reservation notification
+        let _ = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        let reservation_id = match r1 {
+            ReserveResult::Success(r) => r.id,
+            _ => panic!("Expected Success"),
+        };
+
+        // Cancel the reservation - this clears pending from 900 to 0
+        // Even though available balance goes back to 1000, pending changed too
+        state.cancel_reservation(&reservation_id).await.unwrap();
+
+        // Should get notification because pending balance changed
+        let notification_result = tokio_with_wasm::alias::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.changed(),
+        )
+        .await;
+
+        assert!(
+            notification_result.is_ok(),
+            "Expected notification when pending balance changes"
+        );
     }
 }
