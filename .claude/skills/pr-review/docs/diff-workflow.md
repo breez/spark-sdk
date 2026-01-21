@@ -6,7 +6,7 @@ Review the diff with context instead of reading full files to improve token effi
 
 ```bash
 # Default: filtered diff with standard context (3 lines)
-.claude/skills/pr-review/filter-diff.sh $PR_NUMBER
+.claude/skills/pr-review/scripts/fetching/filter-diff.sh $PR_NUMBER
 
 # More context for complex changes (trait impls, error handling)
 gh pr diff $PR_NUMBER --unified=20 -- path/to/file.rs
@@ -77,4 +77,4 @@ Then create a multi-line comment:
 
 **Critical:** Always include `start_line` and `start_side` fields. Single-line comments may not display properly in large diff hunks.
 
-See `.claude/skills/pr-review/github-inline-comments.md` for the two-step posting workflow.
+See `.claude/skills/pr-review/docs/github-inline-comments.md` for the two-step posting workflow.

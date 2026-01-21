@@ -62,7 +62,7 @@ echo "" >&2
 
 # Get filtered diff
 FULL_DIFF_FILE="$OUTPUT_DIR/full-diff.txt"
-.claude/skills/pr-review/filter-diff.sh "$PR_NUMBER" > "$FULL_DIFF_FILE"
+.claude/skills/pr-review/scripts/fetching/filter-diff.sh "$PR_NUMBER" > "$FULL_DIFF_FILE"
 
 TOTAL_SIZE=$(wc -c < "$FULL_DIFF_FILE")
 echo "Total diff size: $TOTAL_SIZE chars" >&2

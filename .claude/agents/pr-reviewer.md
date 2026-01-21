@@ -24,13 +24,13 @@ Before analyzing code, gather complete context:
    - If code hasn't changed since last review, don't re-flag the same issues
 
 3. **File Access** - Use caching for efficiency
-   - Use `.claude/skills/pr-review/fetch-file.sh $PR_NUMBER path/file.rs true` for cached file access with line numbers
-   - For multiple files: `.claude/skills/pr-review/batch-fetch-files.sh $PR_NUMBER file1 file2 file3`
+   - Use `.claude/skills/pr-review/scripts/fetching/fetch-file.sh $PR_NUMBER path/file.rs true` for cached file access with line numbers
+   - For multiple files: `.claude/skills/pr-review/scripts/fetching/batch-fetch-files.sh $PR_NUMBER file1 file2 file3`
    - Eliminates redundant API calls (3x faster for repeated access)
    - Helpful for accurate line number positioning in inline comments
 
 4. **Large Diffs** - Use chunking for token efficiency
-   - For PRs with >25k token diffs: `.claude/skills/pr-review/chunk-diff.sh $PR_NUMBER --max-tokens 20000`
+   - For PRs with >25k token diffs: `.claude/skills/pr-review/scripts/processing/chunk-diff.sh $PR_NUMBER --max-tokens 20000`
    - Review each chunk separately to stay within context limits
    - Chunks maintain file boundaries for coherent review
 
@@ -53,13 +53,13 @@ Focus on what automated checks miss: unintentional behavior changes, unnecessary
 
 ## Communication Style
 
-Follow `.claude/skills/pr-review/tone.md` for feedback phrasing. Key points:
+Follow `.claude/skills/pr-review/docs/tone.md` for feedback phrasing. Key points:
 - Phrase feedback as questions when unsure
 - Include substantive observation before approving
 
 ## CI Coverage (Skip These)
 
-See `.claude/skills/pr-review/ci-reference.md` for full details. Key items CI catches:
+See `.claude/skills/pr-review/docs/ci-reference.md` for full details. Key items CI catches:
 - Formatting issues (fmt job)
 - Clippy warnings (clippy, wasm-clippy jobs)
 - Doc snippet syntax (docs-* jobs)
@@ -115,14 +115,14 @@ When displaying results in chat, use concise and scannable format. Only include 
 - Fix: How to fix
 ```
 
-Refer to the **Severity Indicators** section in `.claude/skills/pr-review/tone.md` for the strict set of allowed severity levels.
+Refer to the **Severity Indicators** section in `.claude/skills/pr-review/docs/tone.md` for the strict set of allowed severity levels.
 
 ### Inline Comments for `--post` Mode
 
 When creating inline comments JSON for posting to GitHub:
 - **Always use multi-line ranges** with `start_line` and `line` fields
 - Include 2-4 lines of context around the issue (even for single-line problems)
-- Verify line numbers using `.claude/skills/pr-review/fetch-file.sh $PR_NUMBER path/file.rs true` (cached and includes line numbers)
+- Verify line numbers using `.claude/skills/pr-review/scripts/fetching/fetch-file.sh $PR_NUMBER path/file.rs true` (cached and includes line numbers)
 - Never calculate line numbers from diff hunks alone
 
 Example:
@@ -137,11 +137,11 @@ Example:
 }
 ```
 
-See `.claude/skills/pr-review/github-inline-comments.md` for full details.
+See `.claude/skills/pr-review/docs/github-inline-comments.md` for full details.
 
 ### Recommendation
 
-Refer to the **Recommendations** section in `.claude/skills/pr-review/tone.md` for the strict set of allowed values.
+Refer to the **Recommendations** section in `.claude/skills/pr-review/docs/tone.md` for the strict set of allowed values.
 
 ## Questions
 
