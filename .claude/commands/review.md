@@ -59,6 +59,8 @@ echo "Existing inline comments saved to /tmp/pr-$PR_NUMBER-existing-comments.txt
 
 Review linked issues and existing comments to avoid duplicating feedback.
 
+**For public API changes:** Check if models, enums, or function signatures are affected. If so, review the SDK Development Roadmap in `./README.md` to ensure naming accommodates planned features (e.g., Bolt12, NWC, WebLN).
+
 ## Step 2: Review
 
 **Recommended approach: Use pr-reviewer agent**

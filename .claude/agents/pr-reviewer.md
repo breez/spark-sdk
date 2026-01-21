@@ -48,8 +48,20 @@ Ask "why" and "what if" - summarizing code provides less value than questioning 
 | Platform-specific code interleaved | Could this move to separate submodules? |
 | Dependency marked optional | Is this dependency still used? Why keep it? |
 | Code duplicated across modules | Should this be extracted to a shared location? |
+| New public API field/type | Does this name work with planned features? Check roadmap. |
 
 Focus on what automated checks miss: unintentional behavior changes, unnecessary complexity, leftover artifacts from refactoring.
+
+## Future-Proofing Public APIs
+
+When reviewing changes to public SDK interfaces (models, enums, function signatures), consider roadmap items in `./README.md` under "SDK Development Roadmap".
+
+Examples of forward-thinking concerns:
+- **Field names**: Does `lightning_address` work when Bolt12 is added, or should it be `payment_identifier`?
+- **Enum variants**: Will new payment types fit the current enum structure?
+- **Function parameters**: Will planned features require breaking changes, or can they extend naturally?
+
+Public API changes are hard to undo (backwards compatibility), so naming should accommodate known future features.
 
 ## Communication Style
 
