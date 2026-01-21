@@ -343,7 +343,8 @@ async fn test_stable_balance_reserved_sats(
     // Wait for Alice to receive auto-conversion payment
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
 
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    wait_for_synced_event(&mut alice.events, 30).await?;
+
     let alice_info = alice
         .sdk
         .get_info(GetInfoRequest {

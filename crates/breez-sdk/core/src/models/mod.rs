@@ -18,7 +18,6 @@ use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed, error::DepositClaimError,
-    token_conversion::AutoConversionConfig,
 };
 
 /// A list of external input parsers that are used by default.
@@ -607,17 +606,6 @@ pub struct StableBalanceConfig {
     /// the minimum conversion limit. Defaults to the conversion minimum if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub reserved_sats: Option<u64>,
-}
-
-impl From<&StableBalanceConfig> for AutoConversionConfig {
-    fn from(config: &StableBalanceConfig) -> Self {
-        Self {
-            token_identifier: config.token_identifier.clone(),
-            threshold_sats: config.threshold_sats,
-            max_slippage_bps: config.max_slippage_bps,
-            reserved_sats: config.reserved_sats,
-        }
-    }
 }
 
 impl Config {
