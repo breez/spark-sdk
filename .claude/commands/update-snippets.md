@@ -35,9 +35,9 @@ When updating multiple snippet files:
 4. If verification fails, fix and re-verify
 5. Mark Rust as complete
 
-### Phase 3: Update All Other Languages (Parallel)
+### Phase 3: Update Remaining 8 Languages (Parallel)
 
-**Spawn all 8 agents in a single message** for: `go`, `python`, `kotlin-mpp`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
+After Rust completes, **spawn 8 agents in a single message** for: `go`, `python`, `kotlin-mpp`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
 
 Use this prompt template for each:
 
