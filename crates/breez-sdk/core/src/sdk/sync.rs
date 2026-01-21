@@ -10,7 +10,7 @@ use crate::{
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
-    models::Payment,
+    models::{Payment, SyncWalletRequest, SyncWalletResponse},
     persist::{ObjectCacheRepository, UpdateDepositPayload},
     sync::SparkSyncService,
     utils::{
@@ -558,5 +558,27 @@ impl BreezSdk {
             detailed_utxo.txid, detailed_utxo.vout, transfer.total_value_sat,
         );
         Ok(transfer)
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
+impl BreezSdk {
+    /// Synchronizes the wallet with the Spark network
+    #[allow(unused_variables)]
+    pub async fn sync_wallet(
+        &self,
+        request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
+        let (tx, rx) = oneshot::channel();
+
+        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
+            error!("Failed to send sync trigger: {e:?}");
+        }
+        let _ = rx.await.map_err(|e| {
+            error!("Failed to receive sync trigger: {e:?}");
+            SdkError::Generic(format!("sync trigger failed: {e:?}"))
+        })?;
+        Ok(SyncWalletResponse {})
     }
 }

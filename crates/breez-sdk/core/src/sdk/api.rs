@@ -1,6 +1,5 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
-use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::{
@@ -11,12 +10,12 @@ use crate::{
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse, SyncWalletRequest, SyncWalletResponse},
+    models::{GetInfoRequest, GetInfoResponse},
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
-use super::{BreezSdk, SyncRequest, parse_input};
+use super::{BreezSdk, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -92,24 +91,6 @@ impl BreezSdk {
             balance_sats: account_info.balance_sats,
             token_balances: account_info.token_balances,
         })
-    }
-
-    /// Synchronizes the wallet with the Spark network
-    #[allow(unused_variables)]
-    pub async fn sync_wallet(
-        &self,
-        request: SyncWalletRequest,
-    ) -> Result<SyncWalletResponse, SdkError> {
-        let (tx, rx) = oneshot::channel();
-
-        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
-            error!("Failed to send sync trigger: {e:?}");
-        }
-        let _ = rx.await.map_err(|e| {
-            error!("Failed to receive sync trigger: {e:?}");
-            SdkError::Generic(format!("sync trigger failed: {e:?}"))
-        })?;
-        Ok(SyncWalletResponse {})
     }
 
     /// List fiat currencies for which there is a known exchange rate,
