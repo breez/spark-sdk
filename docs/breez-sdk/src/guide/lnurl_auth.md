@@ -1,13 +1,13 @@
 <h1 id="lnurl-auth">
-    <a class="header" href="#lnurl-auth">LNURL Authentication</a>
+    <a class="header" href="#lnurl-auth">Using LNURL-Auth</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_auth">API docs</a>
 </h1>
 
-LNURL-auth allows users to authenticate with services using their Lightning wallet, without requiring passwords or usernames. The Breez SDK supports LNURL-auth following the LUD-04 and LUD-05 specifications.
+LNURL-Auth allows users to authenticate with services using their Lightning app, without requiring passwords or usernames. The Breez SDK supports LNURL-Auth following the LUD-04 and LUD-05 specifications.
 
 ## How it works
 
-LNURL-auth uses cryptographic key derivation to generate domain-specific keys, ensuring that:
+LNURL-Auth uses cryptographic key derivation to generate domain-specific keys, ensuring that:
 - Each service gets a unique authentication key
 - Your master key remains private
 - Authentication is secure and passwordless
@@ -19,7 +19,7 @@ The SDK handles:
 
 ## Parsing LNURL-Auth URLs
 
-After [parsing](parse.md) an LNURL-auth URL, you'll receive an `LnurlAuthRequestDetails` object containing:
+After [parsing](parse.md) an LNURL-Auth URL, you'll receive an `LnurlAuthRequestDetails` object containing:
 - **k1** - The authentication challenge (hex-encoded 32 bytes)
 - **action** - Optional action type: `register`, `login`, `link`, or `auth`
 - **domain** - The service domain requesting authentication
@@ -43,7 +43,7 @@ The SDK automatically derives domain-specific keys according to LUD-05, ensuring
 
 ## Action Types
 
-LNURL-auth supports different action types that indicate the purpose of the authentication:
+LNURL-Auth supports different action types that indicate the purpose of the authentication:
 
 - **register** - Create a new account
 - **login** - Sign in to an existing account
