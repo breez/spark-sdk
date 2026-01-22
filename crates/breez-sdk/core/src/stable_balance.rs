@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use spark_wallet::SparkWallet;
-use tokio::sync::{Notify, OnceCell, watch};
+use tokio::sync::{Notify, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info, warn};
 
@@ -14,7 +14,18 @@ use crate::{
         ConversionAmount, ConversionError, ConversionOptions, ConversionPurpose, ConversionType,
         FetchConversionLimitsRequest, TokenConverter,
     },
+    utils::expiring_cell::ExpiringCell,
 };
+
+/// TTL for cached effective values (1 hour)
+const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
+
+/// Cached effective threshold and reserved values for auto-conversion.
+#[derive(Clone)]
+struct EffectiveValues {
+    threshold: u64,
+    reserved: u64,
+}
 
 /// Manages stable balance auto-conversion behavior.
 ///
@@ -32,11 +43,8 @@ pub(crate) struct StableBalance {
     /// Reference to the spark wallet for balance queries
     spark_wallet: Arc<SparkWallet>,
 
-    /// Cached effective threshold for auto-conversion (lazy initialized, shared across clones)
-    effective_threshold: Arc<OnceCell<u64>>,
-
-    /// Cached effective reserved sats for auto-conversion (lazy initialized, shared across clones)
-    effective_reserved: Arc<OnceCell<u64>>,
+    /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
+    effective_values: Arc<ExpiringCell<EffectiveValues>>,
 
     /// Counter of active conversions.
     /// Auto-convert waits while this is > 0 and is notified when `active_conversions` drops to 0
@@ -83,8 +91,7 @@ impl StableBalance {
             config,
             token_converter,
             spark_wallet,
-            effective_threshold: Arc::new(OnceCell::new()),
-            effective_reserved: Arc::new(OnceCell::new()),
+            effective_values: Arc::new(ExpiringCell::new()),
             active_conversions,
             conversions_done,
             auto_convert_trigger,
@@ -180,18 +187,16 @@ impl StableBalance {
 
     /// Gets or initializes the effective threshold and reserved sats for auto-conversion.
     ///
-    /// On first call, fetches conversion limits and computes:
+    /// Returns cached values if they exist and haven't expired. Otherwise, fetches
+    /// conversion limits and computes:
     /// - Effective threshold: `max(user_threshold, min_from_amount)`
     /// - Effective reserved: user value if set, otherwise `min_from_amount`
     ///
-    /// Subsequent calls return the cached values.
+    /// Values are cached with a TTL and will be refreshed after expiration.
     async fn get_or_init_effective_values(&self) -> Result<(u64, u64), ConversionError> {
-        // Return cached values if already initialized
-        if let (Some(&threshold), Some(&reserved)) = (
-            self.effective_threshold.get(),
-            self.effective_reserved.get(),
-        ) {
-            return Ok((threshold, reserved));
+        // Return cached values if not expired
+        if let Some(values) = self.effective_values.get().await {
+            return Ok((values.threshold, values.reserved));
         }
 
         // Fetch limits and compute effective values
@@ -215,9 +220,16 @@ impl StableBalance {
         // Compute effective reserved: user value if set, otherwise min_from_amount
         let reserved = self.config.reserved_sats.unwrap_or(min_from_amount);
 
-        // Store in the caches
-        let _ = self.effective_threshold.set(threshold);
-        let _ = self.effective_reserved.set(reserved);
+        // Cache with TTL
+        self.effective_values
+            .set(
+                EffectiveValues {
+                    threshold,
+                    reserved,
+                },
+                EFFECTIVE_VALUES_TTL_MS,
+            )
+            .await;
         info!(
             "Auto-conversion effective values initialized: threshold={threshold} sats, reserved={reserved} sats"
         );
