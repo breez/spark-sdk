@@ -348,12 +348,14 @@ impl SdkBuilder {
             }
         };
 
+        let breez_server = Arc::new(
+            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
+                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
+
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
-            None => Arc::new(
-                BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
+            None => Arc::clone(&breez_server),
         };
 
         let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
@@ -444,6 +446,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
+            breez_server,
         })?;
         debug!("Initialized and started breez sdk.");
 
