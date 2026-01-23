@@ -151,6 +151,13 @@ impl BreezSdk {
         self.inner.list_unclaimed_deposits(request).await
     }
 
+    pub async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        self.inner.buy_bitcoin(request).await
+    }
+
     pub async fn check_lightning_address_available(
         &self,
         request: CheckLightningAddressRequest,

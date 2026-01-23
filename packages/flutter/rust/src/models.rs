@@ -224,6 +224,19 @@ pub struct _ListUnclaimedDepositsResponse {
     pub deposits: Vec<DepositInfo>,
 }
 
+#[frb(mirror(BuyBitcoinRequest))]
+pub struct _BuyBitcoinRequest {
+    pub address: String,
+    pub locked_amount_sat: Option<u64>,
+    pub max_amount_sat: Option<u64>,
+    pub redirect_url: Option<String>,
+}
+
+#[frb(mirror(BuyBitcoinResponse))]
+pub struct _BuyBitcoinResponse {
+    pub url: String,
+}
+
 #[frb(mirror(LnurlPayInfo))]
 pub struct _LnurlPayInfo {
     pub ln_address: Option<String>,
