@@ -55,6 +55,21 @@ impl SdkBuilder {
         *builder = builder.clone().with_real_time_sync_storage(storage);
     }
 
+    /// Sets the storage to use `PostgreSQL` with the given configuration.
+    /// This initializes both storage and real-time sync storage with the
+    /// `PostgreSQL` implementation.
+    /// Arguments:
+    /// - `config`: `PostgreSQL` storage configuration containing connection string and pool settings.
+    #[cfg(feature = "postgres")]
+    pub async fn with_postgres_storage(
+        &self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Result<(), SdkError> {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_postgres_storage(config).await?;
+        Ok(())
+    }
+
     /// Sets the key set type to be used by the SDK.
     /// Arguments:
     /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.

@@ -166,6 +166,54 @@ impl SdkBuilder {
         self
     }
 
+    /// Sets the storage to use `PostgreSQL` with the given configuration.
+    /// This initializes both storage and real-time sync storage with the
+    /// `PostgreSQL` implementation.
+    ///
+    /// # Arguments
+    /// - `config`: `PostgreSQL` storage configuration
+    ///
+    /// # Example
+    /// ```ignore
+    /// use crate::persist::postgres::PostgresStorageConfig;
+    ///
+    /// // Simple usage with defaults:
+    /// let sdk = SdkBuilder::new(config, seed)
+    ///     .with_postgres_storage(PostgresStorageConfig::new("host=localhost user=postgres dbname=spark"))
+    ///     .await?
+    ///     .build()
+    ///     .await?;
+    ///
+    /// // With custom pool settings:
+    /// let sdk = SdkBuilder::new(config, seed)
+    ///     .with_postgres_storage(PostgresStorageConfig {
+    ///         connection_string: "host=localhost user=postgres dbname=spark".into(),
+    ///         max_pool_size: Some(8),
+    ///         wait_timeout_secs: Some(30),
+    ///         ..Default::default()
+    ///     })
+    ///     .await?
+    ///     .build()
+    ///     .await?;
+    /// ```
+    #[cfg(all(
+        feature = "postgres",
+        not(all(target_family = "wasm", target_os = "unknown"))
+    ))]
+    pub async fn with_postgres_storage(
+        mut self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Result<Self, crate::error::SdkError> {
+        let storage = Arc::new(
+            crate::persist::postgres::PostgresStorage::new(config)
+                .await
+                .map_err(|e| crate::error::SdkError::Generic(e.to_string()))?,
+        );
+        self.storage = Some(storage.clone());
+        self.sync_storage = Some(storage);
+        Ok(self)
+    }
+
     /// Sets the chain service to be used by the SDK.
     /// Arguments:
     /// - `chain_service`: The chain service to be used.
