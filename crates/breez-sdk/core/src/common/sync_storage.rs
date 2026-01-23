@@ -47,7 +47,11 @@ pub trait SyncStorage: Send + Sync {
         &self,
         record: UnversionedRecordChange,
     ) -> Result<u64, SyncStorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError>;
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), SyncStorageError>;
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
@@ -100,8 +104,12 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
     async fn complete_outgoing_sync(
         &self,
         record: breez_sdk_common::sync::storage::Record,
+        local_revision: u64,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.complete_outgoing_sync(record.into()).await?)
+        Ok(self
+            .inner
+            .complete_outgoing_sync(record.into(), local_revision)
+            .await?)
     }
 
     async fn get_pending_outgoing_changes(

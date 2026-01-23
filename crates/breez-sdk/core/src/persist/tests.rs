@@ -76,7 +76,7 @@ pub async fn test_sqlite_sync_storage(storage: Box<dyn SyncStorage>) {
     };
 
     storage
-        .complete_outgoing_sync(completed_record.clone())
+        .complete_outgoing_sync(completed_record.clone(), revision1)
         .await
         .unwrap();
 
@@ -302,7 +302,7 @@ pub async fn test_sqlite_sync_storage(storage: Box<dyn SyncStorage>) {
     };
 
     storage
-        .complete_outgoing_sync(completed_settings)
+        .complete_outgoing_sync(completed_settings, settings_revision)
         .await
         .unwrap();
 
