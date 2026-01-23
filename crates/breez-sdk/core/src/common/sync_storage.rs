@@ -43,9 +43,10 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
     async fn complete_outgoing_sync(
         &self,
         record: breez_sdk_common::sync::storage::Record,
+        local_revision: u64,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
         self.inner
-            .complete_outgoing_sync(record.into())
+            .complete_outgoing_sync(record.into(), local_revision)
             .await
             .map_err(storage_to_sync_error)
     }
