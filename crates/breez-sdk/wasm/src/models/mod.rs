@@ -969,11 +969,17 @@ pub struct RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlInfo)]
+pub struct LnurlInfo {
+    pub url: String,
+    pub bech32: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressInfo)]
 pub struct LightningAddressInfo {
     pub description: String,
     pub lightning_address: String,
-    pub lnurl: String,
+    pub lnurl: LnurlInfo,
     pub username: String,
 }
 

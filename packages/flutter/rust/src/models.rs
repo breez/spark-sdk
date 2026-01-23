@@ -838,11 +838,17 @@ pub struct _RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
+#[frb(mirror(LnurlInfo))]
+pub struct _LnurlInfo {
+    pub url: String,
+    pub bech32: String,
+}
+
 #[frb(mirror(LightningAddressInfo))]
 pub struct _LightningAddressInfo {
     pub description: String,
     pub lightning_address: String,
-    pub lnurl: String,
+    pub lnurl: LnurlInfo,
     pub username: String,
 }
 
