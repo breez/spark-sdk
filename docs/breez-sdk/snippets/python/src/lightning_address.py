@@ -38,7 +38,8 @@ async def register_lightning_address(sdk: BreezSdk, username: str, description: 
 
     address_info = await sdk.register_lightning_address(request)
     lightning_address = address_info.lightning_address
-    lnurl = address_info.lnurl
+    lnurl_url = address_info.lnurl.url
+    lnurl_bech32 = address_info.lnurl.bech32
     # ANCHOR_END: register-lightning-address
     return address_info
 
@@ -51,7 +52,8 @@ async def get_lightning_address(sdk: BreezSdk):
         lightning_address = address_info_opt.lightning_address
         username = address_info_opt.username
         description = address_info_opt.description
-        lnurl = address_info_opt.lnurl
+        lnurl_url = address_info_opt.lnurl.url
+        lnurl_bech32 = address_info_opt.lnurl.bech32
     # ANCHOR_END: get-lightning-address
 
 

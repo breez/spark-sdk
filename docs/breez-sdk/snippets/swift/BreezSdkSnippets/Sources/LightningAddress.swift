@@ -34,7 +34,8 @@ func registerLightningAddress(sdk: BreezSdk) async throws {
     
     let addressInfo = try await sdk.registerLightningAddress(request: request)
     let lightningAddress = addressInfo.lightningAddress
-    let lnurl = addressInfo.lnurl
+    let lnurlUrl = addressInfo.lnurl.url
+    let lnurlBech32 = addressInfo.lnurl.bech32
     // ANCHOR_END: register-lightning-address
 }
 
@@ -44,7 +45,8 @@ func getLightningAddress(sdk: BreezSdk) async throws {
         let lightningAddress = addressInfo.lightningAddress
         let username = addressInfo.username
         let description = addressInfo.description
-        let lnurl = addressInfo.lnurl
+        let lnurlUrl = addressInfo.lnurl.url
+        let lnurlBech32 = addressInfo.lnurl.bech32
     }
     // ANCHOR_END: get-lightning-address
 }

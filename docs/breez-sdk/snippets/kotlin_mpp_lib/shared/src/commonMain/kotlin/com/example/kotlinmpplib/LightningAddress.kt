@@ -36,7 +36,8 @@ class LightningAddress {
         
         val addressInfo = sdk.registerLightningAddress(request)
         val lightningAddress = addressInfo.lightningAddress
-        val lnurl = addressInfo.lnurl
+        val lnurlUrl = addressInfo.lnurl.url
+        val lnurlBech32 = addressInfo.lnurl.bech32
         // ANCHOR_END: register-lightning-address
     }
 
@@ -48,7 +49,8 @@ class LightningAddress {
             val lightningAddress = addressInfoOpt.lightningAddress
             val username = addressInfoOpt.username
             val description = addressInfoOpt.description
-            val lnurl = addressInfoOpt.lnurl
+            val lnurlUrl = addressInfoOpt.lnurl.url
+            val lnurlBech32 = addressInfoOpt.lnurl.bech32
         }
         // ANCHOR_END: get-lightning-address
     }
