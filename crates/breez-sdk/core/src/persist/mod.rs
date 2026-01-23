@@ -1,4 +1,9 @@
 pub(crate) mod path;
+#[cfg(all(
+    feature = "postgres",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub mod postgres;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 

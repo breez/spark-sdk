@@ -9,9 +9,12 @@ browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "dep:uniffi",
     "openssl-vendored",
+    "postgres",
 ]
 openssl-vendored = ["openssl"]
 test-utils = []
+# PostgreSQL storage backend (optional for pure Rust users, included in uniffi builds)
+postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:tokio-postgres-rustls", "dep:rustls"]
 # TLS features
 default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls", "flashnet/default-tls"]
 rustls-tls = ["reqwest/rustls-tls", "breez-sdk-common/rustls-tls", "flashnet/rustls-tls"]
@@ -60,6 +63,11 @@ k256 = { workspace = true, features = ["arithmetic"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
+tokio-postgres = { workspace = true, optional = true }
+tokio-postgres-rustls = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
+deadpool = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
@@ -68,6 +76,12 @@ tokio = { workspace = true, features = ["macros"] }
 [dev-dependencies]
 breez-sdk-common = { workspace = true, features = ["test-utils"] }
 breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+
+# Non-WASM dev dependencies (for PostgreSQL container tests)
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+testcontainers.workspace = true
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+breez-sdk-spark = { workspace = true, features = ["postgres"] }
 
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
