@@ -1213,11 +1213,26 @@ pub struct RegisterLightningAddressRequest {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LnurlInfo {
+    pub url: String,
+    pub bech32: String,
+}
+
+impl LnurlInfo {
+    pub fn new(url: String) -> Self {
+        let bech32 =
+            breez_sdk_common::lnurl::encode_lnurl_to_bech32(&url).unwrap_or_else(|_| url.clone());
+        Self { url, bech32 }
+    }
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Deserialize, Serialize)]
 pub struct LightningAddressInfo {
     pub description: String,
     pub lightning_address: String,
-    pub lnurl: String,
+    pub lnurl: LnurlInfo,
     pub username: String,
 }
 
@@ -1226,7 +1241,7 @@ impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
         Self {
             description: resp.description,
             lightning_address: resp.lightning_address,
-            lnurl: resp.lnurl,
+            lnurl: LnurlInfo::new(resp.lnurl),
             username: resp.username,
         }
     }
