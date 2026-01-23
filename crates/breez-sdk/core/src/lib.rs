@@ -35,6 +35,12 @@ pub use sdk::{BreezSdk, default_config, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;
 
+#[cfg(all(
+    feature = "postgres",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub use persist::postgres::{PoolQueueMode, PostgresStorage, PostgresStorageConfig};
+
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {
     persist::sqlite::SqliteStorage,

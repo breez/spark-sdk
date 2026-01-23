@@ -1,0 +1,1700 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use deadpool_postgres::Pool;
+use macros::async_trait;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
+use tokio_postgres::{Config as PgConfig, Row, types::ToSql};
+use tokio_postgres_rustls::MakeRustlsConnect;
+
+use crate::{
+    AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
+    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
+    error::DepositClaimError,
+    persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
+    sync_storage::{
+        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, SyncStorage,
+        SyncStorageError, UnversionedRecordChange,
+    },
+};
+
+use super::{Payment, Storage, StorageError};
+
+/// Queue mode for the connection pool.
+///
+/// Determines the order in which connections are retrieved from the pool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PoolQueueMode {
+    /// First In, First Out (default).
+    /// Connections are used in the order they were returned to the pool.
+    /// Spreads load evenly across all connections.
+    #[default]
+    Fifo,
+    /// Last In, First Out.
+    /// Most recently returned connections are used first.
+    /// Keeps fewer connections "hot" and allows idle connections to close sooner.
+    Lifo,
+}
+
+impl From<PoolQueueMode> for deadpool::managed::QueueMode {
+    fn from(mode: PoolQueueMode) -> Self {
+        match mode {
+            PoolQueueMode::Fifo => deadpool::managed::QueueMode::Fifo,
+            PoolQueueMode::Lifo => deadpool::managed::QueueMode::Lifo,
+        }
+    }
+}
+
+/// Configuration for `PostgreSQL` storage connection pool.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PostgresStorageConfig {
+    /// `PostgreSQL` connection string (key-value or URI format).
+    ///
+    /// Supported formats:
+    /// - Key-value: `host=localhost user=postgres dbname=spark sslmode=require`
+    /// - URI: `postgres://user:password@host:port/dbname?sslmode=require`
+    pub connection_string: String,
+
+    /// Maximum number of connections in the pool.
+    /// If `None`, uses deadpool default (`num_cpus * 4`).
+    pub max_pool_size: Option<u32>,
+
+    /// Timeout in seconds waiting for a connection from the pool.
+    /// If `None`, waits indefinitely.
+    pub wait_timeout_secs: Option<u64>,
+
+    /// Timeout in seconds for establishing a new connection.
+    /// If `None`, uses no timeout.
+    pub create_timeout_secs: Option<u64>,
+
+    /// Timeout in seconds before recycling an idle connection.
+    /// If `None`, connections are not recycled based on idle time.
+    pub recycle_timeout_secs: Option<u64>,
+
+    /// Queue mode for retrieving connections from the pool.
+    /// If `None`, defaults to FIFO.
+    pub queue_mode: Option<PoolQueueMode>,
+}
+
+impl PostgresStorageConfig {
+    /// Creates a new configuration with the given connection string and all pool defaults.
+    #[must_use]
+    pub fn new(connection_string: impl Into<String>) -> Self {
+        Self {
+            connection_string: connection_string.into(),
+            max_pool_size: None,
+            wait_timeout_secs: None,
+            create_timeout_secs: None,
+            recycle_timeout_secs: None,
+            queue_mode: None,
+        }
+    }
+}
+
+/// Certificate verifier that accepts any server certificate.
+/// This is used for `sslmode=require` which only ensures encryption,
+/// not server identity verification.
+#[derive(Debug)]
+struct NoVerifier;
+
+impl ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+        ]
+    }
+}
+
+/// PostgreSQL-based storage implementation using connection pooling
+pub struct PostgresStorage {
+    pool: Pool,
+}
+
+/// Creates a rustls `ClientConfig` that accepts any server certificate.
+/// This is appropriate for `sslmode=require` which ensures encrypted connections
+/// but does not verify the server's identity.
+fn make_tls_config() -> ClientConfig {
+    ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoVerifier))
+        .with_no_client_auth()
+}
+
+/// Applies pool configuration options from `PostgresStorageConfig` to a deadpool-postgres config.
+fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolConfig {
+    let mut pool_config = deadpool_postgres::PoolConfig::default();
+    if let Some(size) = config.max_pool_size {
+        pool_config.max_size = size as usize;
+    }
+    if let Some(secs) = config.wait_timeout_secs {
+        pool_config.timeouts.wait = Some(Duration::from_secs(secs));
+    }
+    if let Some(secs) = config.create_timeout_secs {
+        pool_config.timeouts.create = Some(Duration::from_secs(secs));
+    }
+    if let Some(secs) = config.recycle_timeout_secs {
+        pool_config.timeouts.recycle = Some(Duration::from_secs(secs));
+    }
+    if let Some(mode) = config.queue_mode {
+        pool_config.queue_mode = mode.into();
+    }
+    pool_config
+}
+
+impl PostgresStorage {
+    /// Creates a new `PostgresStorage` with a connection pool.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration for the `PostgreSQL` connection pool
+    ///
+    /// # Connection String Formats
+    ///
+    /// - Key-value: `host=localhost user=postgres dbname=spark sslmode=require`
+    /// - URI: `postgres://user:password@host:port/dbname?sslmode=require`
+    ///
+    /// # Supported `sslmode` values
+    ///
+    /// - `disable` - No TLS (default if not specified)
+    /// - `prefer` - Try TLS, fall back to plaintext if unavailable
+    /// - `require` - TLS required, but accept any server certificate
+    ///
+    /// # Returns
+    ///
+    /// A new `PostgresStorage` instance or an error
+    pub async fn new(config: PostgresStorageConfig) -> Result<Self, StorageError> {
+        let pg_config: PgConfig = config.connection_string.parse().map_err(|e| {
+            StorageError::InitializationError(format!("Invalid connection string: {e}"))
+        })?;
+
+        let ssl_mode = pg_config.get_ssl_mode();
+        let pool_config = apply_pool_config(&config);
+        let pool = match ssl_mode {
+            tokio_postgres::config::SslMode::Disable => {
+                let manager = deadpool_postgres::Manager::new(pg_config, tokio_postgres::NoTls);
+                Pool::builder(manager)
+                    .config(pool_config)
+                    .build()
+                    .map_err(|e| StorageError::InitializationError(e.to_string()))?
+            }
+            tokio_postgres::config::SslMode::Prefer | tokio_postgres::config::SslMode::Require => {
+                let tls_config = make_tls_config();
+                let tls = MakeRustlsConnect::new(tls_config);
+                let manager = deadpool_postgres::Manager::new(pg_config, tls);
+                Pool::builder(manager)
+                    .config(pool_config)
+                    .build()
+                    .map_err(|e| StorageError::InitializationError(e.to_string()))?
+            }
+            _ => {
+                return Err(StorageError::InitializationError(
+                    "Unsupported sslmode: only disable, prefer, and require are supported"
+                        .to_string(),
+                ));
+            }
+        };
+
+        let storage = Self { pool };
+        storage.migrate().await?;
+        Ok(storage)
+    }
+
+    #[allow(clippy::arithmetic_side_effects)]
+    async fn migrate(&self) -> Result<(), StorageError> {
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+
+        // Create migrations table if it doesn't exist
+        client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                )",
+                &[],
+            )
+            .await
+            .map_err(map_db_error)?;
+
+        // Get current version
+        let current_version: i32 = client
+            .query_opt(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                &[],
+            )
+            .await
+            .map_err(map_db_error)?
+            .map_or(0, |row| row.get(0));
+
+        let migrations = Self::migrations();
+
+        for (i, migration) in migrations.iter().enumerate() {
+            let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
+            if version > current_version {
+                // Run each migration in a transaction for atomicity
+                let tx = client.transaction().await.map_err(map_db_error)?;
+
+                for statement in *migration {
+                    tx.execute(*statement, &[]).await.map_err(|e| {
+                        StorageError::Implementation(format!("Migration {version} failed: {e}"))
+                    })?;
+                }
+                tx.execute(
+                    "INSERT INTO schema_migrations (version) VALUES ($1)",
+                    &[&version],
+                )
+                .await
+                .map_err(map_db_error)?;
+
+                tx.commit().await.map_err(map_db_error)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn migrations() -> Vec<&'static [&'static str]> {
+        vec![
+            // Migration 1: Core tables
+            &[
+                "CREATE TABLE IF NOT EXISTS payments (
+                    id TEXT PRIMARY KEY,
+                    payment_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    fees TEXT NOT NULL,
+                    timestamp BIGINT NOT NULL,
+                    method TEXT,
+                    withdraw_tx_id TEXT,
+                    deposit_tx_id TEXT,
+                    spark BOOLEAN
+                )",
+                "CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )",
+                "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
+                    txid TEXT NOT NULL,
+                    vout INTEGER NOT NULL,
+                    amount_sats BIGINT,
+                    claim_error JSONB,
+                    refund_tx TEXT,
+                    refund_tx_id TEXT,
+                    PRIMARY KEY (txid, vout)
+                )",
+                "CREATE TABLE IF NOT EXISTS payment_metadata (
+                    payment_id TEXT PRIMARY KEY,
+                    parent_payment_id TEXT,
+                    lnurl_pay_info JSONB,
+                    lnurl_withdraw_info JSONB,
+                    lnurl_description TEXT,
+                    conversion_info JSONB
+                )",
+                "CREATE TABLE IF NOT EXISTS payment_details_lightning (
+                    payment_id TEXT PRIMARY KEY,
+                    invoice TEXT NOT NULL,
+                    payment_hash TEXT NOT NULL,
+                    destination_pubkey TEXT NOT NULL,
+                    description TEXT,
+                    preimage TEXT
+                )",
+                "CREATE TABLE IF NOT EXISTS payment_details_token (
+                    payment_id TEXT PRIMARY KEY,
+                    metadata JSONB NOT NULL,
+                    tx_hash TEXT NOT NULL,
+                    invoice_details JSONB
+                )",
+                "CREATE TABLE IF NOT EXISTS payment_details_spark (
+                    payment_id TEXT PRIMARY KEY,
+                    invoice_details JSONB,
+                    htlc_details JSONB
+                )",
+                "CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
+                    payment_hash TEXT PRIMARY KEY,
+                    nostr_zap_request TEXT,
+                    nostr_zap_receipt TEXT,
+                    sender_comment TEXT
+                )",
+            ],
+            // Migration 2: Sync tables
+            &[
+                "CREATE TABLE IF NOT EXISTS sync_revision (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    revision BIGINT NOT NULL DEFAULT 0,
+                    CHECK (id = 1)
+                )",
+                "INSERT INTO sync_revision (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING",
+                "CREATE TABLE IF NOT EXISTS sync_outgoing (
+                    record_type TEXT NOT NULL,
+                    data_id TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    commit_time BIGINT NOT NULL,
+                    updated_fields_json JSONB NOT NULL,
+                    revision BIGINT NOT NULL
+                )",
+                "CREATE INDEX IF NOT EXISTS idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id)",
+                "CREATE TABLE IF NOT EXISTS sync_state (
+                    record_type TEXT NOT NULL,
+                    data_id TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    commit_time BIGINT NOT NULL,
+                    data JSONB NOT NULL,
+                    revision BIGINT NOT NULL,
+                    PRIMARY KEY(record_type, data_id)
+                )",
+                "CREATE TABLE IF NOT EXISTS sync_incoming (
+                    record_type TEXT NOT NULL,
+                    data_id TEXT NOT NULL,
+                    schema_version TEXT NOT NULL,
+                    commit_time BIGINT NOT NULL,
+                    data JSONB NOT NULL,
+                    revision BIGINT NOT NULL,
+                    PRIMARY KEY(record_type, data_id, revision)
+                )",
+                "CREATE INDEX IF NOT EXISTS idx_sync_incoming_revision ON sync_incoming(revision)",
+            ],
+            // Migration 3: Indexes
+            &[
+                "CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_payments_payment_type ON payments(payment_type)",
+                "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)",
+                "CREATE INDEX IF NOT EXISTS idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)",
+                "CREATE INDEX IF NOT EXISTS idx_payment_metadata_parent ON payment_metadata(parent_payment_id)",
+            ],
+        ]
+    }
+}
+
+/// Maps a deadpool-postgres pool error to the appropriate `StorageError`.
+/// Pool errors (exhaustion, timeout) are connection-related.
+#[allow(clippy::needless_pass_by_value)]
+fn map_pool_error(e: deadpool_postgres::PoolError) -> StorageError {
+    StorageError::Connection(e.to_string())
+}
+
+/// Maps a tokio-postgres database error to the appropriate `StorageError`.
+/// Connection-class errors (Class 08) and closed connections are mapped to `Connection`,
+/// other errors are mapped to `Implementation`.
+#[allow(clippy::needless_pass_by_value)]
+fn map_db_error(e: tokio_postgres::Error) -> StorageError {
+    // Check if the connection is closed
+    if e.is_closed() {
+        return StorageError::Connection(e.to_string());
+    }
+    // Check SQL state codes for connection errors (Class 08)
+    if let Some(code) = e.code()
+        && code.code().starts_with("08")
+    {
+        return StorageError::Connection(e.to_string());
+    }
+    StorageError::Implementation(e.to_string())
+}
+
+impl From<tokio_postgres::Error> for StorageError {
+    fn from(value: tokio_postgres::Error) -> Self {
+        map_db_error(value)
+    }
+}
+
+/// Converts an optional serializable value to an optional `serde_json::Value` for JSONB storage.
+fn to_json_opt<T: serde::Serialize>(
+    value: Option<&T>,
+) -> Result<Option<serde_json::Value>, StorageError> {
+    value
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
+/// Converts an optional `serde_json::Value` to an optional deserialized type.
+fn from_json_opt<T: serde::de::DeserializeOwned>(
+    value: Option<serde_json::Value>,
+) -> Result<Option<T>, StorageError> {
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
+#[async_trait]
+impl Storage for PostgresStorage {
+    #[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
+    async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<Vec<Payment>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        // Build WHERE clauses based on filters
+        let mut where_clauses = Vec::new();
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let mut param_idx = 1;
+
+        // Filter by payment type
+        if let Some(ref type_filter) = request.type_filter
+            && !type_filter.is_empty()
+        {
+            let placeholders: Vec<String> = type_filter
+                .iter()
+                .map(|_| {
+                    let placeholder = format!("${param_idx}");
+                    param_idx += 1;
+                    placeholder
+                })
+                .collect();
+            where_clauses.push(format!("p.payment_type IN ({})", placeholders.join(", ")));
+            for payment_type in type_filter {
+                params.push(Box::new(payment_type.to_string()));
+            }
+        }
+
+        // Filter by status
+        if let Some(ref status_filter) = request.status_filter
+            && !status_filter.is_empty()
+        {
+            let placeholders: Vec<String> = status_filter
+                .iter()
+                .map(|_| {
+                    let placeholder = format!("${param_idx}");
+                    param_idx += 1;
+                    placeholder
+                })
+                .collect();
+            where_clauses.push(format!("p.status IN ({})", placeholders.join(", ")));
+            for status in status_filter {
+                params.push(Box::new(status.to_string()));
+            }
+        }
+
+        // Filter by timestamp range
+        if let Some(from_timestamp) = request.from_timestamp {
+            where_clauses.push(format!("p.timestamp >= ${param_idx}"));
+            param_idx += 1;
+            params.push(Box::new(i64::try_from(from_timestamp).unwrap_or(i64::MAX)));
+        }
+
+        if let Some(to_timestamp) = request.to_timestamp {
+            where_clauses.push(format!("p.timestamp < ${param_idx}"));
+            param_idx += 1;
+            params.push(Box::new(i64::try_from(to_timestamp).unwrap_or(i64::MAX)));
+        }
+
+        // Filter by asset
+        if let Some(ref asset_filter) = request.asset_filter {
+            match asset_filter {
+                AssetFilter::Bitcoin => {
+                    where_clauses.push("t.metadata IS NULL".to_string());
+                }
+                AssetFilter::Token { token_identifier } => {
+                    where_clauses.push("t.metadata IS NOT NULL".to_string());
+                    if let Some(identifier) = token_identifier {
+                        where_clauses
+                            .push(format!("t.metadata::jsonb->>'identifier' = ${param_idx}"));
+                        param_idx += 1;
+                        params.push(Box::new(identifier.clone()));
+                    }
+                }
+            }
+        }
+
+        // Filter by payment details
+        if let Some(ref payment_details_filter) = request.payment_details_filter {
+            let mut all_payment_details_clauses = Vec::new();
+            for payment_details_filter in payment_details_filter {
+                let mut payment_details_clauses = Vec::new();
+                // Filter by Spark HTLC status
+                if let PaymentDetailsFilter::Spark {
+                    htlc_status: Some(htlc_statuses),
+                    ..
+                } = payment_details_filter
+                    && !htlc_statuses.is_empty()
+                {
+                    let placeholders: Vec<String> = htlc_statuses
+                        .iter()
+                        .map(|_| {
+                            let placeholder = format!("${param_idx}");
+                            param_idx += 1;
+                            placeholder
+                        })
+                        .collect();
+                    payment_details_clauses.push(format!(
+                        "s.htlc_details::jsonb->>'status' IN ({})",
+                        placeholders.join(", ")
+                    ));
+                    for htlc_status in htlc_statuses {
+                        params.push(Box::new(htlc_status.to_string()));
+                    }
+                }
+                // Filter by conversion info presence
+                if let PaymentDetailsFilter::Spark {
+                    conversion_refund_needed: Some(conversion_refund_needed),
+                    ..
+                }
+                | PaymentDetailsFilter::Token {
+                    conversion_refund_needed: Some(conversion_refund_needed),
+                    ..
+                } = payment_details_filter
+                {
+                    let type_check = match payment_details_filter {
+                        PaymentDetailsFilter::Spark { .. } => "p.spark = true",
+                        PaymentDetailsFilter::Token { .. } => "p.spark IS NULL",
+                    };
+                    let refund_needed = if *conversion_refund_needed {
+                        "= 'RefundNeeded'"
+                    } else {
+                        "!= 'RefundNeeded'"
+                    };
+                    payment_details_clauses.push(format!(
+                        "{type_check} AND pm.conversion_info IS NOT NULL AND
+                         pm.conversion_info::jsonb->>'status' {refund_needed}"
+                    ));
+                }
+                // Filter by token transaction hash
+                if let PaymentDetailsFilter::Token {
+                    tx_hash: Some(tx_hash),
+                    ..
+                } = payment_details_filter
+                {
+                    payment_details_clauses.push(format!("t.tx_hash = ${param_idx}"));
+                    param_idx += 1;
+                    params.push(Box::new(tx_hash.clone()));
+                }
+
+                if !payment_details_clauses.is_empty() {
+                    all_payment_details_clauses
+                        .push(format!("({})", payment_details_clauses.join(" AND ")));
+                }
+            }
+
+            if !all_payment_details_clauses.is_empty() {
+                where_clauses.push(format!("({})", all_payment_details_clauses.join(" OR ")));
+            }
+        }
+
+        // Exclude child payments
+        where_clauses.push("pm.parent_payment_id IS NULL".to_string());
+
+        // Build the WHERE clause
+        let where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
+
+        // Determine sort order
+        let order_direction = if request.sort_ascending.unwrap_or(false) {
+            "ASC"
+        } else {
+            "DESC"
+        };
+
+        let limit = i64::from(request.limit.unwrap_or(u32::MAX));
+        let offset = i64::from(request.offset.unwrap_or(0));
+
+        let query = format!(
+            "{SELECT_PAYMENT_SQL} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT ${param_idx} OFFSET ${}",
+            param_idx + 1
+        );
+
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
+
+        let param_refs: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+
+        let rows = client
+            .query(&query, &param_refs)
+            .await
+            .map_err(map_db_error)?;
+
+        let mut payments = Vec::new();
+        for row in rows {
+            payments.push(map_payment(&row)?);
+        }
+        Ok(payments)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+
+        let tx = client.transaction().await.map_err(map_db_error)?;
+
+        // Insert or update main payment record
+        tx.execute(
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT(id) DO UPDATE SET
+                    payment_type = EXCLUDED.payment_type,
+                    status = EXCLUDED.status,
+                    amount = EXCLUDED.amount,
+                    fees = EXCLUDED.fees,
+                    timestamp = EXCLUDED.timestamp,
+                    method = EXCLUDED.method",
+            &[
+                &payment.id,
+                &payment.payment_type.to_string(),
+                &payment.status.to_string(),
+                &payment.amount.to_string(),
+                &payment.fees.to_string(),
+                &i64::try_from(payment.timestamp).unwrap_or(i64::MAX),
+                &Some(payment.method.to_string()),
+            ],
+        )
+        .await?;
+
+        match payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => {
+                tx.execute(
+                    "UPDATE payments SET withdraw_tx_id = $1 WHERE id = $2",
+                    &[&tx_id, &payment.id],
+                )
+                .await?;
+            }
+            Some(PaymentDetails::Deposit { tx_id }) => {
+                tx.execute(
+                    "UPDATE payments SET deposit_tx_id = $1 WHERE id = $2",
+                    &[&tx_id, &payment.id],
+                )
+                .await?;
+            }
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+                ..
+            }) => {
+                tx.execute(
+                    "UPDATE payments SET spark = true WHERE id = $1",
+                    &[&payment.id],
+                )
+                .await?;
+                if invoice_details.is_some() || htlc_details.is_some() {
+                    let invoice_json = to_json_opt(invoice_details.as_ref())?;
+                    let htlc_json = to_json_opt(htlc_details.as_ref())?;
+                    tx.execute(
+                        "INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
+                             VALUES ($1, $2, $3)
+                             ON CONFLICT(payment_id) DO UPDATE SET
+                                invoice_details = COALESCE(EXCLUDED.invoice_details, payment_details_spark.invoice_details),
+                                htlc_details = COALESCE(EXCLUDED.htlc_details, payment_details_spark.htlc_details)",
+                        &[&payment.id, &invoice_json, &htlc_json],
+                    )
+                    .await?;
+                }
+            }
+            Some(PaymentDetails::Token {
+                metadata,
+                tx_hash,
+                invoice_details,
+                ..
+            }) => {
+                let metadata_json = serde_json::to_value(&metadata)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                let invoice_json = to_json_opt(invoice_details.as_ref())?;
+                tx.execute(
+                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT(payment_id) DO UPDATE SET
+                            metadata = EXCLUDED.metadata,
+                            tx_hash = EXCLUDED.tx_hash,
+                            invoice_details = COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)",
+                    &[&payment.id, &metadata_json, &tx_hash, &invoice_json],
+                )
+                .await?;
+            }
+            Some(PaymentDetails::Lightning {
+                invoice,
+                payment_hash,
+                destination_pubkey,
+                description,
+                preimage,
+                ..
+            }) => {
+                tx.execute(
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage)
+                         VALUES ($1, $2, $3, $4, $5, $6)
+                         ON CONFLICT(payment_id) DO UPDATE SET
+                            invoice = EXCLUDED.invoice,
+                            payment_hash = EXCLUDED.payment_hash,
+                            destination_pubkey = EXCLUDED.destination_pubkey,
+                            description = EXCLUDED.description,
+                            preimage = COALESCE(EXCLUDED.preimage, payment_details_lightning.preimage)",
+                    &[&payment.id, &invoice, &payment_hash, &destination_pubkey, &description, &preimage],
+                )
+                .await?;
+            }
+            None => {}
+        }
+
+        tx.commit().await.map_err(map_db_error)?;
+
+        Ok(())
+    }
+
+    async fn set_payment_metadata(
+        &self,
+        payment_id: String,
+        metadata: PaymentMetadata,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        let lnurl_pay_info_json = to_json_opt(metadata.lnurl_pay_info.as_ref())?;
+        let lnurl_withdraw_info_json = to_json_opt(metadata.lnurl_withdraw_info.as_ref())?;
+        let conversion_info_json = to_json_opt(metadata.conversion_info.as_ref())?;
+
+        client
+            .execute(
+                "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT(payment_id) DO UPDATE SET
+                    parent_payment_id = EXCLUDED.parent_payment_id,
+                    lnurl_pay_info = EXCLUDED.lnurl_pay_info,
+                    lnurl_withdraw_info = EXCLUDED.lnurl_withdraw_info,
+                    lnurl_description = EXCLUDED.lnurl_description,
+                    conversion_info = EXCLUDED.conversion_info",
+                &[
+                    &payment_id,
+                    &metadata.parent_payment_id,
+                    &lnurl_pay_info_json,
+                    &lnurl_withdraw_info_json,
+                    &metadata.lnurl_description,
+                    &conversion_info_json,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        client
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ($1, $2)
+                 ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+                &[&key, &value],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        let row = client
+            .query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
+            .await?;
+
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        client
+            .execute("DELETE FROM settings WHERE key = $1", &[&key])
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.id = $1");
+        let row = client
+            .query_one(&query, &[&id])
+            .await
+            .map_err(map_db_error)?;
+        map_payment(&row)
+    }
+
+    async fn get_payment_by_invoice(
+        &self,
+        invoice: String,
+    ) -> Result<Option<Payment>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE l.invoice = $1");
+        let row = client.query_opt(&query, &[&invoice]).await?;
+
+        match row {
+            Some(r) => Ok(Some(map_payment(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    #[allow(clippy::arithmetic_side_effects)]
+    async fn get_payments_by_parent_ids(
+        &self,
+        parent_payment_ids: Vec<String>,
+    ) -> Result<HashMap<String, Vec<Payment>>, StorageError> {
+        if parent_payment_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        // Early exit if no related payments exist
+        let has_related: bool = client
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1)",
+                &[],
+            )
+            .await
+            .map(|row| row.get(0))
+            .unwrap_or(false);
+
+        if !has_related {
+            return Ok(HashMap::new());
+        }
+
+        // Build the IN clause with placeholders
+        let placeholders: Vec<String> = parent_payment_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}", i + 1))
+            .collect();
+        let in_clause = placeholders.join(", ");
+
+        let query = format!(
+            "{SELECT_PAYMENT_SQL} WHERE pm.parent_payment_id IN ({in_clause}) ORDER BY p.timestamp ASC"
+        );
+
+        let params: Vec<&(dyn ToSql + Sync)> = parent_payment_ids
+            .iter()
+            .map(|id| id as &(dyn ToSql + Sync))
+            .collect();
+
+        let rows = client.query(&query, &params).await?;
+
+        let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
+        for row in rows {
+            let payment = map_payment(&row)?;
+            let parent_payment_id: String = row.get(26);
+            result.entry(parent_payment_id).or_default().push(payment);
+        }
+
+        Ok(result)
+    }
+
+    async fn add_deposit(
+        &self,
+        txid: String,
+        vout: u32,
+        amount_sats: u64,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        client
+            .execute(
+                "INSERT INTO unclaimed_deposits (txid, vout, amount_sats)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT(txid, vout) DO NOTHING",
+                &[
+                    &txid,
+                    &i32::try_from(vout).unwrap_or(i32::MAX),
+                    &i64::try_from(amount_sats).unwrap_or(i64::MAX),
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        client
+            .execute(
+                "DELETE FROM unclaimed_deposits WHERE txid = $1 AND vout = $2",
+                &[&txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(
+                "SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits",
+                &[],
+            )
+            .await?;
+
+        let mut deposits = Vec::new();
+        for row in rows {
+            let claim_error_json: Option<serde_json::Value> = row.get(3);
+            let claim_error: Option<DepositClaimError> = from_json_opt(claim_error_json)?;
+
+            deposits.push(DepositInfo {
+                txid: row.get(0),
+                vout: u32::try_from(row.get::<_, i32>(1)).unwrap_or(u32::MAX),
+                amount_sats: row
+                    .get::<_, Option<i64>>(2)
+                    .map_or(0, |v| u64::try_from(v).unwrap_or(u64::MAX)),
+                claim_error,
+                refund_tx: row.get(4),
+                refund_tx_id: row.get(5),
+            });
+        }
+        Ok(deposits)
+    }
+
+    async fn update_deposit(
+        &self,
+        txid: String,
+        vout: u32,
+        payload: UpdateDepositPayload,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        match payload {
+            UpdateDepositPayload::ClaimError { error } => {
+                let error_json = serde_json::to_value(&error)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                client
+                    .execute(
+                        "UPDATE unclaimed_deposits SET claim_error = $1 WHERE txid = $2 AND vout = $3",
+                        &[&error_json, &txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+                    )
+                    .await?;
+            }
+            UpdateDepositPayload::Refund {
+                refund_txid,
+                refund_tx,
+            } => {
+                client
+                    .execute(
+                        "UPDATE unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2 WHERE txid = $3 AND vout = $4",
+                        &[&refund_tx, &refund_txid, &txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_lnurl_metadata(
+        &self,
+        metadata: Vec<SetLnurlMetadataItem>,
+    ) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        for m in metadata {
+            client
+                .execute(
+                    "INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT(payment_hash) DO UPDATE SET
+                        nostr_zap_request = EXCLUDED.nostr_zap_request,
+                        nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
+                        sender_comment = EXCLUDED.sender_comment",
+                    &[&m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+#[macros::async_trait]
+impl SyncStorage for PostgresStorage {
+    async fn add_outgoing_change(
+        &self,
+        record: UnversionedRecordChange,
+    ) -> Result<u64, SyncStorageError> {
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        // Bump the revision atomically
+        let revision: i64 = tx
+            .query_one(
+                "UPDATE sync_revision SET revision = revision + 1 RETURNING revision",
+                &[],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .get(0);
+
+        let updated_fields_json = serde_json::to_value(&record.updated_fields)?;
+        let commit_time = chrono::Utc::now().timestamp();
+
+        tx.execute(
+            "INSERT INTO sync_outgoing (record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                &record.id.r#type,
+                &record.id.data_id,
+                &record.schema_version,
+                &commit_time,
+                &updated_fields_json,
+                &revision,
+            ],
+        )
+        .await
+        .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        Ok(u64::try_from(revision).unwrap_or(u64::MAX))
+    }
+
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        client
+            .execute(
+                "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
+                &[
+                    &record.id.r#type,
+                    &record.id.data_id,
+                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                ],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let data_json = serde_json::to_value(&record.data)?;
+        let commit_time = chrono::Utc::now().timestamp();
+
+        client
+            .execute(
+                "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT(record_type, data_id) DO UPDATE SET
+                    schema_version = EXCLUDED.schema_version,
+                    commit_time = EXCLUDED.commit_time,
+                    data = EXCLUDED.data,
+                    revision = EXCLUDED.revision",
+                &[
+                    &record.id.r#type,
+                    &record.id.data_id,
+                    &record.schema_version,
+                    &commit_time,
+                    &data_json,
+                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                ],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_pending_outgoing_changes(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingChange>, SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let rows = client
+            .query(
+                "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
+                        e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
+                 FROM sync_outgoing o
+                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
+                 ORDER BY o.revision ASC
+                 LIMIT $1",
+                &[&i64::from(limit)],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let parent = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(8) {
+                Some(Record {
+                    id: RecordId::new(row.get(0), row.get(1)),
+                    schema_version: row.get(6),
+                    revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
+                    data: serde_json::from_value(existing_data)?,
+                })
+            } else {
+                None
+            };
+            let change = RecordChange {
+                id: RecordId::new(row.get(0), row.get(1)),
+                schema_version: row.get(2),
+                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))?,
+                revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+            };
+            results.push(OutgoingChange { change, parent });
+        }
+
+        Ok(results)
+    }
+
+    async fn get_last_revision(&self) -> Result<u64, SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let revision: i64 = client
+            .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .get(0);
+
+        Ok(u64::try_from(revision).unwrap_or(u64::MAX))
+    }
+
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+        let commit_time = chrono::Utc::now().timestamp();
+
+        for record in records {
+            let data_json = serde_json::to_value(&record.data)?;
+            client
+                .execute(
+                    "INSERT INTO sync_incoming (record_type, data_id, schema_version, commit_time, data, revision)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT(record_type, data_id, revision) DO UPDATE SET
+                        schema_version = EXCLUDED.schema_version,
+                        commit_time = EXCLUDED.commit_time,
+                        data = EXCLUDED.data",
+                    &[
+                        &record.id.r#type,
+                        &record.id.data_id,
+                        &record.schema_version,
+                        &commit_time,
+                        &data_json,
+                        &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                    ],
+                )
+                .await
+                .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        client
+            .execute(
+                "DELETE FROM sync_incoming WHERE record_type = $1 AND data_id = $2 AND revision = $3",
+                &[
+                    &record.id.r#type,
+                    &record.id.data_id,
+                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                ],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let last_revision: i64 = client
+            .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .get(0);
+
+        let diff = i64::try_from(revision)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(last_revision);
+
+        client
+            .execute(
+                "UPDATE sync_outgoing SET revision = revision + $1",
+                &[&diff],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_incoming_records(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<IncomingChange>, SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let rows = client
+            .query(
+                "SELECT i.record_type, i.data_id, i.schema_version, i.data, i.revision,
+                        e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
+                 FROM sync_incoming i
+                 LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
+                 ORDER BY i.revision ASC
+                 LIMIT $1",
+                &[&i64::from(limit)],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let old_state = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(7)
+            {
+                Some(Record {
+                    id: RecordId::new(row.get(0), row.get(1)),
+                    schema_version: row.get(5),
+                    revision: u64::try_from(row.get::<_, i64>(8)).unwrap_or(u64::MAX),
+                    data: serde_json::from_value(existing_data)?,
+                })
+            } else {
+                None
+            };
+            let new_state = Record {
+                id: RecordId::new(row.get(0), row.get(1)),
+                schema_version: row.get(2),
+                data: serde_json::from_value(row.get::<_, serde_json::Value>(3))?,
+                revision: u64::try_from(row.get::<_, i64>(4)).unwrap_or(u64::MAX),
+            };
+            results.push(IncomingChange {
+                new_state,
+                old_state,
+            });
+        }
+
+        Ok(results)
+    }
+
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let row = client
+            .query_opt(
+                "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
+                        e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
+                 FROM sync_outgoing o
+                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
+                 ORDER BY o.revision DESC
+                 LIMIT 1",
+                &[],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        if let Some(row) = row {
+            let parent = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(8) {
+                Some(Record {
+                    id: RecordId::new(row.get(0), row.get(1)),
+                    schema_version: row.get(6),
+                    revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
+                    data: serde_json::from_value(existing_data)?,
+                })
+            } else {
+                None
+            };
+            let change = RecordChange {
+                id: RecordId::new(row.get(0), row.get(1)),
+                schema_version: row.get(2),
+                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))?,
+                revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+            };
+            return Ok(Some(OutgoingChange { change, parent }));
+        }
+
+        Ok(None)
+    }
+
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        let data_json = serde_json::to_value(&record.data)?;
+        let commit_time = chrono::Utc::now().timestamp();
+
+        client
+            .execute(
+                "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT(record_type, data_id) DO UPDATE SET
+                    schema_version = EXCLUDED.schema_version,
+                    commit_time = EXCLUDED.commit_time,
+                    data = EXCLUDED.data,
+                    revision = EXCLUDED.revision",
+                &[
+                    &record.id.r#type,
+                    &record.id.data_id,
+                    &record.schema_version,
+                    &commit_time,
+                    &data_json,
+                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                ],
+            )
+            .await
+            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+
+        Ok(())
+    }
+}
+
+/// Base query for payment lookups.
+/// Column indices 0-25 are used by `map_payment`, index 26 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+const SELECT_PAYMENT_SQL: &str = "
+    SELECT p.id,
+           p.payment_type,
+           p.status,
+           p.amount,
+           p.fees,
+           p.timestamp,
+           p.method,
+           p.withdraw_tx_id,
+           p.deposit_tx_id,
+           p.spark,
+           l.invoice AS lightning_invoice,
+           l.payment_hash AS lightning_payment_hash,
+           l.destination_pubkey AS lightning_destination_pubkey,
+           COALESCE(l.description, pm.lnurl_description) AS lightning_description,
+           l.preimage AS lightning_preimage,
+           pm.lnurl_pay_info,
+           pm.lnurl_withdraw_info,
+           pm.conversion_info,
+           t.metadata AS token_metadata,
+           t.tx_hash AS token_tx_hash,
+           t.invoice_details AS token_invoice_details,
+           s.invoice_details AS spark_invoice_details,
+           s.htlc_details AS spark_htlc_details,
+           lrm.nostr_zap_request AS lnurl_nostr_zap_request,
+           lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
+           lrm.sender_comment AS lnurl_sender_comment,
+           pm.parent_payment_id
+      FROM payments p
+      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
+      LEFT JOIN payment_details_token t ON p.id = t.payment_id
+      LEFT JOIN payment_details_spark s ON p.id = s.payment_id
+      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
+      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash";
+
+#[allow(clippy::too_many_lines)]
+fn map_payment(row: &Row) -> Result<Payment, StorageError> {
+    let withdraw_tx_id: Option<String> = row.get(7);
+    let deposit_tx_id: Option<String> = row.get(8);
+    let spark: Option<bool> = row.get(9);
+    let lightning_invoice: Option<String> = row.get(10);
+    let token_metadata: Option<serde_json::Value> = row.get(18);
+
+    let details = match (
+        lightning_invoice,
+        withdraw_tx_id,
+        deposit_tx_id,
+        spark,
+        token_metadata,
+    ) {
+        (Some(invoice), _, _, _, _) => {
+            let payment_hash: String = row.get(11);
+            let destination_pubkey: String = row.get(12);
+            let description: Option<String> = row.get(13);
+            let preimage: Option<String> = row.get(14);
+            let lnurl_pay_info_json: Option<serde_json::Value> = row.get(15);
+            let lnurl_withdraw_info_json: Option<serde_json::Value> = row.get(16);
+            let lnurl_nostr_zap_request: Option<String> = row.get(23);
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(24);
+            let lnurl_sender_comment: Option<String> = row.get(25);
+
+            let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
+                from_json_opt(lnurl_withdraw_info_json)?;
+
+            let lnurl_receive_metadata =
+                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
+                    Some(LnurlReceiveMetadata {
+                        nostr_zap_request: lnurl_nostr_zap_request,
+                        nostr_zap_receipt: lnurl_nostr_zap_receipt,
+                        sender_comment: lnurl_sender_comment,
+                    })
+                } else {
+                    None
+                };
+            Some(PaymentDetails::Lightning {
+                invoice,
+                payment_hash,
+                destination_pubkey,
+                description,
+                preimage,
+                lnurl_pay_info,
+                lnurl_withdraw_info,
+                lnurl_receive_metadata,
+            })
+        }
+        (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, _, Some(_), _) => {
+            let invoice_details_json: Option<serde_json::Value> = row.get(21);
+            let invoice_details = from_json_opt(invoice_details_json)?;
+            let htlc_details_json: Option<serde_json::Value> = row.get(22);
+            let htlc_details = from_json_opt(htlc_details_json)?;
+            let conversion_info_json: Option<serde_json::Value> = row.get(17);
+            let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+                conversion_info,
+            })
+        }
+        (_, _, _, _, Some(metadata)) => {
+            let invoice_details_json: Option<serde_json::Value> = row.get(20);
+            let invoice_details = from_json_opt(invoice_details_json)?;
+            let conversion_info_json: Option<serde_json::Value> = row.get(17);
+            let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
+            Some(PaymentDetails::Token {
+                metadata: serde_json::from_value(metadata)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                tx_hash: row.get(19),
+                invoice_details,
+                conversion_info,
+            })
+        }
+        _ => None,
+    };
+
+    let payment_type_str: String = row.get(1);
+    let status_str: String = row.get(2);
+    let amount_str: String = row.get(3);
+    let fees_str: String = row.get(4);
+    let method_str: Option<String> = row.get(6);
+
+    Ok(Payment {
+        id: row.get(0),
+        payment_type: payment_type_str
+            .parse()
+            .map_err(|e: String| StorageError::Serialization(e))?,
+        status: status_str
+            .parse()
+            .map_err(|e: String| StorageError::Serialization(e))?,
+        amount: amount_str
+            .parse()
+            .map_err(|_| StorageError::Serialization("invalid amount".to_string()))?,
+        fees: fees_str
+            .parse()
+            .map_err(|_| StorageError::Serialization("invalid fees".to_string()))?,
+        timestamp: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+        details,
+        method: method_str.map_or(PaymentMethod::Lightning, |s| {
+            s.trim_matches('"')
+                .to_lowercase()
+                .parse()
+                .unwrap_or(PaymentMethod::Lightning)
+        }),
+        conversion_details: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use testcontainers::{ContainerAsync, runners::AsyncRunner};
+    use testcontainers_modules::postgres::Postgres;
+
+    /// Helper struct that holds the container and storage together.
+    /// The container must be kept alive for the duration of the test.
+    struct PostgresTestFixture {
+        storage: PostgresStorage,
+        #[allow(dead_code)]
+        container: ContainerAsync<Postgres>,
+    }
+
+    impl PostgresTestFixture {
+        async fn new() -> Self {
+            // Start a PostgreSQL container using testcontainers
+            let container = Postgres::default()
+                .start()
+                .await
+                .expect("Failed to start PostgreSQL container");
+
+            // Get the host port that maps to PostgreSQL's port 5432
+            let host_port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("Failed to get host port");
+
+            // Build connection string for the container
+            let connection_string = format!(
+                "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+            );
+
+            let storage = PostgresStorage::new(PostgresStorageConfig::new(connection_string))
+                .await
+                .expect("Failed to create PostgresStorage");
+
+            Self { storage, container }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_postgres_storage() {
+        let fixture = PostgresTestFixture::new().await;
+        Box::pin(crate::persist::tests::test_sqlite_storage(Box::new(
+            fixture.storage,
+        )))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_unclaimed_deposits_crud() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_unclaimed_deposits_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_deposit_refunds() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_deposit_refunds(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_type_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_type_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_status_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_status_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_asset_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_asset_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_timestamp_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_htlc_status_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_spark_htlc_status_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_conversion_refund_needed_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_combined_filters() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_combined_filters(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_sort_order() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_sort_order(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_metadata() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_metadata(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_details_update_persistence() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_details_update_persistence(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_sync_storage() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_sqlite_sync_storage(Box::new(fixture.storage)).await;
+    }
+}
