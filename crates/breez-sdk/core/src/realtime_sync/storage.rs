@@ -273,15 +273,34 @@ impl SyncedStorage {
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
         let contact = Contact {
-            id: data_id,
+            id: data_id.clone(),
             name: sync_data.name,
             lightning_address: sync_data.lightning_address,
             created_at: sync_data.created_at,
             updated_at: sync_data.updated_at,
         };
-        // Upsert: try update, if fails try insert
-        if self.inner.update_contact(contact.clone()).await.is_err() {
-            let _ = self.inner.insert_contact(contact).await;
+
+        // Upsert: try update, if fails (not found) try insert
+        match self.inner.update_contact(contact.clone()).await {
+            Ok(_) => {
+                debug!("Updated contact {} from sync", data_id);
+            }
+            Err(StorageError::NotFound) => {
+                // Contact doesn't exist, insert it
+                match self.inner.insert_contact(contact).await {
+                    Ok(()) => {
+                        debug!("Inserted contact {} from sync", data_id);
+                    }
+                    Err(e) => {
+                        error!("Failed to insert contact {} from sync: {}", data_id, e);
+                        // Don't propagate - allow sync to continue for other records
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to update contact {} from sync: {}", data_id, e);
+                // Don't propagate - allow sync to continue for other records
+            }
         }
         Ok(())
     }
@@ -418,16 +437,20 @@ impl Storage for SyncedStorage {
     }
 
     async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
+        // Update the contact first to get the preserved created_at value
+        let updated = self.inner.update_contact(contact).await?;
+
+        // Create sync_data with the correct created_at from the returned contact
         let sync_data = ContactSyncData {
-            id: contact.id.clone(),
-            name: contact.name.clone(),
-            lightning_address: contact.lightning_address.clone(),
-            created_at: contact.created_at,
-            updated_at: contact.updated_at,
+            id: updated.id.clone(),
+            name: updated.name.clone(),
+            lightning_address: updated.lightning_address.clone(),
+            created_at: updated.created_at,
+            updated_at: updated.updated_at,
         };
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
+                id: RecordId::new(RecordType::Contact.to_string(), &updated.id),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&sync_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -436,7 +459,8 @@ impl Storage for SyncedStorage {
             })
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
-        self.inner.update_contact(contact).await
+
+        Ok(updated)
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
@@ -466,8 +490,14 @@ impl Storage for SyncedStorage {
         self.inner.add_outgoing_change(record).await
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
-        self.inner.complete_outgoing_sync(record).await
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .complete_outgoing_sync(record, local_revision)
+            .await
     }
 
     async fn get_pending_outgoing_changes(
