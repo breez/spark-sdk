@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use bitcoin::Amount;
@@ -223,4 +224,99 @@ pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture)
         "Balance should be the deposit amount"
     );
     Ok(())
+}
+
+/// Deposit a specific amount to a wallet.
+/// Similar to deposit_to_wallet but allows specifying the amount.
+pub async fn deposit_with_amount(
+    wallet: &SparkWallet,
+    bitcoind: &BitcoindFixture,
+    amount_sats: u64,
+) -> Result<()> {
+    // Generate a deposit address
+    let deposit_address = wallet.generate_deposit_address(false).await?;
+    info!("Generated deposit address: {}", deposit_address);
+
+    // Fund the deposit address with the specified amount
+    let deposit_amount = Amount::from_sat(amount_sats);
+    let txid = bitcoind
+        .fund_address(&deposit_address, deposit_amount)
+        .await?;
+    info!(
+        "Funded deposit address with {}, txid: {}",
+        deposit_amount, txid
+    );
+
+    // Get the transaction to claim
+    let tx = bitcoind.get_transaction(&txid).await?;
+    info!("Got transaction: {:?}", tx);
+
+    // Find the output index for our address
+    let mut output_index = None;
+    for (vout, output) in tx.output.iter().enumerate() {
+        if let Ok(address) =
+            bitcoin::Address::from_script(&output.script_pubkey, bitcoin::Network::Regtest)
+            && address == deposit_address
+        {
+            output_index = Some(vout as u32);
+            break;
+        }
+    }
+
+    let vout = output_index.expect("Could not find deposit address in transaction outputs");
+    info!("Found deposit output at index: {}", vout);
+
+    let mut listener = wallet.subscribe_events();
+    let leaves = wallet.claim_deposit(tx, vout).await?;
+    info!("Claimed deposit, got leaves: {:?}", leaves);
+
+    // Mine a block to confirm the transaction
+    bitcoind.generate_blocks(1).await?;
+    bitcoind.wait_for_tx_confirmation(&txid, 1).await?;
+    info!("Transaction confirmed");
+
+    // Wait for the deposit confirmation event from the SO.
+    loop {
+        let event: WalletEvent = listener
+            .recv()
+            .await
+            .expect("Failed to receive wallet event");
+        match event {
+            WalletEvent::DepositConfirmed(_) => {
+                info!("Received deposit confirmed event");
+                break;
+            }
+            _ => debug!("Received other event: {:?}", event),
+        }
+    }
+
+    Ok(())
+}
+
+/// Polls a condition function every 50ms until it returns true or the timeout is reached.
+/// Returns Ok(()) if the condition was met, or an error if the timeout was reached.
+pub async fn wait_for<F, Fut>(condition: F, timeout_secs: u64, description: &str) -> Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll_interval = Duration::from_millis(50);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        if condition().await {
+            return Ok(());
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "Timeout waiting for condition '{}' after {} seconds",
+                description,
+                timeout_secs
+            );
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
