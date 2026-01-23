@@ -179,6 +179,19 @@ pub struct ListUnclaimedDepositsResponse {
     pub deposits: Vec<DepositInfo>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
+pub struct BuyBitcoinRequest {
+    pub address: String,
+    pub locked_amount_sat: Option<u64>,
+    pub max_amount_sat: Option<u64>,
+    pub redirect_url: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinResponse)]
+pub struct BuyBitcoinResponse {
+    pub url: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::DepositClaimError)]
 pub enum DepositClaimError {
     MaxDepositClaimFeeExceeded {
