@@ -57,7 +57,12 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum StorageError {
-    #[error("Underline implementation error: {0}")]
+    /// Connection-related errors (pool exhaustion, timeouts, connection refused).
+    /// These are often transient and may be retried.
+    #[error("Connection error: {0}")]
+    Connection(String),
+
+    #[error("Underlying implementation error: {0}")]
     Implementation(String),
 
     /// Database initialization error
