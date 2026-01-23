@@ -46,14 +46,14 @@ use crate::{
     GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
     InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlAuthRequestDetails,
-    LnurlCallbackStatus, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo,
-    LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, MaxFee, Network, OnchainConfirmationSpeed,
-    OptimizationConfig, OptimizationProgress, PayAmount, PaymentDetails, PaymentStatus,
-    PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse, RefundDepositRequest,
-    RefundDepositResponse, RegisterLightningAddressRequest, SendOnchainFeeQuote,
-    SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest, SignMessageResponse,
-    SparkHtlcOptions, SparkInvoiceDetails, TokenConversionResponse, UpdateUserSettingsRequest,
-    UserSettings, WaitForPaymentIdentifier,
+    LnurlCallbackStatus, LnurlInfo, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
+    LnurlWithdrawInfo, LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, MaxFee, Network,
+    OnchainConfirmationSpeed, OptimizationConfig, OptimizationProgress, PayAmount, PaymentDetails,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    RefundDepositRequest, RefundDepositResponse, RegisterLightningAddressRequest,
+    SendOnchainFeeQuote, SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest,
+    SignMessageResponse, SparkHtlcOptions, SparkInvoiceDetails, TokenConversionResponse,
+    UpdateUserSettingsRequest, UserSettings, WaitForPaymentIdentifier,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -385,8 +385,8 @@ impl BreezSdk {
             match sdk.recover_lightning_address().await {
                 Ok(None) => info!("no lightning address to recover on startup"),
                 Ok(Some(value)) => info!(
-                    "recovered lightning address on startup: lnurl: {}, address: {}",
-                    value.lnurl, value.lightning_address
+                    "recovered lightning address on startup: address: {}, lnurl url: {}, lnurl bech32: {}",
+                    value.lightning_address, value.lnurl.url, value.lnurl.bech32
                 ),
                 Err(e) => error!("Failed to recover lightning address on startup: {e:?}"),
             }
@@ -3255,7 +3255,7 @@ impl BreezSdk {
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description,
-            lnurl: response.lnurl,
+            lnurl: LnurlInfo::new(response.lnurl),
             username,
         };
         cache.save_lightning_address(&address_info).await?;
