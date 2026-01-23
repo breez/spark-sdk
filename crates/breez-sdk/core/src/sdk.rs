@@ -55,6 +55,7 @@ use crate::{
     SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest, SignMessageResponse,
     SparkHtlcOptions, SparkInvoiceDetails, TokenConversionResponse, UpdateUserSettingsRequest,
     UserSettings, WaitForPaymentIdentifier,
+    buy_bitcoin_service::BuyBitcoinService,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -179,7 +180,7 @@ pub struct BreezSdk {
     spark_private_mode_initialized: Arc<OnceCell<()>>,
     nostr_client: Arc<NostrClient>,
     token_converter: Arc<dyn TokenConverter>,
-    breez_server: Arc<breez_sdk_common::breez_server::BreezServer>,
+    buy_bitcoin_service: Arc<dyn BuyBitcoinService>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -305,7 +306,7 @@ pub(crate) struct BreezSdkParams {
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub nostr_client: Arc<NostrClient>,
-    pub breez_server: Arc<breez_sdk_common::breez_server::BreezServer>,
+    pub buy_bitcoin_service: Arc<dyn BuyBitcoinService>,
 }
 
 impl BreezSdk {
@@ -348,7 +349,7 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
-            breez_server: params.breez_server,
+            buy_bitcoin_service: params.buy_bitcoin_service,
         };
 
         sdk.start(initial_synced_sender);
@@ -2096,18 +2097,15 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        use breez_sdk_common::buy::{moonpay::MoonpayProvider, BuyBitcoinProviderApi};
-
-        let provider = MoonpayProvider::new(Arc::clone(&self.breez_server));
-        let url = provider
+        let url = self
+            .buy_bitcoin_service
             .buy_bitcoin(
                 request.address,
                 request.locked_amount_sat,
                 request.max_amount_sat,
                 request.redirect_url,
             )
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
+            .await?;
 
         Ok(BuyBitcoinResponse { url })
     }

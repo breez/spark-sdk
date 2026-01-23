@@ -1,5 +1,6 @@
 #[cfg(feature = "uniffi")]
 pub mod bindings;
+mod buy_bitcoin_service;
 mod chain;
 mod common;
 mod error;
