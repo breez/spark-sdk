@@ -35,9 +35,11 @@ use scenarios::{
     ScenarioConfig, ScenarioPreset, generate_payments,
 };
 use stats::{BenchmarkResults, PaymentMeasurement};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PHRASE_FILE_NAME: &str = "phrase";
 const MIN_BALANCE_FOR_BENCHMARK: u64 = 10_000; // Minimum sats needed to run benchmark
+static RETURN_PAYMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Parser, Debug)]
 #[command(name = "breez-sdk-bench")]
@@ -124,6 +126,10 @@ fn is_mainnet(network: Network) -> bool {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    let run_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     // Parse network
     let network = match args.network.to_lowercase().as_str() {
         "regtest" => Network::Regtest,
@@ -322,7 +328,7 @@ async fn main() -> Result<()> {
                     .send_payment(SendPaymentRequest {
                         prepare_response: prepare,
                         options: None,
-                        idempotency_key: None,
+                        idempotency_key: Some("bench-initial-consolidation".to_string()),
                     })
                     .await?;
 
@@ -473,13 +479,19 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
-
+        let idempotency_key = format!(
+            "bench-{}-{}-{}-{}",
+            run_id, // Makes each run unique
+            config.seed,
+            i,
+            payment_spec.amount_sats
+        );
         let send_result = sender
             .sdk
             .send_payment(SendPaymentRequest {
                 prepare_response: prepare,
                 options: None,
-                idempotency_key: None,
+                idempotency_key: Some(idempotency_key),
             })
             .await;
 
@@ -849,12 +861,13 @@ async fn return_funds_to_sender(
         })
         .await?;
 
+    let return_id = RETURN_PAYMENT_COUNTER.fetch_add(1, Ordering::SeqCst);
     receiver
         .sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare,
             options: None,
-            idempotency_key: None,
+            idempotency_key: Some(format!("bench-return-{}-{}", return_id, amount)),
         })
         .await?;
 
