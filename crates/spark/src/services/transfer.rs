@@ -33,7 +33,7 @@ use k256::Scalar;
 use prost::Message as ProstMessage;
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, trace};
-use web_time::SystemTime;
+use web_time::{Instant, SystemTime};
 
 use crate::{
     signer::Signer,
@@ -113,6 +113,14 @@ impl TransferService {
         signing_key_source: Option<SecretSource>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
+        let start = Instant::now();
+        let leaf_count = leaves.len();
+        let total_value: u64 = leaves.iter().map(|l| l.value).sum();
+        debug!(
+            "transfer_leaves_to starting | leaf_count={} total_value={}",
+            leaf_count, total_value
+        );
+
         let unwrapped_transfer_id = match &transfer_id {
             Some(transfer_id) => transfer_id.clone(),
             None => TransferId::generate(),
@@ -139,8 +147,11 @@ impl TransferService {
         }
 
         // build leaf key tweaks with new signing keys that we will send to the receiver
+        debug!("transfer_leaves_to | preparing leaf key tweaks");
         let leaf_key_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves, signing_key_source).await?;
+
+        debug!("transfer_leaves_to | calling operators for transfer");
         let transfer_res = self
             .send_transfer_with_key_tweaks(
                 &unwrapped_transfer_id,
@@ -152,6 +163,7 @@ impl TransferService {
         let transfer = match (&transfer_id, transfer_res) {
             (_, Ok(t)) => t,
             (Some(transfer_id), Err(e)) => {
+                debug!("transfer_leaves_to | attempting recovery after error");
                 return self
                     .recover_transfer_on_rpc_connection_error(transfer_id, e)
                     .await;
@@ -159,6 +171,12 @@ impl TransferService {
             (None, Err(e)) => return Err(e),
         };
 
+        debug!(
+            "transfer_leaves_to completed | leaf_count={} total_value={} elapsed_ms={}",
+            leaf_count,
+            total_value,
+            start.elapsed().as_millis()
+        );
         Ok(transfer)
     }
 
@@ -206,6 +224,14 @@ impl TransferService {
         receiver_id: &PublicKey,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
+        let start = Instant::now();
+        let leaf_count = leaf_key_tweaks.len();
+        debug!(
+            "send_transfer_with_key_tweaks starting | leaf_count={} transfer_id={}",
+            leaf_count, transfer_id
+        );
+
+        debug!("send_transfer_with_key_tweaks | preparing key tweaks");
         let key_tweak_input_map = self
             .prepare_send_transfer_key_tweaks(
                 transfer_id,
@@ -214,7 +240,12 @@ impl TransferService {
                 Default::default(),
             )
             .await?;
+        debug!(
+            "send_transfer_with_key_tweaks | key tweaks prepared elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
 
+        debug!("send_transfer_with_key_tweaks | preparing transfer package");
         let transfer_package = self
             .prepare_transfer_package(
                 transfer_id,
@@ -224,6 +255,10 @@ impl TransferService {
                 None,
             )
             .await?;
+        debug!(
+            "send_transfer_with_key_tweaks | transfer package prepared elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
 
         // Make request to start transfer
         let start_transfer_request = operator_rpc::spark::StartTransferRequest {
@@ -243,6 +278,7 @@ impl TransferService {
             "About to send start_transfer_request: {:?}",
             start_transfer_request
         );
+        debug!("send_transfer_with_key_tweaks | calling start_transfer_v2 RPC");
         let transfer = self
             .operator_pool
             .get_coordinator()
@@ -254,6 +290,11 @@ impl TransferService {
                 "No transfer from operator".to_string(),
             ))?;
 
+        debug!(
+            "send_transfer_with_key_tweaks completed | leaf_count={} elapsed_ms={}",
+            leaf_count,
+            start.elapsed().as_millis()
+        );
         transfer.try_into()
     }
 
@@ -264,6 +305,13 @@ impl TransferService {
         leaves: &[LeafKeyTweak],
         refund_signatures: RefundSignatures,
     ) -> Result<HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>, ServiceError> {
+        let start = Instant::now();
+        let leaf_count = leaves.len();
+        debug!(
+            "prepare_send_transfer_key_tweaks starting | leaf_count={}",
+            leaf_count
+        );
+
         let mut leaves_tweaks_map = HashMap::new();
 
         for leaf in leaves {
@@ -300,6 +348,11 @@ impl TransferService {
             }
         }
 
+        debug!(
+            "prepare_send_transfer_key_tweaks completed | leaf_count={} elapsed_ms={}",
+            leaf_count,
+            start.elapsed().as_millis()
+        );
         Ok(leaves_tweaks_map)
     }
 
@@ -313,6 +366,12 @@ impl TransferService {
         direct_refund_signature: Option<Signature>,
         direct_from_cpfp_refund_signature: Option<Signature>,
     ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
+        let start = Instant::now();
+        trace!(
+            "prepare_single_send_transfer_key_tweak starting | leaf_id={}",
+            leaf.node.id
+        );
+
         // Calculate the key tweak by subtracting keys
         let privkey_tweak = self
             .signer
@@ -328,6 +387,11 @@ impl TransferService {
                 self.operator_pool.len(),
             )
             .await?;
+
+        trace!(
+            "prepare_single_send_transfer_key_tweak | split_secret_with_proofs completed elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
 
         trace!(
             "prepare transfer: Split secret into {} shares",
@@ -365,6 +429,10 @@ impl TransferService {
                     .await?
             }
         };
+        trace!(
+            "prepare_single_send_transfer_key_tweak | encrypt_secret_for_receiver completed elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
 
         // Create the signing payload: leaf_id || transfer_id || secret_cipher
         let mut payload = Vec::new();
@@ -420,6 +488,11 @@ impl TransferService {
             leaf_tweaks_map.insert(operator.identifier, send_leaf_key_tweak);
         }
 
+        trace!(
+            "prepare_single_send_transfer_key_tweak completed | leaf_id={} elapsed_ms={}",
+            leaf.node.id,
+            start.elapsed().as_millis()
+        );
         Ok(leaf_tweaks_map)
     }
 

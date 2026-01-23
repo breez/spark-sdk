@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use tokio_with_wasm::alias as tokio;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
+use web_time::Instant;
 
 use crate::tree::{Leaves, ReservationPurpose, TreeNodeStatus};
 use crate::{
@@ -83,6 +84,12 @@ impl TreeService for SynchronousTreeService {
         target_amounts: Option<&TargetAmounts>,
         purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        let start = Instant::now();
+        debug!(
+            "select_leaves starting | target_amounts={:?} purpose={:?}",
+            target_amounts.map(|t| t.total_sats()),
+            purpose
+        );
         trace!("Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}");
 
         let reservation = self
@@ -109,6 +116,12 @@ impl TreeService for SynchronousTreeService {
                 .is_ok()
         {
             trace!("Selected leaves match requirements, no swap needed");
+            debug!(
+                "select_leaves completed | leaf_count={} total_value={} swapped=false elapsed_ms={}",
+                reservation.leaves.len(),
+                reservation.sum(),
+                start.elapsed().as_millis()
+            );
             return Ok(reservation);
         }
 
@@ -130,10 +143,20 @@ impl TreeService for SynchronousTreeService {
             reservation.id,
             reservation.sum()
         );
+        debug!(
+            "select_leaves completed | leaf_count={} total_value={} swapped=true elapsed_ms={}",
+            reservation.leaves.len(),
+            reservation.sum(),
+            start.elapsed().as_millis()
+        );
         Ok(reservation)
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
+        let start = Instant::now();
+        debug!("refresh_leaves starting");
+        debug!("refresh_leaves | calling operators to refresh leaves");
+
         // Prepare queries for coordinator and all operators and run them in parallel
         let coordinator_client = self.operator_pool.get_coordinator().client.clone();
         let operators: Vec<_> = self
@@ -250,6 +273,11 @@ impl TreeService for SynchronousTreeService {
             .set_leaves(&refreshed_leaves, &missing_operator_leaves)
             .await?;
 
+        debug!(
+            "refresh_leaves completed | new_leaf_count={} elapsed_ms={}",
+            refreshed_leaves.len(),
+            start.elapsed().as_millis()
+        );
         Ok(())
     }
 
@@ -387,6 +415,12 @@ impl SynchronousTreeService {
         leaves: &[TreeNode],
         target_amounts: Option<&TargetAmounts>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let start = Instant::now();
+        debug!(
+            "swap_leaves_internal starting | leaf_count={}",
+            leaves.len()
+        );
+
         if leaves.is_empty() {
             return Err(TreeServiceError::Generic("no leaves to swap".to_string()));
         }
@@ -411,6 +445,11 @@ impl SynchronousTreeService {
 
         let result_nodes = self.insert_leaves(claimed_nodes.clone()).await?;
 
+        debug!(
+            "swap_leaves_internal completed | result_leaf_count={} elapsed_ms={}",
+            result_nodes.len(),
+            start.elapsed().as_millis()
+        );
         Ok(result_nodes)
     }
 }

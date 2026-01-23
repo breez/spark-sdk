@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use web_time::SystemTime;
+use tracing::debug;
+use web_time::{Instant, SystemTime};
 
 use super::models::LightningSendRequestStatus;
 
@@ -338,6 +339,12 @@ impl LightningService {
         leaves: &[TreeNode],
         transfer_id: Option<TransferId>,
     ) -> Result<PayLightningResult, ServiceError> {
+        let start = Instant::now();
+        debug!(
+            "[1/6] pay_lightning_invoice starting | leaf_count={}",
+            leaves.len()
+        );
+
         let ssp_identity_public_key = self.ssp_client.identity_public_key();
         let expiry_time = SystemTime::now() + Duration::from_secs(DEFAULT_SEND_EXPIRY_SECS);
         let unwrapped_transfer_id = match &transfer_id {
@@ -346,21 +353,38 @@ impl LightningService {
         };
 
         // Decode invoice and validate amount
+        debug!("[2/6] pay_lightning_invoice | decoding bolt11 invoice");
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
         let amount_sats = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
         let payment_hash = decoded_invoice.payment_hash();
+        debug!(
+            "pay_lightning_invoice | invoice_decoded amount_sats={}",
+            amount_sats
+        );
 
         if let Some(transfer_observer) = &self.transfer_observer {
+            debug!(
+                "pay_lightning_invoice | calling transfer_observer.before_send_lightning_payment"
+            );
             transfer_observer
                 .before_send_lightning_payment(&unwrapped_transfer_id, invoice, amount_sats)
                 .await?;
         }
 
         // Prepare leaf tweaks
+        debug!(
+            "[3/6] pay_lightning_invoice | preparing leaf key tweaks | leaf_count={}",
+            leaves.len()
+        );
         let leaf_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
+        debug!(
+            "pay_lightning_invoice | leaf_key_tweaks prepared | count={}",
+            leaf_tweaks.len()
+        );
 
+        debug!("[4/6] pay_lightning_invoice | preparing transfer request");
         let transfer_request = self
             .transfer_service
             .prepare_transfer_request(
@@ -372,7 +396,12 @@ impl LightningService {
                 Some(expiry_time),
             )
             .await?;
+        debug!("pay_lightning_invoice | transfer_request prepared");
 
+        debug!(
+            "[5/6] pay_lightning_invoice | swapping nodes for preimage | leaf_count={}",
+            leaf_tweaks.len()
+        );
         let initiate_preimage_swap_res = swap_nodes_for_preimage(
             &self.operator_pool,
             &self.signer,
@@ -410,7 +439,9 @@ impl LightningService {
             }
             (_, Err(e)) => return Err(e),
         };
+        debug!("pay_lightning_invoice | preimage_swap completed");
 
+        debug!("[6/6] pay_lightning_invoice | requesting lightning send from SSP");
         let mut lightning_send_payment: LightningSendPayment = self
             .ssp_client
             .request_lightning_send(RequestLightningSendInput {
@@ -426,6 +457,12 @@ impl LightningService {
             lightning_send_payment.transfer_id = Some(transfer.id.clone());
         }
 
+        debug!(
+            "pay_lightning_invoice completed | amount_sats={} leaf_count={} elapsed_ms={}",
+            amount_sats,
+            leaves.len(),
+            start.elapsed().as_millis()
+        );
         Ok(PayLightningResult {
             lightning_send_payment: Some(lightning_send_payment),
             transfer,

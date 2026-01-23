@@ -46,8 +46,8 @@ use spark::{
 };
 use tokio::sync::{broadcast, watch};
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, trace};
-use web_time::{SystemTime, UNIX_EPOCH};
+use tracing::{debug, error, info, trace, warn};
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
@@ -88,21 +88,34 @@ macro_rules! with_leafs_spent_retry {
         $operation_name:literal,
         |$leaves_reservation:ident| $operation:expr
     ) => {{
+        let macro_start = Instant::now();
+        debug!(
+            "with_leafs_spent_retry starting | operation={}",
+            $operation_name
+        );
         let mut attempt = 0;
         loop {
             if attempt > 0 {
                 if attempt >= MAX_LEAF_SPENT_RETRIES {
+                    warn!(
+                        "with_leafs_spent_retry exhausted | operation={} attempts={} elapsed_ms={}",
+                        $operation_name,
+                        MAX_LEAF_SPENT_RETRIES,
+                        macro_start.elapsed().as_millis()
+                    );
                     break Err(SparkWalletError::Generic(format!(
                         "{} failed after {} retries due to leaf spending errors",
                         $operation_name, MAX_LEAF_SPENT_RETRIES
                     )));
                 }
-                info!(
-                    "{} failed with leaf spending error (attempt {}/{}), refreshing leaves and retrying",
+                warn!(
+                    "with_leafs_spent_retry | operation={} attempt={}/{} elapsed_ms={} error=leaf_spending",
                     $operation_name,
                     attempt,
-                    MAX_LEAF_SPENT_RETRIES
+                    MAX_LEAF_SPENT_RETRIES,
+                    macro_start.elapsed().as_millis()
                 );
+                debug!("with_leafs_spent_retry | calling refresh_leaves");
                 $self.tree_service.refresh_leaves().await?;
             }
             let $leaves_reservation = $self.select_leaves_with_retry($target_amounts).await?;
@@ -115,7 +128,15 @@ macro_rules! with_leafs_spent_retry {
             .await;
 
             match result {
-                Ok(v) => break Ok(v),
+                Ok(v) => {
+                    debug!(
+                        "with_leafs_spent_retry completed | operation={} attempts={} elapsed_ms={}",
+                        $operation_name,
+                        attempt + 1,
+                        macro_start.elapsed().as_millis()
+                    );
+                    break Ok(v);
+                }
                 Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
                     attempt += 1;
                     continue;
@@ -369,6 +390,12 @@ impl SparkWallet {
         prefer_spark: bool,
         transfer_id: Option<TransferId>,
     ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let start = Instant::now();
+        debug!(
+            "pay_lightning_invoice starting | amount_to_send={:?}",
+            amount_to_send
+        );
+
         let (total_amount_sat, receiver_spark_address) = self
             .lightning_service
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
@@ -382,10 +409,16 @@ impl SparkWallet {
                 return Err(SparkWalletError::SelfPaymentNotAllowed);
             }
 
+            debug!("pay_lightning_invoice | spark_address_detected, using transfer");
+            let transfer = self
+                .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
+                .await?;
+            debug!(
+                "pay_lightning_invoice completed | via=spark_transfer elapsed_ms={}",
+                start.elapsed().as_millis()
+            );
             return Ok(PayLightningInvoiceResult {
-                transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
-                    .await?,
+                transfer,
                 lightning_payment: None,
             });
         }
@@ -429,6 +462,10 @@ impl SparkWallet {
 
         self.maybe_start_optimization();
 
+        debug!(
+            "pay_lightning_invoice completed | via=lightning elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
             lightning_payment: lightning_payment.lightning_send_payment,
@@ -679,6 +716,9 @@ impl SparkWallet {
         transfer_id: Option<TransferId>,
         spark_invoice: Option<String>,
     ) -> Result<WalletTransfer, SparkWalletError> {
+        let start = Instant::now();
+        debug!("transfer starting | amount_sats={}", amount_sat);
+
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
@@ -707,6 +747,11 @@ impl SparkWallet {
 
         self.maybe_start_optimization();
 
+        debug!(
+            "transfer completed | amount_sats={} elapsed_ms={}",
+            amount_sat,
+            start.elapsed().as_millis()
+        );
         Ok(WalletTransfer::from_transfer(
             transfer,
             None,
@@ -747,6 +792,9 @@ impl SparkWallet {
         expiry_duration: Duration,
         transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
+        let start = Instant::now();
+        debug!("create_htlc starting | amount_sats={}", amount_sat);
+
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
             return Err(SparkWalletError::InvalidNetwork);
@@ -773,6 +821,12 @@ impl SparkWallet {
                 transfer_id.clone(),
             )
         )?;
+
+        debug!(
+            "create_htlc completed | amount_sats={} elapsed_ms={}",
+            amount_sat,
+            start.elapsed().as_millis()
+        );
 
         let htlc_preimage_request = PreimageRequest {
             payment_hash: *payment_hash,
@@ -1012,6 +1066,12 @@ impl SparkWallet {
         fee_quote: CoopExitFeeQuote,
         transfer_id: Option<TransferId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
+        let start = Instant::now();
+        debug!(
+            "withdraw starting | amount_sats={:?} exit_speed={:?}",
+            amount_sats, exit_speed
+        );
+
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
             .parse::<Address<NetworkUnchecked>>()
@@ -1047,14 +1107,22 @@ impl SparkWallet {
 
         self.maybe_start_optimization();
 
-        create_transfer(
+        let result = create_transfer(
             transfer,
             &self.ssp_client,
             &self.htlc_service,
             self.identity_public_key,
             self.config.service_provider_config.identity_public_key,
         )
-        .await
+        .await;
+
+        debug!(
+            "withdraw completed | amount_sats={:?} exit_speed={:?} elapsed_ms={}",
+            amount_sats,
+            exit_speed,
+            start.elapsed().as_millis()
+        );
+        result
     }
 
     async fn withdraw_inner(
@@ -1487,6 +1555,12 @@ impl SparkWallet {
     ) -> Result<spark::tree::LeavesReservation, SparkWalletError> {
         use spark::tree::TreeServiceError;
 
+        let start = Instant::now();
+        debug!(
+            "select_leaves_with_retry starting | target_amounts={:?}",
+            target_amounts.map(|t| t.total_sats())
+        );
+
         let mut reservation: Option<spark::tree::LeavesReservation> = None;
 
         for i in 0..SELECT_LEAVES_MAX_RETRIES {
@@ -1505,14 +1579,22 @@ impl SparkWallet {
                 }
             }
 
-            info!("Failed to select leaves, refreshing leaves and retrying");
+            warn!(
+                "select_leaves_with_retry | attempt={}/{} refreshing_leaves",
+                i + 1,
+                SELECT_LEAVES_MAX_RETRIES
+            );
             self.tree_service.refresh_leaves().await?;
 
             // Check if we have enough funds after refresh
             if let Some(target_amounts) = target_amounts {
                 let available_balance = self.tree_service.get_available_balance().await?;
                 if available_balance < target_amounts.total_sats() {
-                    info!("Not enough funds to select leaves after refresh");
+                    warn!(
+                        "select_leaves_with_retry | insufficient_funds available={} required={}",
+                        available_balance,
+                        target_amounts.total_sats()
+                    );
                     return Err(TreeServiceError::InsufficientFunds.into());
                 }
             }
@@ -1520,6 +1602,23 @@ impl SparkWallet {
             // Sleep between retries (except on the last one)
             if i < SELECT_LEAVES_MAX_RETRIES - 1 {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+
+        match &reservation {
+            Some(r) => {
+                debug!(
+                    "select_leaves_with_retry completed | leaf_count={} total_value={} elapsed_ms={}",
+                    r.leaves.len(),
+                    r.sum(),
+                    start.elapsed().as_millis()
+                );
+            }
+            None => {
+                warn!(
+                    "select_leaves_with_retry failed | elapsed_ms={}",
+                    start.elapsed().as_millis()
+                );
             }
         }
 

@@ -7,7 +7,8 @@ use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use bitcoin::{Sequence, Transaction};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
+use web_time::Instant;
 
 use crate::core::{current_sequence, enforce_timelock, next_lightning_htlc_sequence};
 use crate::services::{LeafRefundSigningData, ServiceError, SignedTx};
@@ -89,6 +90,7 @@ pub async fn prepare_leaf_refund_signing_data(
 pub async fn sign_refunds(
     params: SignRefundsParams<'_>,
 ) -> Result<SignedRefundTransactions, SignerError> {
+    let start = Instant::now();
     let SignRefundsParams {
         signer,
         leaves,
@@ -99,6 +101,9 @@ pub async fn sign_refunds(
         payment_hash,
         network,
     } = params;
+    let leaf_count = leaves.len();
+    debug!("sign_refunds starting | leaf_count={}", leaf_count);
+
     let identity_pubkey = signer.get_identity_public_key().await?;
 
     let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
@@ -209,6 +214,16 @@ pub async fn sign_refunds(
             direct_from_cpfp_signed_refunds.push(direct_from_cpfp_signed_tx);
         }
     }
+
+    let signatures_created = cpfp_signed_refunds.len()
+        + direct_signed_refunds.len()
+        + direct_from_cpfp_signed_refunds.len();
+    debug!(
+        "sign_refunds completed | leaf_count={} signatures_created={} elapsed_ms={}",
+        leaf_count,
+        signatures_created,
+        start.elapsed().as_millis()
+    );
 
     Ok(SignedRefundTransactions {
         cpfp_signed_tx: cpfp_signed_refunds,

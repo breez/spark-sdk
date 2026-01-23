@@ -17,6 +17,7 @@ use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
 use frost_secp256k1_tr::round2::SignatureShare;
 use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 use thiserror::Error;
+use web_time::Instant;
 
 use crate::signer::{
     AggregateFrostRequest, EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest,
@@ -559,7 +560,8 @@ impl Signer for DefaultSigner {
         &self,
         request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError> {
-        tracing::trace!("default_signer::sign_frost");
+        let start = Instant::now();
+        tracing::trace!("default_signer::sign_frost starting");
 
         // Derive a deterministic identifier for the local user from the string "user"
         let user_identifier =
@@ -652,6 +654,11 @@ impl Signer for DefaultSigner {
                         e.culprit()
                     ))
                 })?;
+
+        tracing::trace!(
+            "default_signer::sign_frost completed | elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
 
         // Return the generated signature share to be combined with other shares
         // from the statechain participants to form a complete threshold signature

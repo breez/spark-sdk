@@ -6,7 +6,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{Address, OutPoint, Transaction, Txid};
 use serde::Serialize;
 use tracing::{debug, trace};
-use web_time::SystemTime;
+use web_time::{Instant, SystemTime};
 
 use crate::core::Network;
 use crate::operator::OperatorPool;
@@ -143,6 +143,7 @@ impl CoopExitService {
     }
 
     pub async fn coop_exit(&self, params: CoopExitParams<'_>) -> Result<Transfer, ServiceError> {
+        let start = Instant::now();
         let CoopExitParams {
             leaves,
             withdrawal_address,
@@ -152,7 +153,13 @@ impl CoopExitService {
             fee_leaves,
             transfer_id,
         } = params;
-        debug!("Starting cooperative exit with leaves");
+
+        let leaf_count = leaves.len();
+        let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
+        debug!(
+            "coop_exit starting | leaf_count={} amount_sats={} exit_speed={:?}",
+            leaf_count, amount_sats, exit_speed
+        );
         let leaf_external_ids = leaves.iter().map(|l| l.id.clone().to_string()).collect();
         let fee_leaf_external_ids = fee_leaves.as_ref().map(|fee_leaves| {
             fee_leaves
@@ -175,11 +182,13 @@ impl CoopExitService {
         }
 
         // Build leaf key tweaks for all leaves with new signing keys
+        debug!("coop_exit | preparing leaf key tweaks");
         let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
         let leaf_key_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None).await?;
 
         // Request cooperative exit from the SSP
+        debug!("coop_exit | calling SSP for cooperative exit");
         trace!("Requesting cooperative exit");
         let coop_exit_request = self
             .ssp_client
@@ -229,12 +238,19 @@ impl CoopExitService {
         trace!("Got connector refund signatures: {coop_exit_refund_signatures:?}",);
         let transfer = coop_exit_refund_signatures.transfer;
 
+        debug!("coop_exit | completing cooperative exit with SSP");
         let complete_response = self
             .ssp_client
             .complete_coop_exit(&transfer.id.to_string(), &coop_exit_request.id)
             .await?;
         trace!("Completed cooperative exit: {complete_response:?}",);
 
+        debug!(
+            "coop_exit completed | leaf_count={} amount_sats={} elapsed_ms={}",
+            leaf_count,
+            amount_sats,
+            start.elapsed().as_millis()
+        );
         Ok(transfer)
     }
 

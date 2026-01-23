@@ -4,7 +4,8 @@ use bitcoin::{
     hashes::{Hash, sha256},
     secp256k1::PublicKey,
 };
-use web_time::SystemTime;
+use tracing::debug;
+use web_time::{Instant, SystemTime};
 
 use crate::{
     Network,
@@ -43,6 +44,7 @@ pub(crate) async fn swap_nodes_for_preimage(
     network: Network,
     req: SwapNodesForPreimageRequest<'_>,
 ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
+    let start = Instant::now();
     let SwapNodesForPreimageRequest {
         transfer_id,
         leaves,
@@ -55,11 +57,20 @@ pub(crate) async fn swap_nodes_for_preimage(
         transfer_request,
         expiry_time,
     } = req;
+
+    debug!(
+        "swap_nodes_for_preimage starting | leaf_count={} amount_sats={}",
+        leaves.len(),
+        amount_sats
+    );
+
     // get signing commitments
+    debug!("swap_nodes_for_preimage | calling get_signing_commitments");
     let node_ids: Vec<String> = leaves
         .iter()
         .map(|l| l.node.id.clone().to_string())
         .collect();
+    let commitments_start = Instant::now();
     let signing_commitments = operator_pool
         .get_coordinator()
         .client
@@ -69,6 +80,10 @@ pub(crate) async fn swap_nodes_for_preimage(
         .iter()
         .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
         .collect::<Result<Vec<_>, _>>()?;
+    debug!(
+        "swap_nodes_for_preimage | get_signing_commitments completed | elapsed_ms={}",
+        commitments_start.elapsed().as_millis()
+    );
 
     let chunked_signing_commitments = signing_commitments.chunks(leaves.len()).collect::<Vec<_>>();
 
@@ -82,6 +97,11 @@ pub(crate) async fn swap_nodes_for_preimage(
     let direct_signing_commitments = chunked_signing_commitments[1].to_vec();
     let direct_from_cpfp_signing_commitments = chunked_signing_commitments[2].to_vec();
 
+    debug!(
+        "swap_nodes_for_preimage | signing refunds | leaf_count={}",
+        leaves.len()
+    );
+    let sign_refunds_start = Instant::now();
     let SignedRefundTransactions {
         cpfp_signed_tx,
         direct_signed_tx,
@@ -97,6 +117,10 @@ pub(crate) async fn swap_nodes_for_preimage(
         network,
     })
     .await?;
+    debug!(
+        "swap_nodes_for_preimage | sign_refunds completed | elapsed_ms={}",
+        sign_refunds_start.elapsed().as_millis()
+    );
 
     let reason = if is_inbound_payment {
         Reason::Receive
@@ -146,10 +170,16 @@ pub(crate) async fn swap_nodes_for_preimage(
         transfer_request,
     };
 
+    debug!("swap_nodes_for_preimage | calling initiate_preimage_swap");
     let response = operator_pool
         .get_coordinator()
         .client
         .initiate_preimage_swap_v3(request_data)
         .await?;
+
+    debug!(
+        "swap_nodes_for_preimage completed | elapsed_ms={}",
+        start.elapsed().as_millis()
+    );
     Ok(response)
 }

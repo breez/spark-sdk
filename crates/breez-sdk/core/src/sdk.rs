@@ -1932,8 +1932,35 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
+        let start = Instant::now();
+        let method_name = match &request.prepare_response.payment_method {
+            SendPaymentMethod::SparkAddress { .. } => "SparkAddress",
+            SendPaymentMethod::SparkInvoice { .. } => "SparkInvoice",
+            SendPaymentMethod::Bolt11Invoice { .. } => "Bolt11",
+            SendPaymentMethod::BitcoinAddress { .. } => "BitcoinAddress",
+        };
+        info!(
+            "send_payment starting | method={} pay_amount={:?}",
+            method_name, request.prepare_response.amount
+        );
+
         self.ensure_spark_private_mode_initialized().await?;
-        Box::pin(self.maybe_convert_token_send_payment(request, false)).await
+        let result = Box::pin(self.maybe_convert_token_send_payment(request, false)).await;
+
+        match &result {
+            Ok(_) => info!(
+                "send_payment completed | method={} success=true elapsed_ms={}",
+                method_name,
+                start.elapsed().as_millis()
+            ),
+            Err(e) => info!(
+                "send_payment completed | method={} success=false error={} elapsed_ms={}",
+                method_name,
+                e,
+                start.elapsed().as_millis()
+            ),
+        }
+        result
     }
 
     pub async fn fetch_conversion_limits(
@@ -2540,6 +2567,11 @@ impl BreezSdk {
         &self,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
+        debug!(
+            "send_payment_internal | method={:?} amount={}",
+            request.prepare_response.payment_method, request.prepare_response.amount
+        );
+
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress {
                 address,
@@ -2590,6 +2622,9 @@ impl BreezSdk {
         options: Option<&SendPaymentOptions>,
         idempotency_key: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
+        let start = Instant::now();
+        debug!("send_spark_address starting | amount={}", amount);
+
         let spark_address = address
             .parse::<SparkAddress>()
             .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
@@ -2614,6 +2649,7 @@ impl BreezSdk {
                 .await;
         }
 
+        debug!("send_spark_address | calling spark_wallet.transfer");
         let payment = if let Some(identifier) = token_identifier {
             self.send_spark_token_address(identifier, amount, spark_address)
                 .await?
@@ -2632,6 +2668,11 @@ impl BreezSdk {
         // Insert the payment into storage to make it immediately available for listing
         self.storage.insert_payment(payment.clone()).await?;
 
+        debug!(
+            "send_spark_address completed | amount={} elapsed_ms={}",
+            amount,
+            start.elapsed().as_millis()
+        );
         Ok(SendPaymentResponse { payment })
     }
 
@@ -2741,6 +2782,12 @@ impl BreezSdk {
         lightning_fee_sats: u64,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
+        let start = Instant::now();
+        debug!(
+            "send_bolt11_invoice starting | amount={}",
+            request.prepare_response.amount
+        );
+
         let amount_to_send = match invoice_details.amount_msat {
             // We are not sending amount in case the invoice contains it.
             Some(_) => None,
@@ -2764,9 +2811,9 @@ impl BreezSdk {
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
 
-        let payment_response = self
-            .spark_wallet
-            .pay_lightning_invoice(
+        debug!("send_bolt11_invoice | calling spark_wallet.pay_lightning_invoice");
+        let payment_response = Box::pin(
+            self.spark_wallet.pay_lightning_invoice(
                 &invoice_details.invoice.bolt11,
                 amount_to_send
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
@@ -2774,8 +2821,9 @@ impl BreezSdk {
                 Some(fee_sats),
                 prefer_spark,
                 transfer_id,
-            )
-            .await?;
+            ),
+        )
+        .await?;
         let payment = match payment_response.lightning_payment {
             Some(lightning_payment) => {
                 let ssp_id = lightning_payment.id.clone();
@@ -2795,6 +2843,11 @@ impl BreezSdk {
         };
 
         if completion_timeout_secs == 0 {
+            debug!(
+                "send_bolt11_invoice completed | amount={} elapsed_ms={}",
+                request.prepare_response.amount,
+                start.elapsed().as_millis()
+            );
             return Ok(SendPaymentResponse { payment });
         }
 
@@ -2809,6 +2862,11 @@ impl BreezSdk {
         // Insert the payment into storage to make it immediately available for listing
         self.storage.insert_payment(payment.clone()).await?;
 
+        debug!(
+            "send_bolt11_invoice completed | amount={} elapsed_ms={}",
+            request.prepare_response.amount,
+            start.elapsed().as_millis()
+        );
         Ok(SendPaymentResponse { payment })
     }
 
@@ -2818,6 +2876,9 @@ impl BreezSdk {
         fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
+        let start = Instant::now();
+        debug!("send_bitcoin_address starting");
+
         let exit_speed = match &request.options {
             Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
                 confirmation_speed.clone().into()
@@ -2832,6 +2893,8 @@ impl BreezSdk {
             .as_ref()
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
+
+        debug!("send_bitcoin_address | calling spark_wallet.withdraw");
         let response = self
             .spark_wallet
             .withdraw(
@@ -2847,6 +2910,10 @@ impl BreezSdk {
 
         self.storage.insert_payment(payment.clone()).await?;
 
+        debug!(
+            "send_bitcoin_address completed | elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
         Ok(SendPaymentResponse { payment })
     }
 
