@@ -34,6 +34,14 @@ pub struct LnurlErrorDetails {
     pub reason: String,
 }
 
+/// Encodes an lnurl as a bech32 string.
+pub fn encode_lnurl_to_bech32(lnurl: &str) -> Result<String, String> {
+    let hrp = bech32::Hrp::parse("lnurl").map_err(|e| e.to_string())?;
+    let bech32_encoded =
+        bech32::encode::<bech32::Bech32>(hrp, lnurl.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(bech32_encoded.to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use rand;
