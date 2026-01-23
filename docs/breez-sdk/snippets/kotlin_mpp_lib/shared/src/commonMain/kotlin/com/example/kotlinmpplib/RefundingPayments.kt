@@ -76,7 +76,11 @@ class RefundingPayments {
             val fee = Fee.Rate(recommendedFees.halfHourFee)
             // or using a fixed amount
             //val fee = Fee.Fixed(500u)
-            
+            //
+            // Important: The total fee must be at least 194 sats to ensure the
+            // transaction can be relayed by the Bitcoin network. If the fee is
+            // lower, the refund request will be rejected.
+
             val request = RefundDepositRequest(
                 txid = txid,
                 vout = vout,

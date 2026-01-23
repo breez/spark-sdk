@@ -82,6 +82,10 @@ async def refund_deposit(sdk: BreezSdk):
         fee = Fee.RATE(sat_per_vbyte=recommended_fees.half_hour_fee)
         # or using a fixed amount
         #fee = Fee.FIXED(amount=500)
+        #
+        # Important: The total fee must be at least 194 sats to ensure the
+        # transaction can be relayed by the Bitcoin network. If the fee is
+        # lower, the refund request will be rejected.
 
         request = RefundDepositRequest(
             txid=txid, vout=vout, destination_address=destination_address, fee=fee
