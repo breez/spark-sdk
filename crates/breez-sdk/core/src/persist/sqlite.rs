@@ -272,9 +272,25 @@ impl SqliteStorage {
     }
 }
 
+/// Maps a rusqlite error to the appropriate `StorageError`.
+/// Database busy/locked errors are mapped to `Connection` (transient),
+/// other errors are mapped to `Implementation`.
+#[allow(clippy::needless_pass_by_value)]
+fn map_sqlite_error(e: rusqlite::Error) -> StorageError {
+    match e {
+        rusqlite::Error::SqliteFailure(err, _)
+            if err.code == rusqlite::ErrorCode::DatabaseBusy
+                || err.code == rusqlite::ErrorCode::DatabaseLocked =>
+        {
+            StorageError::Connection(e.to_string())
+        }
+        _ => StorageError::Implementation(e.to_string()),
+    }
+}
+
 impl From<rusqlite::Error> for StorageError {
     fn from(value: rusqlite::Error) -> Self {
-        StorageError::Implementation(value.to_string())
+        map_sqlite_error(value)
     }
 }
 
@@ -815,7 +831,11 @@ fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, SyncStorageError> {
 impl From<StorageError> for SyncStorageError {
     fn from(value: StorageError) -> Self {
         match value {
-            StorageError::Implementation(s) => SyncStorageError::Implementation(s),
+            // Connection errors are transient; map to Implementation for SyncStorageError
+            // since SyncStorageError doesn't have a Connection variant
+            StorageError::Connection(s) | StorageError::Implementation(s) => {
+                SyncStorageError::Implementation(s)
+            }
             StorageError::InitializationError(s) => SyncStorageError::InitializationError(s),
             StorageError::Serialization(s) => SyncStorageError::Serialization(s),
         }
@@ -1182,11 +1202,6 @@ impl SyncStorage for SqliteStorage {
 
         Ok(())
     }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn map_sqlite_error(value: rusqlite::Error) -> SyncStorageError {
-    SyncStorageError::Implementation(value.to_string())
 }
 
 /// Base query for payment lookups.
