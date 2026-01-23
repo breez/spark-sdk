@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use crate::error::SdkError;
 
 /// Service for initiating Bitcoin purchases via external providers
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait BuyBitcoinService: Send + Sync {
     async fn buy_bitcoin(
         &self,
@@ -16,7 +17,7 @@ pub trait BuyBitcoinService: Send + Sync {
     ) -> Result<String, SdkError>;
 }
 
-/// MoonPay-based Bitcoin purchase service
+/// `MoonPay`-based Bitcoin purchase service
 pub struct MoonpayBuyBitcoinService {
     breez_server: Arc<breez_sdk_common::breez_server::BreezServer>,
 }
@@ -27,7 +28,8 @@ impl MoonpayBuyBitcoinService {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl BuyBitcoinService for MoonpayBuyBitcoinService {
     async fn buy_bitcoin(
         &self,

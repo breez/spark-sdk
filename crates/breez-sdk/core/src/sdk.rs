@@ -2090,7 +2090,7 @@ impl BreezSdk {
         Ok(ListUnclaimedDepositsResponse { deposits })
     }
 
-    /// Initiates a Bitcoin purchase via an external provider (e.g., MoonPay)
+    /// Initiates a Bitcoin purchase via an external provider (e.g., `MoonPay`)
     ///
     /// Returns a URL that the user should open in a browser to complete the purchase.
     pub async fn buy_bitcoin(

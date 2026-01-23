@@ -239,7 +239,7 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
-    /// Initiates a Bitcoin purchase via MoonPay
+    /// Initiates a Bitcoin purchase via `MoonPay`
     BuyBitcoin {
         /// Bitcoin address to receive the purchased bitcoin
         address: String,
@@ -400,8 +400,8 @@ pub(crate) async fn execute_command(
             let response = sdk
                 .buy_bitcoin(BuyBitcoinRequest {
                     address: address.clone(),
-                    locked_amount_sat: *locked_amount_sat,
-                    max_amount_sat: *max_amount_sat,
+                    locked_amount_sat,
+                    max_amount_sat,
                     redirect_url: redirect_url.clone(),
                 })
                 .await?;
