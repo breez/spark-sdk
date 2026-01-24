@@ -9,11 +9,10 @@ browser-tests = [] # Enable browser wasm-pack tests
 uniffi = [
     "dep:uniffi",
     "openssl-vendored",
-    "postgres",
 ]
 openssl-vendored = ["openssl"]
 test-utils = []
-# PostgreSQL storage backend (optional for pure Rust users, included in uniffi builds)
+# PostgreSQL storage backend (optional, for server-side use cases)
 postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:deadpool", "dep:tokio-postgres-rustls", "dep:rustls"]
 # TLS features
 default-tls = ["reqwest/default-tls", "breez-sdk-common/default-tls", "flashnet/default-tls"]
