@@ -39,12 +39,13 @@ use x509_parser::parse_x509_certificate;
 
 use crate::{
     AssetFilter, BitcoinAddressDetails, BitcoinChainService, BitcoinPayAmount,
-    Bolt11InvoiceDetails, CheckLightningAddressRequest, CheckMessageRequest, CheckMessageResponse,
-    ClaimDepositRequest, ClaimDepositResponse, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, DepositInfo,
-    ExternalInputParser, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
-    GetPaymentRequest, GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    InputType, LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    Bolt11InvoiceDetails, BuyBitcoinRequest, BuyBitcoinResponse, CheckLightningAddressRequest,
+    CheckMessageRequest, CheckMessageResponse, ClaimDepositRequest, ClaimDepositResponse,
+    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, ConversionEstimate, ConversionOptions,
+    ConversionPurpose, ConversionType, DepositInfo, ExternalInputParser,
+    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
+    GetPaymentResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
+    LightningAddressInfo, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     ListUnclaimedDepositsRequest, ListUnclaimedDepositsResponse, LnurlAuthRequestDetails,
     LnurlCallbackStatus, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo,
     LnurlWithdrawRequest, LnurlWithdrawResponse, Logger, MaxFee, Network, OnchainConfirmationSpeed,
@@ -54,6 +55,7 @@ use crate::{
     SendPaymentOptions, SetLnurlMetadataItem, SignMessageRequest, SignMessageResponse,
     SparkHtlcOptions, SparkInvoiceDetails, TokenConversionResponse, UpdateUserSettingsRequest,
     UserSettings, WaitForPaymentIdentifier,
+    buy_bitcoin_service::BuyBitcoinService,
     chain::RecommendedFees,
     error::SdkError,
     events::{EventEmitter, EventListener, InternalSyncedEvent, SdkEvent},
@@ -178,6 +180,7 @@ pub struct BreezSdk {
     spark_private_mode_initialized: Arc<OnceCell<()>>,
     nostr_client: Arc<NostrClient>,
     token_converter: Arc<dyn TokenConverter>,
+    buy_bitcoin_service: Arc<dyn BuyBitcoinService>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -303,6 +306,7 @@ pub(crate) struct BreezSdkParams {
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub nostr_client: Arc<NostrClient>,
+    pub buy_bitcoin_service: Arc<dyn BuyBitcoinService>,
 }
 
 impl BreezSdk {
@@ -345,6 +349,7 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
+            buy_bitcoin_service: params.buy_bitcoin_service,
         };
 
         sdk.start(initial_synced_sender);
@@ -2083,6 +2088,26 @@ impl BreezSdk {
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+
+    /// Initiates a Bitcoin purchase via an external provider (e.g., `MoonPay`)
+    ///
+    /// Returns a URL that the user should open in a browser to complete the purchase.
+    pub async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        let url = self
+            .buy_bitcoin_service
+            .buy_bitcoin(
+                request.address,
+                request.locked_amount_sat,
+                request.max_amount_sat,
+                request.redirect_url,
+            )
+            .await?;
+
+        Ok(BuyBitcoinResponse { url })
     }
 
     pub async fn check_lightning_address_available(

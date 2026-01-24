@@ -17,6 +17,7 @@ use tracing::{debug, info};
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
     RestClientWrapper, Seed,
+    buy_bitcoin_service::MoonpayBuyBitcoinService,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
@@ -348,13 +349,18 @@ impl SdkBuilder {
             }
         };
 
+        let breez_server = Arc::new(
+            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
+                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
+
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
-            None => Arc::new(
-                BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
+            None => breez_server.clone() as Arc<dyn breez_sdk_common::fiat::FiatService>,
         };
+
+        let buy_bitcoin_service: Arc<dyn crate::buy_bitcoin_service::BuyBitcoinService> =
+            Arc::new(MoonpayBuyBitcoinService::new(breez_server.clone()));
 
         let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
             Some(client) => Arc::new(RestClientWrapper::new(client)),
@@ -444,6 +450,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
+            buy_bitcoin_service,
         })?;
         debug!("Initialized and started breez sdk.");
 

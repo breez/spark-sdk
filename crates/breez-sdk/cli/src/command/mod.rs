@@ -2,13 +2,13 @@ mod issuer;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BitcoinPayAmount, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
-    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
-    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
-    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PayAmount, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    AssetFilter, BitcoinPayAmount, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest,
+    ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee,
+    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PayAmount,
+    PaymentDetailsFilter, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, UpdateUserSettingsRequest,
 };
@@ -239,6 +239,23 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    /// Initiates a Bitcoin purchase via `MoonPay`
+    BuyBitcoin {
+        /// Bitcoin address to receive the purchased bitcoin
+        address: String,
+
+        /// Optional: Lock the purchase to a specific amount in satoshis
+        #[arg(short, long)]
+        locked_amount_sat: Option<u64>,
+
+        /// Optional: Maximum purchase amount in satoshis
+        #[arg(short, long)]
+        max_amount_sat: Option<u64>,
+
+        /// Optional: Custom redirect URL after purchase completion
+        #[arg(short, long)]
+        redirect_url: Option<String>,
+    },
     CheckLightningAddressAvailable {
         /// The username to check
         username: String,
@@ -372,6 +389,24 @@ pub(crate) async fn execute_command(
                 .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
                 .await?;
             print_value(&value)?;
+            Ok(true)
+        }
+        Command::BuyBitcoin {
+            address,
+            locked_amount_sat,
+            max_amount_sat,
+            redirect_url,
+        } => {
+            let response = sdk
+                .buy_bitcoin(BuyBitcoinRequest {
+                    address: address.clone(),
+                    locked_amount_sat,
+                    max_amount_sat,
+                    redirect_url: redirect_url.clone(),
+                })
+                .await?;
+            println!("Open this URL in a browser to complete the purchase:");
+            println!("{}", response.url);
             Ok(true)
         }
         Command::ClaimDeposit {
