@@ -56,6 +56,11 @@ pub struct SdkBuilder {
 
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
+    #[cfg(all(
+        feature = "postgres",
+        not(all(target_family = "wasm", target_os = "unknown"))
+    ))]
+    postgres_config: Option<crate::persist::postgres::PostgresStorageConfig>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
@@ -84,6 +89,11 @@ impl SdkBuilder {
             },
             storage_dir: None,
             storage: None,
+            #[cfg(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            ))]
+            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -105,6 +115,11 @@ impl SdkBuilder {
             signer_source: SignerSource::External(signer),
             storage_dir: None,
             storage: None,
+            #[cfg(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            ))]
+            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -168,7 +183,7 @@ impl SdkBuilder {
 
     /// Sets the storage to use `PostgreSQL` with the given configuration.
     /// This initializes both storage and real-time sync storage with the
-    /// `PostgreSQL` implementation.
+    /// `PostgreSQL` implementation when `build()` is called.
     ///
     /// # Arguments
     /// - `config`: `PostgreSQL` storage configuration
@@ -180,7 +195,6 @@ impl SdkBuilder {
     /// // Simple usage with defaults:
     /// let sdk = SdkBuilder::new(config, seed)
     ///     .with_postgres_storage(PostgresStorageConfig::new("host=localhost user=postgres dbname=spark"))
-    ///     .await?
     ///     .build()
     ///     .await?;
     ///
@@ -192,26 +206,20 @@ impl SdkBuilder {
     ///         wait_timeout_secs: Some(30),
     ///         ..Default::default()
     ///     })
-    ///     .await?
     ///     .build()
     ///     .await?;
     /// ```
+    #[must_use]
     #[cfg(all(
         feature = "postgres",
         not(all(target_family = "wasm", target_os = "unknown"))
     ))]
-    pub async fn with_postgres_storage(
+    pub fn with_postgres_storage(
         mut self,
         config: crate::persist::postgres::PostgresStorageConfig,
-    ) -> Result<Self, crate::error::SdkError> {
-        let storage = Arc::new(
-            crate::persist::postgres::PostgresStorage::new(config)
-                .await
-                .map_err(|e| crate::error::SdkError::Generic(e.to_string()))?,
-        );
-        self.storage = Some(storage.clone());
-        self.sync_storage = Some(storage);
-        Ok(self)
+    ) -> Self {
+        self.postgres_config = Some(config);
+        self
     }
 
     /// Sets the chain service to be used by the SDK.
@@ -362,39 +370,90 @@ impl SdkBuilder {
             }
         };
 
-        let (storage, sync_storage) = match (self.storage, self.storage_dir) {
-            // Use provided storages directly
-            (Some(storage), _) => (storage, self.sync_storage),
-            // Initialize default storages based on provided directory
-            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-            (None, Some(storage_dir)) => {
-                let identity_pub_key = spark_signer
-                    .get_identity_public_key()
-                    .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?;
-                let storage =
-                    default_storage(&storage_dir, self.config.network, &identity_pub_key)?;
-                let sync_storage = match (self.sync_storage, &self.config.real_time_sync_server_url)
-                {
-                    // Use provided sync storage directly
-                    (Some(sync_storage), _) => Some(sync_storage),
-                    // Initialize default sync storage based on provided directory
-                    // if real-time sync is enabled
-                    (None, Some(_)) => Some(default_sync_storage(
-                        &storage_dir,
-                        self.config.network,
-                        &identity_pub_key,
-                    )?),
-                    _ => None,
-                };
-                (storage, sync_storage)
+        // Validate storage configuration
+        #[cfg(all(
+            feature = "postgres",
+            not(all(target_family = "wasm", target_os = "unknown"))
+        ))]
+        let has_postgres = self.postgres_config.is_some();
+        #[cfg(not(all(
+            feature = "postgres",
+            not(all(target_family = "wasm", target_os = "unknown"))
+        )))]
+        let has_postgres = false;
+
+        match (
+            self.storage.is_some(),
+            self.storage_dir.is_some(),
+            has_postgres,
+        ) {
+            (false, false, false) => {
+                return Err(SdkError::Generic("No storage configured".to_string()));
             }
+            (true, false, false) | (false, true, false) | (false, false, true) => {}
             _ => {
                 return Err(SdkError::Generic(
-                    "Either storage or storage_dir must be set before building the SDK".to_string(),
+                    "Multiple storage configurations provided".to_string(),
                 ));
             }
-        };
+        }
+
+        // Initialize storage
+        let (storage, sync_storage): (Arc<dyn Storage>, Option<Arc<dyn SyncStorage>>) =
+            if let Some(storage) = self.storage {
+                (storage, self.sync_storage)
+            } else if let Some(storage_dir) = self.storage_dir {
+                #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+                {
+                    let identity_pub_key = spark_signer
+                        .get_identity_public_key()
+                        .await
+                        .map_err(|e| SdkError::Generic(e.to_string()))?;
+                    let storage =
+                        default_storage(&storage_dir, self.config.network, &identity_pub_key)?;
+                    let sync_storage =
+                        match (self.sync_storage, &self.config.real_time_sync_server_url) {
+                            (Some(sync_storage), _) => Some(sync_storage),
+                            (None, Some(_)) => Some(default_sync_storage(
+                                &storage_dir,
+                                self.config.network,
+                                &identity_pub_key,
+                            )?),
+                            _ => None,
+                        };
+                    (storage, sync_storage)
+                }
+                #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+                {
+                    let _ = storage_dir;
+                    return Err(SdkError::Generic(
+                        "with_default_storage is not supported on WASM".to_string(),
+                    ));
+                }
+            } else {
+                #[cfg(all(
+                    feature = "postgres",
+                    not(all(target_family = "wasm", target_os = "unknown"))
+                ))]
+                if let Some(pg_config) = self.postgres_config {
+                    let storage = Arc::new(
+                        crate::persist::postgres::PostgresStorage::new(pg_config)
+                            .await
+                            .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    );
+                    (
+                        storage.clone() as Arc<dyn Storage>,
+                        Some(storage as Arc<dyn SyncStorage>),
+                    )
+                } else {
+                    return Err(SdkError::Generic("No storage configured".to_string()));
+                }
+                #[cfg(not(all(
+                    feature = "postgres",
+                    not(all(target_family = "wasm", target_os = "unknown"))
+                )))]
+                return Err(SdkError::Generic("No storage configured".to_string()));
+            };
 
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
