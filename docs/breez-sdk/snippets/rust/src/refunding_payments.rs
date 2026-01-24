@@ -72,6 +72,7 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
     let fee = Fee::Rate { sat_per_vbyte: recommended_fees.half_hour_fee };
     // or using a fixed amount
     //let fee = Fee::Fixed { amount: 500 };
+    //
 
     let request = RefundDepositRequest {
         txid,

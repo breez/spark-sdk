@@ -78,6 +78,7 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const fee: Fee = { type: 'rate', satPerVbyte: recommendedFees.halfHourFee }
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
+  //
 
   const request: RefundDepositRequest = {
     txid,

@@ -60,6 +60,7 @@ Future<void> refundDeposit(BreezSdk sdk) async {
   Fee fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee);
   // or using a fixed amount
   //Fee fee = Fee.fixed(amount: BigInt.from(500));
+  //
 
   final request = RefundDepositRequest(
     txid: txid,

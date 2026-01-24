@@ -77,6 +77,7 @@ const refundDeposit = async (sdk: BreezSdk) => {
   const fee = new Fee.Rate({ satPerVbyte: recommendedFees.halfHourFee })
   // or using a fixed amount
   // const fee = new Fee.Fixed({ amount: BigInt(500) })
+  //
 
   const request: RefundDepositRequest = {
     txid,

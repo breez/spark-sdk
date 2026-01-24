@@ -82,6 +82,7 @@ namespace BreezSdkSnippets
             var fee = new Fee.Rate(satPerVbyte: recommendedFees.halfHourFee);
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
+            //
 
             var request = new RefundDepositRequest(
                 txid: txid,

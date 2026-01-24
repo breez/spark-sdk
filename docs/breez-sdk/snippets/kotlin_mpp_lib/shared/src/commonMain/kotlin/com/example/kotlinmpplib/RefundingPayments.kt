@@ -76,7 +76,8 @@ class RefundingPayments {
             val fee = Fee.Rate(recommendedFees.halfHourFee)
             // or using a fixed amount
             //val fee = Fee.Fixed(500u)
-            
+            //
+
             val request = RefundDepositRequest(
                 txid = txid,
                 vout = vout,
