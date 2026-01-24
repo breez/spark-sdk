@@ -83,9 +83,6 @@ namespace BreezSdkSnippets
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
             //
-            // Important: The total fee must be at least 194 sats to ensure the
-            // transaction can be relayed by the Bitcoin network. If the fee is
-            // lower, the refund request will be rejected.
 
             var request = new RefundDepositRequest(
                 txid: txid,

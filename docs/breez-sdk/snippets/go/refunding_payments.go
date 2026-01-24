@@ -97,9 +97,6 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	// or using a fixed amount
 	//fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 500})
 	//
-	// Important: The total fee must be at least 194 sats to ensure the
-	// transaction can be relayed by the Bitcoin network. If the fee is
-	// lower, the refund request will be rejected.
 
 	request := breez_sdk_spark.RefundDepositRequest{
 		Txid:               txid,

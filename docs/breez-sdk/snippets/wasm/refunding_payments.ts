@@ -79,9 +79,6 @@ const refundDeposit = async (sdk: BreezSdk) => {
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
   //
-  // Important: The total fee must be at least 194 sats to ensure the
-  // transaction can be relayed by the Bitcoin network. If the fee is
-  // lower, the refund request will be rejected.
 
   const request: RefundDepositRequest = {
     txid,

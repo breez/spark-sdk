@@ -67,9 +67,6 @@ func refundDeposit(sdk: BreezSdk) async throws {
     // or using a fixed amount
     //let fee = Fee.fixed(amount: 500) // 500 sats
     //
-    // Important: The total fee must be at least 194 sats to ensure the
-    // transaction can be relayed by the Bitcoin network. If the fee is
-    // lower, the refund request will be rejected.
 
     let request = RefundDepositRequest(
         txid: txid,
