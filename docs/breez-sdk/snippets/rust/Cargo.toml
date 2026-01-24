@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1.89"
-breez-sdk-spark = { path = "../../../../crates/breez-sdk/core" }
+breez-sdk-spark = { path = "../../../../crates/breez-sdk/core", features = ["postgres"] }
 log = "0.4"
 tokio = "1.42.0"
 hex = "0.4.3"

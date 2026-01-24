@@ -10,6 +10,8 @@ from breez_sdk_spark import (
     LogEntry,
     Logger,
     Network,
+    PostgresStorageConfig,
+    SdkBuilder,
     SdkEvent,
     Seed,
 )
@@ -130,3 +132,38 @@ async def disconnect(sdk: BreezSdk):
 
 
 # ANCHOR_END: disconnect
+
+
+# ANCHOR: init-sdk-postgres
+async def init_sdk_postgres():
+    # Construct the seed using mnemonic words or entropy bytes
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Configure PostgreSQL storage
+    # Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+    # Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    postgres_config = PostgresStorageConfig(
+        connection_string="host=localhost user=postgres dbname=spark",
+        # Optional pool settings (all default to None):
+        max_pool_size=8,            # Max connections in pool
+        wait_timeout_secs=30,       # Timeout waiting for connection
+        create_timeout_secs=None,   # Timeout establishing connection
+        recycle_timeout_secs=None,  # Idle connection recycle timeout
+        queue_mode=None,            # FIFO (default) or LIFO
+    )
+
+    try:
+        # Build the SDK with PostgreSQL storage
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_postgres_storage(config=postgres_config)
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+# ANCHOR_END: init-sdk-postgres
