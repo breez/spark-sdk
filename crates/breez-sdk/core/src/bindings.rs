@@ -122,15 +122,14 @@ impl SdkBuilder {
 impl SdkBuilder {
     /// Sets the storage to use `PostgreSQL` with the given configuration.
     /// This initializes both storage and real-time sync storage with the
-    /// `PostgreSQL` implementation.
+    /// `PostgreSQL` implementation when `build()` is called.
     /// Arguments:
     /// - `config`: `PostgreSQL` storage configuration containing connection string and pool settings.
     pub async fn with_postgres_storage(
         &self,
         config: crate::persist::postgres::PostgresStorageConfig,
-    ) -> Result<(), SdkError> {
+    ) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_storage(config).await?;
-        Ok(())
+        *builder = builder.clone().with_postgres_storage(config);
     }
 }
