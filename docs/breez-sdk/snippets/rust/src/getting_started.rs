@@ -111,3 +111,39 @@ pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 // ANCHOR_END: disconnect
+
+pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-postgres
+    // Construct the seed using mnemonic words or entropy bytes
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Configure PostgreSQL storage
+    // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+    // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    let postgres_config = PostgresStorageConfig {
+        connection_string: "host=localhost user=postgres dbname=spark".to_string(),
+        // Optional pool settings (all default to None):
+        max_pool_size: Some(8),        // Max connections in pool
+        wait_timeout_secs: Some(30),   // Timeout waiting for connection
+        create_timeout_secs: None,     // Timeout establishing connection
+        recycle_timeout_secs: None,    // Idle connection recycle timeout
+        queue_mode: None,              // FIFO (default) or LIFO
+    };
+
+    // Build the SDK with PostgreSQL storage
+    let sdk = SdkBuilder::new(config, seed)
+        .with_postgres_storage(postgres_config)
+        .build()
+        .await?;
+    // ANCHOR_END: init-sdk-postgres
+
+    Ok(sdk)
+}

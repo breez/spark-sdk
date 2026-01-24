@@ -124,4 +124,38 @@ class GettingStarted {
         }
     }
     // ANCHOR_END: disconnect
+
+    suspend fun initSdkPostgres() {
+        // ANCHOR: init-sdk-postgres
+        // Construct the seed using mnemonic words or entropy bytes
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Configure PostgreSQL storage
+        // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+        // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+        val postgresConfig = PostgresStorageConfig(
+            connectionString = "host=localhost user=postgres dbname=spark",
+            // Optional pool settings (all default to null):
+            maxPoolSize = 8u,        // Max connections in pool
+            waitTimeoutSecs = 30u,   // Timeout waiting for connection
+            createTimeoutSecs = null,     // Timeout establishing connection
+            recycleTimeoutSecs = null,    // Idle connection recycle timeout
+            queueMode = null,             // FIFO (default) or LIFO
+        )
+
+        try {
+            // Build the SDK with PostgreSQL storage
+            val builder = SdkBuilder(config, seed)
+            builder.withPostgresStorage(postgresConfig)
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-postgres
+    }
 }
