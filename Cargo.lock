@@ -612,6 +612,7 @@ dependencies = [
  "breez-sdk-spark",
  "clap",
  "dirs",
+ "futures",
  "rand 0.8.5",
  "tempdir",
  "tokio",

@@ -17,7 +17,7 @@ struct ChannelEventListener {
 #[async_trait::async_trait]
 impl EventListener for ChannelEventListener {
     async fn on_event(&self, event: SdkEvent) {
-        let _ = self.tx.send(event).await;
+        let _ = self.tx.try_send(event);
     }
 }
 
