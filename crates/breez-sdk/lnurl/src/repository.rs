@@ -99,7 +99,7 @@ pub trait LnurlRepository {
     /// Insert a newly paid invoice into the queue
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError>;
 
-    /// Get all newly paid invoices ready for processing (next_retry_at <= now)
+    /// Get all newly paid invoices ready for processing (`next_retry_at` <= now)
     async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
 
     /// Update retry count and next retry time for a newly paid invoice
