@@ -6,4 +6,6 @@ pub struct User {
     pub name: String,
     pub description: String,
     pub nostr_pubkey: Option<String>,
+    /// When true, the server won't track invoice payments for this user (LUD-21 and zap receipts disabled)
+    pub no_invoice_paid_support: bool,
 }

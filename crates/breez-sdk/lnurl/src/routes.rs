@@ -165,6 +165,7 @@ where
             name: username,
             description: payload.description,
             nostr_pubkey,
+            no_invoice_paid_support: false,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
