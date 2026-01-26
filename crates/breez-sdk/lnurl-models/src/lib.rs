@@ -53,6 +53,8 @@ pub struct ListMetadataRequest {
     pub timestamp: Option<u64>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+    /// Only return metadata updated after this timestamp (milliseconds)
+    pub updated_after: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +71,8 @@ pub struct ListMetadataMetadata {
     pub nostr_zap_receipt: Option<String>,
     /// Unix timestamp (milliseconds) when this metadata was last updated
     pub updated_at: i64,
+    /// The payment preimage if invoice has been paid
+    pub preimage: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

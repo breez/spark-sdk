@@ -287,7 +287,7 @@ where
         let limit = params.limit.unwrap_or(DEFAULT_METADATA_LIMIT);
         let metadata = state
             .db
-            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit)
+            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit, params.updated_after)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
