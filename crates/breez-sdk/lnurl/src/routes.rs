@@ -2,6 +2,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
+    response::IntoResponse,
 };
 use axum_extra::extract::Host;
 use bitcoin::{
@@ -758,6 +759,37 @@ where
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
         })))
+    }
+
+    /// LUD-21 verify endpoint
+    pub async fn verify(
+        Path(payment_hash): Path<String>,
+        Extension(state): Extension<State<DB>>,
+    ) -> impl IntoResponse {
+        let invoice = match state.db.get_invoice_by_payment_hash(&payment_hash).await {
+            Ok(Some(invoice)) => invoice,
+            Ok(None) => {
+                return Json(json!({
+                    "status": "ERROR",
+                    "reason": "Not found"
+                }));
+            }
+            Err(e) => {
+                error!("Failed to get invoice by payment hash: {}", e);
+                return Json(json!({
+                    "status": "ERROR",
+                    "reason": "Internal server error"
+                }));
+            }
+        };
+
+        let settled = invoice.preimage.is_some();
+        Json(json!({
+            "status": "OK",
+            "settled": settled,
+            "preimage": invoice.preimage,
+            "pr": invoice.invoice
+        }))
     }
 }
 
