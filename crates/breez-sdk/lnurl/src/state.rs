@@ -4,7 +4,7 @@ use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
 use spark_wallet::DefaultSigner;
 use std::{collections::HashSet, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 pub struct State<DB> {
     pub db: DB,
@@ -22,6 +22,7 @@ pub struct State<DB> {
     pub session_manager: Arc<InMemorySessionManager>,
     pub service_provider: Arc<ServiceProvider>,
     pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
+    pub invoice_paid_trigger: watch::Sender<()>,
 }
 
 impl<DB> Clone for State<DB>
@@ -45,6 +46,7 @@ where
             session_manager: self.session_manager.clone(),
             service_provider: self.service_provider.clone(),
             subscribed_keys: Arc::clone(&self.subscribed_keys),
+            invoice_paid_trigger: self.invoice_paid_trigger.clone(),
         }
     }
 }
