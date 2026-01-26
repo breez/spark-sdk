@@ -651,30 +651,19 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let (nostr_pubkey, is_user_nostr_key) =
-            match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
-                (Some(nostr_pubkey), _) => {
-                    let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
-                        error!(
-                            "invalid nostr pubkey in user record, could not parse: {:?}",
-                            e
-                        );
-                        lnurl_error("internal server error")
-                    })?;
-                    (Some(xonly_pubkey), true)
-                }
-                (None, Some(nostr_keys)) => (
-                    Some(nostr_keys.public_key.xonly().map_err(|e| {
-                        error!(
-                            "invalid nostr pubkey in server keys, could not parse: {:?}",
-                            e
-                        );
-                        lnurl_error("internal server error")
-                    })?),
-                    false,
-                ),
-                _ => (None, false),
-            };
+        let nostr_pubkey = state
+            .nostr_keys
+            .as_ref()
+            .map(|nostr_keys| {
+                nostr_keys.public_key.xonly().map_err(|e| {
+                    error!(
+                        "invalid nostr pubkey in server keys, could not parse: {:?}",
+                        e
+                    );
+                    lnurl_error("internal server error")
+                })
+            })
+            .transpose()?;
 
         let desc_hash = if let Some(event) = &params.nostr {
             if nostr_pubkey.is_none() {
@@ -748,7 +737,7 @@ where
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
                 updated_at,
-                is_user_nostr_key,
+                is_user_nostr_key: false,
             };
             if let Err(e) = state.db.upsert_zap(&zap).await {
                 error!("failed to save zap event: {}", e);
@@ -757,7 +746,7 @@ where
 
             // Subscribe to user if not already subscribed (only if nostr is enabled, and
             // the user doesn't handle the zap receipt itself)
-            if !is_user_nostr_key && let Some(nostr_keys) = &state.nostr_keys {
+            if let Some(nostr_keys) = &state.nostr_keys {
                 crate::zap::create_rpc_client_and_subscribe(
                     state.db.clone(),
                     pubkey,
