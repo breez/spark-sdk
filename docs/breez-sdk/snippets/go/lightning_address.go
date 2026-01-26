@@ -60,7 +60,8 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 	}
 
 	_ = addressInfo.LightningAddress
-	_ = addressInfo.Lnurl
+	_ = addressInfo.Lnurl.Url
+	_ = addressInfo.Lnurl.Bech32
 	// ANCHOR_END: register-lightning-address
 
 	return &addressInfo, nil
@@ -82,7 +83,8 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 		_ = addressInfoOpt.LightningAddress
 		_ = addressInfoOpt.Username
 		_ = addressInfoOpt.Description
-		_ = addressInfoOpt.Lnurl
+		_ = addressInfoOpt.Lnurl.Url
+		_ = addressInfoOpt.Lnurl.Bech32
 	}
 	// ANCHOR_END: get-lightning-address
 

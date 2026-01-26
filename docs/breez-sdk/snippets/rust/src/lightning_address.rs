@@ -24,7 +24,7 @@ pub async fn check_lightning_address_availability(sdk: &BreezSdk) -> anyhow::Res
     Ok(is_available)
 }
 
-pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(String, String)> {
+pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(String, String, String)> {
     // Define the parameters
     let username = "a username".to_string();
     let description = Some("Lightning address description".to_string());
@@ -37,9 +37,10 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
 
     let address_info = sdk.register_lightning_address(request).await?;
     let lightning_address = address_info.lightning_address;
-    let lnurl = address_info.lnurl;
+    let lnurl_url = address_info.lnurl.url;
+    let lnurl_bech32 = address_info.lnurl.bech32;
     // ANCHOR_END: register-lightning-address
-    Ok((lightning_address, lnurl))
+    Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 
 pub async fn delete_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
@@ -57,7 +58,8 @@ pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
         let lightning_address = &info.lightning_address;
         let username = &info.username;
         let description = &info.description;
-        let lnurl = &info.lnurl;
+        let lnurl_url = &info.lnurl.url;
+        let lnurl_bech32 = &info.lnurl.bech32;
     }
     // ANCHOR_END: get-lightning-address
     Ok(())

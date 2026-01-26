@@ -39,7 +39,8 @@ namespace BreezSdkSnippets
 
             var addressInfo = await sdk.RegisterLightningAddress(request);
             var lightningAddress = addressInfo.lightningAddress;
-            var lnurl = addressInfo.lnurl;
+            var lnurlUrl = addressInfo.lnurl.url;
+            var lnurlBech32 = addressInfo.lnurl.bech32;
             // ANCHOR_END: register-lightning-address
             return addressInfo;
         }
@@ -54,7 +55,8 @@ namespace BreezSdkSnippets
                 var lightningAddress = addressInfoOpt.lightningAddress;
                 var username = addressInfoOpt.username;
                 var description = addressInfoOpt.description;
-                var lnurl = addressInfoOpt.lnurl;
+                var lnurlUrl = addressInfoOpt.lnurl.url;
+                var lnurlBech32 = addressInfoOpt.lnurl.bech32;
             }
             // ANCHOR_END: get-lightning-address
         }

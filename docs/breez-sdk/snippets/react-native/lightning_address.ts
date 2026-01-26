@@ -33,7 +33,8 @@ const exampleRegisterLightningAddress = async (sdk: BreezSdk) => {
 
   const addressInfo = await sdk.registerLightningAddress(request)
   const lightningAddress = addressInfo.lightningAddress
-  const lnurl = addressInfo.lnurl
+  const lnurlUrl = addressInfo.lnurl.url
+  const lnurlBech32 = addressInfo.lnurl.bech32
   // ANCHOR_END: register-lightning-address
 }
 
@@ -45,7 +46,8 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
     const lightningAddress = addressInfoOpt.lightningAddress
     const username = addressInfoOpt.username
     const description = addressInfoOpt.description
-    const lnurl = addressInfoOpt.lnurl
+    const lnurlUrl = addressInfoOpt.lnurl.url
+    const lnurlBech32 = addressInfoOpt.lnurl.bech32
   }
   // ANCHOR_END: get-lightning-address
 }
