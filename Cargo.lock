@@ -724,6 +724,7 @@ dependencies = [
  "macros",
  "nostr",
  "openssl",
+ "rcgen",
  "reqwest",
  "rusqlite",
  "rusqlite_migration",
@@ -744,6 +745,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen-test",
  "web-time",
+ "webpki-roots 1.0.2",
  "x509-parser",
 ]
 
