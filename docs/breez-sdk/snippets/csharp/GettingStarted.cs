@@ -121,38 +121,5 @@ namespace BreezSdkSnippets
             await sdk.Disconnect();
         }
         // ANCHOR_END: disconnect
-
-        async Task InitSdkPostgres()
-        {
-            // ANCHOR: init-sdk-postgres
-            // Construct the seed using mnemonic words or entropy bytes
-            var mnemonic = "<mnemonic words>";
-            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
-
-            // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
-            {
-                apiKey = "<breez api key>"
-            };
-
-            // Configure PostgreSQL storage
-            // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
-            // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-            var postgresConfig = new PostgresStorageConfig(
-                connectionString: "host=localhost user=postgres dbname=spark",
-                // Optional pool settings (all default to null):
-                maxPoolSize: 8u,           // Max connections in pool
-                waitTimeoutSecs: 30ul,     // Timeout waiting for connection
-                createTimeoutSecs: null,   // Timeout establishing connection
-                recycleTimeoutSecs: null,  // Idle connection recycle timeout
-                queueMode: null            // FIFO (default) or LIFO
-            );
-
-            // Build the SDK with PostgreSQL storage
-            var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithPostgresStorage(config: postgresConfig);
-            var sdk = await builder.Build();
-            // ANCHOR_END: init-sdk-postgres
-        }
     }
 }

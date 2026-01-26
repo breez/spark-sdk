@@ -86,3 +86,37 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
     builder.with_payment_observer(Arc::new(observer))
 }
 // ANCHOR_END: with-payment-observer
+
+pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-postgres
+    // Construct the seed using mnemonic words or entropy bytes
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Configure PostgreSQL storage
+    // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+    // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    let mut postgres_config =
+        create_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
+    // Optionally pool settings can be adjusted. Some examples:
+    postgres_config.max_pool_size = 8; // Max connections in pool
+    postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
+
+    // Create the storage and build the SDK
+    let storages = create_postgres_storage(postgres_config).await?;
+    let sdk = SdkBuilder::new(config, seed)
+        .with_storage(storages.storage)
+        .with_real_time_sync_storage(storages.sync_storage)
+        .build()
+        .await?;
+    // ANCHOR_END: init-sdk-postgres
+
+    Ok(sdk)
+}

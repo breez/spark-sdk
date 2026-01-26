@@ -80,3 +80,43 @@ func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
 }
 
 // ANCHOR_END: with-payment-observer
+
+func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
+	// ANCHOR: init-sdk-postgres
+	// Construct the seed using mnemonic words or entropy bytes
+	mnemonic := "<mnemonic words>"
+	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+		Mnemonic:   mnemonic,
+		Passphrase: nil,
+	}
+
+	// Create the default config
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Configure PostgreSQL storage
+	// Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+	// Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+	postgresConfig := breez_sdk_spark.CreatePostgresStorageConfig("host=localhost user=postgres dbname=spark")
+	// Optionally pool settings can be adjusted. Some examples:
+	postgresConfig.MaxPoolSize = 8 // Max connections in pool
+	waitTimeoutSecs := uint64(30)
+	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
+
+	// Create the storage and build the SDK
+	storages, err := breez_sdk_spark.CreatePostgresStorage(postgresConfig)
+	if err != nil {
+		return nil, err
+	}
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithStorage(storages.Storage)
+	builder.WithRealTimeSyncStorage(storages.SyncStorage)
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: init-sdk-postgres
+
+	return sdk, nil
+}
