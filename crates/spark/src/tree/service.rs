@@ -464,12 +464,12 @@ mod tests {
 
     #[test_all]
     fn test_find_exact_single_match() {
-        let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
+        let leaves = create_test_leaves(&[8192, 4096, 2048, 1024]);
 
         // Should find an exact match
-        let result = find_exact_single_match(&leaves, 5000);
+        let result = find_exact_single_match(&leaves, 4096);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().value, 5000);
+        assert_eq!(result.unwrap().value, 4096);
 
         // Should not find a match
         let result = find_exact_single_match(&leaves, 7000);
@@ -478,71 +478,107 @@ mod tests {
 
     #[test_all]
     fn test_find_exact_multiple_match_simple_case() {
-        let leaves = create_test_leaves(&[10000, 5000, 3000, 1000]);
+        let leaves = create_test_leaves(&[8192, 4096, 2048, 1024]);
 
-        // Should find 5000 + 1000
-        let result = find_exact_multiple_match(&leaves, 6000);
+        // Should find 4096 + 1024 = 5120
+        let result = find_exact_multiple_match(&leaves, 5120);
         assert!(result.is_some());
 
         let selected = result.unwrap();
         let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
-        assert_eq!(total, 6000);
+        assert_eq!(total, 5120);
 
-        // Verify we're using the correct leaves (we know our implementation will
-        // select 5000 + 1000 rather than 3000 + 3000 because leaves are processed in order)
+        // Verify we're using the correct leaves (greedy picks largest first)
         let values: Vec<u64> = selected.iter().map(|leaf| leaf.value).collect();
-        assert!(values.contains(&5000));
-        assert!(values.contains(&1000));
+        assert!(values.contains(&4096));
+        assert!(values.contains(&1024));
     }
 
     #[test_all]
     fn test_find_exact_multiple_match_complex_case() {
-        let leaves = create_test_leaves(&[10000, 7000, 5000, 3000, 2000, 1000]);
+        let leaves = create_test_leaves(&[16384, 8192, 4096, 2048, 1024, 512]);
 
-        // Should find a combination adding up to 12000
-        let result = find_exact_multiple_match(&leaves, 12000);
+        // Should find a combination adding up to 12288 (8192 + 4096)
+        let result = find_exact_multiple_match(&leaves, 12288);
         assert!(result.is_some());
 
         let selected = result.unwrap();
         let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
-        assert_eq!(total, 12000);
+        assert_eq!(total, 12288);
     }
 
     #[test_all]
     fn test_find_exact_multiple_match_edge_cases() {
         // Empty leaves
         let leaves = Vec::<TreeNode>::new();
-        assert!(find_exact_multiple_match(&leaves, 1000).is_none());
+        assert!(find_exact_multiple_match(&leaves, 1024).is_none());
 
         // Zero target
-        let leaves = create_test_leaves(&[1000, 500]);
+        let leaves = create_test_leaves(&[1024, 512]);
         assert_eq!(find_exact_multiple_match(&leaves, 0).unwrap().len(), 0);
 
-        // Impossible combination
-        let leaves = create_test_leaves(&[10000, 5000, 3000]);
-        assert!(find_exact_multiple_match(&leaves, 7000).is_none());
+        // Impossible combination (greedy picks 8192, remaining=1808, can't make it)
+        let leaves = create_test_leaves(&[8192, 4096, 2048]);
+        assert!(find_exact_multiple_match(&leaves, 10000).is_none());
 
         // Target equals single leaf value
-        let leaves = create_test_leaves(&[10000, 5000, 3000]);
-        let result = find_exact_multiple_match(&leaves, 5000);
+        let leaves = create_test_leaves(&[8192, 4096, 2048]);
+        let result = find_exact_multiple_match(&leaves, 4096);
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].value, 5000);
+        assert_eq!(result[0].value, 4096);
     }
 
     #[test_all]
     fn test_find_exact_multiple_match_large_values() {
-        // Test with larger values to ensure our algorithm scales properly
-        let leaves =
-            create_test_leaves(&[100_000_000, 50_000_000, 30_000_000, 10_000_000, 5_000_000]);
+        // Test with larger power-of-two values to ensure our algorithm scales properly
+        let leaves = create_test_leaves(&[
+            134_217_728, // 2^27
+            67_108_864,  // 2^26
+            33_554_432,  // 2^25
+            16_777_216,  // 2^24
+            8_388_608,   // 2^23
+        ]);
 
-        // Should find a combination adding up to 65_000_000
-        let result = find_exact_multiple_match(&leaves, 65_000_000);
+        // Should find a combination adding up to 100_663_296 (2^26 + 2^25)
+        let result = find_exact_multiple_match(&leaves, 100_663_296);
         assert!(result.is_some());
 
         let selected = result.unwrap();
         let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
-        assert_eq!(total, 65_000_000);
+        assert_eq!(total, 100_663_296);
+    }
+
+    #[test_all]
+    fn test_greedy_with_non_power_of_two_success() {
+        // [3000, 2048, 1024] targeting 3072
+        // Pass 1: picks 3000, remaining=72, can't find → fails
+        // Pass 2: filters to [2048, 1024], picks 2048, remaining=1024, picks 1024 → success!
+        let leaves = create_test_leaves(&[3000, 2048, 1024]);
+
+        let result = find_exact_multiple_match(&leaves, 3072);
+        assert!(result.is_some());
+
+        let selected = result.unwrap();
+        let total: u64 = selected.iter().map(|leaf| leaf.value).sum();
+        assert_eq!(total, 3072);
+
+        // Verify we selected the power-of-two leaves, not the odd one
+        let values: Vec<u64> = selected.iter().map(|leaf| leaf.value).collect();
+        assert!(values.contains(&2048));
+        assert!(values.contains(&1024));
+        assert!(!values.contains(&3000));
+    }
+
+    #[test_all]
+    fn test_greedy_with_non_power_of_two_failure() {
+        // [3000, 2048, 1024] targeting 3080
+        // Pass 1: picks 3000, remaining=80, can't find → fails
+        // Pass 2: filters to [2048, 1024], picks 2048, remaining=1032, can't find → returns None
+        let leaves = create_test_leaves(&[3000, 2048, 1024]);
+
+        let result = find_exact_multiple_match(&leaves, 3080);
+        assert!(result.is_none());
     }
 }

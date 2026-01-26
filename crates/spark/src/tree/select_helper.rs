@@ -136,13 +136,39 @@ pub(crate) fn find_exact_single_match(
         .cloned()
 }
 
+/// Helper to check if a value is a power of two
+fn is_power_of_two(value: u64) -> bool {
+    value > 0 && (value & (value - 1)) == 0
+}
+
+/// Greedy algorithm to find exact match.
+/// Sorts leaves by value in descending order and takes the largest leaf that fits
+/// the remaining amount until the target is reached or no valid leaf can be found.
+fn greedy_exact_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<Vec<TreeNode>> {
+    let mut sorted_leaves = leaves.to_vec();
+    sorted_leaves.sort_by(|a, b| b.value.cmp(&a.value));
+
+    let mut result = Vec::new();
+    let mut remaining = target_amount_sat;
+
+    for leaf in &sorted_leaves {
+        if leaf.value > remaining {
+            continue;
+        }
+        remaining -= leaf.value;
+        result.push(leaf.clone());
+        if remaining == 0 {
+            return Some(result);
+        }
+    }
+
+    None // Couldn't reach exact target
+}
+
 pub(crate) fn find_exact_multiple_match(
     leaves: &[TreeNode],
     target_amount_sat: u64,
 ) -> Option<Vec<TreeNode>> {
-    use std::collections::HashMap;
-
-    // Early return if target is 0 or if there are no leaves
     if target_amount_sat == 0 {
         return Some(Vec::new());
     }
@@ -150,57 +176,24 @@ pub(crate) fn find_exact_multiple_match(
         return None;
     }
 
-    // Sort leaves by value in descending order, as we want to use larger leaves first.
-    // This avoids potentially consuming smaller leaves that could be used later for
-    // smaller targets, like paying fees.
-    let mut sorted_leaves = leaves.to_vec();
-    sorted_leaves.sort_by(|a, b| b.value.cmp(&a.value));
-
-    // Use dynamic programming with HashMap for space efficiency
-    // dp[amount] = (leaf_idx, prev_amount) represents that we can achieve 'amount'
-    // by using leaf at leaf_idx and then achieve prev_amount
-    let mut dp: HashMap<u64, (usize, u64)> = HashMap::new();
-    dp.insert(0, (usize::MAX, 0)); // Special marker for zero sum
-
-    // Fill dp table
-    for (leaf_idx, leaf) in sorted_leaves.iter().enumerate() {
-        // Consider all amounts we can currently achieve
-        let current_amounts: Vec<u64> = dp.keys().cloned().collect();
-
-        for &current_amount in &current_amounts {
-            let new_amount = current_amount + leaf.value;
-
-            // If this new amount doesn't exceed our target and we haven't found a way to achieve it yet
-            if new_amount <= target_amount_sat && !dp.contains_key(&new_amount) {
-                dp.insert(new_amount, (leaf_idx, current_amount));
-            }
-        }
-
-        // Early exit if we've found our target
-        if dp.contains_key(&target_amount_sat) {
-            break;
-        }
+    // Pass 1: Try greedy on all leaves
+    if let Some(result) = greedy_exact_match(leaves, target_amount_sat) {
+        return Some(result);
     }
 
-    // If target amount cannot be reached
-    if !dp.contains_key(&target_amount_sat) {
+    // Pass 2: Try with only power-of-two leaves (if there were non-power-of-two leaves)
+    let power_of_two_leaves: Vec<_> = leaves
+        .iter()
+        .filter(|l| is_power_of_two(l.value))
+        .cloned()
+        .collect();
+
+    // If all leaves were already power-of-two, no point in retrying
+    if power_of_two_leaves.len() == leaves.len() {
         return None;
     }
 
-    // Reconstruct the solution by backtracking through the dp table
-    let mut result = Vec::new();
-    let mut current_amount = target_amount_sat;
-
-    while current_amount > 0 {
-        let (leaf_idx, prev_amount) = *dp.get(&current_amount).unwrap();
-        if leaf_idx == usize::MAX {
-            break; // Reached the special zero marker
-        }
-        result.push(sorted_leaves[leaf_idx].clone());
-        current_amount = prev_amount;
-    }
-
-    Some(result)
+    greedy_exact_match(&power_of_two_leaves, target_amount_sat)
 }
 
 pub async fn with_reserved_leaves<F, R, E>(

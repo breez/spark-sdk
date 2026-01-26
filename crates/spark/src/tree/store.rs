@@ -414,12 +414,23 @@ mod tests {
         // Check that reserved leaves were updated with new data
         let reservation = state.get_reservation(&reservation.id).await.unwrap();
         assert_eq!(reservation.len(), 2);
-        assert_eq!(reservation[0].value, 150);
+
+        // Find the leaves by their updated values (order may vary by selection algorithm)
+        let node1_leaf = reservation.iter().find(|l| l.value == 150);
+        let node2_leaf = reservation.iter().find(|l| l.value == 250);
+
+        assert!(
+            node1_leaf.is_some(),
+            "node1 with updated value 150 should exist"
+        );
+        assert!(
+            node2_leaf.is_some(),
+            "node2 with updated value 250 should exist"
+        );
         assert_eq!(
-            reservation[0].status,
+            node1_leaf.unwrap().status,
             crate::tree::TreeNodeStatus::TransferLocked
         );
-        assert_eq!(reservation[1].value, 250);
 
         // Check main pool
         let all_leaves = state.get_leaves().await.unwrap();

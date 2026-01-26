@@ -1,7 +1,9 @@
 use anyhow::Result;
 use bitcoin::Amount;
 use rstest::*;
-use spark_itest::helpers::{WalletsFixture, deposit_to_wallet, wallets};
+use spark_itest::helpers::{
+    WalletsFixture, deposit_to_wallet, deposit_with_amount, wait_for, wallets,
+};
 use tracing::info;
 
 #[rstest]
@@ -96,5 +98,58 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     // Check that balance increased immediately after claiming
     let balance = wallet.get_balance().await?;
     assert_eq!(balance, 100_000, "Balance should be the deposit amount");
+    Ok(())
+}
+
+/// Test that the greedy leaf selection algorithm's second pass succeeds.
+/// When greedy fails due to a non-power-of-two leaf, it retries with only
+/// power-of-two leaves and should find a valid combination without triggering a swap.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_transfer_with_odd_leaf_greedy_succeeds(
+    #[future] wallets: WalletsFixture,
+) -> Result<()> {
+    let fixture = wallets.await;
+    let alice = &fixture.alice_wallet;
+    let bob = &fixture.bob_wallet;
+    let bitcoind = &fixture.fixtures.bitcoind;
+
+    // Deposit leaves: [3000, 2048, 1024]
+    // Total: 6072 sats
+    deposit_with_amount(alice, bitcoind, 3000).await?;
+    deposit_with_amount(alice, bitcoind, 2048).await?;
+    deposit_with_amount(alice, bitcoind, 1024).await?;
+
+    let alice_balance = alice.get_balance().await?;
+    info!("Alice balance after deposits: {}", alice_balance);
+    assert_eq!(alice_balance, 6072);
+
+    // Transfer 3072 sats
+    // Greedy pass 1: picks 3000, remaining=72, can't find → fails
+    // Greedy pass 2: filters to [2048, 1024], picks 2048+1024=3072 → succeeds!
+    // No swap needed
+    let bob_address = bob.get_spark_address()?;
+    info!("Bob's Spark address: {:?}", bob_address);
+
+    alice.transfer(3072, &bob_address, None).await?;
+    info!("Transfer completed");
+
+    // Wait for Bob's balance to become the expected value
+    wait_for(
+        || async { bob.get_balance().await.unwrap_or(0) == 3072 },
+        30,
+        "Bob's balance to become 3072",
+    )
+    .await?;
+
+    let bob_balance = bob.get_balance().await?;
+    info!("Bob balance after transfer: {}", bob_balance);
+    assert_eq!(bob_balance, 3072);
+
+    let alice_balance_after = alice.get_balance().await?;
+    info!("Alice balance after transfer: {}", alice_balance_after);
+    assert_eq!(alice_balance_after, 3000); // Only the odd leaf remains
+
     Ok(())
 }
