@@ -233,6 +233,7 @@ impl BreezSdk {
                         nostr_zap_request: Some(zap_request.clone()),
                         nostr_zap_receipt: Some(zap_receipt),
                         payment_hash: payment_hash.clone(),
+                        preimage: None,
                     }])
                     .await
                 {

@@ -950,6 +950,7 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    pub preimage: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]

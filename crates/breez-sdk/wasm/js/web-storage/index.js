@@ -330,6 +330,17 @@ class MigrationManager {
           if (db.objectStoreNames.contains("settings")) {
             transaction.objectStore("settings").delete("sync_initial_complete");
           }
+        },
+      },
+      {
+        name: "Add preimage to lnurl_receive_metadata for LUD-21",
+        upgrade: (db, transaction) => {
+          // IndexedDB doesn't need schema changes for new fields on existing stores.
+          // Just clear the lnurl_metadata_updated_after setting to force re-sync.
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("lnurl_metadata_updated_after");
+          }
         }
       }
     ];
@@ -355,7 +366,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 10; // Current schema version
+    this.dbVersion = 11; // Current schema version
   }
 
   /**
@@ -1251,6 +1262,7 @@ class IndexedDBStorage {
           nostrZapRequest: item.nostrZapRequest || null,
           nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
+          preimage: item.preimage || null,
         });
 
         request.onsuccess = () => {
@@ -2165,12 +2177,14 @@ class IndexedDBStorage {
         if (
           lnurlReceiveMetadata &&
           (lnurlReceiveMetadata.nostrZapRequest ||
-            lnurlReceiveMetadata.senderComment)
+            lnurlReceiveMetadata.senderComment ||
+            lnurlReceiveMetadata.preimage)
         ) {
           payment.details.lnurlReceiveMetadata = {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
+            preimage: lnurlReceiveMetadata.preimage || null,
           };
         }
         resolve(payment);

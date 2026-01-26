@@ -60,6 +60,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.preimage AS lnurl_preimage,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -662,7 +663,7 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage) VALUES (?, ?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -671,7 +672,8 @@ class SqliteStorage {
             item.paymentHash,
             item.nostrZapRequest || null,
             item.nostrZapReceipt || null,
-            item.senderComment || null
+            item.senderComment || null,
+            item.preimage || null
           );
         }
       });
@@ -724,11 +726,12 @@ class SqliteStorage {
         }
       }
 
-      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment) {
+      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment || row.lnurl_preimage) {
         details.lnurlReceiveMetadata = {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          preimage: row.lnurl_preimage || null,
         };
       }
     } else if (row.withdraw_tx_id) {
