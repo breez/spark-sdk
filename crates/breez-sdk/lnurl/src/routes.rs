@@ -167,7 +167,7 @@ where
             name: username,
             description: payload.description,
             nostr_pubkey,
-            no_invoice_paid_support: false,
+            no_invoice_paid_support: payload.no_invoice_paid_support,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -539,26 +539,39 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
-        let nostr_pubkey = match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
-            (Some(nostr_pubkey), _) => {
-                let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
-                    error!(
-                        "invalid nostr pubkey in user record, could not parse: {:?}",
-                        e
-                    );
-                    lnurl_error("internal server error")
-                })?;
-                Some(xonly_pubkey)
+        // When no_invoice_paid_support is true, omit nostr fields entirely
+        // Otherwise, always return server's nostrPubkey for zap receipt signing
+        let (allows_nostr, nostr_pubkey) = if user.no_invoice_paid_support {
+            (None, None)
+        } else {
+            match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
+                // User has own nostr pubkey - they handle zap receipts
+                (Some(nostr_pubkey), _) => {
+                    let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in user record, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?;
+                    (Some(true), Some(xonly_pubkey))
+                }
+                // Server has nostr keys - server signs zap receipts
+                (None, Some(nostr_keys)) => {
+                    let xonly_pubkey = nostr_keys.public_key.xonly().map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in server keys, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?;
+                    (Some(true), Some(xonly_pubkey))
+                }
+                // No nostr support
+                _ => (None, None),
             }
-            (None, Some(nostr_keys)) => Some(nostr_keys.public_key.xonly().map_err(|e| {
-                error!(
-                    "invalid nostr pubkey in server keys, could not parse: {:?}",
-                    e
-                );
-                lnurl_error("internal server error")
-            })?),
-            _ => None,
         };
+
         Ok(Json(PayResponse {
             callback: format!(
                 "{}://{}/lnurlp/{}/invoice",
@@ -569,7 +582,7 @@ where
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: Some(255),
-            allows_nostr: nostr_pubkey.map(|_| true),
+            allows_nostr,
             nostr_pubkey,
         }))
     }
