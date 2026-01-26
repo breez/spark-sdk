@@ -1,10 +1,7 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 
 use spark_wallet::SparkWallet;
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Mutex, MutexGuard, Notify, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info, warn};
 
@@ -46,33 +43,13 @@ pub(crate) struct StableBalance {
     /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
     effective_values: Arc<ExpiringCell<EffectiveValues>>,
 
-    /// Counter of active conversions.
-    /// Auto-convert waits while this is > 0 and is notified when `active_conversions` drops to 0
-    active_conversions: Arc<AtomicUsize>,
-    conversions_done: Arc<Notify>,
+    /// Mutex ensuring only one conversion runs at a time.
+    /// Payments acquire this with `.lock().await` (blocking).
+    /// Auto-convert uses `try_lock()` and skips if busy.
+    conversion_lock: Arc<Mutex<()>>,
 
     /// Notify to trigger auto-conversion
     auto_convert_trigger: Arc<Notify>,
-}
-
-/// Guard that tracks an active conversions.
-///
-/// When dropped, decrements the active conversions counter and
-/// notifies waiting auto-convert tasks if the counter reaches zero.
-/// Creating this guard is non-blocking - conversions never wait.
-pub(crate) struct ActiveConversionGuard {
-    active_counter: Arc<AtomicUsize>,
-    done_notify: Arc<Notify>,
-}
-
-impl Drop for ActiveConversionGuard {
-    fn drop(&mut self) {
-        let prev = self.active_counter.fetch_sub(1, Ordering::SeqCst);
-        if prev == 1 {
-            // Was 1, now 0 - notify waiting auto-convert
-            self.done_notify.notify_waiters();
-        }
-    }
 }
 
 impl StableBalance {
@@ -83,8 +60,6 @@ impl StableBalance {
         spark_wallet: Arc<SparkWallet>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
-        let active_conversions = Arc::new(AtomicUsize::new(0));
-        let conversions_done = Arc::new(Notify::new());
         let auto_convert_trigger = Arc::new(Notify::new());
 
         let stable_balance = Self {
@@ -92,8 +67,7 @@ impl StableBalance {
             token_converter,
             spark_wallet,
             effective_values: Arc::new(ExpiringCell::new()),
-            active_conversions,
-            conversions_done,
+            conversion_lock: Arc::new(Mutex::new(())),
             auto_convert_trigger,
         };
 
@@ -107,7 +81,7 @@ impl StableBalance {
     ///
     /// The task:
     /// 1. Waits for a trigger signal
-    /// 2. Waits for all active conversions to complete
+    /// 2. Tries to acquire the conversion lock (skips if busy)
     /// 3. Executes auto-conversion if conditions are met
     fn spawn_auto_convert_task(&self, mut shutdown_receiver: watch::Receiver<()>) {
         let stable_balance = self.clone();
@@ -125,11 +99,11 @@ impl StableBalance {
                     }
                 }
 
-                // Wait for active conversions to complete
-                while stable_balance.active_conversions.load(Ordering::SeqCst) > 0 {
-                    debug!("Auto-conversion waiting for active conversions to complete");
-                    stable_balance.conversions_done.notified().await;
-                }
+                // Try to acquire lock - skip if a conversion is in progress
+                let Ok(_guard) = stable_balance.conversion_lock.try_lock() else {
+                    debug!("Conversion in progress, skipping auto-convert");
+                    continue;
+                };
 
                 // Execute auto-conversion
                 if let Err(e) = stable_balance.auto_convert().await {
@@ -246,19 +220,12 @@ impl StableBalance {
         self.auto_convert_trigger.notify_one();
     }
 
-    /// Signals the start of a payment conversion.
+    /// Acquires the conversion lock for a payment conversion.
     ///
     /// Returns a guard that must be held for the duration of the payment conversion.
-    /// When the guard is dropped, it decrements the active counter and notifies
-    /// any waiting auto-convert task.
-    ///
-    /// This operation is non-blocking - payment conversions never wait.
-    pub fn signal_active_conversion(&self) -> ActiveConversionGuard {
-        self.active_conversions.fetch_add(1, Ordering::SeqCst);
-        ActiveConversionGuard {
-            active_counter: Arc::clone(&self.active_conversions),
-            done_notify: Arc::clone(&self.conversions_done),
-        }
+    /// This waits for any in-progress conversion (including auto-convert) to complete.
+    pub async fn acquire_conversion_lock(&self) -> MutexGuard<'_, ()> {
+        self.conversion_lock.lock().await
     }
 
     /// Gets conversion options for a payment if auto-population is needed.

@@ -890,6 +890,11 @@ impl BreezSdk {
         let ((wallet, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
+        // Trigger auto-conversion after sync
+        if wallet_state && let Some(stable_balance) = &self.stable_balance {
+            stable_balance.trigger_auto_convert();
+        }
+
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {
             wallet,
@@ -2458,12 +2463,12 @@ impl BreezSdk {
             }
         };
 
-        // Signal payment conversion started (non-blocking, just increments counter)
-        // Auto-convert will wait for this guard to drop before running
-        let _conversion_guard = self
-            .stable_balance
-            .as_ref()
-            .map(|sb| sb.signal_active_conversion());
+        // Acquire conversion lock - waits for any in-progress conversion to complete
+        // This serializes conversions to prevent races between auto-convert and payments
+        let _conversion_guard = match &self.stable_balance {
+            Some(sb) => Some(sb.acquire_conversion_lock().await),
+            None => None,
+        };
 
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =

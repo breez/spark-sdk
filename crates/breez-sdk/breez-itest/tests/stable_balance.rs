@@ -267,6 +267,84 @@ async fn test_stable_balance_auto_conversion(
     );
 
     info!("Part 3 complete: Token-to-bitcoin payment successful");
+    clear_event_receiver(&mut alice.events).await;
+    clear_event_receiver(&mut bob.events).await;
+
+    // ==========================================
+    // Part 4: Concurrent payment conversions (race test)
+    // ==========================================
+    info!("--- Part 4: Concurrent payment conversions (race test) ---");
+
+    // Create two invoices for Bob
+    let bob_invoice_1 = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Race test 1".to_string(),
+                amount_sats: Some(payment_amount),
+                expiry_secs: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let bob_invoice_2 = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Race test 2".to_string(),
+                amount_sats: Some(payment_amount),
+                expiry_secs: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    // Prepare both payments upfront (both need token→btc conversion)
+    let prepare_1 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice_1,
+            pay_amount: None,
+            conversion_options: None, // auto-populated, needs token→btc
+        })
+        .await?;
+
+    let prepare_2 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice_2,
+            pay_amount: None,
+            conversion_options: None, // auto-populated, needs token→btc
+        })
+        .await?;
+
+    // Create futures for both payments
+    let send_fut_1 = alice.sdk.send_payment(SendPaymentRequest {
+        prepare_response: prepare_1,
+        options: None,
+        idempotency_key: None,
+    });
+    let send_fut_2 = alice.sdk.send_payment(SendPaymentRequest {
+        prepare_response: prepare_2,
+        options: None,
+        idempotency_key: None,
+    });
+
+    // Fire both concurrently - with mutex fix, they serialize and both succeed
+    let results = futures::future::try_join_all(vec![send_fut_1, send_fut_2]).await?;
+
+    // Both payments should succeed
+    for (i, result) in results.iter().enumerate() {
+        assert!(
+            matches!(result.payment.status, PaymentStatus::Completed),
+            "Payment {} should complete (got {:?})",
+            i + 1,
+            result.payment.status
+        );
+    }
+
+    info!("Part 4 complete: Concurrent conversions serialized correctly");
     info!("=== Test test_stable_balance_auto_conversion PASSED ===");
     Ok(())
 }
