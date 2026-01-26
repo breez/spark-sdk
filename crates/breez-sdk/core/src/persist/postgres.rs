@@ -49,8 +49,22 @@ impl From<PoolQueueMode> for deadpool::managed::QueueMode {
     }
 }
 
+impl From<deadpool::managed::QueueMode> for PoolQueueMode {
+    fn from(mode: deadpool::managed::QueueMode) -> Self {
+        match mode {
+            deadpool::managed::QueueMode::Fifo => PoolQueueMode::Fifo,
+            deadpool::managed::QueueMode::Lifo => PoolQueueMode::Lifo,
+        }
+    }
+}
+
+/// Returns the default pool configuration values from deadpool.
+fn default_pool_config() -> deadpool_postgres::PoolConfig {
+    deadpool_postgres::PoolConfig::default()
+}
+
 /// Configuration for `PostgreSQL` storage connection pool.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PostgresStorageConfig {
     /// `PostgreSQL` connection string (key-value or URI format).
@@ -61,37 +75,45 @@ pub struct PostgresStorageConfig {
     pub connection_string: String,
 
     /// Maximum number of connections in the pool.
-    /// If `None`, uses deadpool default (`num_cpus * 4`).
-    pub max_pool_size: Option<u32>,
+    /// Default: `num_cpus * 4` (from deadpool).
+    pub max_pool_size: u32,
 
     /// Timeout in seconds waiting for a connection from the pool.
-    /// If `None`, waits indefinitely.
+    /// `None` means wait indefinitely.
     pub wait_timeout_secs: Option<u64>,
 
     /// Timeout in seconds for establishing a new connection.
-    /// If `None`, uses no timeout.
+    /// `None` means no timeout.
     pub create_timeout_secs: Option<u64>,
 
     /// Timeout in seconds before recycling an idle connection.
-    /// If `None`, connections are not recycled based on idle time.
+    /// `None` means connections are not recycled based on idle time.
     pub recycle_timeout_secs: Option<u64>,
 
     /// Queue mode for retrieving connections from the pool.
-    /// If `None`, defaults to FIFO.
-    pub queue_mode: Option<PoolQueueMode>,
+    /// Default: FIFO.
+    pub queue_mode: PoolQueueMode,
 }
 
 impl PostgresStorageConfig {
-    /// Creates a new configuration with the given connection string and all pool defaults.
+    /// Creates a new configuration with the given connection string and pool defaults from deadpool.
+    ///
+    /// Default values:
+    /// - `max_pool_size`: `num_cpus * 4`
+    /// - `wait_timeout_secs`: `None` (wait indefinitely)
+    /// - `create_timeout_secs`: `None` (no timeout)
+    /// - `recycle_timeout_secs`: `None` (no timeout)
+    /// - `queue_mode`: FIFO
     #[must_use]
     pub fn new(connection_string: impl Into<String>) -> Self {
+        let defaults = default_pool_config();
         Self {
             connection_string: connection_string.into(),
-            max_pool_size: None,
-            wait_timeout_secs: None,
-            create_timeout_secs: None,
-            recycle_timeout_secs: None,
-            queue_mode: None,
+            max_pool_size: u32::try_from(defaults.max_size).unwrap_or(u32::MAX),
+            wait_timeout_secs: defaults.timeouts.wait.map(|d| d.as_secs()),
+            create_timeout_secs: defaults.timeouts.create.map(|d| d.as_secs()),
+            recycle_timeout_secs: defaults.timeouts.recycle.map(|d| d.as_secs()),
+            queue_mode: defaults.queue_mode.into(),
         }
     }
 }
@@ -165,23 +187,15 @@ fn make_tls_config() -> ClientConfig {
 
 /// Applies pool configuration options from `PostgresStorageConfig` to a deadpool-postgres config.
 fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolConfig {
-    let mut pool_config = deadpool_postgres::PoolConfig::default();
-    if let Some(size) = config.max_pool_size {
-        pool_config.max_size = size as usize;
+    deadpool_postgres::PoolConfig {
+        max_size: config.max_pool_size as usize,
+        timeouts: deadpool::managed::Timeouts {
+            wait: config.wait_timeout_secs.map(Duration::from_secs),
+            create: config.create_timeout_secs.map(Duration::from_secs),
+            recycle: config.recycle_timeout_secs.map(Duration::from_secs),
+        },
+        queue_mode: config.queue_mode.into(),
     }
-    if let Some(secs) = config.wait_timeout_secs {
-        pool_config.timeouts.wait = Some(Duration::from_secs(secs));
-    }
-    if let Some(secs) = config.create_timeout_secs {
-        pool_config.timeouts.create = Some(Duration::from_secs(secs));
-    }
-    if let Some(secs) = config.recycle_timeout_secs {
-        pool_config.timeouts.recycle = Some(Duration::from_secs(secs));
-    }
-    if let Some(mode) = config.queue_mode {
-        pool_config.queue_mode = mode.into();
-    }
-    pool_config
 }
 
 impl PostgresStorage {
