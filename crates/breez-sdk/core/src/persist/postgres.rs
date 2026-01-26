@@ -40,10 +40,10 @@ use super::{Payment, Storage, StorageError};
 /// # Example
 ///
 /// ```ignore
-/// use breez_sdk_core::persist::postgres::{create_postgres_storage, PostgresStorageConfig};
+/// use breez_sdk_core::persist::postgres::{create_postgres_storage, create_postgres_storage_config};
 ///
-/// let storage = create_postgres_storage(PostgresStorageConfig::new(
-///     "host=localhost user=postgres dbname=spark"
+/// let storage = create_postgres_storage(create_postgres_storage_config(
+///     "host=localhost user=postgres dbname=spark".to_string()
 /// )).await?;
 ///
 /// let sdk = SdkBuilder::new(config, seed)
@@ -57,6 +57,24 @@ pub async fn create_postgres_storage(
     config: PostgresStorageConfig,
 ) -> Result<Arc<dyn Storage>, StorageError> {
     Ok(Arc::new(PostgresStorage::new(config).await?))
+}
+
+/// Creates a `PostgresStorageConfig` with the given connection string and default pool settings.
+///
+/// This is a convenience function for creating a config with sensible defaults from deadpool.
+/// Use this instead of manually constructing `PostgresStorageConfig` when you want defaults.
+///
+/// Default values:
+/// - `max_pool_size`: `num_cpus * 4`
+/// - `wait_timeout_secs`: `None` (wait indefinitely)
+/// - `create_timeout_secs`: `None` (no timeout)
+/// - `recycle_timeout_secs`: `None` (no timeout)
+/// - `queue_mode`: FIFO
+/// - `root_ca_pem`: `None` (uses Mozilla's root certificate store)
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[must_use]
+pub fn create_postgres_storage_config(connection_string: String) -> PostgresStorageConfig {
+    PostgresStorageConfig::with_defaults(connection_string)
 }
 
 /// Queue mode for the connection pool.
@@ -146,7 +164,7 @@ impl PostgresStorageConfig {
     /// - `recycle_timeout_secs`: `None` (no timeout)
     /// - `queue_mode`: FIFO
     #[must_use]
-    pub fn new(connection_string: impl Into<String>) -> Self {
+    pub fn with_defaults(connection_string: impl Into<String>) -> Self {
         let defaults = default_pool_config();
         Self {
             connection_string: connection_string.into(),
@@ -1855,9 +1873,10 @@ mod tests {
                 "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
             );
 
-            let storage = PostgresStorage::new(PostgresStorageConfig::new(connection_string))
-                .await
-                .expect("Failed to create PostgresStorage");
+            let storage =
+                PostgresStorage::new(PostgresStorageConfig::with_defaults(connection_string))
+                    .await
+                    .expect("Failed to create PostgresStorage");
 
             Self { storage, container }
         }
