@@ -267,6 +267,11 @@ impl SqliteStorage {
             ALTER TABLE payment_metadata DROP COLUMN token_conversion_info;
             ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
             ",
+            // Add preimage column for LUD-21 verify support
+            "ALTER TABLE lnurl_receive_metadata ADD COLUMN preimage TEXT;",
+            // Clear the lnurl_metadata_updated_after setting to force re-sync
+            // This ensures clients get the new preimage field from the server
+            "DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after';",
         ]
     }
 }
@@ -713,7 +718,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(26)?;
+            let parent_payment_id: String = row.get(27)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -805,13 +810,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
+                 VALUES (?, ?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
+                    metadata.preimage,
                 ],
             )?;
         }
@@ -1190,7 +1196,7 @@ fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-25 are used by `map_payment`, index 26 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-26 are used by `map_payment`, index 27 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1218,6 +1224,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.preimage AS lnurl_preimage,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -1250,16 +1257,20 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let lnurl_nostr_zap_request: Option<String> = row.get(23)?;
             let lnurl_nostr_zap_receipt: Option<String> = row.get(24)?;
             let lnurl_sender_comment: Option<String> = row.get(25)?;
-            let lnurl_receive_metadata =
-                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
-                    Some(LnurlReceiveMetadata {
-                        nostr_zap_request: lnurl_nostr_zap_request,
-                        nostr_zap_receipt: lnurl_nostr_zap_receipt,
-                        sender_comment: lnurl_sender_comment,
-                    })
-                } else {
-                    None
-                };
+            let lnurl_preimage: Option<String> = row.get(26)?;
+            let lnurl_receive_metadata = if lnurl_nostr_zap_request.is_some()
+                || lnurl_sender_comment.is_some()
+                || lnurl_preimage.is_some()
+            {
+                Some(LnurlReceiveMetadata {
+                    nostr_zap_request: lnurl_nostr_zap_request,
+                    nostr_zap_receipt: lnurl_nostr_zap_receipt,
+                    sender_comment: lnurl_sender_comment,
+                    preimage: lnurl_preimage,
+                })
+            } else {
+                None
+            };
             Some(PaymentDetails::Lightning {
                 invoice,
                 payment_hash,
