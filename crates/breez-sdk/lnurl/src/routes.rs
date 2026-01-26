@@ -344,6 +344,17 @@ where
             ));
         }
 
+        // Extract preimage from zap receipt for LUD-21 backward compatibility
+        // This allows old clients using publish_zap_receipt to still populate
+        // the invoice's preimage for the verify endpoint
+        let preimage_from_receipt = zap_receipt.tags.iter().find_map(|t| {
+            if let Some(TagStandard::Preimage(p)) = t.as_standardized() {
+                Some(p.clone())
+            } else {
+                None
+            }
+        });
+
         // Get the existing zap record
         let mut zap = state
             .db
@@ -371,6 +382,24 @@ where
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "unauthorized"})),
             ));
+        }
+
+        // If we have a preimage, call the invoice paid handler for LUD-21 compatibility
+        // This ensures the preimage is stored in the invoices table
+        if let Some(preimage) = &preimage_from_receipt
+            && let Err(e) = handle_invoice_paid(
+                &state.db,
+                &payment_hash,
+                preimage,
+                &state.invoice_paid_trigger,
+            )
+            .await
+        {
+            // Log but don't fail - this is for backward compatibility
+            debug!(
+                "Failed to handle invoice paid from zap receipt for {}: {}",
+                payment_hash, e
+            );
         }
 
         // Check if zap receipt already exists
@@ -767,7 +796,9 @@ where
         }
 
         // Store all invoices for LUD-21 verify support (unless user opted out)
-        let verify_url = if !user.no_invoice_paid_support {
+        let verify_url = if user.no_invoice_paid_support {
+            None
+        } else {
             // Store invoice in invoices table
             if let Err(e) = create_invoice(
                 &state.db,
@@ -808,8 +839,6 @@ where
                 "{}://{}/verify/{}",
                 state.scheme, domain, payment_hash
             ))
-        } else {
-            None
         };
 
         let mut response = json!({
