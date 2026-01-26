@@ -76,6 +76,13 @@ pub struct PublishZapReceiptRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct InvoicePaidRequest {
+    pub signature: String,
+    pub timestamp: Option<u64>,
+    pub preimage: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PublishZapReceiptResponse {
     pub published: bool,
     pub zap_receipt: String,

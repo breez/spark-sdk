@@ -11,7 +11,7 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
+    CheckUsernameAvailableResponse, InvoicePaidRequest, ListMetadataRequest, ListMetadataResponse,
     PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
     UnregisterLnurlPayRequest, sanitize_username,
@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
+    invoice_paid::handle_invoice_paid,
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
     zap::Zap,
@@ -790,6 +791,83 @@ where
             "preimage": invoice.preimage,
             "pr": invoice.invoice
         }))
+    }
+
+    /// Invoice-paid notification endpoint.
+    /// Client notifies server that an invoice was paid with the preimage.
+    pub async fn invoice_paid(
+        Path(pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<InvoicePaidRequest>,
+    ) -> Result<(), (StatusCode, Json<Value>)> {
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &payload.preimage,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
+
+        let preimage_bytes = hex::decode(&payload.preimage).map_err(|e| {
+            trace!("invalid preimage, could not decode: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid preimage".into())),
+            )
+        })?;
+        let payment_hash = bitcoin::hashes::sha256::Hash::hash(&preimage_bytes);
+        let payment_hash_hex = payment_hash.to_string();
+
+        // Verify the invoice belongs to this user
+        let invoice = state
+            .db
+            .get_invoice_by_payment_hash(&payment_hash_hex)
+            .await
+            .map_err(|e| {
+                error!("Failed to get invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?
+            .ok_or_else(|| {
+                trace!("invoice not found for payment hash: {}", payment_hash_hex);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(Value::String("invoice not found".into())),
+                )
+            })?;
+
+        if invoice.user_pubkey != pubkey.to_string() {
+            trace!("invoice does not belong to this user");
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(Value::String("invoice not found".into())),
+            ));
+        }
+
+        // Use the central invoice paid handler
+        handle_invoice_paid(
+            &state.db,
+            &payment_hash_hex,
+            &payload.preimage,
+            &state.invoice_paid_trigger,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to handle invoice paid: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+
+        debug!(
+            "Invoice paid notification received for payment hash {}",
+            payment_hash_hex
+        );
+        Ok(())
     }
 }
 
