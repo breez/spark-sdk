@@ -28,10 +28,23 @@ use crate::{
 
 use super::{Payment, Storage, StorageError};
 
-/// Creates a new `PostgresStorage` instance with the given configuration.
+/// Container for `PostgreSQL` storage instances.
 ///
-/// This is a standalone factory function for creating `PostgreSQL` storage that can be
-/// used with `SdkBuilder::with_storage()` and `SdkBuilder::with_real_time_sync_storage()`.
+/// Contains both `Storage` and `SyncStorage` trait objects backed by the same
+/// `PostgreSQL` connection pool.
+#[derive(Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PostgresStorages {
+    /// Storage instance for use with `SdkBuilder::with_storage()`
+    pub storage: Arc<dyn Storage>,
+    /// Sync storage instance for use with `SdkBuilder::with_real_time_sync_storage()`
+    pub sync_storage: Arc<dyn SyncStorage>,
+}
+
+/// Creates `PostgreSQL` storage instances for use with the SDK builder.
+///
+/// Returns a `PostgresStorages` struct containing both `Storage` and `SyncStorage`
+/// trait objects backed by the same connection pool.
 ///
 /// # Arguments
 ///
@@ -40,23 +53,27 @@ use super::{Payment, Storage, StorageError};
 /// # Example
 ///
 /// ```ignore
-/// use breez_sdk_core::persist::postgres::{create_postgres_storage, create_postgres_storage_config};
+/// use breez_sdk_core::{create_postgres_storage, create_postgres_storage_config};
 ///
-/// let storage = create_postgres_storage(create_postgres_storage_config(
+/// let storages = create_postgres_storage(create_postgres_storage_config(
 ///     "host=localhost user=postgres dbname=spark".to_string()
 /// )).await?;
 ///
 /// let sdk = SdkBuilder::new(config, seed)
-///     .with_storage(storage.clone())
-///     .with_real_time_sync_storage(storage)
+///     .with_storage(storages.storage)
+///     .with_real_time_sync_storage(storages.sync_storage)
 ///     .build()
 ///     .await?;
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn create_postgres_storage(
     config: PostgresStorageConfig,
-) -> Result<Arc<dyn Storage>, StorageError> {
-    Ok(Arc::new(PostgresStorage::new(config).await?))
+) -> Result<PostgresStorages, StorageError> {
+    let storage = Arc::new(PostgresStorage::new(config).await?);
+    Ok(PostgresStorages {
+        storage: storage.clone(),
+        sync_storage: storage,
+    })
 }
 
 /// Creates a `PostgresStorageConfig` with the given connection string and default pool settings.
