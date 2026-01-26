@@ -141,4 +141,5 @@ wasm-bindgen-futures = "0.4.50"
 wasm-bindgen-test = "0.3.50"
 web-sys = { version = "0.3.77", features = ["console", "DomException"] }
 web-time = { version = "1.1.0", features = ["serde"] }
+webpki-roots = "1.0"
 xshell = "0.2"
