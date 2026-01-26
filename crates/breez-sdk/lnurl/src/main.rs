@@ -32,6 +32,7 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
 mod error;
+mod invoice_paid;
 mod postgresql;
 mod repository;
 mod routes;
