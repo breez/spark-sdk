@@ -114,22 +114,3 @@ impl SdkBuilder {
         self.inner.lock().await.clone().build().await
     }
 }
-
-/// PostgreSQL-specific methods for `SdkBuilder`.
-/// Only available when the `postgres` feature is enabled.
-#[cfg(feature = "postgres")]
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-impl SdkBuilder {
-    /// Sets the storage to use `PostgreSQL` with the given configuration.
-    /// This initializes both storage and real-time sync storage with the
-    /// `PostgreSQL` implementation when `build()` is called.
-    /// Arguments:
-    /// - `config`: `PostgreSQL` storage configuration containing connection string and pool settings.
-    pub async fn with_postgres_storage(
-        &self,
-        config: crate::persist::postgres::PostgresStorageConfig,
-    ) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_storage(config);
-    }
-}

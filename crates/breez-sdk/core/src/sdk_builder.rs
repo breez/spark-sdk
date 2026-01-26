@@ -56,11 +56,6 @@ pub struct SdkBuilder {
 
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
-    #[cfg(all(
-        feature = "postgres",
-        not(all(target_family = "wasm", target_os = "unknown"))
-    ))]
-    postgres_config: Option<crate::persist::postgres::PostgresStorageConfig>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn RestClient>>,
@@ -89,11 +84,6 @@ impl SdkBuilder {
             },
             storage_dir: None,
             storage: None,
-            #[cfg(all(
-                feature = "postgres",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -115,11 +105,6 @@ impl SdkBuilder {
             signer_source: SignerSource::External(signer),
             storage_dir: None,
             storage: None,
-            #[cfg(all(
-                feature = "postgres",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -178,47 +163,6 @@ impl SdkBuilder {
     /// - `storage`: The sync storage implementation to be used.
     pub fn with_real_time_sync_storage(mut self, storage: Arc<dyn SyncStorage>) -> Self {
         self.sync_storage = Some(storage);
-        self
-    }
-
-    /// Sets the storage to use `PostgreSQL` with the given configuration.
-    /// This initializes both storage and real-time sync storage with the
-    /// `PostgreSQL` implementation when `build()` is called.
-    ///
-    /// # Arguments
-    /// - `config`: `PostgreSQL` storage configuration
-    ///
-    /// # Example
-    /// ```ignore
-    /// use crate::persist::postgres::PostgresStorageConfig;
-    ///
-    /// // Simple usage with defaults:
-    /// let sdk = SdkBuilder::new(config, seed)
-    ///     .with_postgres_storage(PostgresStorageConfig::new("host=localhost user=postgres dbname=spark"))
-    ///     .build()
-    ///     .await?;
-    ///
-    /// // With custom pool settings:
-    /// let sdk = SdkBuilder::new(config, seed)
-    ///     .with_postgres_storage(PostgresStorageConfig {
-    ///         connection_string: "host=localhost user=postgres dbname=spark".into(),
-    ///         max_pool_size: Some(8),
-    ///         wait_timeout_secs: Some(30),
-    ///         ..Default::default()
-    ///     })
-    ///     .build()
-    ///     .await?;
-    /// ```
-    #[must_use]
-    #[cfg(all(
-        feature = "postgres",
-        not(all(target_family = "wasm", target_os = "unknown"))
-    ))]
-    pub fn with_postgres_storage(
-        mut self,
-        config: crate::persist::postgres::PostgresStorageConfig,
-    ) -> Self {
-        self.postgres_config = Some(config);
         self
     }
 
@@ -371,31 +315,16 @@ impl SdkBuilder {
         };
 
         // Validate storage configuration
-        #[cfg(all(
-            feature = "postgres",
-            not(all(target_family = "wasm", target_os = "unknown"))
-        ))]
-        let has_postgres = self.postgres_config.is_some();
-        #[cfg(not(all(
-            feature = "postgres",
-            not(all(target_family = "wasm", target_os = "unknown"))
-        )))]
-        let has_postgres = false;
-
-        match (
-            self.storage.is_some(),
-            self.storage_dir.is_some(),
-            has_postgres,
-        ) {
-            (false, false, false) => {
+        match (self.storage.is_some(), self.storage_dir.is_some()) {
+            (false, false) => {
                 return Err(SdkError::Generic("No storage configured".to_string()));
             }
-            (true, false, false) | (false, true, false) | (false, false, true) => {}
-            _ => {
+            (true, true) => {
                 return Err(SdkError::Generic(
                     "Multiple storage configurations provided".to_string(),
                 ));
             }
+            _ => {}
         }
 
         // Initialize storage
@@ -431,27 +360,6 @@ impl SdkBuilder {
                     ));
                 }
             } else {
-                #[cfg(all(
-                    feature = "postgres",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                ))]
-                if let Some(pg_config) = self.postgres_config {
-                    let storage = Arc::new(
-                        crate::persist::postgres::PostgresStorage::new(pg_config)
-                            .await
-                            .map_err(|e| SdkError::Generic(e.to_string()))?,
-                    );
-                    (
-                        storage.clone() as Arc<dyn Storage>,
-                        Some(storage as Arc<dyn SyncStorage>),
-                    )
-                } else {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
-                #[cfg(not(all(
-                    feature = "postgres",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                )))]
                 return Err(SdkError::Generic("No storage configured".to_string()));
             };
 

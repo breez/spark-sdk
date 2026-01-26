@@ -28,6 +28,37 @@ use crate::{
 
 use super::{Payment, Storage, StorageError};
 
+/// Creates a new `PostgresStorage` instance with the given configuration.
+///
+/// This is a standalone factory function for creating `PostgreSQL` storage that can be
+/// used with `SdkBuilder::with_storage()` and `SdkBuilder::with_real_time_sync_storage()`.
+///
+/// # Arguments
+///
+/// * `config` - Configuration for the `PostgreSQL` connection pool
+///
+/// # Example
+///
+/// ```ignore
+/// use breez_sdk_core::persist::postgres::{create_postgres_storage, PostgresStorageConfig};
+///
+/// let storage = create_postgres_storage(PostgresStorageConfig::new(
+///     "host=localhost user=postgres dbname=spark"
+/// )).await?;
+///
+/// let sdk = SdkBuilder::new(config, seed)
+///     .with_storage(storage.clone())
+///     .with_real_time_sync_storage(storage)
+///     .build()
+///     .await?;
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn create_postgres_storage(
+    config: PostgresStorageConfig,
+) -> Result<Arc<dyn Storage>, StorageError> {
+    Ok(Arc::new(PostgresStorage::new(config).await?))
+}
+
 /// Queue mode for the connection pool.
 ///
 /// Determines the order in which connections are retrieved from the pool.

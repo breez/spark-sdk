@@ -39,7 +39,7 @@ pub use spark_wallet::KeySet;
     feature = "postgres",
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
-pub use persist::postgres::{PoolQueueMode, PostgresStorage, PostgresStorageConfig};
+pub use persist::postgres::{PoolQueueMode, PostgresStorageConfig, create_postgres_storage};
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {
