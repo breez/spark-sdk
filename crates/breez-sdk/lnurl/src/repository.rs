@@ -70,6 +70,7 @@ pub trait LnurlRepository {
         pubkey: &str,
         offset: u32,
         limit: u32,
+        updated_after: Option<i64>,
     ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError>;
 
     /// Get all allowed domains from the database

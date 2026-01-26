@@ -216,22 +216,39 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pubkey: &str,
         offset: u32,
         limit: u32,
+        updated_after: Option<i64>,
     ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError> {
+        let updated_after = updated_after.unwrap_or(0);
         let rows = sqlx::query(
-            "SELECT COALESCE(z.payment_hash, sc.payment_hash) AS payment_hash
+            "SELECT COALESCE(z.payment_hash, sc.payment_hash, i.payment_hash) AS payment_hash
+             ,      sc.sender_comment
+             ,      z.zap_request
+             ,      z.zap_event
+             ,      COALESCE(z.updated_at, sc.updated_at, i.updated_at) AS updated_at
+             ,      i.preimage
+             FROM invoices i
+             LEFT JOIN zaps z ON i.payment_hash = z.payment_hash
+             LEFT JOIN sender_comments sc ON i.payment_hash = sc.payment_hash
+             WHERE i.user_pubkey = $1 AND COALESCE(z.updated_at, sc.updated_at, i.updated_at) > $4
+             UNION
+             SELECT COALESCE(z.payment_hash, sc.payment_hash) AS payment_hash
              ,      sc.sender_comment
              ,      z.zap_request
              ,      z.zap_event
              ,      COALESCE(z.updated_at, sc.updated_at) AS updated_at
+             ,      NULL as preimage
              FROM zaps z
              FULL JOIN sender_comments sc ON z.payment_hash = sc.payment_hash
-             WHERE z.user_pubkey = $1 OR sc.user_pubkey = $1
-             ORDER BY COALESCE(z.updated_at, sc.updated_at) ASC
+             LEFT JOIN invoices i ON COALESCE(z.payment_hash, sc.payment_hash) = i.payment_hash
+             WHERE (z.user_pubkey = $1 OR sc.user_pubkey = $1) AND i.payment_hash IS NULL
+               AND COALESCE(z.updated_at, sc.updated_at) > $4
+             ORDER BY updated_at ASC
              OFFSET $2 LIMIT $3",
         )
         .bind(pubkey)
         .bind(i64::from(offset))
         .bind(i64::from(limit))
+        .bind(updated_after)
         .fetch_all(&self.pool)
         .await?;
         let metadata = rows
@@ -243,6 +260,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     nostr_zap_request: row.try_get(2)?,
                     nostr_zap_receipt: row.try_get(3)?,
                     updated_at: row.try_get(4)?,
+                    preimage: row.try_get(5)?,
                 })
             })
             .collect::<Result<Vec<_>, sqlx::Error>>()?;
