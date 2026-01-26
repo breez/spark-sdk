@@ -98,35 +98,3 @@ func disconnect(sdk: BreezSdk) async throws {
     try await sdk.disconnect()
 }
 // ANCHOR_END: disconnect
-
-func initSdkPostgres() async throws -> BreezSdk {
-    // ANCHOR: init-sdk-postgres
-    // Construct the seed using mnemonic words or entropy bytes
-    let mnemonic = "<mnemonic words>"
-    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
-
-    // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
-    config.apiKey = "<breez api key>"
-
-    // Configure PostgreSQL storage
-    // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
-    // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-    let postgresConfig = PostgresStorageConfig(
-        connectionString: "host=localhost user=postgres dbname=spark",
-        // Optional pool settings (all default to nil):
-        maxPoolSize: UInt32(8),        // Max connections in pool
-        waitTimeoutSecs: UInt64(30),   // Timeout waiting for connection
-        createTimeoutSecs: nil,        // Timeout establishing connection
-        recycleTimeoutSecs: nil,       // Idle connection recycle timeout
-        queueMode: nil                 // FIFO (default) or LIFO
-    )
-
-    // Build the SDK with PostgreSQL storage
-    let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withPostgresStorage(config: postgresConfig)
-    let sdk = try await builder.build()
-    // ANCHOR_END: init-sdk-postgres
-
-    return sdk
-}

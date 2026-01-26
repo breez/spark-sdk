@@ -1,6 +1,8 @@
 import logging
 import typing
 from breez_sdk_spark import (
+    create_postgres_storage,
+    create_postgres_storage_config,
     default_config,
     Network,
     ProvisionalPayment,
@@ -84,3 +86,37 @@ async def with_payment_observer(builder: SdkBuilder):
     payment_observer = ExamplePaymentObserver()
     await builder.with_payment_observer(payment_observer=payment_observer)
 # ANCHOR_END: with-payment-observer
+
+
+# ANCHOR: init-sdk-postgres
+async def init_sdk_postgres():
+    # Construct the seed using mnemonic words or entropy bytes
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Configure PostgreSQL storage
+    # Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+    # Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    postgres_config = create_postgres_storage_config(
+        connection_string="host=localhost user=postgres dbname=spark"
+    )
+    # Optionally pool settings can be adjusted. Some examples:
+    postgres_config.max_pool_size = 8  # Max connections in pool
+    postgres_config.wait_timeout_secs = 30  # Timeout waiting for connection
+
+    try:
+        # Create the storage and build the SDK
+        storages = await create_postgres_storage(config=postgres_config)
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_storage(storage=storages.storage)
+        await builder.with_real_time_sync_storage(storage=storages.sync_storage)
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+# ANCHOR_END: init-sdk-postgres

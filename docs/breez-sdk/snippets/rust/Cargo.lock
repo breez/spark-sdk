@@ -427,6 +427,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "web-time",
+ "webpki-roots 1.0.5",
  "x509-parser",
 ]
 

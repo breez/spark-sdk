@@ -28,17 +28,6 @@ On some platforms (e.g., Android, iOS), you must use an application-specific wri
 
 </div>
 
-<h2 id="server-initialization">
-    <a class="header" href="#server-initialization">Server Initialization</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_storage">API docs</a>
-</h2>
-
-For server-side deployments, PostgreSQL storage is supported for environments where file-based storage may not be suitable.
-
-**Note:** Not available for Javascript, React Native or Flutter.
-
-{{#tabs getting_started:init-sdk-postgres}}
-
 ## Advanced Initialization
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:
