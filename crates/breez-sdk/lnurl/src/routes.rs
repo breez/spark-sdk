@@ -26,7 +26,7 @@ use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    invoice_paid::handle_invoice_paid,
+    invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
     zap::Zap,
@@ -687,19 +687,20 @@ where
         })?;
 
         let updated_at = now_millis();
+        let payment_hash = invoice.payment_hash().to_string();
+        let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+            error!(
+                "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                invoice.duration_since_epoch().as_secs(),
+                invoice.expiry_time().as_secs(),
+            );
+            lnurl_error("internal server error")
+        })?;
+
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
-            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
-                error!(
-                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
-                    invoice.duration_since_epoch().as_secs(),
-                    invoice.expiry_time().as_secs(),
-                );
-                lnurl_error("internal server error")
-            })?;
-
             let zap = Zap {
-                payment_hash: invoice.payment_hash().to_string(),
+                payment_hash: payment_hash.clone(),
                 zap_request,
                 zap_event: None,
                 user_pubkey: user.pubkey.clone(),
@@ -741,7 +742,7 @@ where
                     .db
                     .insert_lnurl_sender_comment(&LnurlSenderComment {
                         comment: comment.to_string(),
-                        payment_hash: invoice.payment_hash().to_string(),
+                        payment_hash: payment_hash.clone(),
                         user_pubkey: user.pubkey.clone(),
                         updated_at,
                     })
@@ -752,14 +753,62 @@ where
             }
         }
 
-        // TODO: Save things like the invoice/preimage/transfer id?
-        // TODO: Validate invoice?
-        // TODO: Add lnurl-verify
+        // Store all invoices for LUD-21 verify support (unless user opted out)
+        let verify_url = if !user.no_invoice_paid_support {
+            // Store invoice in invoices table
+            if let Err(e) = create_invoice(
+                &state.db,
+                &payment_hash,
+                &user.pubkey,
+                &res.invoice,
+                invoice_expiry,
+            )
+            .await
+            {
+                error!("Failed to create invoice record: {}", e);
+                return Err(lnurl_error("internal server error"));
+            }
 
-        Ok(Json(json!({
+            // Subscribe to user for invoice monitoring if nostr is enabled
+            if let Some(nostr_keys) = &state.nostr_keys {
+                crate::background::create_rpc_client_and_subscribe(
+                    state.db.clone(),
+                    pubkey,
+                    &state.connection_manager,
+                    &state.coordinator,
+                    state.signer.clone(),
+                    state.session_manager.clone(),
+                    state.service_provider.clone(),
+                    nostr_keys.clone(),
+                    Arc::clone(&state.subscribed_keys),
+                    state.invoice_paid_trigger.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    error!("failed to subscribe to user for invoice monitoring: {}", e);
+                    lnurl_error("internal server error")
+                })?;
+            }
+
+            // Build verify URL
+            Some(format!(
+                "{}://{}/verify/{}",
+                state.scheme, domain, payment_hash
+            ))
+        } else {
+            None
+        };
+
+        let mut response = json!({
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
-        })))
+        });
+
+        if let Some(verify) = verify_url {
+            response["verify"] = json!(verify);
+        }
+
+        Ok(Json(response))
     }
 
     /// LUD-21 verify endpoint
