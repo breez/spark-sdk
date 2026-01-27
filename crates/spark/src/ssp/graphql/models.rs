@@ -6,14 +6,6 @@ use crate::ssp::graphql::queries::complete_coop_exit::{
     TransferFragmentUserRequest as CompleteCoopExitUserRequestFragment,
     TransferFragmentUserRequestOn as CompleteCoopExitUserRequestFragmentOn,
 };
-use crate::ssp::graphql::queries::complete_leaves_swap::{
-    CurrencyAmountFragment as CompleteLeavesSwapCurrencyAmountFragment,
-    LeavesSwapRequestFragment as CompleteLeavesSwapLeavesSwapRequestFragment,
-    SwapLeafFragment as CompleteLeavesSwapSwapLeafFragment,
-    TransferFragment as CompleteLeavesSwapTransferFragment,
-    TransferFragmentUserRequest as CompleteLeavesSwapUserRequestFragment,
-    TransferFragmentUserRequestOn as CompleteLeavesSwapUserRequestFragmentOn,
-};
 use crate::ssp::graphql::queries::coop_exit_fee_quote::{
     CoopExitFeeQuoteCoopExitFeeQuoteQuote,
     CurrencyAmountFragment as CoopExitFeeQuoteCurrencyAmountFragment,
@@ -26,14 +18,6 @@ use crate::ssp::graphql::queries::request_coop_exit::{
     TransferFragment as RequestCoopExitTransferFragment,
     TransferFragmentUserRequest as RequestCoopExitUserRequestFragment,
     TransferFragmentUserRequestOn as RequestCoopExitUserRequestFragmentOn,
-};
-use crate::ssp::graphql::queries::request_leaves_swap::{
-    CurrencyAmountFragment as RequestLeavesSwapCurrencyAmountFragment,
-    LeavesSwapRequestFragment as RequestLeavesSwapLeavesSwapRequestFragment,
-    SwapLeafFragment as RequestLeavesSwapSwapLeafFragment,
-    TransferFragment as RequestLeavesSwapTransferFragment,
-    TransferFragmentUserRequest as RequestLeavesSwapUserRequestFragment,
-    TransferFragmentUserRequestOn as RequestLeavesSwapUserRequestFragmentOn,
 };
 use crate::ssp::graphql::queries::request_lightning_receive::{
     CurrencyAmountFragment as RequestLightningReceiveCurrencyAmountFragment,
@@ -49,6 +33,14 @@ use crate::ssp::graphql::queries::request_lightning_send::{
     TransferFragment as RequestLightningSendTransferFragment,
     TransferFragmentUserRequest as RequestLightningSendUserRequestFragment,
     TransferFragmentUserRequestOn as RequestLightningSendUserRequestFragmentOn,
+};
+use crate::ssp::graphql::queries::request_swap::{
+    CurrencyAmountFragment as RequestSwapCurrencyAmountFragment,
+    LeavesSwapRequestFragment as RequestSwapLeavesSwapRequestFragment,
+    SwapLeafFragment as RequestSwapSwapLeafFragment,
+    TransferFragment as RequestSwapTransferFragment,
+    TransferFragmentUserRequest as RequestSwapUserRequestFragment,
+    TransferFragmentUserRequestOn as RequestSwapUserRequestFragmentOn,
 };
 use crate::ssp::graphql::queries::static_deposit_quote::StaticDepositQuoteStaticDepositQuote;
 use crate::ssp::graphql::queries::transfers::{
@@ -83,12 +75,11 @@ use enum_to_enum::FromEnum;
 use serde::{Deserialize, Serialize};
 
 pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
-pub use crate::ssp::graphql::queries::complete_leaves_swap::CompleteLeavesSwapInput;
 pub use crate::ssp::graphql::queries::request_coop_exit::RequestCoopExitInput;
-pub use crate::ssp::graphql::queries::request_leaves_swap::RequestLeavesSwapInput;
-pub use crate::ssp::graphql::queries::request_leaves_swap::UserLeafInput;
 pub use crate::ssp::graphql::queries::request_lightning_receive::RequestLightningReceiveInput;
 pub use crate::ssp::graphql::queries::request_lightning_send::RequestLightningSendInput;
+pub use crate::ssp::graphql::queries::request_swap::RequestSwapInput;
+pub use crate::ssp::graphql::queries::request_swap::UserLeafInput;
 
 /// Config for creating a GraphQLClient
 #[derive(Debug, Clone)]
@@ -253,12 +244,11 @@ pub struct LightningInvoice {
 /// Currency amount structure
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitCurrencyAmountFragment)]
-#[macros::derive_from(CompleteLeavesSwapCurrencyAmountFragment)]
 #[macros::derive_from(CoopExitFeeQuoteCurrencyAmountFragment)]
 #[macros::derive_from(LeavesSwapFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(LightningSendFeeEstimateCurrencyAmountFragment)]
 #[macros::derive_from(RequestCoopExitCurrencyAmountFragment)]
-#[macros::derive_from(RequestLeavesSwapCurrencyAmountFragment)]
+#[macros::derive_from(RequestSwapCurrencyAmountFragment)]
 #[macros::derive_from(RequestLightningReceiveCurrencyAmountFragment)]
 #[macros::derive_from(RequestLightningSendCurrencyAmountFragment)]
 #[macros::derive_from(TransferCurrencyAmountFragment)]
@@ -286,9 +276,8 @@ impl Default for CurrencyAmount {
 /// Transfer structure
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitTransferFragment)]
-#[macros::derive_from(CompleteLeavesSwapTransferFragment)]
 #[macros::derive_from(RequestCoopExitTransferFragment)]
-#[macros::derive_from(RequestLeavesSwapTransferFragment)]
+#[macros::derive_from(RequestSwapTransferFragment)]
 #[macros::derive_from(RequestLightningReceiveTransferFragment)]
 #[macros::derive_from(RequestLightningSendTransferFragment)]
 #[macros::derive_from(UserRequestTransferFragment)]
@@ -302,9 +291,8 @@ pub struct Transfer {
 /// UserRequest structure
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[macros::derive_from(CompleteCoopExitUserRequestFragment)]
-#[macros::derive_from(CompleteLeavesSwapUserRequestFragment)]
 #[macros::derive_from(RequestCoopExitUserRequestFragment)]
-#[macros::derive_from(RequestLeavesSwapUserRequestFragment)]
+#[macros::derive_from(RequestSwapUserRequestFragment)]
 #[macros::derive_from(RequestLightningReceiveUserRequestFragment)]
 #[macros::derive_from(RequestLightningSendUserRequestFragment)]
 #[macros::derive_from(UserRequestTransferFragmentUserRequest)]
@@ -315,9 +303,8 @@ pub struct UserRequest {
 }
 
 #[derive(FromEnum, Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
-#[from_enum(CompleteLeavesSwapUserRequestFragmentOn)]
 #[from_enum(RequestCoopExitUserRequestFragmentOn)]
-#[from_enum(RequestLeavesSwapUserRequestFragmentOn)]
+#[from_enum(RequestSwapUserRequestFragmentOn)]
 #[from_enum(RequestLightningReceiveUserRequestFragmentOn)]
 #[from_enum(RequestLightningSendUserRequestFragmentOn)]
 #[from_enum(UserRequestTransferFragmentUserRequestOn)]
@@ -483,8 +470,7 @@ pub struct LightningSendRequest {
 
 /// SwapLeaf structure
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[macros::derive_from(CompleteLeavesSwapSwapLeafFragment)]
-#[macros::derive_from(RequestLeavesSwapSwapLeafFragment)]
+#[macros::derive_from(RequestSwapSwapLeafFragment)]
 #[macros::derive_from(UserRequestSwapLeafFragment)]
 #[macros::derive_from(TransfersSwapLeafFragment)]
 pub struct SwapLeaf {
@@ -495,8 +481,7 @@ pub struct SwapLeaf {
 
 /// LeavesSwapRequest structure
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[macros::derive_from(CompleteLeavesSwapLeavesSwapRequestFragment)]
-#[macros::derive_from(RequestLeavesSwapLeavesSwapRequestFragment)]
+#[macros::derive_from(RequestSwapLeavesSwapRequestFragment)]
 #[macros::derive_from(UserRequestLeavesSwapRequestFragment)]
 #[macros::derive_from(TransfersLeavesSwapRequestFragment)]
 pub struct LeavesSwapRequest {

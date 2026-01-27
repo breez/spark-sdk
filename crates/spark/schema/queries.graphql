@@ -195,14 +195,6 @@ mutation CompleteCoopExit($input: CompleteCoopExitInput!) {
   }
 }
 
-mutation CompleteLeavesSwap($input: CompleteLeavesSwapInput!) {
-  complete_leaves_swap(input: $input) {
-    request {
-      ...LeavesSwapRequestFragment
-    }
-  }
-}
-
 mutation GetChallenge($input: GetChallengeInput!) {
   get_challenge(input: $input) {
     protected_challenge
@@ -213,14 +205,6 @@ mutation RequestCoopExit($input: RequestCoopExitInput!) {
   request_coop_exit(input: $input) {
     request {
       ...CoopExitRequestFragment
-    }
-  }
-}
-
-mutation RequestLeavesSwap($input: RequestLeavesSwapInput!) {
-  request_leaves_swap(input: $input) {
-    request {
-      ...LeavesSwapRequestFragment
     }
   }
 }
@@ -237,6 +221,14 @@ mutation RequestLightningSend($input: RequestLightningSendInput!) {
   request_lightning_send(input: $input) {
     request {
       ...LightningSendRequestFragment
+    }
+  }
+}
+
+mutation RequestSwap($input: RequestSwapInput!) {
+  request_swap(input: $input) {
+    request {
+      ...LeavesSwapRequestFragment
     }
   }
 }

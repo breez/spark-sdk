@@ -77,7 +77,7 @@ impl HtlcService {
 
         let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves, None).await?;
 
-        let transfer_request = self
+        let prepared_transfer_request = self
             .transfer_service
             .prepare_transfer_request(
                 &unwrapped_transfer_id,
@@ -86,6 +86,7 @@ impl HtlcService {
                 Default::default(),
                 Some(payment_hash),
                 Some(expiry_time),
+                None, // No adaptor public key for HTLC transfers
             )
             .await?;
 
@@ -104,7 +105,7 @@ impl HtlcService {
                 amount_sats,
                 fee_sats: 0,
                 is_inbound_payment: false,
-                transfer_request: Some(transfer_request),
+                transfer_request: Some(prepared_transfer_request.transfer_request),
                 expiry_time: &expiry_time,
             },
         )

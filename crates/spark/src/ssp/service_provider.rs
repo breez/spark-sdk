@@ -6,10 +6,10 @@ use crate::{
     session_manager::SessionManager,
     signer::Signer,
     ssp::{
-        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CompleteLeavesSwapInput,
-        CoopExitFeeQuote, CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput,
-        RequestLeavesSwapInput, RequestLightningReceiveInput, RequestLightningSendInput,
-        ServiceProviderConfig, SspTransfer, StaticDepositQuote,
+        BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
+        CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLightningReceiveInput,
+        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig, SspTransfer,
+        StaticDepositQuote,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -105,20 +105,12 @@ impl ServiceProvider {
         Ok(self.gql_client.request_lightning_send(input).await?)
     }
 
-    /// Request leaves swap
-    pub async fn request_leaves_swap(
+    /// Request swap (v3)
+    pub async fn request_swap(
         &self,
-        input: RequestLeavesSwapInput,
+        input: RequestSwapInput,
     ) -> ServiceProviderResult<LeavesSwapRequest> {
-        Ok(self.gql_client.request_leaves_swap(input).await?)
-    }
-
-    /// Complete a leaves swap
-    pub async fn complete_leaves_swap(
-        &self,
-        input: CompleteLeavesSwapInput,
-    ) -> ServiceProviderResult<LeavesSwapRequest> {
-        Ok(self.gql_client.complete_leaves_swap(input).await?)
+        Ok(self.gql_client.request_swap(input).await?)
     }
 
     /// Get claim deposit quote

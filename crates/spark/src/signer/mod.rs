@@ -11,7 +11,6 @@ use frost_secp256k1_tr::round2::SignatureShare;
 pub use default_signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType};
 pub use error::SignerError;
 pub use models::*;
-pub(crate) use secret_sharing::from_bytes_to_scalar;
 
 #[cfg(test)]
 pub(crate) use default_signer::tests::create_test_signer;

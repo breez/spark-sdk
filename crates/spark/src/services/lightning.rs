@@ -361,7 +361,7 @@ impl LightningService {
         let leaf_tweaks =
             prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
 
-        let transfer_request = self
+        let prepared_transfer_request = self
             .transfer_service
             .prepare_transfer_request(
                 &unwrapped_transfer_id,
@@ -370,6 +370,7 @@ impl LightningService {
                 Default::default(),
                 Some(payment_hash),
                 Some(expiry_time),
+                None, // No adaptor public key for lightning transfers
             )
             .await?;
 
@@ -386,7 +387,7 @@ impl LightningService {
                 amount_sats,
                 fee_sats: 0, // TODO: this must use the estimated fee.
                 is_inbound_payment: false,
-                transfer_request: Some(transfer_request),
+                transfer_request: Some(prepared_transfer_request.transfer_request),
                 expiry_time: &expiry_time,
             },
         )
