@@ -67,6 +67,9 @@ pub struct ClawbackResponse {
 pub enum CurveType {
     ConstantProduct,
     SingleSided,
+    V3Concentrated,
+    #[serde(other)]
+    Unknown,
 }
 
 impl std::fmt::Display for CurveType {
@@ -74,6 +77,8 @@ impl std::fmt::Display for CurveType {
         match self {
             CurveType::ConstantProduct => write!(f, "CONSTANT_PRODUCT"),
             CurveType::SingleSided => write!(f, "SINGLE_SIDED"),
+            CurveType::V3Concentrated => write!(f, "V3_CONCENTRATED"),
+            CurveType::Unknown => write!(f, "UNKNOWN"),
         }
     }
 }
