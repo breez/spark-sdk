@@ -136,7 +136,15 @@ where
 
         // Validate both parts are within the DNS label size limit.
         // See <https://datatracker.ietf.org/doc/html/rfc1035#section-2.3.4>
-        if local_part.len() > 63 || domain.len() > 63 {
+        if local_part.len() > 63 {
+            return Ok(None);
+        }
+
+        // Domain can contain multiple labels - validate each one
+        if domain
+            .split('.')
+            .any(|label| label.is_empty() || label.len() > 63)
+        {
             return Ok(None);
         }
 
