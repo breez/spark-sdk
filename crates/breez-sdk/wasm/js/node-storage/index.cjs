@@ -1248,15 +1248,28 @@ class SqliteStorage {
     try {
       const offset = request.offset !== null && request.offset !== undefined ? request.offset : 0;
       const limit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
+      const nameFilter = request.name !== null && request.name !== undefined ? request.name : null;
 
-      const stmt = this.db.prepare(`
-        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
-        FROM contacts
-        ORDER BY name ASC
-        LIMIT ? OFFSET ?
-      `);
+      let rows;
+      if (nameFilter !== null) {
+        const stmt = this.db.prepare(`
+          SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+          FROM contacts
+          WHERE name = ?
+          ORDER BY name ASC
+          LIMIT ? OFFSET ?
+        `);
+        rows = stmt.all(nameFilter, limit, offset);
+      } else {
+        const stmt = this.db.prepare(`
+          SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
+          FROM contacts
+          ORDER BY name ASC
+          LIMIT ? OFFSET ?
+        `);
+        rows = stmt.all(limit, offset);
+      }
 
-      const rows = stmt.all(limit, offset);
       return Promise.resolve(rows);
     } catch (error) {
       return Promise.reject(

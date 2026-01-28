@@ -34,6 +34,6 @@ To remove a contact, pass its ID to the delete method.
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_contacts">API docs</a>
 </h2>
 
-To retrieve your saved contacts, use the list method. The results support pagination through offset and limit parameters.
+To retrieve your saved contacts, use the list method. The results support pagination through offset and limit parameters. You can also filter by exact name match using the optional name parameter.
 
 {{#tabs contacts:list-contacts}}

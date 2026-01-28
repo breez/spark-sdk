@@ -855,17 +855,21 @@ impl Storage for SqliteStorage {
         let limit = request.limit.unwrap_or(u32::MAX);
         let offset = request.offset.unwrap_or(0);
         let connection = self.get_connection()?;
-        let mut query =
-            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts".to_string();
-
-        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
-
-        if let Some(ref name_filter) = request.name_filter {
-            query.push_str(" WHERE name LIKE ?");
-            params.push(Box::new(format!("%{name_filter}%")));
-        }
-
-        query.push_str(&format!(" ORDER BY name ASC LIMIT {limit} OFFSET {offset}"));
+        let (query, params): (String, Vec<Box<dyn ToSql>>) = if let Some(ref name) = request.name {
+            (
+                format!(
+                    "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE name = ? ORDER BY name ASC LIMIT {limit} OFFSET {offset}"
+                ),
+                vec![Box::new(name.clone())],
+            )
+        } else {
+            (
+                format!(
+                    "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts ORDER BY name ASC LIMIT {limit} OFFSET {offset}"
+                ),
+                vec![],
+            )
+        };
 
         let mut stmt = connection.prepare(&query)?;
         let param_refs: Vec<&dyn ToSql> = params.iter().map(std::convert::AsRef::as_ref).collect();
@@ -1960,5 +1964,13 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_contacts_crud(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_contacts_name_filter() {
+        let temp_dir = create_temp_dir("contacts_name_filter");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_contacts_name_filter(Box::new(storage)).await;
     }
 }

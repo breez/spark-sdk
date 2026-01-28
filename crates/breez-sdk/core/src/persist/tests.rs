@@ -2792,6 +2792,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         .list_contacts(ListContactsRequest {
             offset: Some(0),
             limit: Some(2),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -2800,9 +2801,79 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         .list_contacts(ListContactsRequest {
             offset: Some(2),
             limit: Some(2),
+            ..Default::default()
         })
         .await
         .unwrap();
     assert_eq!(page2.len(), 2);
     assert_ne!(page1[0].id, page2[0].id);
+}
+
+pub async fn test_contacts_name_filter(storage: Box<dyn Storage>) {
+    use crate::{Contact, ListContactsRequest};
+
+    // Insert test contacts
+    let c1 = Contact {
+        id: "c1".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    let c2 = Contact {
+        id: "c2".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    let c3 = Contact {
+        id: "c3".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice2@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c1).await.unwrap();
+    storage.insert_contact(c2).await.unwrap();
+    storage.insert_contact(c3).await.unwrap();
+
+    // Filter by name "Alice" - should return 2 contacts
+    let alice_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("Alice".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(alice_contacts.len(), 2);
+    assert!(alice_contacts.iter().all(|c| c.name == "Alice"));
+
+    // Filter by name "Bob" - should return 1 contact
+    let bob_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("Bob".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(bob_contacts.len(), 1);
+    assert_eq!(bob_contacts[0].name, "Bob");
+
+    // Filter by name "NonExistent" - should return 0 contacts
+    let no_contacts = storage
+        .list_contacts(ListContactsRequest {
+            name: Some("NonExistent".to_string()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(no_contacts.is_empty());
+
+    // No filter - should return all 3 contacts
+    let all_contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(all_contacts.len(), 3);
 }
