@@ -26,7 +26,6 @@ const exampleGettingStartedAdvanced = async () => {
   await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
   // You can also pass your custom implementations:
   // await builder.withStorage(<your storage implementation>)
-  // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // await builder.withChainService(<your chain service implementation>)
   // await builder.withRestClient(<your rest client implementation>)
   // await builder.withKeySet({ keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number> })

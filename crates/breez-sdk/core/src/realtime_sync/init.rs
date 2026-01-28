@@ -5,11 +5,8 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    EventEmitter,
-    error::SdkError,
-    persist::Storage,
-    realtime_sync::SyncedStorage,
-    sync_storage::{SyncStorage, SyncStorageWrapper},
+    EventEmitter, error::SdkError, persist::Storage, realtime_sync::SyncedStorage,
+    sync_storage::SyncStorageWrapper,
 };
 
 pub struct RealTimeSyncParams {
@@ -17,7 +14,6 @@ pub struct RealTimeSyncParams {
     pub api_key: Option<String>,
     pub signer: Arc<dyn breez_sdk_common::sync::SyncSigner>,
     pub storage: Arc<dyn Storage>,
-    pub sync_storage: Arc<dyn SyncStorage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
     pub event_emitter: Arc<EventEmitter>,
 }
@@ -27,7 +23,7 @@ pub async fn init_and_start_real_time_sync(
 ) -> Result<Arc<dyn Storage>, SdkError> {
     debug!("Real-time sync is enabled.");
     let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> =
-        Arc::new(SyncStorageWrapper::new(params.sync_storage));
+        Arc::new(SyncStorageWrapper::new(Arc::clone(&params.storage)));
     let sync_service = Arc::new(SyncService::new(Arc::clone(&sync_storage)));
     let synced_storage = Arc::new(SyncedStorage::new(
         Arc::clone(&params.storage),

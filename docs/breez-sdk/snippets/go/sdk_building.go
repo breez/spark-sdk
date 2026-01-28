@@ -25,7 +25,6 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	builder.WithDefaultStorage("./.data")
 	// You can also pass your custom implementations:
 	// builder.WithStorage(<your storage implementation>)
-	// builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
 	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
@@ -98,20 +97,19 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	// Configure PostgreSQL storage
 	// Connection string format: "host=localhost user=postgres password=secret dbname=spark"
 	// Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-	postgresConfig := breez_sdk_spark.CreatePostgresStorageConfig("host=localhost user=postgres dbname=spark")
+	postgresConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
 	// Optionally pool settings can be adjusted. Some examples:
 	postgresConfig.MaxPoolSize = 8 // Max connections in pool
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
 	// Create the storage and build the SDK
-	storages, err := breez_sdk_spark.CreatePostgresStorage(postgresConfig)
+	storage, err := breez_sdk_spark.CreatePostgresStorage(postgresConfig)
 	if err != nil {
 		return nil, err
 	}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithStorage(storages.Storage)
-	builder.WithRealTimeSyncStorage(storages.SyncStorage)
+	builder.WithStorage(storage)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err

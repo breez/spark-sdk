@@ -2,7 +2,7 @@
 
 Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components:
 
-- [Storage](#with-storage) and [Real-Time Storage](#with-real-time-storage) to manage stored data
+- [Storage](#with-storage) to manage stored data
 - [PostgreSQL Storage](#with-postgres-storage) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
 - [LNURL Client](#with-lnurl-client) to make REST requests
@@ -21,21 +21,12 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 **Note:** Flutter currently only supports using the default storage.
 
-<h2 id="with-real-time-storage">
-    <a class="header" href="#with-real-time-storage">With Real-Time Sync Storage</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_real_time_sync_storage">API docs</a>
-</h2>
-
-If you are providing your own Storage implementation, you also need to provide a Real-Time Sync Storage implementation when real-time sync is enabled. When using the default storage from the SDK, this is already provided.
-
-**Note:** Flutter currently only supports using the default storage.
-
 <h2 id="with-postgres-storage">
     <a class="header" href="#with-postgres-storage">With PostgreSQL Storage</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.create_postgres_storage.html">API docs</a>
 </h2>
 
-The SDK supports PostgreSQL as an alternative storage backend for environments where file-based storage may not be suitable. The PostgreSQL storage constructor returns both storage and real-time sync storage instances.
+The SDK includes a PostgreSQL storage implementation as an alternative. This is useful for environments where file-based storage may not be suitable.
 
 **Note:** Not available for Javascript, React Native or Flutter.
 

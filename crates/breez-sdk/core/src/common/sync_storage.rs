@@ -1,90 +1,30 @@
 use std::{collections::HashMap, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-/// Errors that can occur during storage operations
-#[derive(Debug, Error, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
-pub enum SyncStorageError {
-    #[error("Underline implementation error: {0}")]
-    Implementation(String),
-
-    /// Database initialization error
-    #[error("Failed to initialize database: {0}")]
-    InitializationError(String),
-
-    #[error("Failed to serialize/deserialize data: {0}")]
-    Serialization(String),
-}
-
-impl From<SyncStorageError> for breez_sdk_common::sync::storage::SyncStorageError {
-    fn from(value: SyncStorageError) -> Self {
-        match value {
-            SyncStorageError::Implementation(msg) => {
-                breez_sdk_common::sync::storage::SyncStorageError::Implementation(msg)
-            }
-            SyncStorageError::InitializationError(msg) => {
-                breez_sdk_common::sync::storage::SyncStorageError::InitializationError(msg)
-            }
-            SyncStorageError::Serialization(msg) => {
-                breez_sdk_common::sync::storage::SyncStorageError::Serialization(msg)
-            }
-        }
-    }
-}
-
-impl From<serde_json::Error> for SyncStorageError {
-    fn from(e: serde_json::Error) -> Self {
-        SyncStorageError::Serialization(e.to_string())
-    }
-}
-
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
-#[macros::async_trait]
-pub trait SyncStorage: Send + Sync {
-    async fn add_outgoing_change(
-        &self,
-        record: UnversionedRecordChange,
-    ) -> Result<u64, SyncStorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError>;
-    async fn get_pending_outgoing_changes(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<OutgoingChange>, SyncStorageError>;
-
-    /// Get the revision number of the last synchronized record
-    async fn get_last_revision(&self) -> Result<u64, SyncStorageError>;
-
-    /// Insert incoming records from remote sync
-    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError>;
-
-    /// Delete an incoming record after it has been processed
-    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError>;
-
-    /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError>;
-
-    /// Get incoming records that need to be processed, up to the specified limit
-    async fn get_incoming_records(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<IncomingChange>, SyncStorageError>;
-
-    /// Get the latest outgoing record if any exists
-    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError>;
-
-    /// Update the sync state record from an incoming record
-    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError>;
-}
+use crate::persist::{Storage, StorageError};
 
 pub(crate) struct SyncStorageWrapper {
-    pub inner: Arc<dyn SyncStorage>,
+    pub inner: Arc<dyn Storage>,
 }
 
 impl SyncStorageWrapper {
-    pub fn new(inner: Arc<dyn SyncStorage>) -> Self {
+    pub fn new(inner: Arc<dyn Storage>) -> Self {
         Self { inner }
+    }
+}
+
+fn storage_to_sync_error(value: StorageError) -> breez_sdk_common::sync::storage::SyncStorageError {
+    match value {
+        StorageError::Connection(msg) | StorageError::Implementation(msg) => {
+            breez_sdk_common::sync::storage::SyncStorageError::Implementation(msg)
+        }
+        StorageError::InitializationError(msg) => {
+            breez_sdk_common::sync::storage::SyncStorageError::InitializationError(msg)
+        }
+        StorageError::Serialization(msg) => {
+            breez_sdk_common::sync::storage::SyncStorageError::Serialization(msg)
+        }
     }
 }
 
@@ -94,14 +34,20 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         &self,
         record: breez_sdk_common::sync::storage::UnversionedRecordChange,
     ) -> Result<u64, breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.add_outgoing_change(record.into()).await?)
+        self.inner
+            .add_outgoing_change(record.into())
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn complete_outgoing_sync(
         &self,
         record: breez_sdk_common::sync::storage::Record,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.complete_outgoing_sync(record.into()).await?)
+        self.inner
+            .complete_outgoing_sync(record.into())
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn get_pending_outgoing_changes(
@@ -111,14 +57,21 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         Vec<breez_sdk_common::sync::storage::OutgoingChange>,
         breez_sdk_common::sync::storage::SyncStorageError,
     > {
-        let changes = self.inner.get_pending_outgoing_changes(limit).await?;
+        let changes = self
+            .inner
+            .get_pending_outgoing_changes(limit)
+            .await
+            .map_err(storage_to_sync_error)?;
         Ok(changes.into_iter().map(From::from).collect())
     }
 
     async fn get_last_revision(
         &self,
     ) -> Result<u64, breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.get_last_revision().await?)
+        self.inner
+            .get_last_revision()
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn insert_incoming_records(
@@ -126,21 +79,30 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         records: Vec<breez_sdk_common::sync::storage::Record>,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
         let recs: Vec<Record> = records.into_iter().map(From::from).collect();
-        Ok(self.inner.insert_incoming_records(recs).await?)
+        self.inner
+            .insert_incoming_records(recs)
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn delete_incoming_record(
         &self,
         record: breez_sdk_common::sync::storage::Record,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.delete_incoming_record(record.into()).await?)
+        self.inner
+            .delete_incoming_record(record.into())
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn rebase_pending_outgoing_records(
         &self,
         revision: u64,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self.inner.rebase_pending_outgoing_records(revision).await?)
+        self.inner
+            .rebase_pending_outgoing_records(revision)
+            .await
+            .map_err(storage_to_sync_error)
     }
 
     async fn get_incoming_records(
@@ -150,7 +112,11 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         Vec<breez_sdk_common::sync::storage::IncomingChange>,
         breez_sdk_common::sync::storage::SyncStorageError,
     > {
-        let changes = self.inner.get_incoming_records(limit).await?;
+        let changes = self
+            .inner
+            .get_incoming_records(limit)
+            .await
+            .map_err(storage_to_sync_error)?;
         Ok(changes.into_iter().map(From::from).collect())
     }
 
@@ -160,7 +126,11 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         Option<breez_sdk_common::sync::storage::OutgoingChange>,
         breez_sdk_common::sync::storage::SyncStorageError,
     > {
-        let change = self.inner.get_latest_outgoing_change().await?;
+        let change = self
+            .inner
+            .get_latest_outgoing_change()
+            .await
+            .map_err(storage_to_sync_error)?;
         Ok(change.map(From::from))
     }
 
@@ -168,10 +138,10 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
         &self,
         record: breez_sdk_common::sync::storage::Record,
     ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        Ok(self
-            .inner
+        self.inner
             .update_record_from_incoming(record.into())
-            .await?)
+            .await
+            .map_err(storage_to_sync_error)
     }
 }
 
