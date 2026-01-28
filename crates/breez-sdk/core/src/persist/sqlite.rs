@@ -271,10 +271,10 @@ impl SqliteStorage {
             "CREATE TABLE contacts (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                lightning_address TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
-                UNIQUE(name, lightning_address)
+                UNIQUE(name, payment_identifier)
             );",
         ]
     }
@@ -829,7 +829,7 @@ impl Storage for SqliteStorage {
         let offset = request.offset.unwrap_or(0);
         let connection = self.get_connection()?;
         let mut query =
-            "SELECT id, name, lightning_address, created_at, updated_at FROM contacts".to_string();
+            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts".to_string();
 
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
@@ -849,7 +849,7 @@ impl Storage for SqliteStorage {
                 Ok(Contact {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    lightning_address: row.get(2)?,
+                    payment_identifier: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
                 })
@@ -861,11 +861,11 @@ impl Storage for SqliteStorage {
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         match connection.execute(
-            "INSERT INTO contacts (id, name, lightning_address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             params![
                 contact.id,
                 contact.name,
-                contact.lightning_address,
+                contact.payment_identifier,
                 contact.created_at,
                 contact.updated_at,
             ],
@@ -882,10 +882,10 @@ impl Storage for SqliteStorage {
     async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
         let connection = self.get_connection()?;
         match connection.execute(
-            "UPDATE contacts SET name = ?, lightning_address = ?, updated_at = ? WHERE id = ?",
+            "UPDATE contacts SET name = ?, payment_identifier = ?, updated_at = ? WHERE id = ?",
             params![
                 contact.name,
-                contact.lightning_address,
+                contact.payment_identifier,
                 contact.updated_at,
                 contact.id,
             ],
@@ -899,13 +899,13 @@ impl Storage for SqliteStorage {
         }
         // Fetch and return updated record with preserved created_at
         let mut stmt = connection.prepare(
-            "SELECT id, name, lightning_address, created_at, updated_at FROM contacts WHERE id = ?",
+            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = ?",
         )?;
         let updated = stmt.query_row(params![contact.id], |row| {
             Ok(Contact {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                lightning_address: row.get(2)?,
+                payment_identifier: row.get(2)?,
                 created_at: row.get(3)?,
                 updated_at: row.get(4)?,
             })

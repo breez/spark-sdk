@@ -293,7 +293,7 @@ impl BreezSdk {
     ///
     /// The created contact or an error
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
-        let name = validate_contact_input(&request.name, &request.lightning_address)?;
+        let name = validate_contact_input(&request.name, &request.payment_identifier)?;
 
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
@@ -303,7 +303,7 @@ impl BreezSdk {
         let contact = Contact {
             id: uuid::Uuid::now_v7().to_string(),
             name,
-            lightning_address: request.lightning_address,
+            payment_identifier: request.payment_identifier.trim().to_string(),
             created_at: now,
             updated_at: now,
         };
@@ -322,7 +322,7 @@ impl BreezSdk {
     ///
     /// The updated contact or an error
     pub async fn update_contact(&self, request: UpdateContactRequest) -> Result<Contact, SdkError> {
-        let name = validate_contact_input(&request.name, &request.lightning_address)?;
+        let name = validate_contact_input(&request.name, &request.payment_identifier)?;
 
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
@@ -332,7 +332,7 @@ impl BreezSdk {
         let contact = Contact {
             id: request.id,
             name,
-            lightning_address: request.lightning_address,
+            payment_identifier: request.payment_identifier.trim().to_string(),
             created_at: 0, // Ignored by storage, will be preserved
             updated_at: now,
         };

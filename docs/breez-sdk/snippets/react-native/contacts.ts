@@ -4,7 +4,7 @@ const exampleAddContact = async (sdk: BreezSdk) => {
   // ANCHOR: add-contact
   const contact = await sdk.addContact({
     name: 'Alice',
-    lightningAddress: 'alice@example.com'
+    paymentIdentifier: 'alice@example.com'
   })
   console.log(`Contact added: ${JSON.stringify(contact)}`)
   // ANCHOR_END: add-contact
@@ -16,7 +16,7 @@ const exampleUpdateContact = async (sdk: BreezSdk) => {
   const contact = await sdk.updateContact({
     id: contactId,
     name: 'Alice Smith',
-    lightningAddress: 'alice.smith@example.com'
+    paymentIdentifier: 'alice.smith@example.com'
   })
   console.log(`Contact updated: ${JSON.stringify(contact)}`)
   // ANCHOR_END: update-contact
@@ -38,7 +38,7 @@ const exampleListContacts = async (sdk: BreezSdk) => {
     limit: 10
   })
   for (const contact of contacts) {
-    console.log(`Contact: id=${contact.id}, name=${contact.name}, address=${contact.lightningAddress}`)
+    console.log(`Contact: id=${contact.id}, name=${contact.name}, identifier=${contact.paymentIdentifier}`)
   }
   // ANCHOR_END: list-contacts
 }

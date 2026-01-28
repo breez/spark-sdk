@@ -59,7 +59,7 @@ impl FromStr for RecordType {
 struct ContactSyncData {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -275,7 +275,7 @@ impl SyncedStorage {
         let contact = Contact {
             id: data_id.clone(),
             name: sync_data.name,
-            lightning_address: sync_data.lightning_address,
+            payment_identifier: sync_data.payment_identifier,
             created_at: sync_data.created_at,
             updated_at: sync_data.updated_at,
         };
@@ -418,7 +418,7 @@ impl Storage for SyncedStorage {
         let sync_data = ContactSyncData {
             id: contact.id.clone(),
             name: contact.name.clone(),
-            lightning_address: contact.lightning_address.clone(),
+            payment_identifier: contact.payment_identifier.clone(),
             created_at: contact.created_at,
             updated_at: contact.updated_at,
         };
@@ -444,7 +444,7 @@ impl Storage for SyncedStorage {
         let sync_data = ContactSyncData {
             id: updated.id.clone(),
             name: updated.name.clone(),
-            lightning_address: updated.lightning_address.clone(),
+            payment_identifier: updated.payment_identifier.clone(),
             created_at: updated.created_at,
             updated_at: updated.updated_at,
         };

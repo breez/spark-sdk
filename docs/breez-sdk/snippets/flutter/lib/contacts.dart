@@ -4,7 +4,7 @@ Future<Contact> addContact(BreezSdk sdk) async {
   // ANCHOR: add-contact
   AddContactRequest request = AddContactRequest(
     name: "Alice",
-    lightningAddress: "alice@example.com",
+    paymentIdentifier: "alice@example.com",
   );
   Contact contact = await sdk.addContact(request: request);
   print("Contact added: $contact");
@@ -18,7 +18,7 @@ Future<Contact> updateContact(BreezSdk sdk) async {
   UpdateContactRequest request = UpdateContactRequest(
     id: contactId,
     name: "Alice Smith",
-    lightningAddress: "alice.smith@example.com",
+    paymentIdentifier: "alice.smith@example.com",
   );
   Contact contact = await sdk.updateContact(request: request);
   print("Contact updated: $contact");
@@ -43,7 +43,7 @@ Future<List<Contact>> listContacts(BreezSdk sdk) async {
   );
   List<Contact> contacts = await sdk.listContacts(request: request);
   for (Contact contact in contacts) {
-    print("Contact: id=${contact.id}, name=${contact.name}, address=${contact.lightningAddress}");
+    print("Contact: id=${contact.id}, name=${contact.name}, identifier=${contact.paymentIdentifier}");
   }
   // ANCHOR_END: list-contacts
   return contacts;
