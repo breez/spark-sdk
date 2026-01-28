@@ -1403,13 +1403,14 @@ pub struct OptimizationProgress {
     pub total_rounds: u32,
 }
 
-/// A contact entry containing a name and Lightning address.
+/// A contact entry containing a name and payment identifier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Contact {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -1418,7 +1419,8 @@ pub struct Contact {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddContactRequest {
     pub name: String,
-    pub lightning_address: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
 }
 
 /// Request to update an existing contact.
@@ -1426,7 +1428,8 @@ pub struct AddContactRequest {
 pub struct UpdateContactRequest {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
 }
 
 /// Request to list contacts with optional pagination.

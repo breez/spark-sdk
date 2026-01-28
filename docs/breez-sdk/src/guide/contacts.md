@@ -1,13 +1,13 @@
 # Managing contacts
 
-Contacts allow you to save Lightning addresses for quick access. Each contact stores a name and Lightning address, making it easy to send payments to frequently used recipients without re-entering their address. Contacts are synced across all instances of the SDK.
+Contacts allow you to save payment identifiers for quick access. Each contact stores a name and payment identifier (such as a Lightning address, BOLT12 offer, or BIP353 address), making it easy to send payments to frequently used recipients without re-entering their identifier. Contacts are synced across all instances of the SDK.
 
 <h2 id="adding-a-contact">
     <a class="header" href="#adding-a-contact">Adding a contact</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.add_contact">API docs</a>
 </h2>
 
-To add a new contact, provide a name and Lightning address.
+To add a new contact, provide a name and payment identifier.
 
 {{#tabs contacts:add-contact}}
 
@@ -16,7 +16,7 @@ To add a new contact, provide a name and Lightning address.
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_contact">API docs</a>
 </h2>
 
-To update an existing contact, provide the contact ID along with the new name and Lightning address.
+To update an existing contact, provide the contact ID along with the new name and payment identifier.
 
 {{#tabs contacts:update-contact}}
 

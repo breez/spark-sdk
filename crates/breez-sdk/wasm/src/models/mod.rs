@@ -1231,7 +1231,7 @@ pub struct FetchConversionLimitsResponse {
 pub struct Contact {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -1239,14 +1239,14 @@ pub struct Contact {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::AddContactRequest)]
 pub struct AddContactRequest {
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateContactRequest)]
 pub struct UpdateContactRequest {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListContactsRequest)]

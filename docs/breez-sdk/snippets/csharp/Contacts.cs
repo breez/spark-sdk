@@ -9,7 +9,7 @@ namespace BreezSdkSnippets
             // ANCHOR: add-contact
             var contact = await sdk.AddContact(request: new AddContactRequest(
                 name: "Alice",
-                lightningAddress: "alice@example.com"
+                paymentIdentifier: "alice@example.com"
             ));
             Console.WriteLine($"Contact added: {contact}");
             // ANCHOR_END: add-contact
@@ -22,7 +22,7 @@ namespace BreezSdkSnippets
             var contact = await sdk.UpdateContact(request: new UpdateContactRequest(
                 id: contactId,
                 name: "Alice Smith",
-                lightningAddress: "alice.smith@example.com"
+                paymentIdentifier: "alice.smith@example.com"
             ));
             Console.WriteLine($"Contact updated: {contact}");
             // ANCHOR_END: update-contact
@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
             ));
             foreach (var contact in contacts)
             {
-                Console.WriteLine($"Contact: id={contact.id}, name={contact.name}, address={contact.lightningAddress}");
+                Console.WriteLine($"Contact: id={contact.id}, name={contact.name}, identifier={contact.paymentIdentifier}");
             }
             // ANCHOR_END: list-contacts
         }

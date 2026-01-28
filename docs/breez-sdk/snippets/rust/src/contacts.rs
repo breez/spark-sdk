@@ -7,7 +7,7 @@ pub(crate) async fn add_contact(sdk: &BreezSdk) -> Result<()> {
     let contact = sdk
         .add_contact(AddContactRequest {
             name: "Alice".to_string(),
-            lightning_address: "alice@example.com".to_string(),
+            payment_identifier: "alice@example.com".to_string(),
         })
         .await?;
     info!("Contact added: {:?}", contact);
@@ -22,7 +22,7 @@ pub(crate) async fn update_contact(sdk: &BreezSdk) -> Result<()> {
         .update_contact(UpdateContactRequest {
             id: contact_id,
             name: "Alice Smith".to_string(),
-            lightning_address: "alice.smith@example.com".to_string(),
+            payment_identifier: "alice.smith@example.com".to_string(),
         })
         .await?;
     info!("Contact updated: {:?}", contact);
@@ -50,8 +50,8 @@ pub(crate) async fn list_contacts(sdk: &BreezSdk) -> Result<()> {
         .await?;
     for contact in contacts {
         info!(
-            "Contact: id={}, name={}, address={}",
-            contact.id, contact.name, contact.lightning_address
+            "Contact: id={}, name={}, identifier={}",
+            contact.id, contact.name, contact.payment_identifier
         );
     }
     // ANCHOR_END: list-contacts

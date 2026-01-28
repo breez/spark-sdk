@@ -253,8 +253,8 @@ class MigrationManager {
         upgrade: (db) => {
           if (!db.objectStoreNames.contains("contacts")) {
             const contactsStore = db.createObjectStore("contacts", { keyPath: "id" });
-            // Create unique index on (name, lightningAddress) combination
-            contactsStore.createIndex("name_address", ["name", "lightningAddress"], { unique: true });
+            // Create unique index on (name, paymentIdentifier) combination
+            contactsStore.createIndex("name_identifier", ["name", "paymentIdentifier"], { unique: true });
             contactsStore.createIndex("name", "name", { unique: false });
           }
         }
