@@ -57,6 +57,8 @@ pub struct LeafRefundSigningData {
     pub direct_signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
     pub direct_from_cpfp_signing_nonce_commitment: FrostSigningCommitmentsWithNonces,
     pub vout: u32,
+    /// For coop exit signing: the connector transaction output to use as prev_out
+    pub connector_prev_out: Option<bitcoin::TxOut>,
 }
 
 /// Configuration for claiming transfers
@@ -441,6 +443,7 @@ impl TransferService {
                     .map(|l| l.node.id.to_string())
                     .collect(),
                 count: 3,
+                node_id_count: 0,
             })
             .await?
             .signing_commitments
@@ -1066,6 +1069,7 @@ impl TransferService {
                     direct_signing_nonce_commitment,
                     direct_from_cpfp_signing_nonce_commitment,
                     vout: leaf_key.node.vout,
+                    connector_prev_out: None,
                 },
             );
         }

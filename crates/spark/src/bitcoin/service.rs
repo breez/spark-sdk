@@ -82,3 +82,41 @@ pub fn sighash_from_tx(
         )?,
     )
 }
+
+/// Computes the BIP 341 Taproot sighash for a transaction with multiple distinct inputs.
+///
+/// Unlike `sighash_from_tx` which duplicates a single prevout for all inputs, this function
+/// takes an array of all previous outputs. This is required for transactions like coop exit
+/// refunds that spend from multiple different UTXOs (node tx + connector tx).
+///
+/// # Arguments
+///
+/// * `tx` - The transaction to compute the sighash for
+/// * `input_index` - The index of the input being signed
+/// * `prev_outputs` - Slice containing the previous output for each input (must match input count)
+///
+/// # Errors
+///
+/// Returns `BitcoinError::InvalidTransaction` if the number of prevouts doesn't match the
+/// number of inputs.
+pub fn sighash_from_multi_input_tx(
+    tx: &Transaction,
+    input_index: usize,
+    prev_outputs: &[TxOut],
+) -> Result<TapSighash, BitcoinError> {
+    if prev_outputs.len() != tx.input.len() {
+        return Err(BitcoinError::InvalidTransaction(format!(
+            "prev_outputs length {} != inputs length {}",
+            prev_outputs.len(),
+            tx.input.len()
+        )));
+    }
+    let prev_output_fetcher = bitcoin::sighash::Prevouts::All(prev_outputs);
+    Ok(
+        bitcoin::sighash::SighashCache::new(tx).taproot_key_spend_signature_hash(
+            input_index,
+            &prev_output_fetcher,
+            bitcoin::sighash::TapSighashType::Default,
+        )?,
+    )
+}

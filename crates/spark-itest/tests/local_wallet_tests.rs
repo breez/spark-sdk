@@ -69,7 +69,7 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     fixture
         .fixtures
         .spark_so
-        .wait_for_log("Deposit confirmed before tree creation or tree already available")
+        .wait_for_log("tree not found in available or creating status")
         .await?;
     info!("SO confirmed deposit is ready to claim");
 

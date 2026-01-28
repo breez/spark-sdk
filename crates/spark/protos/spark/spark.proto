@@ -14,7 +14,12 @@ service SparkService {
     // Generates a new static deposit address of the user or returns the existing one for the specified network.
     rpc generate_static_deposit_address(GenerateStaticDepositAddressRequest) returns (GenerateStaticDepositAddressResponse) {}
 
+    // Archives the current default static deposit address and generates a new one for the user.
+    rpc rotate_static_deposit_address(RotateStaticDepositAddressRequest) returns (RotateStaticDepositAddressResponse) {}
+
     rpc start_deposit_tree_creation(StartDepositTreeCreationRequest) returns (StartDepositTreeCreationResponse) {}
+    // Creates a deposit tree with the commitments from get_signing_commitments, after they are signed. Fails if the tree already exists.
+    rpc finalize_deposit_tree_creation(FinalizeDepositTreeCreationRequest) returns (FinalizeDepositTreeCreationResponse) {}
     rpc finalize_transfer_with_transfer_package(FinalizeTransferWithTransferPackageRequest) returns (FinalizeTransferResponse) {}
 
 
@@ -28,6 +33,8 @@ service SparkService {
     rpc get_signing_commitments(GetSigningCommitmentsRequest) returns (GetSigningCommitmentsResponse) {}
 
     rpc provide_preimage(ProvidePreimageRequest) returns (ProvidePreimageResponse) {}
+    // Used to check if a user has provided the preimage for a HODL invoice in lightning receive flow.
+    rpc query_preimage(QueryPreimageRequest) returns (QueryPreimageResponse) {}
     rpc query_htlc(QueryHtlcRequest) returns (QueryHtlcResponse) {}
 
 
@@ -118,7 +125,8 @@ enum Network {
 }
 
 message PageRequest {
-    int32 page_size = 1;
+    int32 unsafe_page_size = 1 [(validate.rules).int32 = { gte: 0, lte: 1000 }];
+    uint32 page_size = 4 [(validate.rules).uint32 = { gte: 0, lte: 1000 }];
     string cursor = 2;
     Direction direction = 3;
 }
@@ -209,6 +217,29 @@ message GenerateStaticDepositAddressRequest {
  */
 message GenerateStaticDepositAddressResponse {
     Address deposit_address = 1;
+}
+
+/**
+ * Request to rotate a static deposit address.
+ * This archives the current default address and generates a new one.
+ * Old address still can be used to receive deposits.
+ */
+message RotateStaticDepositAddressRequest {
+    // The signing public key of the user to aggregate with SO keys and produce the
+    // final pubkey used to generate P2TR address.
+    bytes signing_public_key = 1 [(validate.rules).bytes.len = 33];
+    // The network of the bitcoin network.
+    Network network = 2 [(validate.rules).enum = {not_in: [0]}];
+}
+
+/**
+ * Response to the request to rotate a static deposit address.
+ */
+message RotateStaticDepositAddressResponse {
+    // The newly generated default deposit address.
+    Address new_deposit_address = 1;
+    // The archived (previous default) deposit address.
+    Address archived_deposit_address = 2;
 }
 
 /**
@@ -397,9 +428,9 @@ message NodeSignatureShares {
     // The verifying key of the node.
     bytes verifying_key = 4;
     // The signing result of the node's transaction. This transaction is to pay to self.
-    SigningResult direct_node_tx_signing_result = 5;
+    SigningResult direct_node_tx_signing_result = 5 [deprecated = true];
     // The signing result of the node's direct refund transaction. This transaction is to broadcast for the SO.
-    SigningResult direct_refund_tx_signing_result = 6;
+    SigningResult direct_refund_tx_signing_result = 6 [deprecated = true];
     // The signing result of the node's direct from cpfp refund transaction. This transaction is to broadcast for the SO.
     SigningResult direct_from_cpfp_refund_tx_signing_result = 7;
 }
@@ -466,9 +497,9 @@ message StartDepositTreeCreationRequest {
     // The signing job for the root node's refund transaction.
     SigningJob refund_tx_signing_job = 4;
     // The direct signing job for the root node's transaction.
-    SigningJob direct_root_tx_signing_job = 5;
+    SigningJob direct_root_tx_signing_job = 5 [deprecated = true];
     // The signing job for the root node's direct refund transaction.
-    SigningJob direct_refund_tx_signing_job = 6;
+    SigningJob direct_refund_tx_signing_job = 6 [deprecated = true];
     // The signing job for the root node's direct from cpfp refund transaction.
     SigningJob direct_from_cpfp_refund_tx_signing_job = 7;
 }
@@ -481,6 +512,30 @@ message StartDepositTreeCreationResponse {
     string tree_id = 1;
     // The signature shares for the root node.
     NodeSignatureShares root_node_signature_shares = 2;
+}
+
+/**
+ * FinalizeDepositTreeCreationRequest is the request to finalize the tree creation for a tree root node.
+ */
+message FinalizeDepositTreeCreationRequest {
+    // The identity public key of the user
+    bytes identity_public_key = 1  [(validate.rules).bytes.len = 33];
+
+    // The on-chain utxo
+    UTXO on_chain_utxo = 2;
+
+    // User-signed transactions (with user signature shares, aggregated by server)
+    UserSignedTxSigningJob root_tx_signing_job = 3;
+    UserSignedTxSigningJob refund_tx_signing_job = 4;
+    UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
+}
+
+/**
+ * FinalizeDepositTreeCreationResponse is the response to the request to finalize the tree creation for a tree root node.
+ */
+message FinalizeDepositTreeCreationResponse {
+    // the root node of the created tree
+    TreeNode root_node = 1;
 }
 
 // This proto is constructed by the wallet to specify leaves it wants to spend as
@@ -868,6 +923,13 @@ message TransferFilter {
     Network network = 4; // defaults to mainnet when no network is provided.
     repeated TransferStatus statuses = 80;
     Order order = 5;
+
+    oneof time_filter {
+        // Filter transfers created strictly after this timestamp (exclusive)
+        google.protobuf.Timestamp created_after = 6;
+        // Filter transfers created strictly before this timestamp (exclusive)
+        google.protobuf.Timestamp created_before = 7;
+    }
 }
 
 message QueryTransfersResponse {
@@ -915,6 +977,9 @@ message GetSigningCommitmentsRequest {
     repeated string node_ids = 1;
     // The number of signing commitments to get per node ID.
     uint32 count = 2;
+    // Alternative to passing the node IDs: the number of node IDs for which to get signing commitments.
+    // Either `node_ids` or `node_id_count` should be passed, but not both.
+    uint32 node_id_count = 3;
 }
 
 message GetSigningCommitmentsResponse {
@@ -980,6 +1045,7 @@ message CooperativeExitRequest {
     StartTransferRequest transfer = 1;
     string exit_id = 2;
     bytes exit_txid = 3;
+    bytes connector_tx = 4;
 }
 
 message CooperativeExitResponse {
@@ -1181,6 +1247,14 @@ message ProvidePreimageResponse {
     Transfer transfer = 1;
 }
 
+message QueryPreimageRequest {
+    bytes payment_hash = 1 [(validate.rules).bytes.len = 32];
+}
+
+message QueryPreimageResponse {
+    optional bytes preimage = 1;
+}
+
 message TreeNodeIds {
     repeated string node_ids = 1;
 }
@@ -1295,6 +1369,12 @@ enum UtxoSwapRequestType {
   Refund = 2;
 }
 
+// Which hash variant to use in cryptographic operations.
+enum HashVariant {
+  HASH_VARIANT_UNSPECIFIED = 0;  // Legacy
+  HASH_VARIANT_V2 = 1;           // Structured hashing
+}
+
 message InitiateStaticDepositUtxoRefundRequest {
     UTXO on_chain_utxo = 1;
     // A package that is used for signing L1 Bitcoin transactions using FROST.
@@ -1316,6 +1396,8 @@ message InitiateStaticDepositUtxoRefundRequest {
     // The concatenated payload is then hashed with SHA-256, and the resulting hash
     // is signed using ECDSA with the user's identity private key to produce this signature.
     bytes user_signature = 4;
+    // Optional: which hash variant was used to create user_signature.
+    HashVariant hash_variant = 5;
 }
 
 message InitiateStaticDepositUtxoRefundResponse {
