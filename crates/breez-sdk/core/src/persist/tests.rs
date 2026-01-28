@@ -2686,7 +2686,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let c1 = Contact {
         id: "c1".to_string(),
         name: "Alice".to_string(),
-        lightning_address: "alice@example.com".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
         created_at: 1000,
         updated_at: 1000,
     };
@@ -2704,7 +2704,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let to_update = Contact {
         id: "c1".to_string(),
         name: "Alice B".to_string(),
-        lightning_address: "alice@example.com".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
         created_at: 0, // Should be ignored
         updated_at: 2000,
     };
@@ -2724,7 +2724,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let c2 = Contact {
         id: "c2".to_string(),
         name: "Bob".to_string(),
-        lightning_address: "bob@example.com".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
         created_at: 1000,
         updated_at: 1000,
     };
@@ -2732,7 +2732,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let c3 = Contact {
         id: "c3".to_string(),
         name: "Bob".to_string(),
-        lightning_address: "bob@example.com".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
         created_at: 1000,
         updated_at: 1000,
     };
@@ -2745,7 +2745,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let c4 = Contact {
         id: "c4".to_string(),
         name: "Carol".to_string(),
-        lightning_address: "carol@example.com".to_string(),
+        payment_identifier: "carol@example.com".to_string(),
         created_at: 1000,
         updated_at: 1000,
     };
@@ -2753,7 +2753,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let c4_dup = Contact {
         id: "c4".to_string(),
         name: "Bob".to_string(),
-        lightning_address: "bob@example.com".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
         created_at: 0,
         updated_at: 2000,
     };
@@ -2766,7 +2766,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     let missing = Contact {
         id: "missing".to_string(),
         name: "X".to_string(),
-        lightning_address: "x@example.com".to_string(),
+        payment_identifier: "x@example.com".to_string(),
         created_at: 0,
         updated_at: 1000,
     };
@@ -2782,7 +2782,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         let c = Contact {
             id: format!("p{i}"),
             name: format!("User{i}"),
-            lightning_address: format!("u{i}@example.com"),
+            payment_identifier: format!("u{i}@example.com"),
             created_at: 1000,
             updated_at: 1000,
         };

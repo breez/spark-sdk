@@ -338,10 +338,10 @@ class MigrationManager {
         sql: `CREATE TABLE contacts (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
-          lightning_address TEXT NOT NULL,
+          payment_identifier TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
-          UNIQUE(name, lightning_address)
+          UNIQUE(name, payment_identifier)
         )`
       },
     ];

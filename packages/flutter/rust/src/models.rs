@@ -1119,7 +1119,7 @@ pub struct _FetchConversionLimitsResponse {
 pub struct _Contact {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -1127,14 +1127,14 @@ pub struct _Contact {
 #[frb(mirror(AddContactRequest))]
 pub struct _AddContactRequest {
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
 }
 
 #[frb(mirror(UpdateContactRequest))]
 pub struct _UpdateContactRequest {
     pub id: String,
     pub name: String,
-    pub lightning_address: String,
+    pub payment_identifier: String,
 }
 
 #[frb(mirror(ListContactsRequest))]

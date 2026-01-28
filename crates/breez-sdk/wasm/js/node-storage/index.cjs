@@ -1250,7 +1250,7 @@ class SqliteStorage {
       const limit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
 
       const stmt = this.db.prepare(`
-        SELECT id, name, lightning_address AS lightningAddress, created_at AS createdAt, updated_at AS updatedAt
+        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
         FROM contacts
         ORDER BY name ASC
         LIMIT ? OFFSET ?
@@ -1268,14 +1268,14 @@ class SqliteStorage {
   insertContact(contact) {
     try {
       const stmt = this.db.prepare(`
-        INSERT INTO contacts (id, name, lightning_address, created_at, updated_at)
+        INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
       `);
 
       stmt.run(
         contact.id,
         contact.name,
-        contact.lightningAddress,
+        contact.paymentIdentifier,
         contact.createdAt,
         contact.updatedAt
       );
@@ -1298,13 +1298,13 @@ class SqliteStorage {
     try {
       const updateStmt = this.db.prepare(`
         UPDATE contacts
-        SET name = ?, lightning_address = ?, updated_at = ?
+        SET name = ?, payment_identifier = ?, updated_at = ?
         WHERE id = ?
       `);
 
       const result = updateStmt.run(
         contact.name,
-        contact.lightningAddress,
+        contact.paymentIdentifier,
         contact.updatedAt,
         contact.id
       );
@@ -1315,7 +1315,7 @@ class SqliteStorage {
 
       // Fetch and return the updated record
       const selectStmt = this.db.prepare(`
-        SELECT id, name, lightning_address AS lightningAddress, created_at AS createdAt, updated_at AS updatedAt
+        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
         FROM contacts
         WHERE id = ?
       `);

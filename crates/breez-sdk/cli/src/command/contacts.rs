@@ -9,8 +9,8 @@ pub enum ContactCommand {
     Add {
         /// Name of the contact
         name: String,
-        /// Lightning address of the contact
-        lightning_address: String,
+        /// Payment identifier (Lightning address, BOLT12 offer, BIP353 address, etc.)
+        payment_identifier: String,
     },
     /// Update an existing contact
     Update {
@@ -18,8 +18,8 @@ pub enum ContactCommand {
         id: String,
         /// New name for the contact
         name: String,
-        /// New lightning address for the contact
-        lightning_address: String,
+        /// New payment identifier (Lightning address, BOLT12 offer, BIP353 address, etc.)
+        payment_identifier: String,
     },
     /// Delete a contact
     Delete {
@@ -42,12 +42,12 @@ pub async fn handle_command(
     match command {
         ContactCommand::Add {
             name,
-            lightning_address,
+            payment_identifier,
         } => {
             let contact = sdk
                 .add_contact(AddContactRequest {
                     name,
-                    lightning_address,
+                    payment_identifier,
                 })
                 .await?;
             print_value(&contact)?;
@@ -56,13 +56,13 @@ pub async fn handle_command(
         ContactCommand::Update {
             id,
             name,
-            lightning_address,
+            payment_identifier,
         } => {
             let contact = sdk
                 .update_contact(UpdateContactRequest {
                     id,
                     name,
-                    lightning_address,
+                    payment_identifier,
                 })
                 .await?;
             print_value(&contact)?;

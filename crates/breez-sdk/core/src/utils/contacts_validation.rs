@@ -1,7 +1,7 @@
 use crate::SdkError;
 
 /// Validates contact input, returns trimmed name on success
-pub fn validate_contact_input(name: &str, address: &str) -> Result<String, SdkError> {
+pub fn validate_contact_input(name: &str, payment_identifier: &str) -> Result<String, SdkError> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(SdkError::InvalidInput(
@@ -13,14 +13,15 @@ pub fn validate_contact_input(name: &str, address: &str) -> Result<String, SdkEr
             "Contact name cannot exceed 100 characters".to_string(),
         ));
     }
-    if address.len() > 320 {
+    let payment_identifier = payment_identifier.trim();
+    if payment_identifier.is_empty() {
         return Err(SdkError::InvalidInput(
-            "Lightning address cannot exceed 320 characters".to_string(),
+            "Payment identifier cannot be empty".to_string(),
         ));
     }
-    if !breez_sdk_common::input::validate_lightning_address_format(address) {
+    if payment_identifier.len() > 1000 {
         return Err(SdkError::InvalidInput(
-            "Invalid lightning address format".to_string(),
+            "Payment identifier cannot exceed 1000 characters".to_string(),
         ));
     }
     Ok(name)

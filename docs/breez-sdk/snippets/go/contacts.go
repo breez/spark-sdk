@@ -10,8 +10,8 @@ import (
 func AddContact(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Contact, error) {
 	// ANCHOR: add-contact
 	contact, err := sdk.AddContact(breez_sdk_spark.AddContactRequest{
-		Name:             "Alice",
-		LightningAddress: "alice@example.com",
+		Name:              "Alice",
+		PaymentIdentifier: "alice@example.com",
 	})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -31,9 +31,9 @@ func UpdateContact(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Contact, err
 	// ANCHOR: update-contact
 	contactId := "contact-id"
 	contact, err := sdk.UpdateContact(breez_sdk_spark.UpdateContactRequest{
-		Id:               contactId,
-		Name:             "Alice Smith",
-		LightningAddress: "alice.smith@example.com",
+		Id:                contactId,
+		Name:              "Alice Smith",
+		PaymentIdentifier: "alice.smith@example.com",
 	})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -86,7 +86,7 @@ func ListContacts(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Contact, err
 	}
 
 	for _, contact := range contacts {
-		log.Printf("Contact: id=%v, name=%v, address=%v", contact.Id, contact.Name, contact.LightningAddress)
+		log.Printf("Contact: id=%v, name=%v, identifier=%v", contact.Id, contact.Name, contact.PaymentIdentifier)
 	}
 	// ANCHOR_END: list-contacts
 	return contacts, nil

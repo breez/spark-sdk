@@ -13,7 +13,7 @@ async def add_contact(sdk: BreezSdk):
         contact = await sdk.add_contact(
             request=AddContactRequest(
                 name="Alice",
-                lightning_address="alice@example.com",
+                payment_identifier="alice@example.com",
             )
         )
         logging.debug(f"Contact added: {contact}")
@@ -31,7 +31,7 @@ async def update_contact(sdk: BreezSdk):
             request=UpdateContactRequest(
                 id=contact_id,
                 name="Alice Smith",
-                lightning_address="alice.smith@example.com",
+                payment_identifier="alice.smith@example.com",
             )
         )
         logging.debug(f"Contact updated: {contact}")
@@ -66,7 +66,7 @@ async def list_contacts(sdk: BreezSdk):
         for contact in contacts:
             logging.debug(
                 f"Contact: id={contact.id}, name={contact.name}, "
-                f"address={contact.lightning_address}"
+                f"identifier={contact.payment_identifier}"
             )
     except Exception as error:
         logging.error(error)

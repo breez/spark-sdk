@@ -5,7 +5,7 @@ func addContact(sdk: BreezSdk) async throws {
     let contact = try await sdk.addContact(
         request: AddContactRequest(
             name: "Alice",
-            lightningAddress: "alice@example.com"
+            paymentIdentifier: "alice@example.com"
         ))
     print("Contact added: \(contact)")
     // ANCHOR_END: add-contact
@@ -18,7 +18,7 @@ func updateContact(sdk: BreezSdk) async throws {
         request: UpdateContactRequest(
             id: contactId,
             name: "Alice Smith",
-            lightningAddress: "alice.smith@example.com"
+            paymentIdentifier: "alice.smith@example.com"
         ))
     print("Contact updated: \(contact)")
     // ANCHOR_END: update-contact
@@ -41,7 +41,7 @@ func listContacts(sdk: BreezSdk) async throws {
             limit: 10
         ))
     for contact in contacts {
-        print("Contact: id=\(contact.id), name=\(contact.name), address=\(contact.lightningAddress)")
+        print("Contact: id=\(contact.id), name=\(contact.name), identifier=\(contact.paymentIdentifier)")
     }
     // ANCHOR_END: list-contacts
 }

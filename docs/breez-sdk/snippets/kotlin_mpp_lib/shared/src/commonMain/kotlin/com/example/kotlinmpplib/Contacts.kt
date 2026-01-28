@@ -8,7 +8,7 @@ class Contacts {
         try {
             val contact = sdk.addContact(AddContactRequest(
                 name = "Alice",
-                lightningAddress = "alice@example.com"
+                paymentIdentifier = "alice@example.com"
             ))
             // Log.v("Breez", "Contact added: $contact")
         } catch (e: Exception) {
@@ -24,7 +24,7 @@ class Contacts {
             val contact = sdk.updateContact(UpdateContactRequest(
                 id = contactId,
                 name = "Alice Smith",
-                lightningAddress = "alice.smith@example.com"
+                paymentIdentifier = "alice.smith@example.com"
             ))
             // Log.v("Breez", "Contact updated: $contact")
         } catch (e: Exception) {
@@ -54,7 +54,7 @@ class Contacts {
                 limit = 10u
             ))
             for (contact in contacts) {
-                // Log.v("Breez", "Contact: id=${contact.id}, name=${contact.name}, address=${contact.lightningAddress}")
+                // Log.v("Breez", "Contact: id=${contact.id}, name=${contact.name}, identifier=${contact.paymentIdentifier}")
             }
         } catch (e: Exception) {
             // handle error
