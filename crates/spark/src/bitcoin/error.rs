@@ -7,4 +7,6 @@ pub enum BitcoinError {
     KeyCombinationError(String),
     #[error("taproot error: {0}")]
     Taproot(#[from] TaprootError),
+    #[error("invalid transaction: {0}")]
+    InvalidTransaction(String),
 }

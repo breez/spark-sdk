@@ -271,6 +271,7 @@ impl TimelockManager {
             .get_signing_commitments(GetSigningCommitmentsRequest {
                 node_ids: vec![node.id.to_string()],
                 count: signing_jobs.len() as u32,
+                node_id_count: 0,
             })
             .await?
             .signing_commitments
@@ -439,6 +440,7 @@ impl TimelockManager {
             .get_signing_commitments(GetSigningCommitmentsRequest {
                 node_ids: vec![node.id.to_string()],
                 count: signing_jobs.len() as u32,
+                node_id_count: 0,
             })
             .await?
             .signing_commitments
@@ -581,6 +583,7 @@ impl TimelockManager {
             .get_signing_commitments(GetSigningCommitmentsRequest {
                 node_ids: vec![node.id.to_string()],
                 count: signing_jobs.len() as u32,
+                node_id_count: 0,
             })
             .await?
             .signing_commitments

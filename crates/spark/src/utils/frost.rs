@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use bitcoin::TapSighash;
 use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Transaction, TxOut};
 
-use crate::bitcoin::sighash_from_tx;
 use crate::services::SigningResult;
 use crate::signer::{
     AggregateFrostRequest, FrostSigningCommitmentsWithNonces, SecretSource, SignerError,
@@ -13,8 +12,7 @@ use crate::signer::{SignFrostRequest, Signer};
 
 pub struct SignAggregateFrostParams<'a> {
     pub signer: &'a Arc<dyn Signer>,
-    pub tx: &'a Transaction,
-    pub prev_out: &'a TxOut,
+    pub sighash: &'a TapSighash,
     pub signing_public_key: &'a PublicKey,
     pub aggregating_public_key: &'a PublicKey,
     pub signing_private_key: &'a SecretSource,
@@ -27,9 +25,8 @@ pub struct SignAggregateFrostParams<'a> {
 /// Performs a complete FROST signing and aggregation flow for a Bitcoin transaction.
 ///
 /// This function handles the full FROST (Flexible Round-Optimized Schnorr Threshold) signature process:
-/// 1. Creates a sighash for the transaction
-/// 2. Signs the sighash using FROST with the user's key
-/// 3. Aggregates the user's signature with signatures from statechain participants
+/// 1. Signs the sighash using FROST with the user's key
+/// 2. Aggregates the user's signature with signatures from statechain participants
 ///
 /// The function supports optional adaptor signatures when an adaptor public key is provided.
 /// Adaptor signatures allow the signature to be "encrypted" under an adaptor key,
@@ -39,8 +36,7 @@ pub struct SignAggregateFrostParams<'a> {
 ///
 /// * `params` - A `SignAggregateFrostParams` struct containing:
 ///   - `signer`: Reference to the signer implementation
-///   - `tx`: The Bitcoin transaction to sign
-///   - `prev_out`: The previous transaction output being spent
+///   - `sighash`: Pre-computed taproot sighash for the transaction
 ///   - `signing_public_key`: The public key to use for signing (user's key)
 ///   - `aggregating_public_key`: The public key to use for aggregation
 ///   - `signing_private_key`: The private key source for signing
@@ -57,15 +53,11 @@ pub struct SignAggregateFrostParams<'a> {
 pub async fn sign_aggregate_frost(
     params: SignAggregateFrostParams<'_>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-    // Create the sighash for the transaction
-    let sighash = sighash_from_tx(params.tx, 0, params.prev_out)
-        .map_err(|e| SignerError::Generic(e.to_string()))?;
-
     // Sign with FROST
     let user_signature = params
         .signer
         .sign_frost(SignFrostRequest {
-            message: sighash.as_byte_array(),
+            message: params.sighash.as_byte_array(),
             public_key: params.signing_public_key,
             private_key: params.signing_private_key,
             verifying_key: params.verifying_key,
@@ -79,7 +71,7 @@ pub async fn sign_aggregate_frost(
     let aggregate_signature = params
         .signer
         .aggregate_frost(AggregateFrostRequest {
-            message: sighash.as_byte_array(),
+            message: params.sighash.as_byte_array(),
             statechain_signatures: params.signing_result.signature_shares,
             statechain_public_keys: params.signing_result.public_keys,
             verifying_key: params.verifying_key,

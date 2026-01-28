@@ -381,6 +381,7 @@ impl DepositService {
                             spend_nonce_commitment.commitments.try_into()?,
                         ),
                     }),
+                    hash_variant: 0,
                 },
             )
             .await?;
@@ -405,8 +406,7 @@ impl DepositService {
 
         let spend_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
-            tx: &refund_tx,
-            prev_out: tx_out,
+            sighash: &spend_tx_sighash,
             signing_public_key: &verifying_public_key,
             aggregating_public_key: &static_deposit_public_key,
             signing_private_key: &static_deposit_private_key_source,
@@ -573,7 +573,9 @@ impl DepositService {
                         cpfp_refund_nonce_commitment.commitments.try_into()?,
                     ),
                 }),
+                #[allow(deprecated)]
                 direct_root_tx_signing_job: None,
+                #[allow(deprecated)]
                 direct_refund_tx_signing_job: None,
                 direct_from_cpfp_refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
                     signing_public_key: signing_public_key.serialize().to_vec(),
@@ -618,10 +620,15 @@ impl DepositService {
             return Err(ServiceError::InvalidVerifyingKey);
         }
 
+        // Compute sighashes for all transactions
+        let cpfp_root_sighash = sighash_from_tx(&cpfp_root_tx, 0, deposit_tx_out)?;
+        let cpfp_refund_sighash = sighash_from_tx(&cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
+        let direct_from_cpfp_refund_sighash =
+            sighash_from_tx(&direct_from_cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
+
         let cpfp_root_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
-            tx: &cpfp_root_tx,
-            prev_out: deposit_tx_out,
+            sighash: &cpfp_root_sighash,
             signing_public_key: &signing_public_key,
             aggregating_public_key: &signing_public_key,
             signing_private_key: &signing_private_key,
@@ -634,8 +641,7 @@ impl DepositService {
 
         let cpfp_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
-            tx: &cpfp_refund_tx,
-            prev_out: &cpfp_root_tx.output[0],
+            sighash: &cpfp_refund_sighash,
             signing_public_key: &signing_public_key,
             aggregating_public_key: &signing_public_key,
             signing_private_key: &signing_private_key,
@@ -648,8 +654,7 @@ impl DepositService {
 
         let direct_from_cpfp_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer: &self.signer,
-            tx: &direct_from_cpfp_refund_tx,
-            prev_out: &cpfp_root_tx.output[0],
+            sighash: &direct_from_cpfp_refund_sighash,
             signing_public_key: &signing_public_key,
             aggregating_public_key: &signing_public_key,
             signing_private_key: &signing_private_key,
