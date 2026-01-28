@@ -37,7 +37,9 @@ Future<void> deleteContact(BreezSdk sdk) async {
 Future<List<Contact>> listContacts(BreezSdk sdk) async {
   // ANCHOR: list-contacts
   // List contacts with pagination (e.g., 10 contacts starting from offset 0)
+  // Optionally filter by exact name match
   ListContactsRequest request = ListContactsRequest(
+    name: null, // Set to "Alice" to filter by name
     offset: 0,
     limit: 10,
   );

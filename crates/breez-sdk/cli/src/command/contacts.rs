@@ -28,6 +28,9 @@ pub enum ContactCommand {
     },
     /// List contacts
     List {
+        /// Filter by exact name match
+        #[clap(long)]
+        name: Option<String>,
         /// Number of contacts to skip
         offset: Option<u32>,
         /// Maximum number of contacts to return
@@ -73,9 +76,17 @@ pub async fn handle_command(
             println!("Contact deleted successfully");
             Ok(true)
         }
-        ContactCommand::List { offset, limit } => {
+        ContactCommand::List {
+            name,
+            offset,
+            limit,
+        } => {
             let contacts = sdk
-                .list_contacts(ListContactsRequest { offset, limit })
+                .list_contacts(ListContactsRequest {
+                    name,
+                    offset,
+                    limit,
+                })
                 .await?;
             print_value(&contacts)?;
             Ok(true)

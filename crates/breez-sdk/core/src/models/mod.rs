@@ -1436,6 +1436,11 @@ pub struct UpdateContactRequest {
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListContactsRequest {
+    /// Filter by exact name match
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub name: Option<String>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub offset: Option<u32>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub limit: Option<u32>,
 }
