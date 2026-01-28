@@ -298,7 +298,7 @@ impl BreezSdk {
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
 
         let contact = Contact {
             id: uuid::Uuid::now_v7().to_string(),
@@ -327,7 +327,7 @@ impl BreezSdk {
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
 
         let contact = Contact {
             id: request.id,
