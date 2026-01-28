@@ -5,7 +5,6 @@ use tokio::sync::Mutex;
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
     RestClient, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
-    sync_storage::SyncStorage,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -45,14 +44,6 @@ impl SdkBuilder {
     pub async fn with_storage(&self, storage: Arc<dyn Storage>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_storage(storage);
-    }
-
-    /// Sets the real-time sync storage implementation to be used by the SDK.
-    /// Arguments:
-    /// - `storage`: The sync storage implementation to be used.
-    pub async fn with_real_time_sync_storage(&self, storage: Arc<dyn SyncStorage>) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_real_time_sync_storage(storage);
     }
 
     /// Sets the key set type to be used by the SDK.

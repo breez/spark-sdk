@@ -18,7 +18,6 @@ class SdkBuilding {
             builder.withDefaultStorage("./.data")
             // You can also pass your custom implementations:
             // builder.withStorage(<your storage implementation>)
-            // builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)
@@ -90,17 +89,16 @@ class SdkBuilding {
         // Configure PostgreSQL storage
         // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
         // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-        val postgresConfig = createPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+        val postgresConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
         // Optionally pool settings can be adjusted. Some examples:
         postgresConfig.maxPoolSize = 8u // Max connections in pool
         postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
 
         try {
             // Create the storage and build the SDK
-            val storages = createPostgresStorage(postgresConfig)
+            val storage = createPostgresStorage(postgresConfig)
             val builder = SdkBuilder(config, seed)
-            builder.withStorage(storages.storage)
-            builder.withRealTimeSyncStorage(storages.syncStorage)
+            builder.withStorage(storage)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

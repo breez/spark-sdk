@@ -20,7 +20,6 @@ namespace BreezSdkSnippets
             await builder.WithDefaultStorage(storageDir: "./.data");
             // You can also pass your custom implementations:
             // await builder.WithStorage(<your storage implementation>)
-            // await builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
             // await builder.WithChainService(<your chain service implementation>)
             // await builder.WithRestClient(<your rest client implementation>)
             // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
@@ -98,7 +97,7 @@ namespace BreezSdkSnippets
             // Configure PostgreSQL storage
             // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
             // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-            var postgresConfig = BreezSdkSparkMethods.CreatePostgresStorageConfig(
+            var postgresConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
                 connectionString: "host=localhost user=postgres dbname=spark"
             );
             // Optionally pool settings can be adjusted. Some examples:
@@ -109,10 +108,9 @@ namespace BreezSdkSnippets
             };
 
             // Create the storage and build the SDK
-            var storages = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
+            var storage = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
             var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithStorage(storages.storage);
-            await builder.WithRealTimeSyncStorage(storages.syncStorage);
+            await builder.WithStorage(storage);
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }

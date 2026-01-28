@@ -2,8 +2,8 @@ import logging
 import typing
 from breez_sdk_spark import (
     create_postgres_storage,
-    create_postgres_storage_config,
     default_config,
+    default_postgres_storage_config,
     Network,
     ProvisionalPayment,
     SdkBuilder,
@@ -30,7 +30,6 @@ async def init_sdk_advanced():
         await builder.with_default_storage(storage_dir="./.data")
         # You can also pass your custom implementations:
         # await builder.with_storage(<your storage implementation>)
-        # await builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
         # await builder.with_chain_service(<your chain service implementation>)
         # await builder.with_rest_client(<your rest client implementation>)
         # await builder.with_key_set(<your key set type>, <use address index>, <account number>)
@@ -101,7 +100,7 @@ async def init_sdk_postgres():
     # Configure PostgreSQL storage
     # Connection string format: "host=localhost user=postgres password=secret dbname=spark"
     # Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-    postgres_config = create_postgres_storage_config(
+    postgres_config = default_postgres_storage_config(
         connection_string="host=localhost user=postgres dbname=spark"
     )
     # Optionally pool settings can be adjusted. Some examples:
@@ -110,10 +109,9 @@ async def init_sdk_postgres():
 
     try:
         # Create the storage and build the SDK
-        storages = await create_postgres_storage(config=postgres_config)
+        storage = await create_postgres_storage(config=postgres_config)
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_storage(storage=storages.storage)
-        await builder.with_real_time_sync_storage(storage=storages.sync_storage)
+        await builder.with_storage(storage=storage)
         sdk = await builder.build()
         return sdk
     except Exception as error:

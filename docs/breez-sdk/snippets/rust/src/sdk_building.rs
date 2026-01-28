@@ -22,7 +22,6 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
     // let builder = builder.with_storage(<your storage implementation>)
-    // let builder = builder.with_real_time_sync_storage(<your real-time sync storage implementation>)
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
     // let builder = builder.with_key_set(KeySetConfig { key_set_type: <your key set type>, use_address_index: <use address index>, account_number: <account number> })
@@ -104,16 +103,15 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
     // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
     let mut postgres_config =
-        create_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
+        default_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
     // Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
 
     // Create the storage and build the SDK
-    let storages = create_postgres_storage(postgres_config).await?;
+    let storage = create_postgres_storage(postgres_config).await?;
     let sdk = SdkBuilder::new(config, seed)
-        .with_storage(storages.storage)
-        .with_real_time_sync_storage(storages.sync_storage)
+        .with_storage(storage)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres

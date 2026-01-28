@@ -21,30 +21,15 @@ use crate::{
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
-        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, SyncStorage,
-        SyncStorageError, UnversionedRecordChange,
+        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
     },
 };
 
 use super::{Payment, Storage, StorageError};
 
-/// Container for `PostgreSQL` storage instances.
+/// Creates a `PostgreSQL` storage instance for use with the SDK builder.
 ///
-/// Contains both `Storage` and `SyncStorage` trait objects backed by the same
-/// `PostgreSQL` connection pool.
-#[derive(Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PostgresStorages {
-    /// Storage instance for use with `SdkBuilder::with_storage()`
-    pub storage: Arc<dyn Storage>,
-    /// Sync storage instance for use with `SdkBuilder::with_real_time_sync_storage()`
-    pub sync_storage: Arc<dyn SyncStorage>,
-}
-
-/// Creates `PostgreSQL` storage instances for use with the SDK builder.
-///
-/// Returns a `PostgresStorages` struct containing both `Storage` and `SyncStorage`
-/// trait objects backed by the same connection pool.
+/// Returns a `Storage` trait object backed by the `PostgreSQL` connection pool.
 ///
 /// # Arguments
 ///
@@ -53,27 +38,22 @@ pub struct PostgresStorages {
 /// # Example
 ///
 /// ```ignore
-/// use breez_sdk_core::{create_postgres_storage, create_postgres_storage_config};
+/// use breez_sdk_core::{create_postgres_storage, default_postgres_storage_config};
 ///
-/// let storages = create_postgres_storage(create_postgres_storage_config(
+/// let storage = create_postgres_storage(default_postgres_storage_config(
 ///     "host=localhost user=postgres dbname=spark".to_string()
 /// )).await?;
 ///
 /// let sdk = SdkBuilder::new(config, seed)
-///     .with_storage(storages.storage)
-///     .with_real_time_sync_storage(storages.sync_storage)
+///     .with_storage(storage)
 ///     .build()
 ///     .await?;
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn create_postgres_storage(
     config: PostgresStorageConfig,
-) -> Result<PostgresStorages, StorageError> {
-    let storage = Arc::new(PostgresStorage::new(config).await?);
-    Ok(PostgresStorages {
-        storage: storage.clone(),
-        sync_storage: storage,
-    })
+) -> Result<Arc<dyn Storage>, StorageError> {
+    Ok(Arc::new(PostgresStorage::new(config).await?))
 }
 
 /// Creates a `PostgresStorageConfig` with the given connection string and default pool settings.
@@ -90,7 +70,7 @@ pub async fn create_postgres_storage(
 /// - `root_ca_pem`: `None` (uses Mozilla's root certificate store)
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[must_use]
-pub fn create_postgres_storage_config(connection_string: String) -> PostgresStorageConfig {
+pub fn default_postgres_storage_config(connection_string: String) -> PostgresStorageConfig {
     PostgresStorageConfig::with_defaults(connection_string)
 }
 
@@ -1326,24 +1306,17 @@ impl Storage for PostgresStorage {
         }
         Ok(())
     }
-}
 
-#[macros::async_trait]
-impl SyncStorage for PostgresStorage {
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
-    ) -> Result<u64, SyncStorageError> {
-        let mut client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    ) -> Result<u64, StorageError> {
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
         let tx = client
             .transaction()
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         // Bump the revision atomically
         let revision: i64 = tx
@@ -1352,10 +1325,11 @@ impl SyncStorage for PostgresStorage {
                 &[],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
-        let updated_fields_json = serde_json::to_value(&record.updated_fields)?;
+        let updated_fields_json = serde_json::to_value(&record.updated_fields)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.execute(
@@ -1371,21 +1345,17 @@ impl SyncStorage for PostgresStorage {
             ],
         )
         .await
-        .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         tx.commit()
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         Ok(u64::try_from(revision).unwrap_or(u64::MAX))
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         client
             .execute(
@@ -1397,9 +1367,10 @@ impl SyncStorage for PostgresStorage {
                 ],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        let data_json = serde_json::to_value(&record.data)?;
+        let data_json = serde_json::to_value(&record.data)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let commit_time = chrono::Utc::now().timestamp();
 
         client
@@ -1421,7 +1392,7 @@ impl SyncStorage for PostgresStorage {
                 ],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         Ok(())
     }
@@ -1429,12 +1400,8 @@ impl SyncStorage for PostgresStorage {
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<OutgoingChange>, SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    ) -> Result<Vec<OutgoingChange>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let rows = client
             .query(
@@ -1447,7 +1414,7 @@ impl SyncStorage for PostgresStorage {
                 &[&i64::from(limit)],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -1456,7 +1423,8 @@ impl SyncStorage for PostgresStorage {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(6),
                     revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
-                    data: serde_json::from_value(existing_data)?,
+                    data: serde_json::from_value(existing_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
             } else {
                 None
@@ -1464,7 +1432,8 @@ impl SyncStorage for PostgresStorage {
             let change = RecordChange {
                 id: RecordId::new(row.get(0), row.get(1)),
                 schema_version: row.get(2),
-                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))?,
+                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
             };
             results.push(OutgoingChange { change, parent });
@@ -1473,36 +1442,29 @@ impl SyncStorage for PostgresStorage {
         Ok(results)
     }
 
-    async fn get_last_revision(&self) -> Result<u64, SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn get_last_revision(&self) -> Result<u64, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let revision: i64 = client
             .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
         Ok(u64::try_from(revision).unwrap_or(u64::MAX))
     }
 
-    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError> {
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
         if records.is_empty() {
             return Ok(());
         }
 
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+        let client = self.pool.get().await.map_err(map_pool_error)?;
         let commit_time = chrono::Utc::now().timestamp();
 
         for record in records {
-            let data_json = serde_json::to_value(&record.data)?;
+            let data_json = serde_json::to_value(&record.data)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?;
             client
                 .execute(
                     "INSERT INTO sync_incoming (record_type, data_id, schema_version, commit_time, data, revision)
@@ -1521,18 +1483,14 @@ impl SyncStorage for PostgresStorage {
                     ],
                 )
                 .await
-                .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+                .map_err(|e| StorageError::Connection(e.to_string()))?;
         }
 
         Ok(())
     }
 
-    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         client
             .execute(
@@ -1544,22 +1502,18 @@ impl SyncStorage for PostgresStorage {
                 ],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let last_revision: i64 = client
             .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?
+            .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
         let diff = i64::try_from(revision)
@@ -1572,20 +1526,13 @@ impl SyncStorage for PostgresStorage {
                 &[&diff],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         Ok(())
     }
 
-    async fn get_incoming_records(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<IncomingChange>, SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let rows = client
             .query(
@@ -1598,7 +1545,7 @@ impl SyncStorage for PostgresStorage {
                 &[&i64::from(limit)],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         let mut results = Vec::new();
         for row in rows {
@@ -1608,7 +1555,8 @@ impl SyncStorage for PostgresStorage {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(5),
                     revision: u64::try_from(row.get::<_, i64>(8)).unwrap_or(u64::MAX),
-                    data: serde_json::from_value(existing_data)?,
+                    data: serde_json::from_value(existing_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
             } else {
                 None
@@ -1616,7 +1564,8 @@ impl SyncStorage for PostgresStorage {
             let new_state = Record {
                 id: RecordId::new(row.get(0), row.get(1)),
                 schema_version: row.get(2),
-                data: serde_json::from_value(row.get::<_, serde_json::Value>(3))?,
+                data: serde_json::from_value(row.get::<_, serde_json::Value>(3))
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 revision: u64::try_from(row.get::<_, i64>(4)).unwrap_or(u64::MAX),
             };
             results.push(IncomingChange {
@@ -1628,12 +1577,8 @@ impl SyncStorage for PostgresStorage {
         Ok(results)
     }
 
-    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let row = client
             .query_opt(
@@ -1646,7 +1591,7 @@ impl SyncStorage for PostgresStorage {
                 &[],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         if let Some(row) = row {
             let parent = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(8) {
@@ -1654,7 +1599,8 @@ impl SyncStorage for PostgresStorage {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(6),
                     revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
-                    data: serde_json::from_value(existing_data)?,
+                    data: serde_json::from_value(existing_data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
             } else {
                 None
@@ -1662,7 +1608,8 @@ impl SyncStorage for PostgresStorage {
             let change = RecordChange {
                 id: RecordId::new(row.get(0), row.get(1)),
                 schema_version: row.get(2),
-                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))?,
+                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
             };
             return Ok(Some(OutgoingChange { change, parent }));
@@ -1671,14 +1618,11 @@ impl SyncStorage for PostgresStorage {
         Ok(None)
     }
 
-    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
 
-        let data_json = serde_json::to_value(&record.data)?;
+        let data_json = serde_json::to_value(&record.data)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let commit_time = chrono::Utc::now().timestamp();
 
         client
@@ -1700,7 +1644,7 @@ impl SyncStorage for PostgresStorage {
                 ],
             )
             .await
-            .map_err(|e| SyncStorageError::Implementation(e.to_string()))?;
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         Ok(())
     }
