@@ -12,6 +12,7 @@ const REGTEST_TOKEN_ID: &str = "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx
 /// - Part B: Token → Bitcoin (Bob pays Alice's Lightning invoice using received tokens)
 #[rstest]
 #[test_log::test(tokio::test)]
+#[ignore = "Skipping due liquidity issues causing test to fail"]
 async fn test_token_conversion_success(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
@@ -376,6 +377,7 @@ async fn test_token_conversion_success(
 /// - Part B: Low slippage failure with refund verification
 #[rstest]
 #[test_log::test(tokio::test)]
+#[ignore = "Skipping due liquidity issues causing test to fail"]
 async fn test_token_conversion_failure(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
