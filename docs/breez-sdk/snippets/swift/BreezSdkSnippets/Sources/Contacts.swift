@@ -35,8 +35,10 @@ func deleteContact(sdk: BreezSdk) async throws {
 func listContacts(sdk: BreezSdk) async throws {
     // ANCHOR: list-contacts
     // List contacts with pagination (e.g., 10 contacts starting from offset 0)
+    // Optionally filter by exact name match
     let contacts = try await sdk.listContacts(
         request: ListContactsRequest(
+            name: nil, // Set to some("Alice") to filter by name
             offset: 0,
             limit: 10
         ))

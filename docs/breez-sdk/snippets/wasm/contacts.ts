@@ -33,7 +33,9 @@ const exampleDeleteContact = async (sdk: BreezSdk) => {
 const exampleListContacts = async (sdk: BreezSdk) => {
   // ANCHOR: list-contacts
   // List contacts with pagination (e.g., 10 contacts starting from offset 0)
+  // Optionally filter by exact name match
   const contacts = await sdk.listContacts({
+    name: undefined, // Set to "Alice" to filter by name
     offset: 0,
     limit: 10
   })

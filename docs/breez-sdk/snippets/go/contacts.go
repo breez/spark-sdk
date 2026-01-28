@@ -1,7 +1,6 @@
 package example
 
 import (
-	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -14,11 +13,6 @@ func AddContact(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Contact, error)
 		PaymentIdentifier: "alice@example.com",
 	})
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			// Handle SdkError - can inspect specific variants if needed
-			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
-		}
 		return nil, err
 	}
 
@@ -36,11 +30,6 @@ func UpdateContact(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Contact, err
 		PaymentIdentifier: "alice.smith@example.com",
 	})
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			// Handle SdkError - can inspect specific variants if needed
-			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
-		}
 		return nil, err
 	}
 
@@ -54,11 +43,6 @@ func DeleteContact(sdk *breez_sdk_spark.BreezSdk) error {
 	contactId := "contact-id"
 	err := sdk.DeleteContact(contactId)
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			// Handle SdkError - can inspect specific variants if needed
-			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
-		}
 		return err
 	}
 
@@ -70,18 +54,15 @@ func DeleteContact(sdk *breez_sdk_spark.BreezSdk) error {
 func ListContacts(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Contact, error) {
 	// ANCHOR: list-contacts
 	// List contacts with pagination (e.g., 10 contacts starting from offset 0)
+	// Optionally filter by exact name match
 	offset := uint32(0)
 	limit := uint32(10)
 	contacts, err := sdk.ListContacts(breez_sdk_spark.ListContactsRequest{
+		Name:   nil, // Set to &"Alice" to filter by name
 		Offset: &offset,
 		Limit:  &limit,
 	})
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			// Handle SdkError - can inspect specific variants if needed
-			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
-		}
 		return nil, err
 	}
 
