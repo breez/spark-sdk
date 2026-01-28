@@ -74,7 +74,11 @@ pub(crate) async fn swap_nodes_for_preimage(
     let signing_commitments = operator_pool
         .get_coordinator()
         .client
-        .get_signing_commitments(GetSigningCommitmentsRequest { node_ids, count: 3 })
+        .get_signing_commitments(GetSigningCommitmentsRequest {
+            node_ids,
+            count: 3,
+            node_id_count: 0,
+        })
         .await?
         .signing_commitments
         .iter()

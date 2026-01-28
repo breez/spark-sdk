@@ -223,6 +223,7 @@ impl CoopExitService {
                 connector_txid,
                 coop_exit_input,
                 unwrapped_transfer_id,
+                raw_connector_transaction_bytes.clone(),
             )
             .await;
         let coop_exit_refund_signatures = match (&transfer_id, res) {
@@ -260,12 +261,19 @@ impl CoopExitService {
         connector_txid: Txid,
         exit_txid: Txid,
         transfer_id: TransferId,
+        connector_tx: Vec<u8>,
     ) -> Result<CoopExitRefundSignatures, ServiceError> {
         debug!(
             "Getting connector refund signatures for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
         );
         let coop_exit_refund_signatures = self
-            .sign_coop_exit_refunds(&leaf_key_tweaks, connector_txid, exit_txid, transfer_id)
+            .sign_coop_exit_refunds(
+                &leaf_key_tweaks,
+                connector_txid,
+                exit_txid,
+                transfer_id,
+                connector_tx,
+            )
             .await?;
 
         trace!("Delivering transfer package for cooperative exit refund signatures");
@@ -290,6 +298,7 @@ impl CoopExitService {
         connector_txid: Txid,
         exit_txid: Txid,
         transfer_id: TransferId,
+        connector_tx: Vec<u8>,
     ) -> Result<CoopExitRefundSignatures, ServiceError> {
         debug!(
             "Signing cooperative exit refunds for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
@@ -299,6 +308,21 @@ impl CoopExitService {
         let mut leaf_data_map =
             prepare_leaf_refund_signing_data(&self.signer, leaf_key_tweaks, receiving_public_key)
                 .await?;
+
+        // Parse connector tx to get outputs for signing
+        let connector_tx_parsed: Transaction = bitcoin::consensus::deserialize(&connector_tx)
+            .map_err(|_| {
+                ServiceError::Generic("Failed to deserialize connector transaction".to_string())
+            })?;
+
+        // Update leaf_data_map with connector prev_out for coop exit signing
+        for (i, leaf_key) in leaf_key_tweaks.iter().enumerate() {
+            if let Some(leaf_data) = leaf_data_map.get_mut(&leaf_key.node.id)
+                && i < connector_tx_parsed.output.len()
+            {
+                leaf_data.connector_prev_out = Some(connector_tx_parsed.output[i].clone());
+            }
+        }
 
         // Prepare refund signing jobs for the coordinator
         trace!("Preparing refund signing jobs for cooperative exit");
@@ -346,6 +370,7 @@ impl CoopExitService {
                     }),
                     exit_id: uuid::Uuid::now_v7().to_string(),
                     exit_txid: exit_txid.as_byte_array().to_vec(),
+                    connector_tx,
                 })
                 .await?;
         let transfer = response

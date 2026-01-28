@@ -19,7 +19,12 @@ use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
-use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
+use crate::{
+    Network,
+    bitcoin::{sighash_from_multi_input_tx, sighash_from_tx},
+    core::next_sequence,
+    services::LeafKeyTweak,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct RefundSignatures {
@@ -80,6 +85,7 @@ pub async fn prepare_leaf_refund_signing_data(
                 direct_signing_nonce_commitment,
                 direct_from_cpfp_signing_nonce_commitment,
                 vout: leaf_key.node.vout,
+                connector_prev_out: None,
             },
         );
     }
@@ -332,10 +338,34 @@ pub async fn sign_aggregate_refunds(
                 "Missing refund tx signing result".to_string(),
             ))?;
 
+        // For coop exit (multi-input refunds), build all_prev_outs with both node and connector outputs
+        let all_prev_outs = leaf_data
+            .connector_prev_out
+            .as_ref()
+            .map(|connector_out| vec![tx.output[0].clone(), connector_out.clone()]);
+
+        tracing::debug!(
+            "sign_aggregate_refunds: leaf={}, connector_prev_out={}, refund_tx_inputs={}, node_tx_out0_value={}, connector_out_value={:?}",
+            leaf_id,
+            leaf_data.connector_prev_out.is_some(),
+            refund_tx.input.len(),
+            tx.output[0].value,
+            leaf_data.connector_prev_out.as_ref().map(|c| c.value)
+        );
+
+        // Compute sighash for refund tx
+        // For multi-input transactions (coop exit), use all_prev_outs for BIP 341 sighash
+        let refund_sighash =
+            if let Some(prev_outs) = all_prev_outs.as_ref().filter(|_| refund_tx.input.len() > 1) {
+                sighash_from_multi_input_tx(refund_tx, 0, prev_outs)
+            } else {
+                sighash_from_tx(refund_tx, 0, &tx.output[0])
+            }
+            .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
         let refund_tx_signature = sign_aggregate_frost(SignAggregateFrostParams {
             signer,
-            tx: refund_tx,
-            prev_out: &tx.output[0],
+            sighash: &refund_sighash,
             signing_public_key: &leaf_data.signing_public_key,
             aggregating_public_key: &leaf_data.signing_public_key,
             signing_private_key: &leaf_data.signing_private_key,
@@ -360,10 +390,28 @@ pub async fn sign_aggregate_refunds(
                     .ok_or(ServiceError::ValidationError(
                         "Missing direct refund tx signing result".to_string(),
                     ))?;
+
+                // Build all_prev_outs for direct refund (direct_tx + connector)
+                // BIP 341 Taproot sighash requires ALL inputs' prevouts
+                let direct_all_prev_outs = leaf_data
+                    .connector_prev_out
+                    .as_ref()
+                    .map(|connector_out| vec![direct_tx.output[0].clone(), connector_out.clone()]);
+
+                // Compute sighash for direct refund tx
+                let direct_refund_sighash = if let Some(prev_outs) = direct_all_prev_outs
+                    .as_ref()
+                    .filter(|_| direct_refund_tx.input.len() > 1)
+                {
+                    sighash_from_multi_input_tx(direct_refund_tx, 0, prev_outs)
+                } else {
+                    sighash_from_tx(direct_refund_tx, 0, &direct_tx.output[0])
+                }
+                .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
                 let signature = sign_aggregate_frost(SignAggregateFrostParams {
                     signer,
-                    tx: direct_refund_tx,
-                    prev_out: &direct_tx.output[0],
+                    sighash: &direct_refund_sighash,
                     signing_public_key: &leaf_data.signing_public_key,
                     aggregating_public_key: &leaf_data.signing_public_key,
                     signing_private_key: &leaf_data.signing_private_key,
@@ -386,10 +434,22 @@ pub async fn sign_aggregate_refunds(
                     .ok_or(ServiceError::ValidationError(
                         "Missing direct from CPFP refund tx signing result".to_string(),
                     ))?;
+
+                // Compute sighash for direct from CPFP refund tx
+                // Reuse all_prev_outs from CPFP refund (same inputs: node_tx + connector)
+                let direct_from_cpfp_sighash = if let Some(prev_outs) = all_prev_outs
+                    .as_ref()
+                    .filter(|_| direct_from_cpfp_refund_tx.input.len() > 1)
+                {
+                    sighash_from_multi_input_tx(direct_from_cpfp_refund_tx, 0, prev_outs)
+                } else {
+                    sighash_from_tx(direct_from_cpfp_refund_tx, 0, &tx.output[0])
+                }
+                .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
                 let signature = sign_aggregate_frost(SignAggregateFrostParams {
                     signer,
-                    tx: direct_from_cpfp_refund_tx,
-                    prev_out: &tx.output[0],
+                    sighash: &direct_from_cpfp_sighash,
                     signing_public_key: &leaf_data.signing_public_key,
                     aggregating_public_key: &leaf_data.signing_public_key,
                     signing_private_key: &leaf_data.signing_private_key,
