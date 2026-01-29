@@ -6,6 +6,7 @@ use rand::rngs::OsRng;
 use tracing::debug;
 use web_time::SystemTime;
 
+use crate::bitcoin::sighash_from_tx;
 use crate::{
     Network,
     operator::{
@@ -204,15 +205,19 @@ impl Swap {
                 })?;
             let signing_result_data: SigningResult = refund_signing_result.try_into()?;
 
+            let sighash = sighash_from_tx(
+                &signed_tx.tx,
+                0,
+                &leaf_key_tweak.node.node_tx.output[leaf_key_tweak.node.vout as usize],
+            )?;
+
             // Aggregate the FROST signature with the adaptor public key
             // This combines the user's signature share with the statechain's signature shares
             // to produce the final adaptor signature
             let adaptor_signature =
                 sign_aggregate_frost(crate::utils::frost::SignAggregateFrostParams {
                     signer: &self.signer,
-                    tx: &signed_tx.tx,
-                    prev_out: &leaf_key_tweak.node.node_tx.output
-                        [leaf_key_tweak.node.vout as usize],
+                    sighash: &sighash,
                     signing_public_key: &signed_tx.signing_public_key,
                     aggregating_public_key: &signed_tx.signing_public_key,
                     signing_private_key: &leaf_key_tweak.signing_key,
