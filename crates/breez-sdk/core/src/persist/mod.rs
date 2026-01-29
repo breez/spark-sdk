@@ -86,6 +86,12 @@ impl From<serde_json::Error> for StorageError {
     }
 }
 
+impl From<std::num::TryFromIntError> for StorageError {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        StorageError::Implementation(format!("integer overflow: {e}"))
+    }
+}
+
 /// Metadata associated with a payment that cannot be extracted from the Spark operator.
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

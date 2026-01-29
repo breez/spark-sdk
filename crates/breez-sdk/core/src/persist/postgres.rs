@@ -802,13 +802,13 @@ impl Storage for PostgresStorage {
         if let Some(from_timestamp) = request.from_timestamp {
             where_clauses.push(format!("p.timestamp >= ${param_idx}"));
             param_idx += 1;
-            params.push(Box::new(i64::try_from(from_timestamp).unwrap_or(i64::MAX)));
+            params.push(Box::new(i64::try_from(from_timestamp)?));
         }
 
         if let Some(to_timestamp) = request.to_timestamp {
             where_clauses.push(format!("p.timestamp < ${param_idx}"));
             param_idx += 1;
-            params.push(Box::new(i64::try_from(to_timestamp).unwrap_or(i64::MAX)));
+            params.push(Box::new(i64::try_from(to_timestamp)?));
         }
 
         // Filter by asset
@@ -971,7 +971,7 @@ impl Storage for PostgresStorage {
                 &payment.status.to_string(),
                 &payment.amount.to_string(),
                 &payment.fees.to_string(),
-                &i64::try_from(payment.timestamp).unwrap_or(i64::MAX),
+                &i64::try_from(payment.timestamp)?,
                 &Some(payment.method.to_string()),
             ],
         )
@@ -1224,11 +1224,7 @@ impl Storage for PostgresStorage {
                 "INSERT INTO unclaimed_deposits (txid, vout, amount_sats)
                  VALUES ($1, $2, $3)
                  ON CONFLICT(txid, vout) DO NOTHING",
-                &[
-                    &txid,
-                    &i32::try_from(vout).unwrap_or(i32::MAX),
-                    &i64::try_from(amount_sats).unwrap_or(i64::MAX),
-                ],
+                &[&txid, &i32::try_from(vout)?, &i64::try_from(amount_sats)?],
             )
             .await?;
         Ok(())
@@ -1239,7 +1235,7 @@ impl Storage for PostgresStorage {
         client
             .execute(
                 "DELETE FROM unclaimed_deposits WHERE txid = $1 AND vout = $2",
-                &[&txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+                &[&txid, &i32::try_from(vout)?],
             )
             .await?;
         Ok(())
@@ -1261,10 +1257,12 @@ impl Storage for PostgresStorage {
 
             deposits.push(DepositInfo {
                 txid: row.get(0),
-                vout: u32::try_from(row.get::<_, i32>(1)).unwrap_or(u32::MAX),
+                vout: u32::try_from(row.get::<_, i32>(1))?,
                 amount_sats: row
                     .get::<_, Option<i64>>(2)
-                    .map_or(0, |v| u64::try_from(v).unwrap_or(u64::MAX)),
+                    .map(u64::try_from)
+                    .transpose()?
+                    .unwrap_or(0),
                 claim_error,
                 refund_tx: row.get(4),
                 refund_tx_id: row.get(5),
@@ -1287,7 +1285,7 @@ impl Storage for PostgresStorage {
                 client
                     .execute(
                         "UPDATE unclaimed_deposits SET claim_error = $1 WHERE txid = $2 AND vout = $3",
-                        &[&error_json, &txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+                        &[&error_json, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
             }
@@ -1298,7 +1296,7 @@ impl Storage for PostgresStorage {
                 client
                     .execute(
                         "UPDATE unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2 WHERE txid = $3 AND vout = $4",
-                        &[&refund_tx, &refund_txid, &txid, &i32::try_from(vout).unwrap_or(i32::MAX)],
+                        &[&refund_tx, &refund_txid, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
             }
@@ -1371,7 +1369,7 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        Ok(u64::try_from(revision).unwrap_or(u64::MAX))
+        Ok(u64::try_from(revision)?)
     }
 
     async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
@@ -1383,7 +1381,7 @@ impl Storage for PostgresStorage {
                 &[
                     &record.id.r#type,
                     &record.id.data_id,
-                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                    &i64::try_from(record.revision)?,
                 ],
             )
             .await
@@ -1408,7 +1406,7 @@ impl Storage for PostgresStorage {
                     &record.schema_version,
                     &commit_time,
                     &data_json,
-                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                    &i64::try_from(record.revision)?,
                 ],
             )
             .await
@@ -1442,7 +1440,7 @@ impl Storage for PostgresStorage {
                 Some(Record {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(6),
-                    revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
+                    revision: u64::try_from(row.get::<_, i64>(9))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1454,7 +1452,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+                revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1471,7 +1469,7 @@ impl Storage for PostgresStorage {
             .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
-        Ok(u64::try_from(revision).unwrap_or(u64::MAX))
+        Ok(u64::try_from(revision)?)
     }
 
     async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
@@ -1499,7 +1497,7 @@ impl Storage for PostgresStorage {
                         &record.schema_version,
                         &commit_time,
                         &data_json,
-                        &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                        &i64::try_from(record.revision)?,
                     ],
                 )
                 .await
@@ -1518,7 +1516,7 @@ impl Storage for PostgresStorage {
                 &[
                     &record.id.r#type,
                     &record.id.data_id,
-                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                    &i64::try_from(record.revision)?,
                 ],
             )
             .await
@@ -1536,9 +1534,7 @@ impl Storage for PostgresStorage {
             .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
-        let diff = i64::try_from(revision)
-            .unwrap_or(i64::MAX)
-            .saturating_sub(last_revision);
+        let diff = i64::try_from(revision)?.saturating_sub(last_revision);
 
         client
             .execute(
@@ -1574,7 +1570,7 @@ impl Storage for PostgresStorage {
                 Some(Record {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(5),
-                    revision: u64::try_from(row.get::<_, i64>(8)).unwrap_or(u64::MAX),
+                    revision: u64::try_from(row.get::<_, i64>(8))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1586,7 +1582,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 data: serde_json::from_value(row.get::<_, serde_json::Value>(3))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(4)).unwrap_or(u64::MAX),
+                revision: u64::try_from(row.get::<_, i64>(4))?,
             };
             results.push(IncomingChange {
                 new_state,
@@ -1618,7 +1614,7 @@ impl Storage for PostgresStorage {
                 Some(Record {
                     id: RecordId::new(row.get(0), row.get(1)),
                     schema_version: row.get(6),
-                    revision: u64::try_from(row.get::<_, i64>(9)).unwrap_or(u64::MAX),
+                    revision: u64::try_from(row.get::<_, i64>(9))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1630,7 +1626,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+                revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             return Ok(Some(OutgoingChange { change, parent }));
         }
@@ -1660,7 +1656,7 @@ impl Storage for PostgresStorage {
                     &record.schema_version,
                     &commit_time,
                     &data_json,
-                    &i64::try_from(record.revision).unwrap_or(i64::MAX),
+                    &i64::try_from(record.revision)?,
                 ],
             )
             .await
@@ -1809,7 +1805,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         fees: fees_str
             .parse()
             .map_err(|_| StorageError::Serialization("invalid fees".to_string()))?,
-        timestamp: u64::try_from(row.get::<_, i64>(5)).unwrap_or(u64::MAX),
+        timestamp: u64::try_from(row.get::<_, i64>(5))?,
         details,
         method: method_str.map_or(PaymentMethod::Lightning, |s| {
             s.trim_matches('"')
