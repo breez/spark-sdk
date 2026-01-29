@@ -401,24 +401,47 @@ impl SyncProcessor {
     }
 
     async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
-        // Merges the updated fields with the existing record data in the local sync state to form the new record.
-        let record = change.merge();
+        // Capture local revision before merge() consumes the change.
+        // This is the revision used to delete the change from sync_outgoing after successful push.
+        let local_revision = change.local_revision();
+
+        // Merges updated_fields with parent's data to form the complete record.
+        // The record.revision is set to parent's server revision for optimistic concurrency control.
+        let mut record = change.merge();
 
         debug!(
-            "Pushing outgoing record {:?}, revision {} to remote",
-            record.id, record.revision
+            "Pushing outgoing record {:?}, revision {} (local rev {}) to remote",
+            record.id, record.revision, local_revision
         );
+
         // Pushes the record to the remote server.
-        // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
-        self.client.set_record(&record).await?;
+        let reply = self.client.set_record(&record).await?;
+
+        // Check for CONFLICT status
+        if reply.status == crate::sync::proto::SetRecordStatus::Conflict as i32 {
+            // Server has a newer version. Pull first, then retry.
+            debug!(
+                "CONFLICT detected for record {:?}. Pulling latest changes before retry.",
+                record.id
+            );
+            // Pull sync will rebase pending outgoing records
+            self.pull_sync_once().await?;
+            // Return error to trigger retry with updated revision
+            anyhow::bail!("Conflict detected, pulled latest changes. Retrying push.");
+        }
+
+        // Update record with server's new revision for sync_state storage
+        record.revision = reply.new_revision;
 
         debug!(
-            "Completing outgoing record {:?}, revision {}",
-            record.id, record.revision
+            "Completing outgoing record {:?}, server revision {}, local revision {}",
+            record.id, record.revision, local_revision
         );
-        // Removes the pending outgoing record and updates the existing record with the new one.
+
+        // Removes the pending outgoing record (using local_revision) and
+        // updates sync_state with the server's new revision (record.revision).
         self.storage
-            .complete_outgoing_sync((&record).try_into()?)
+            .complete_outgoing_sync((&record).try_into()?, local_revision)
             .await?;
         Ok(())
     }
@@ -753,7 +776,7 @@ mod tests {
         mock_storage
             .expect_complete_outgoing_sync()
             .times(1)
-            .returning(|_| Ok(()));
+            .returning(|_, _| Ok(()));
 
         let (_tx, rx) = broadcast::channel(10);
         let mock_handler = Arc::new(MockNewRecordHandler::new());

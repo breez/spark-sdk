@@ -1,3 +1,4 @@
+mod contacts;
 mod issuer;
 
 use bitcoin::hashes::{Hash, sha256};
@@ -23,6 +24,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 
 #[derive(Clone, Parser)]
@@ -280,6 +282,10 @@ pub enum Command {
     /// Issuer related commands
     #[command(subcommand)]
     Issuer(IssuerCommand),
+
+    /// Contacts related commands
+    #[command(subcommand)]
+    Contacts(ContactCommand),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -799,6 +805,7 @@ pub(crate) async fn execute_command(
         Command::Issuer(issuer_command) => {
             issuer::handle_command(token_issuer, issuer_command).await
         }
+        Command::Contacts(contact_command) => contacts::handle_command(sdk, contact_command).await,
     }
 }
 

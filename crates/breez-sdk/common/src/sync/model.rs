@@ -59,7 +59,7 @@ impl std::str::FromStr for SchemaVersion {
     }
 }
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,
@@ -109,10 +109,25 @@ pub struct OutgoingChange {
 }
 
 impl OutgoingChange {
+    /// Returns the local revision from the change (for `sync_outgoing` deletion).
+    pub fn local_revision(&self) -> u64 {
+        self.change.revision
+    }
+
+    /// Merges the change with its parent to form the complete record for pushing to the server.
+    ///
+    /// The returned record contains:
+    /// - `revision`: The parent's server revision (or 0 for new records). The server uses this
+    ///   for optimistic concurrency control - if the server's current revision doesn't match,
+    ///   it returns CONFLICT and the client must pull and retry.
+    /// - `data`: Parent's data merged with the change's `updated_fields`.
     pub fn merge(self) -> Record {
         let mut record = Record {
             id: self.change.id.clone(),
-            revision: self.change.revision,
+            // Server revision for conflict detection:
+            // - New records (no parent): revision=0 tells server to create if not exists
+            // - Updates: revision=parent's server revision for optimistic locking
+            revision: self.parent.as_ref().map_or(0, |p| p.revision),
             schema_version: self.change.schema_version.clone(),
             data: HashMap::new(),
         };
@@ -325,7 +340,8 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 2);
+        // merge() uses parent's server revision for conflict detection
+        assert_eq!(merged.revision, 1);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that parent data was preserved
@@ -367,7 +383,8 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 1);
+        // No parent means revision=0, telling server this is a new record
+        assert_eq!(merged.revision, 0);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that fields were applied

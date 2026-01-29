@@ -1,3 +1,4 @@
+pub(crate) mod contacts_validation;
 pub(crate) mod deposit_chain_syncer;
 pub(crate) mod send_payment_validation;
 pub(crate) mod token;
