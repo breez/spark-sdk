@@ -1,0 +1,1199 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Converting tokens - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/token_conversion.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="converting-tokens"><a class="header" href="#converting-tokens">Converting tokens</a></h1>
+<p>Token conversion enables payments to be made without holding the required asset by converting on-the-fly between Bitcoin and tokens using the Flashnet protocol.</p>
+<h2 id="fetching-conversion-limits">
+    <a class="header" href="#fetching-conversion-limits">Fetching conversion limits</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.fetch_conversion_limits">API docs</a>
+</h2>
+<p>Before performing a conversion, you can fetch the minimum amounts required for the conversion. The limits depend on the conversion direction:</p>
+<ul>
+<li><strong>Bitcoin to token</strong>: Minimum Bitcoin amount (in satoshis) and minimum token amount to receive (in token base units)</li>
+<li><strong>Token to Bitcoin</strong>: Minimum token amount (in token base units) and minimum Bitcoin amount to receive (in satoshis)</li>
+</ul>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Fetch limits for converting Bitcoin to a token
+let response = sdk
+    .fetch_conversion_limits(FetchConversionLimitsRequest {
+        conversion_type: ConversionType::FromBitcoin,
+        token_identifier: Some("&lt;token identifier&gt;".to_string()),
+    })
+    .await?;
+
+if let Some(min_from) = response.min_from_amount {
+    info!("Minimum BTC to convert: {} sats", min_from);
+}
+if let Some(min_to) = response.min_to_amount {
+    info!("Minimum tokens to receive: {} base units", min_to);
+}
+
+// Fetch limits for converting a token to Bitcoin
+let response = sdk
+    .fetch_conversion_limits(FetchConversionLimitsRequest {
+        conversion_type: ConversionType::ToBitcoin {
+            from_token_identifier: "&lt;token identifier&gt;".to_string(),
+        },
+        token_identifier: None,
+    })
+    .await?;
+
+if let Some(min_from) = response.min_from_amount {
+    info!("Minimum tokens to convert: {} base units", min_from);
+}
+if let Some(min_to) = response.min_to_amount {
+    info!("Minimum BTC to receive: {} sats", min_to);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// Fetch limits for converting Bitcoin to a token
+let fromBitcoinResponse = try await sdk.fetchConversionLimits(
+    request: FetchConversionLimitsRequest(
+        conversionType: ConversionType.fromBitcoin,
+        tokenIdentifier: "&lt;token identifier&gt;"
+    ))
+
+if let minFrom = fromBitcoinResponse.minFromAmount {
+    print("Minimum BTC to convert: \(minFrom) sats")
+}
+if let minTo = fromBitcoinResponse.minToAmount {
+    print("Minimum tokens to receive: \(minTo) base units")
+}
+
+// Fetch limits for converting a token to Bitcoin
+let toBitcoinResponse = try await sdk.fetchConversionLimits(
+    request: FetchConversionLimitsRequest(
+        conversionType: ConversionType.toBitcoin(
+            fromTokenIdentifier: "&lt;token identifier&gt;"
+        ),
+        tokenIdentifier: nil
+    ))
+
+if let minFrom = toBitcoinResponse.minFromAmount {
+    print("Minimum tokens to convert: \(minFrom) base units")
+}
+if let minTo = toBitcoinResponse.minToAmount {
+    print("Minimum BTC to receive: \(minTo) sats")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    // Fetch limits for converting Bitcoin to a token
+    val fromBitcoinResponse = sdk.fetchConversionLimits(
+        FetchConversionLimitsRequest(
+            conversionType = ConversionType.FromBitcoin,
+            tokenIdentifier = "&lt;token identifier&gt;"
+        )
+    )
+
+    if (fromBitcoinResponse.minFromAmount != null) {
+        println("Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats")
+    }
+    if (fromBitcoinResponse.minToAmount != null) {
+        println("Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units")
+    }
+
+    // Fetch limits for converting a token to Bitcoin
+    val toBitcoinResponse = sdk.fetchConversionLimits(
+        FetchConversionLimitsRequest(
+            conversionType = ConversionType.ToBitcoin(
+                fromTokenIdentifier = "&lt;token identifier&gt;"
+            ),
+            tokenIdentifier = null
+        )
+    )
+
+    if (toBitcoinResponse.minFromAmount != null) {
+        println("Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units")
+    }
+    if (toBitcoinResponse.minToAmount != null) {
+        println("Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// Fetch limits for converting Bitcoin to a token
+var fromBitcoinResponse = await sdk.FetchConversionLimits(
+    request: new FetchConversionLimitsRequest(
+        conversionType: new ConversionType.FromBitcoin(),
+        tokenIdentifier: "&lt;token identifier&gt;"
+    )
+);
+
+if (fromBitcoinResponse.minFromAmount != null)
+{
+    Console.WriteLine($"Minimum BTC to convert: {fromBitcoinResponse.minFromAmount} sats");
+}
+if (fromBitcoinResponse.minToAmount != null)
+{
+    Console.WriteLine($"Minimum tokens to receive: {fromBitcoinResponse.minToAmount} base units");
+}
+
+// Fetch limits for converting a token to Bitcoin
+var toBitcoinResponse = await sdk.FetchConversionLimits(
+    request: new FetchConversionLimitsRequest(
+        conversionType: new ConversionType.ToBitcoin(
+            fromTokenIdentifier: "&lt;token identifier&gt;"
+        ),
+        tokenIdentifier: null
+    )
+);
+
+if (toBitcoinResponse.minFromAmount != null)
+{
+    Console.WriteLine($"Minimum tokens to convert: {toBitcoinResponse.minFromAmount} base units");
+}
+if (toBitcoinResponse.minToAmount != null)
+{
+    Console.WriteLine($"Minimum BTC to receive: {toBitcoinResponse.minToAmount} sats");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// Fetch limits for converting Bitcoin to a token
+const fromBitcoinResponse = await sdk.fetchConversionLimits({
+  conversionType: { type: 'fromBitcoin' },
+  tokenIdentifier: '&lt;token identifier&gt;'
+})
+
+if (fromBitcoinResponse.minFromAmount !== undefined) {
+  console.log(`Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats`)
+}
+if (fromBitcoinResponse.minToAmount !== undefined) {
+  console.log(`Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units`)
+}
+
+// Fetch limits for converting a token to Bitcoin
+const toBitcoinResponse = await sdk.fetchConversionLimits({
+  conversionType: {
+    type: 'toBitcoin',
+    fromTokenIdentifier: '&lt;token identifier&gt;'
+  },
+  tokenIdentifier: undefined
+})
+
+if (toBitcoinResponse.minFromAmount !== undefined) {
+  console.log(`Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units`)
+}
+if (toBitcoinResponse.minToAmount !== undefined) {
+  console.log(`Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// Fetch limits for converting Bitcoin to a token
+const fromBitcoinResponse = await sdk.fetchConversionLimits({
+  conversionType: new ConversionType.FromBitcoin(),
+  tokenIdentifier: '&lt;token identifier&gt;'
+})
+
+if (fromBitcoinResponse.minFromAmount !== undefined) {
+  console.log(`Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats`)
+}
+if (fromBitcoinResponse.minToAmount !== undefined) {
+  console.log(`Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units`)
+}
+
+// Fetch limits for converting a token to Bitcoin
+const toBitcoinResponse = await sdk.fetchConversionLimits({
+  conversionType: new ConversionType.ToBitcoin({
+    fromTokenIdentifier: '&lt;token identifier&gt;'
+  }),
+  tokenIdentifier: undefined
+})
+
+if (toBitcoinResponse.minFromAmount !== undefined) {
+  console.log(`Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units`)
+}
+if (toBitcoinResponse.minToAmount !== undefined) {
+  console.log(`Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// Fetch limits for converting Bitcoin to a token
+final fromBitcoinResponse = await sdk.fetchConversionLimits(
+  request: FetchConversionLimitsRequest(
+    conversionType: ConversionType.fromBitcoin(),
+    tokenIdentifier: '&lt;token identifier&gt;',
+  ),
+);
+
+if (fromBitcoinResponse.minFromAmount != null) {
+  print('Minimum BTC to convert: ${fromBitcoinResponse.minFromAmount} sats');
+}
+if (fromBitcoinResponse.minToAmount != null) {
+  print('Minimum tokens to receive: ${fromBitcoinResponse.minToAmount} base units');
+}
+
+// Fetch limits for converting a token to Bitcoin
+final toBitcoinResponse = await sdk.fetchConversionLimits(
+  request: FetchConversionLimitsRequest(
+    conversionType: ConversionType.toBitcoin(
+      fromTokenIdentifier: '&lt;token identifier&gt;',
+    ),
+    tokenIdentifier: null,
+  ),
+);
+
+if (toBitcoinResponse.minFromAmount != null) {
+  print('Minimum tokens to convert: ${toBitcoinResponse.minFromAmount} base units');
+}
+if (toBitcoinResponse.minToAmount != null) {
+  print('Minimum BTC to receive: ${toBitcoinResponse.minToAmount} sats');
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    # Fetch limits for converting Bitcoin to a token
+    from_bitcoin_response = await sdk.fetch_conversion_limits(
+        request=FetchConversionLimitsRequest(
+            conversion_type=ConversionType.FROM_BITCOIN(),
+            token_identifier="&lt;token identifier&gt;",
+        )
+    )
+
+    if from_bitcoin_response.min_from_amount is not None:
+        print(f"Minimum BTC to convert: {from_bitcoin_response.min_from_amount} sats")
+    if from_bitcoin_response.min_to_amount is not None:
+        print(f"Minimum tokens to receive: {from_bitcoin_response.min_to_amount} base units")
+
+    # Fetch limits for converting a token to Bitcoin
+    to_bitcoin_response = await sdk.fetch_conversion_limits(
+        request=FetchConversionLimitsRequest(
+            conversion_type=ConversionType.TO_BITCOIN(
+                from_token_identifier="&lt;token identifier&gt;"
+            ),
+            token_identifier=None,
+        )
+    )
+
+    if to_bitcoin_response.min_from_amount is not None:
+        print(f"Minimum tokens to convert: {to_bitcoin_response.min_from_amount} base units")
+    if to_bitcoin_response.min_to_amount is not None:
+        print(f"Minimum BTC to receive: {to_bitcoin_response.min_to_amount} sats")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// Fetch limits for converting Bitcoin to a token
+tokenIdentifier := "&lt;token identifier&gt;"
+fromBitcoinResponse, err := sdk.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	ConversionType:  breez_sdk_spark.ConversionTypeFromBitcoin{},
+	TokenIdentifier: &amp;tokenIdentifier,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+if fromBitcoinResponse.MinFromAmount != nil {
+	log.Printf("Minimum BTC to convert: %v sats", *fromBitcoinResponse.MinFromAmount)
+}
+if fromBitcoinResponse.MinToAmount != nil {
+	log.Printf("Minimum tokens to receive: %v base units", *fromBitcoinResponse.MinToAmount)
+}
+
+// Fetch limits for converting a token to Bitcoin
+fromTokenIdentifier := "&lt;token identifier&gt;"
+toBitcoinResponse, err := sdk.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
+		FromTokenIdentifier: fromTokenIdentifier,
+	},
+	TokenIdentifier: nil,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+if toBitcoinResponse.MinFromAmount != nil {
+	log.Printf("Minimum tokens to convert: %v base units", *toBitcoinResponse.MinFromAmount)
+}
+if toBitcoinResponse.MinToAmount != nil {
+	log.Printf("Minimum BTC to receive: %v sats", *toBitcoinResponse.MinToAmount)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+Amounts are denominated in satoshis for Bitcoin (1 BTC = 100,000,000 sats) and in token base units for tokens. Token base units depend on the token's decimal specification.
+</div>
+<h2 id="bitcoin-to-token">
+    <a class="header" href="#bitcoin-to-token">Converting Bitcoin to tokens</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+</h2>
+<p>Token conversion enables payments of tokens like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a> to be made without holding the token, but instead using Bitcoin.</p>
+<p>To do so, when preparing to send a payment, set the conversion options. The conversion will first calculate the Bitcoin amount needed to be converted into the token, convert Bitcoin into that token amount, and then finally complete the payment.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;spark address or invoice&gt;".to_string();
+// Token identifier must match the invoice in case it specifies one.
+let token_identifier = "&lt;token identifier&gt;".to_string();
+// Set the amount of tokens you wish to send.
+let optional_pay_amount = Some(PayAmount::Token { amount: 1_000, token_identifier });
+// Set to use Bitcoin funds to pay via conversion
+let optional_max_slippage_bps = Some(50);
+let optional_completion_timeout_secs = Some(30);
+let conversion_options = Some(ConversionOptions {
+    conversion_type: ConversionType::FromBitcoin,
+    max_slippage_bps: optional_max_slippage_bps,
+    completion_timeout_secs: optional_completion_timeout_secs,
+});
+
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        pay_amount: optional_pay_amount,
+        conversion_options,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to send the token payment
+if let Some(conversion_estimate) = &amp;prepare_response.conversion_estimate {
+    info!("Estimated conversion amount: {} sats", conversion_estimate.amount);
+    info!("Estimated conversion fee: {} sats", conversion_estimate.fee);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;spark address or invoice&gt;"
+// Token identifier must match the invoice in case it specifies one.
+let tokenIdentifier = "&lt;token identifier&gt;"
+// Set the amount of tokens you wish to send. (requires 'import BigNumber')
+let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
+// Set to use Bitcoin funds to pay via conversion
+let optionalMaxSlippageBps = UInt32(50)
+let optionalCompletionTimeoutSecs = UInt32(30)
+let conversionOptions = ConversionOptions(
+    conversionType: ConversionType.fromBitcoin,
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+)
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest(
+        paymentRequest: paymentRequest,
+        payAmount: optionalPayAmount,
+        conversionOptions: conversionOptions
+    ))
+
+// If the fees are acceptable, continue to send the token payment
+if let conversionEstimate = prepareResponse.conversionEstimate {
+    print("Estimated conversion amount: \(conversionEstimate.amount) sats")
+    print("Estimated conversion fee: \(conversionEstimate.fee) sats")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val paymentRequest = "&lt;spark address or invoice&gt;"
+    // Token identifier must match the invoice in case it specifies one.
+    val tokenIdentifier = "&lt;token identifier&gt;"
+    // Set the amount of tokens you wish to send.
+    // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+    // package)
+    val amount = BigInteger.fromLong(1_000L)
+    // Android (BigInteger from java.math)
+    // val amount = BigInteger.valueOf(1_000L)
+    val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
+    // set to use Bitcoin funds to pay via conversion
+    val optionalMaxSlippageBps = 50u
+    val optionalCompletionTimeoutSecs = 30u
+    val conversionOptions = ConversionOptions(
+        conversionType = ConversionType.FromBitcoin,
+        maxSlippageBps = optionalMaxSlippageBps,
+        completionTimeoutSecs = optionalCompletionTimeoutSecs
+    )
+
+    val prepareResponse =
+        sdk.prepareSendPayment(
+            PrepareSendPaymentRequest(
+                paymentRequest = paymentRequest,
+                payAmount = optionalPayAmount,
+                conversionOptions = conversionOptions,
+            )
+        )
+
+    // If the fees are acceptable, continue to send the token payment
+    prepareResponse.conversionEstimate?.let { conversionEstimate -&gt;
+        println("Estimated conversion amount: ${conversionEstimate.amount} sats")
+        println("Estimated conversion fee: ${conversionEstimate.fee} sats")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var paymentRequest = "&lt;spark address or invoice&gt;";
+// Token identifier must match the invoice in case it specifies one.
+var tokenIdentifier = "&lt;token identifier&gt;";
+// Set the amount of tokens you wish to send.
+var optionalPayAmount = new PayAmount.Token(amount: new BigInteger(1000), tokenIdentifier: tokenIdentifier);
+// Optionally set to use Bitcoin funds to pay via conversion
+var optionalMaxSlippageBps = 50U;
+var optionalCompletionTimeoutSecs = 30U;
+var conversionOptions = new ConversionOptions(
+    conversionType: new ConversionType.FromBitcoin(),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+);
+
+var prepareResponse = await sdk.PrepareSendPayment(
+    request: new PrepareSendPaymentRequest(
+        paymentRequest: paymentRequest,
+        payAmount: optionalPayAmount,
+        conversionOptions: conversionOptions
+    )
+);
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.conversionEstimate != null)
+{
+    Console.WriteLine("Estimated conversion amount: " +
+        $"{prepareResponse.conversionEstimate.amount} sats");
+    Console.WriteLine("Estimated conversion fee: " +
+        $"{prepareResponse.conversionEstimate.fee} sats");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address or invoice&gt;'
+// Token identifier must match the invoice in case it specifies one.
+const tokenIdentifier = '&lt;token identifier&gt;'
+// Set the amount of tokens you wish to send.
+const optionalPayAmount: PayAmount = {
+  type: 'token',
+  amount: '1000',
+  tokenIdentifier
+}
+// Set to use Bitcoin funds to pay via conversion
+const optionalMaxSlippageBps = 50
+const optionalCompletionTimeoutSecs = 30
+const conversionOptions: ConversionOptions = {
+  conversionType: {
+    type: 'fromBitcoin'
+  },
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs
+}
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  payAmount: optionalPayAmount,
+  conversionOptions
+})
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.conversionEstimate !== undefined) {
+  const conversionEstimate = prepareResponse.conversionEstimate
+  console.log(`Estimated conversion amount: ${conversionEstimate.amount} sats`)
+  console.log(`Estimated conversion fee: ${conversionEstimate.fee} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address or invoice&gt;'
+// Token identifier must match the invoice in case it specifies one.
+const tokenIdentifier = '&lt;token identifier&gt;'
+// Set the amount of tokens you wish to send.
+const optionalPayAmount = new PayAmount.Token({ amount: BigInt(1_000), tokenIdentifier })
+// Set to use Bitcoin funds to pay via conversion
+const optionalMaxSlippageBps = 50
+const optionalCompletionTimeoutSecs = 30
+const conversionOptions = {
+  conversionType: new ConversionType.FromBitcoin(),
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs
+}
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  payAmount: optionalPayAmount,
+  conversionOptions
+})
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.conversionEstimate !== undefined) {
+  const conversionEstimate = prepareResponse.conversionEstimate
+  console.debug(`Estimated conversion amount: ${conversionEstimate.amount} sats`)
+  console.debug(`Estimated conversion fee: ${conversionEstimate.fee} sats`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final paymentRequest = '&lt;spark address or invoice&gt;';
+// Token identifier must match the invoice in case it specifies one.
+final tokenIdentifier = '&lt;token identifier&gt;';
+// Set the amount of tokens you wish to send.
+final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
+// Set to use Bitcoin funds to pay via conversion
+int optionalMaxSlippageBps = 50;
+int optionalCompletionTimeoutSecs = 30;
+final conversionOptions = ConversionOptions(
+  conversionType: ConversionType.fromBitcoin(),
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs,
+);
+
+final prepareResponse = await sdk.prepareSendPayment(
+  request: PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    payAmount: optionalPayAmount,
+    conversionOptions: conversionOptions,
+  ),
+);
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.conversionEstimate != null) {
+  print(
+      "Estimated conversion amount: ${prepareResponse.conversionEstimate!.amount} sats");
+  print(
+      "Estimated conversion fee: ${prepareResponse.conversionEstimate!.fee} sats");
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    payment_request = "&lt;spark address or invoice&gt;"
+    # Token identifier must match the invoice in case it specifies one.
+    token_identifier = "&lt;token identifier&gt;"
+    # Set the amount of tokens you wish to send.
+    optional_pay_amount = PayAmount.TOKEN(amount=1_000, token_identifier=token_identifier)
+    # Set to use Bitcoin funds to pay via conversion
+    optional_max_slippage_bps = 50
+    optional_completion_timeout_secs = 30
+    conversion_options = ConversionOptions(
+        conversion_type=ConversionType.FROM_BITCOIN(),
+        max_slippage_bps=optional_max_slippage_bps,
+        completion_timeout_secs=optional_completion_timeout_secs,
+    )
+
+    prepare_response = await sdk.prepare_send_payment(
+        request=PrepareSendPaymentRequest(
+            payment_request=payment_request,
+            pay_amount=optional_pay_amount,
+            conversion_options=conversion_options,
+        )
+    )
+
+    # If the fees are acceptable, continue to send the token payment
+    if prepare_response.conversion_estimate is not None:
+        conversion_estimate = prepare_response.conversion_estimate
+        logging.debug(
+            f"Estimated conversion amount: {conversion_estimate.amount} sats"
+        )
+        logging.debug(
+            f"Estimated conversion fee: {conversion_estimate.fee} sats"
+        )
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;spark address or invoice&gt;"
+// Token identifier must match the invoice in case it specifies one.
+tokenIdentifier := "&lt;token identifier&gt;"
+// Set the amount of tokens you wish to send.
+optionalAmount := new(big.Int).SetInt64(1_000)
+
+var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountToken{
+	Amount:          optionalAmount,
+	TokenIdentifier: tokenIdentifier,
+}
+// Set to use Bitcoin funds to pay via conversion
+optionalMaxSlippageBps := uint32(50)
+optionalCompletionTimeoutSecs := uint32(30)
+conversionOptions := &amp;breez_sdk_spark.ConversionOptions{
+	ConversionType:        breez_sdk_spark.ConversionTypeToBitcoin{},
+	MaxSlippageBps:        &amp;optionalMaxSlippageBps,
+	CompletionTimeoutSecs: &amp;optionalCompletionTimeoutSecs,
+}
+
+prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
+	PaymentRequest:    paymentRequest,
+	PayAmount:         &amp;optionalPayAmount,
+	ConversionOptions: conversionOptions,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+// If the fees are acceptable, continue to send the token payment
+if prepareResponse.ConversionEstimate != nil {
+	log.Printf("Estimated conversion amount: %v sats", prepareResponse.ConversionEstimate.Amount)
+	log.Printf("Estimated conversion fee: %v sats", prepareResponse.ConversionEstimate.Fee)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note-1"><a class="header" href="#developer-note-1">Developer note</a></h4>
+When a conversion fails due to exceeding the maximum slippage, the conversion will be refunded automatically.
+</div>
+<div class="warning">
+<h4 id="developer-note-2"><a class="header" href="#developer-note-2">Developer note</a></h4>
+The conversion may result in some token balance remaining in the wallet after the payment is sent. This remaining balance is to account for slippage in the conversion.
+</div>
+<h2 id="token-to-bitcoin">
+    <a class="header" href="#token-to-bitcoin">Converting tokens to Bitcoin</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+</h2>
+<p>Token conversion also enables Bitcoin payments to be made without holding the required Bitcoin, but instead using a supported token asset like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>.</p>
+<p>To do so, when preparing to send a payment, set the conversion options. The conversion will first calculate the amount needed to be converted into Bitcoin, convert the token into that Bitcoin amount, and then finally complete the payment.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;payment request&gt;".to_string();
+// Set to use token funds to pay via conversion
+let optional_max_slippage_bps = Some(50);
+let optional_completion_timeout_secs = Some(30);
+let conversion_options = Some(ConversionOptions {
+    conversion_type: ConversionType::ToBitcoin {
+        from_token_identifier: "&lt;token identifier&gt;".to_string(),
+    },
+    max_slippage_bps: optional_max_slippage_bps,
+    completion_timeout_secs: optional_completion_timeout_secs,
+});
+
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        pay_amount: None,
+        conversion_options,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to create the Send Payment
+if let Some(conversion_estimate) = &amp;prepare_response.conversion_estimate {
+    info!("Estimated conversion amount: {} token base units", conversion_estimate.amount);
+    info!("Estimated conversion fee: {} token base units", conversion_estimate.fee);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;payment request&gt;"
+// Set to use token funds to pay via conversion
+let optionalMaxSlippageBps = UInt32(50)
+let optionalCompletionTimeoutSecs = UInt32(30)
+let conversionOptions = ConversionOptions(
+    conversionType: ConversionType.toBitcoin(
+        fromTokenIdentifier: "&lt;token identifier&gt;"
+    ),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+)
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest(
+        paymentRequest: paymentRequest,
+        conversionOptions: conversionOptions
+    ))
+
+if let conversionEstimate = prepareResponse.conversionEstimate {
+    print("Estimated conversion amount: \(conversionEstimate.amount) token base units")
+    print("Estimated conversion fee: \(conversionEstimate.fee) token base units")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val paymentRequest = "&lt;payment request&gt;"
+// Set to use token funds to pay via conversion
+val optionalMaxSlippageBps = 50u
+val optionalCompletionTimeoutSecs = 30u
+val conversionOptions = ConversionOptions(
+    conversionType = ConversionType.ToBitcoin(
+        "&lt;token identifier&gt;"
+    ),
+    maxSlippageBps = optionalMaxSlippageBps,
+    completionTimeoutSecs = optionalCompletionTimeoutSecs
+)
+
+try {
+    val req = PrepareSendPaymentRequest(
+        paymentRequest,
+        payAmount = null,
+        conversionOptions = conversionOptions,
+    )
+    val prepareResponse = sdk.prepareSendPayment(req)
+
+    // If the fees are acceptable, continue to create the Send Payment
+    prepareResponse.conversionEstimate?.let { conversionEstimate -&gt;
+        // Log.v("Breez", "Estimated conversion amount: ${conversionEstimate.amount} token base units")
+        // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token base units")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var paymentRequest = "&lt;payment request&gt;";
+// Set to use token funds to pay via conversion
+var optionalMaxSlippageBps = 50U;
+var optionalCompletionTimeoutSecs = 30U;
+var conversionOptions = new ConversionOptions(
+    conversionType: new ConversionType.ToBitcoin(
+        fromTokenIdentifier: "&lt;token identifier&gt;"
+    ),
+    maxSlippageBps: optionalMaxSlippageBps,
+    completionTimeoutSecs: optionalCompletionTimeoutSecs
+);
+
+var request = new PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    conversionOptions: conversionOptions
+);
+var prepareResponse = await sdk.PrepareSendPayment(request: request);
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.conversionEstimate != null)
+{
+    Console.WriteLine("Estimated conversion amount: " +
+        $"{prepareResponse.conversionEstimate.amount} token base units");
+    Console.WriteLine("Estimated conversion fee: " +
+        $"{prepareResponse.conversionEstimate.fee} token base units");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;bolt11 invoice&gt;'
+// Set to use token funds to pay via conversion
+const optionalMaxSlippageBps = 50
+const optionalCompletionTimeoutSecs = 30
+const conversionOptions: ConversionOptions = {
+  conversionType: {
+    type: 'toBitcoin',
+    fromTokenIdentifier: '&lt;token identifier&gt;'
+  },
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs
+}
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  conversionOptions
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.conversionEstimate !== undefined) {
+  const conversionEstimate = prepareResponse.conversionEstimate
+  console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
+  console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;payment request&gt;'
+// Set to use token funds to pay via conversion
+const optionalMaxSlippageBps = 50
+const optionalCompletionTimeoutSecs = 30
+const conversionOptions = {
+  conversionType: new ConversionType.ToBitcoin({
+    fromTokenIdentifier: '&lt;token identifier&gt;'
+  }),
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs
+}
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  payAmount: undefined,
+  conversionOptions
+})
+
+// If the fees are acceptable, continue to create the Send Payment
+if (prepareResponse.conversionEstimate !== undefined) {
+  const conversionEstimate = prepareResponse.conversionEstimate
+  console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
+  console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String paymentRequest = "&lt;payment request&gt;";
+// Set to use token funds to pay via conversion
+int optionalMaxSlippageBps = 50;
+int optionalCompletionTimeoutSecs = 30;
+final conversionOptions = ConversionOptions(
+  conversionType: ConversionType.toBitcoin(
+    fromTokenIdentifier: "&lt;token identifier&gt;",
+  ),
+  maxSlippageBps: optionalMaxSlippageBps,
+  completionTimeoutSecs: optionalCompletionTimeoutSecs,
+);
+
+final request = PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    conversionOptions: conversionOptions);
+final response = await sdk.prepareSendPayment(request: request);
+
+// If the fees are acceptable, continue to create the Send Payment
+if (response.conversionEstimate != null) {
+  print(
+      "Estimated conversion amount: ${response.conversionEstimate!.amount} token base units");
+  print(
+      "Estimated conversion fee: ${response.conversionEstimate!.fee} token base units");
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">payment_request = "&lt;payment request&gt;"
+# Set to use token funds to pay via conversion
+optional_max_slippage_bps = 50
+optional_completion_timeout_secs = 30
+conversion_options = ConversionOptions(
+    conversion_type=ConversionType.TO_BITCOIN(
+        from_token_identifier="&lt;token identifier&gt;"
+    ),
+    max_slippage_bps=optional_max_slippage_bps,
+    completion_timeout_secs=optional_completion_timeout_secs,
+)
+try:
+    request = PrepareSendPaymentRequest(
+        payment_request=payment_request,
+        conversion_options=conversion_options,
+    )
+    prepare_response = await sdk.prepare_send_payment(request=request)
+
+    # If the fees are acceptable, continue to create the Send Payment
+    if prepare_response.conversion_estimate is not None:
+        conversion_estimate = prepare_response.conversion_estimate
+        logging.debug(
+            f"Estimated conversion amount: {conversion_estimate.amount} token base units"
+        )
+        logging.debug(
+            f"Estimated conversion fee: {conversion_estimate.fee} token base units"
+        )
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;payment request&gt;"
+// Set to use token funds to pay via conversion
+optionalMaxSlippageBps := uint32(50)
+optionalCompletionTimeoutSecs := uint32(30)
+conversionOptions := breez_sdk_spark.ConversionOptions{
+	ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
+		FromTokenIdentifier: "&lt;token identifier&gt;",
+	},
+	MaxSlippageBps:        &amp;optionalMaxSlippageBps,
+	CompletionTimeoutSecs: &amp;optionalCompletionTimeoutSecs,
+}
+
+request := breez_sdk_spark.PrepareSendPaymentRequest{
+	PaymentRequest:    paymentRequest,
+	ConversionOptions: &amp;conversionOptions,
+}
+response, err := sdk.PrepareSendPayment(request)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+// If the fees are acceptable, continue to create the Send Payment
+if response.ConversionEstimate != nil {
+	log.Printf("Estimated conversion amount: %v token base units", response.ConversionEstimate.Amount)
+	log.Printf("Estimated conversion fee: %v token base units", response.ConversionEstimate.Fee)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note-3"><a class="header" href="#developer-note-3">Developer note</a></h4>
+When a conversion fails due to exceeding the maximum slippage, the conversion will be refunded automatically.
+</div>
+<div class="warning">
+<h4 id="developer-note-4"><a class="header" href="#developer-note-4">Developer note</a></h4>
+The conversion may result in some Bitcoin remaining in the wallet after the payment is sent. This remaining Bitcoin is to account for slippage in the conversion.
+</div>
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/token_payments.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/issuing_tokens.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/token_payments.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/issuing_tokens.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

@@ -1,0 +1,991 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Parsing inputs - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/parse.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="parsing-inputs"><a class="header" href="#parsing-inputs">Parsing inputs</a></h1>
+<p>The SDK provides a versatile and extensible parsing module designed to process a wide range of input strings and return parsed data in various standardized formats.</p>
+<p>Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. For the complete list, consult the <a href="https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html">API documentation</a>.</p>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL) are denominated in millisatoshi.
+</div>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let input = "an input to be parsed...";
+
+match sdk.parse(input).await? {
+    InputType::BitcoinAddress(details) =&gt; {
+        println!("Input is Bitcoin address {}", details.address);
+    }
+    InputType::Bolt11Invoice(details) =&gt; {
+        println!(
+            "Input is BOLT11 invoice for {} msats",
+            details
+                .amount_msat
+                .map_or("unknown".to_string(), |a| a.to_string())
+        );
+    }
+    InputType::LnurlPay(details) =&gt; {
+        println!(
+            "Input is LNURL-Pay/Lightning address accepting min/max {}/{} msats",
+            details.min_sendable, details.max_sendable
+        );
+    }
+    InputType::LnurlWithdraw(details) =&gt; {
+        println!(
+            "Input is LNURL-Withdraw for min/max {}/{} msats",
+            details.min_withdrawable, details.max_withdrawable
+        );
+    }
+    InputType::SparkAddress(details) =&gt; {
+        println!("Input is Spark address {}", details.address);
+    }
+    InputType::SparkInvoice(invoice) =&gt; {
+        println!("Input is Spark invoice:");
+        if let Some(token_identifier) = &amp;invoice.token_identifier {
+            println!(
+                "  Amount: {:?} base units of token with id {}",
+                invoice.amount, token_identifier
+            );
+        } else {
+            println!("  Amount: {:?} sats", invoice.amount);
+        }
+
+        if let Some(description) = &amp;invoice.description {
+            println!("  Description: {}", description);
+        }
+
+        if let Some(expiry_time) = invoice.expiry_time {
+            println!("  Expiry time: {}", expiry_time);
+        }
+
+        if let Some(sender_public_key) = &amp;invoice.sender_public_key {
+            println!("  Sender public key: {}", sender_public_key);
+        }
+    }
+    // Other input types are available
+    _ =&gt; {}
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let input = "an input to be parsed..."
+
+do {
+    let inputType = try await sdk.parse(input: input)
+    switch inputType {
+    case .bitcoinAddress(v1: let details):
+        print("Input is Bitcoin address \(details.address)")
+
+    case .bolt11Invoice(v1: let details):
+        let amount = details.amountMsat.map { String($0) } ?? "unknown"
+        print("Input is BOLT11 invoice for \(amount) msats")
+
+    case .lnurlPay(v1: let details):
+        print(
+            "Input is LNURL-Pay/Lightning address accepting min/max \(details.minSendable)/\(details.maxSendable) msats)"
+        )
+    case .lnurlWithdraw(v1: let details):
+        print(
+            "Input is LNURL-Withdraw for min/max \(details.minWithdrawable)/\(details.maxWithdrawable) msats"
+        )
+
+    case .sparkAddress(v1: let details):
+        print("Input is Spark address \(details.address)")
+
+    case .sparkInvoice(v1: let invoice):
+        print("Input is Spark invoice:")
+        if let tokenIdentifier = invoice.tokenIdentifier {
+            print("  Amount: \(invoice.amount) base units of token with id \(tokenIdentifier)")
+        } else {
+            print("  Amount: \(invoice.amount) sats")
+        }
+
+        if let description = invoice.description {
+            print("  Description: \(description)")
+        }
+
+        if let expiryTime = invoice.expiryTime {
+            print("  Expiry time: \(Date(timeIntervalSince1970: TimeInterval(expiryTime)))")
+        }
+
+        if let senderPublicKey = invoice.senderPublicKey {
+            print("  Sender public key: \(senderPublicKey)")
+        }
+
+    default:
+        break  // Other input types are available
+    }
+} catch {
+    print("Failed to parse input: \(error)")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val input = "an input to be parsed..."
+
+try {
+    val inputType = sdk.parse(input)
+    when (inputType) {
+        is InputType.BitcoinAddress -&gt; {
+            println("Input is Bitcoin address ${inputType.v1.address}")
+        }
+        is InputType.Bolt11Invoice -&gt; {
+            val amountStr = inputType.v1.amountMsat?.toString() ?: "unknown"
+            println("Input is BOLT11 invoice for $amountStr msats")
+        }
+        is InputType.LnurlPay -&gt; {
+            println(
+                    "Input is LNURL-Pay/Lightning address accepting min/max " +
+                            "${inputType.v1.minSendable}/${inputType.v1.maxSendable} msats}"
+            )
+        }
+        is InputType.LnurlWithdraw -&gt; {
+            println(
+                    "Input is LNURL-Withdraw for min/max " +
+                            "${inputType.v1.minWithdrawable}/${inputType.v1.maxWithdrawable} msats"
+            )
+        }
+        is InputType.SparkAddress -&gt; {
+            println("Input is Spark address ${inputType.v1.address}")
+        }
+        is InputType.SparkInvoice -&gt; {
+            val invoice = inputType.v1
+            println("Input is Spark invoice:")
+            if (invoice.tokenIdentifier != null) {
+                println(
+                        "  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}"
+                )
+            } else {
+                println("  Amount: ${invoice.amount} sats")
+            }
+
+            if (invoice.description != null) {
+                println("  Description: ${invoice.description}")
+            }
+
+            if (invoice.expiryTime != null) {
+                println("  Expiry time: ${invoice.expiryTime}")
+            }
+
+            if (invoice.senderPublicKey != null) {
+                println("  Sender public key: ${invoice.senderPublicKey}")
+            }
+        }
+        else -&gt; {
+            // Handle other input types
+        }
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var inputStr = "an input to be parsed...";
+
+var parsedInput = await sdk.Parse(input: inputStr);
+switch (parsedInput)
+{
+    case InputType.BitcoinAddress bitcoinAddress:
+        var details = bitcoinAddress.v1;
+        Console.WriteLine($"Input is Bitcoin address {details.address}");
+        break;
+
+    case InputType.Bolt11Invoice bolt11:
+        var bolt11Details = bolt11.v1;
+        var amount = bolt11Details.amountMsat.HasValue ? bolt11Details.amountMsat.Value.ToString() : "unknown";
+        Console.WriteLine($"Input is BOLT11 invoice for {amount} msats");
+        break;
+
+    case InputType.LnurlPay lnurlPay:
+        var lnurlPayDetails = lnurlPay.v1;
+        Console.WriteLine($"Input is LNURL-Pay/Lightning address accepting " +
+                        $"min/max {lnurlPayDetails.minSendable}/{lnurlPayDetails.maxSendable} msats");
+        break;
+
+    case InputType.LnurlWithdraw lnurlWithdraw:
+        var lnurlWithdrawDetails = lnurlWithdraw.v1;
+        Console.WriteLine($"Input is LNURL-Withdraw for min/max " +
+                        $"{lnurlWithdrawDetails.minWithdrawable}/{lnurlWithdrawDetails.maxWithdrawable} msats");
+        break;
+
+    case InputType.SparkAddress sparkAddress:
+        var sparkAddressDetails = sparkAddress.v1;
+        Console.WriteLine($"Input is Spark address {sparkAddressDetails.address}");
+        break;
+
+    case InputType.SparkInvoice sparkInvoice:
+        var invoice = sparkInvoice.v1;
+        Console.WriteLine("Input is Spark invoice:");
+        if (invoice.tokenIdentifier != null)
+        {
+            Console.WriteLine($"  Amount: {invoice.amount} base units of " +
+                            $"token with id {invoice.tokenIdentifier}");
+        }
+        else
+        {
+            Console.WriteLine($"  Amount: {invoice.amount} sats");
+        }
+
+        if (invoice.description != null)
+        {
+            Console.WriteLine($"  Description: {invoice.description}");
+        }
+
+        if (invoice.expiryTime.HasValue)
+        {
+            Console.WriteLine($"  Expiry time: {invoice.expiryTime}");
+        }
+
+        if (invoice.senderPublicKey != null)
+        {
+            Console.WriteLine($"  Sender public key: {invoice.senderPublicKey}");
+        }
+        break;
+
+        // Other input types are available
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const input = 'an input to be parsed...'
+
+const parsed = await sdk.parse(input)
+
+switch (parsed.type) {
+  case 'bitcoinAddress':
+    console.log(`Input is Bitcoin address ${parsed.address}`)
+    break
+
+  case 'bolt11Invoice':
+    console.log(
+      `Input is BOLT11 invoice for ${
+        parsed.amountMsat != null ? parsed.amountMsat.toString() : 'unknown'
+      } msats`
+    )
+    break
+
+  case 'lnurlPay':
+    console.log(
+      `Input is LNURL-Pay/Lightning address accepting min/max ${parsed.minSendable}/${parsed.maxSendable} msats`
+    )
+    break
+
+  case 'lnurlWithdraw':
+    console.log(
+      `Input is LNURL-Withdraw for min/max ${parsed.minWithdrawable}/${parsed.maxWithdrawable} msats`
+    )
+    break
+
+  case 'sparkAddress':
+    console.log(`Input is Spark address ${parsed.address}`)
+    break
+
+  case 'sparkInvoice':
+    console.log('Input is Spark invoice:')
+    if (parsed.tokenIdentifier != null) {
+      console.log(
+        `  Amount: ${parsed.amount} base units of token with id ${parsed.tokenIdentifier}`
+      )
+    } else {
+      console.log(`  Amount: ${parsed.amount} sats`)
+    }
+
+    if (parsed.description != null) {
+      console.log(`  Description: ${parsed.description}`)
+    }
+
+    if (parsed.expiryTime != null) {
+      console.log(`  Expiry time: ${new Date(Number(parsed.expiryTime) * 1000).toISOString()}`)
+    }
+
+    if (parsed.senderPublicKey != null) {
+      console.log(`  Sender public key: ${parsed.senderPublicKey}`)
+    }
+    break
+
+  default:
+    // Other input types are available
+    break
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const inputStr = 'an input to be parsed...'
+
+const input = await sdk.parse(inputStr)
+
+if (input.tag === InputType_Tags.BitcoinAddress) {
+  console.log(`Input is Bitcoin address ${input.inner[0].address}`)
+} else if (input.tag === InputType_Tags.Bolt11Invoice) {
+  console.log(
+    `Input is BOLT11 invoice for ${
+      input.inner[0].amountMsat != null ? input.inner[0].amountMsat.toString() : 'unknown'
+    } msats`
+  )
+} else if (input.tag === InputType_Tags.LnurlPay) {
+  console.log(
+    'Input is LNURL-Pay/Lightning address accepting min/max ' +
+      `${input.inner[0].minSendable}/${input.inner[0].maxSendable} msats`
+  )
+} else if (input.tag === InputType_Tags.LnurlWithdraw) {
+  console.log(
+    'Input is LNURL-Withdraw for min/max ' +
+      `${input.inner[0].minWithdrawable}/${input.inner[0].maxWithdrawable} msats`
+  )
+} else if (input.tag === InputType_Tags.SparkAddress) {
+  console.log(`Input is Spark address ${input.inner[0].address}`)
+} else if (input.tag === InputType_Tags.SparkInvoice) {
+  const invoice = input.inner[0]
+  console.log('Input is Spark invoice:')
+  if (invoice.tokenIdentifier != null) {
+    console.log(
+      `  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}`
+    )
+  } else {
+    console.log(`  Amount: ${invoice.amount} sats`)
+  }
+
+  if (invoice.description != null) {
+    console.log(`  Description: ${invoice.description}`)
+  }
+
+  if (invoice.expiryTime != null) {
+    console.log(`  Expiry time: ${new Date(Number(invoice.expiryTime) * 1000).toISOString()}`)
+  }
+
+  if (invoice.senderPublicKey != null) {
+    console.log(`  Sender public key: ${invoice.senderPublicKey}`)
+  }
+} else {
+  // Other input types are available
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String input = "an input to be parsed...";
+
+InputType inputType = await sdk.parse(input: input);
+if (inputType is InputType_BitcoinAddress) {
+  print("Input is Bitcoin address ${inputType.field0.address}");
+} else if (inputType is InputType_Bolt11Invoice) {
+  String amountStr = inputType.field0.amountMsat != null
+      ? inputType.field0.amountMsat.toString()
+      : "unknown";
+  print("Input is BOLT11 invoice for $amountStr msats");
+} else if (inputType is InputType_LnurlPay) {
+  print(
+      "Input is LNURL-Pay/Lightning address accepting min/max ${inputType.field0.minSendable}/${inputType.field0.maxSendable} msats");
+} else if (inputType is InputType_LnurlWithdraw) {
+  print(
+      "Input is LNURL-Withdraw for min/max ${inputType.field0.minWithdrawable}/${inputType.field0.maxWithdrawable} msats");
+} else if (inputType is InputType_SparkAddress) {
+  print("Input is Spark address ${inputType.field0.address}");
+} else if (inputType is InputType_SparkInvoice) {
+  var invoice = inputType.field0;
+  print("Input is Spark invoice:");
+  if (invoice.tokenIdentifier != null) {
+    print("  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}");
+  } else {
+    print("  Amount: ${invoice.amount} sats");
+  }
+
+  if (invoice.description != null) {
+    print("  Description: ${invoice.description}");
+  }
+
+  if (invoice.expiryTime != null) {
+    print("  Expiry time: ${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
+  }
+
+  if (invoice.senderPublicKey != null) {
+    print("  Sender public key: ${invoice.senderPublicKey}");
+  }
+} else {
+  // Other input types are available
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">input_str = "an input to be parsed..."
+
+try:
+    parsed_input = await sdk.parse(input=input_str)
+    if isinstance(parsed_input, InputType.BITCOIN_ADDRESS):
+        details = parsed_input[0]
+        logging.debug(f"Input is Bitcoin address {details.address}")
+    elif isinstance(parsed_input, InputType.BOLT11_INVOICE):
+        details = parsed_input[0]
+        amount = "unknown"
+        if details.amount_msat:
+            amount = str(details.amount_msat)
+        logging.debug(f"Input is BOLT11 invoice for {amount} msats")
+    elif isinstance(parsed_input, InputType.LNURL_PAY):
+        details = parsed_input[0]
+        logging.debug(
+            f"Input is LNURL-Pay/Lightning address accepting "
+            f"min/max {details.min_sendable}/{details.max_sendable} msats"
+        )
+    elif isinstance(parsed_input, InputType.LNURL_WITHDRAW):
+        details = parsed_input[0]
+        logging.debug(
+            f"Input is LNURL-Withdraw for min/max "
+            f"{details.min_withdrawable}/{details.max_withdrawable} msats"
+        )
+    elif isinstance(parsed_input, InputType.SPARK_ADDRESS):
+        details = parsed_input[0]
+        logging.debug(f"Input is Spark address {details.address}")
+    elif isinstance(parsed_input, InputType.SPARK_INVOICE):
+        invoice = parsed_input[0]
+        logging.debug("Input is Spark invoice:")
+        if invoice.token_identifier:
+            logging.debug(f"  Amount: {invoice.amount} base units of "
+            f"token with id {invoice.token_identifier}")
+        else:
+            logging.debug(f"  Amount: {invoice.amount} sats")
+
+        if invoice.description:
+            logging.debug(f"  Description: {invoice.description}")
+
+        if invoice.expiry_time:
+            logging.debug(f"  Expiry time: {invoice.expiry_time}")
+
+        if invoice.sender_public_key:
+            logging.debug(f"  Sender public key: {invoice.sender_public_key}")
+    # Other input types are available
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">inputStr := "an input to be parsed..."
+
+input, err := sdk.Parse(inputStr)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+switch inputType := input.(type) {
+case breez_sdk_spark.InputTypeBitcoinAddress:
+	log.Printf("Input is Bitcoin address %s", inputType.Field0.Address)
+
+case breez_sdk_spark.InputTypeBolt11Invoice:
+	amount := "unknown"
+	if inputType.Field0.AmountMsat != nil {
+		amount = strconv.FormatUint(*inputType.Field0.AmountMsat, 10)
+	}
+	log.Printf("Input is BOLT11 invoice for %s msats", amount)
+
+case breez_sdk_spark.InputTypeLnurlPay:
+	log.Printf("Input is LNURL-Pay/Lightning address accepting min/max %d/%d msats",
+		inputType.Field0.MinSendable, inputType.Field0.MaxSendable)
+
+case breez_sdk_spark.InputTypeLnurlWithdraw:
+	log.Printf("Input is LNURL-Withdraw for min/max %d/%d msats",
+		inputType.Field0.MinWithdrawable, inputType.Field0.MaxWithdrawable)
+
+case breez_sdk_spark.InputTypeSparkAddress:
+	log.Printf("Input is Spark address %s", inputType.Field0.Address)
+
+case breez_sdk_spark.InputTypeSparkInvoice:
+	invoice := inputType.Field0
+	log.Println("Input is Spark invoice:")
+	if invoice.TokenIdentifier != nil {
+		log.Printf("  Amount: %d base units of token with id %s", invoice.Amount, *invoice.TokenIdentifier)
+	} else {
+		log.Printf("  Amount: %d sats", invoice.Amount)
+	}
+
+	if invoice.Description != nil {
+		log.Printf("  Description: %s", *invoice.Description)
+	}
+
+	if invoice.ExpiryTime != nil {
+		log.Printf("  Expiry time: %d", *invoice.ExpiryTime)
+	}
+
+	if invoice.SenderPublicKey != nil {
+		log.Printf("  Sender public key: %s", *invoice.SenderPublicKey)
+	}
+
+default:
+	// Other input types are available
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="supporting-other-input-formats"><a class="header" href="#supporting-other-input-formats">Supporting other input formats</a></h2>
+<p>The parsing module can be extended using external input parsers provided in the SDK configuration. These will be used when the input is not recognized.</p>
+<p>You can implement and provide your own parsers, or use existing public ones.</p>
+<h3 id="configuring-external-parsers"><a class="header" href="#configuring-external-parsers">Configuring external parsers</a></h3>
+<p>Configuring external parsers can only be done before <a href="initializing.html#basic-initialization">initializing</a> and the config cannot be changed through the lifetime of the connection.</p>
+<p>Multiple parsers can be configured, and each one is defined by:</p>
+<ul>
+<li><strong>Provider ID</strong>: an arbitrary id to identify the provider input type</li>
+<li><strong>Input regex</strong>: a regex pattern that should reliably match all inputs that this parser can process, even if it may also match some invalid inputs</li>
+<li><strong>Parser URL</strong>: an URL containing the placeholder <code>&lt;input&gt;</code></li>
+</ul>
+<p>When parsing an input that isn't recognized as one of the native input types, the SDK will check if the input conforms to any of the external parsers regex expressions. If so, it will make an HTTP <code>GET</code> request to the provided URL, replacing the placeholder with the input. If the input is recognized, the response should include in its body a string that can be parsed into one of the natively supported types.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">// Create the default config
+let mut config = default_config(Network::Mainnet);
+config.api_key = Some("&lt;breez api key&gt;".to_string());
+
+// Configure external parsers
+config.external_input_parsers = Some(vec![
+    ExternalInputParser {
+        provider_id: "provider_a".to_string(),
+        input_regex: "^provider_a".to_string(),
+        parser_url: "https://parser-domain.com/parser?input=&lt;input&gt;".to_string(),
+    },
+    ExternalInputParser {
+        provider_id: "provider_b".to_string(),
+        input_regex: "^provider_b".to_string(),
+        parser_url: "https://parser-domain.com/parser?input=&lt;input&gt;".to_string(),
+    },
+]);</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// Create the default config
+var config = defaultConfig(network: Network.mainnet)
+config.apiKey = "&lt;breez api key&gt;"
+
+// Configure external parsers
+config.externalInputParsers = [
+    ExternalInputParser(
+        providerId: "provider_a",
+        inputRegex: "^provider_a",
+        parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;"
+    ),
+    ExternalInputParser(
+        providerId: "provider_b",
+        inputRegex: "^provider_b",
+        parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;"
+    ),
+]
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// Create the default config
+val config = defaultConfig(Network.MAINNET)
+config.apiKey = "&lt;breez api key&gt;"
+
+// Configure external parsers
+config.externalInputParsers = listOf(
+    ExternalInputParser(
+        providerId = "provider_a",
+        inputRegex = "^provider_a",
+        parserUrl = "https://parser-domain.com/parser?input=&lt;input&gt;"
+    ),
+    ExternalInputParser(
+        providerId = "provider_b",
+        inputRegex = "^provider_b",
+        parserUrl = "https://parser-domain.com/parser?input=&lt;input&gt;"
+    )
+)
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// Create the default config
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+{
+    apiKey = "&lt;breez api key&gt;",
+    externalInputParsers = new List&lt;ExternalInputParser&gt;
+    {
+    new ExternalInputParser(
+        providerId: "provider_a",
+        inputRegex: "^provider_a",
+        parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;"
+    ),
+    new ExternalInputParser(
+        providerId: "provider_b",
+        inputRegex: "^provider_b",
+        parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;"
+    )
+    }
+};
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// Create the default config
+const config = defaultConfig('mainnet')
+config.apiKey = '&lt;breez api key&gt;'
+
+// Configure external parsers
+config.externalInputParsers = [
+  {
+    providerId: 'provider_a',
+    inputRegex: '^provider_a',
+    parserUrl: 'https://parser-domain.com/parser?input=&lt;input&gt;'
+  },
+  {
+    providerId: 'provider_b',
+    inputRegex: '^provider_b',
+    parserUrl: 'https://parser-domain.com/parser?input=&lt;input&gt;'
+  }
+]
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// Create the default config
+const config = defaultConfig(Network.Mainnet)
+config.apiKey = '&lt;breez api key&gt;'
+
+// Configure external parsers
+config.externalInputParsers = [
+  {
+    providerId: 'provider_a',
+    inputRegex: '^provider_a',
+    parserUrl: 'https://parser-domain.com/parser?input=&lt;input&gt;'
+  },
+  {
+    providerId: 'provider_b',
+    inputRegex: '^provider_b',
+    parserUrl: 'https://parser-domain.com/parser?input=&lt;input&gt;'
+  }
+]
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// Create the default config
+Config config = defaultConfig(network: Network.mainnet)
+    .copyWith(apiKey: "&lt;breez api key&gt;");
+
+config = config.copyWith(
+  externalInputParsers: [
+    ExternalInputParser(
+      providerId: "provider_a",
+      inputRegex: "^provider_a",
+      parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;",
+    ),
+    ExternalInputParser(
+      providerId: "provider_b",
+      inputRegex: "^provider_b",
+      parserUrl: "https://parser-domain.com/parser?input=&lt;input&gt;",
+    ),
+  ],
+);
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># Create the default config
+config = default_config(network=Network.MAINNET)
+config.api_key = "&lt;breez api key&gt;"
+
+# Configure external parsers
+config.external_input_parsers = [
+    ExternalInputParser(
+        provider_id="provider_a",
+        input_regex="^provider_a",
+        parser_url="https://parser-domain.com/parser?input=&lt;input&gt;"
+    ),
+    ExternalInputParser(
+        provider_id="provider_b",
+        input_regex="^provider_b",
+        parser_url="https://parser-domain.com/parser?input=&lt;input&gt;"
+    )
+]
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// Create the default config
+apiKey := "&lt;breez api key&gt;"
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+config.ApiKey = &amp;apiKey
+
+// Configure external parsers
+parsers := []breez_sdk_spark.ExternalInputParser{
+	{
+		ProviderId: "provider_a",
+		InputRegex: "^provider_a",
+		ParserUrl:  "https://parser-domain.com/parser?input=&lt;input&gt;",
+	},
+	{
+		ProviderId: "provider_b",
+		InputRegex: "^provider_b",
+		ParserUrl:  "https://parser-domain.com/parser?input=&lt;input&gt;",
+	},
+}
+config.ExternalInputParsers = &amp;parsers
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="public-external-parsers"><a class="header" href="#public-external-parsers">Public external parsers</a></h3>
+<ul>
+<li><a href="https://www.pnp.co.za/"><strong>PicknPay QRs</strong></a>
+<ul>
+<li>Maintainer: <a href="https://www.moneybadger.co.za/">MoneyBadger</a></li>
+<li>Regex: <code>(.*)(za.co.electrum.picknpay)(.*)</code></li>
+<li>URL: <code>https://cryptoqr.net/.well-known/lnurlp/&lt;input&gt;</code></li>
+<li>More info: <a href="mailto:support+breezsdk@moneybadger.co.za">support+breezsdk@moneybadger.co.za</a></li>
+</ul>
+</li>
+<li><a href="https://www.bootlegger.coffee/"><strong>Bootlegger QRs</strong></a>
+<ul>
+<li>Maintainer: <a href="https://www.moneybadger.co.za/">MoneyBadger</a></li>
+<li>Regex: <code>(.*)(wigroup\.co|yoyogroup\.co)(.*)</code></li>
+<li>URL: <code>https://cryptoqr.net/.well-known/lnurlw/&lt;input&gt;</code></li>
+<li>More info: <a href="mailto:support+breezsdk@moneybadger.co.za">support+breezsdk@moneybadger.co.za</a></li>
+</ul>
+</li>
+</ul>
+<h3 id="default-external-parsers"><a class="header" href="#default-external-parsers">Default external parsers</a></h3>
+<p>The SDK ships with some embedded default external parsers. If you prefer not to use them, you can disable them in the SDK's configuration. See the available default parsers in the <a href="https://breez.github.io/spark-sdk/breez_sdk_spark/constant.DEFAULT_EXTERNAL_INPUT_PARSERS.html">API Documentation</a> by checking the source of the constant.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/payments.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/receive_payment.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/payments.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/receive_payment.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

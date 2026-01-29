@@ -1,0 +1,1108 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Issuing tokens - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/issuing_tokens.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h2 id="issuing-tokens">
+    <a class="header" href="#issuing-tokens">Issuing tokens</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_token_issuer">API docs</a>
+</h2>
+<p>The Breez SDK provides a specialized Token Issuer interface for managing custom token issuance on the Spark network using the using the <a href="https://docs.spark.money/learn/tokens/hello-btkn">BTKN protocol</a>. This functionality enables token creators to issue, manage, and control their own tokens with advanced features.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let token_issuer = sdk.get_token_issuer();</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let tokenIssuer = sdk.getTokenIssuer()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val tokenIssuer = sdk.getTokenIssuer()
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var tokenIssuer = sdk.GetTokenIssuer();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenIssuer = sdk.getTokenIssuer()
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenIssuer = sdk.getTokenIssuer()
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">TokenIssuer tokenIssuer = sdk.getTokenIssuer();
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">token_issuer = sdk.get_token_issuer()
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">tokenIssuer := sdk.GetTokenIssuer()
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="token-creation">
+    <a class="header" href="#token-creation">Token creation</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.TokenIssuer.html#method.create_issuer_token">API docs</a>
+</h2>
+<p>Create a custom token with configurable parameters. Define the decimal precision, max supply and if the token can be frozen.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let request = CreateIssuerTokenRequest {
+    name: "My Token".to_string(),
+    ticker: "MTK".to_string(),
+    decimals: 6,
+    is_freezable: false,
+    max_supply: 1_000_000,
+};
+let token_metadata = token_issuer.create_issuer_token(request).await?;
+info!("Token identifier: {}", token_metadata.identifier);</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let request = CreateIssuerTokenRequest(
+    name: "My Token",
+    ticker: "MTK",
+    decimals: UInt32(6),
+    isFreezable: false,
+    maxSupply: BInt(1_000_000)
+)
+let tokenMetadata = try await tokenIssuer.createIssuerToken(request: request)
+print("Token identifier: {}", tokenMetadata.identifier)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val request =
+            CreateIssuerTokenRequest(
+                    name = "My Token",
+                    ticker = "MTK",
+                    decimals = 6.toUInt(),
+                    isFreezable = false,
+                    maxSupply = BigInteger.fromLong(1_000_000L)
+            )
+    val tokenMetadata = tokenIssuer.createIssuerToken(request)
+    // Log.v("Breez", "Token identifier: ${tokenMetadata.identifier}")
+} catch (e: Exception) {
+    // Handle exception
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var maxSupply = new BigInteger(1000000);
+var request = new CreateIssuerTokenRequest(
+    name: "My Token",
+    ticker: "MTK",
+    decimals: 6,
+    isFreezable: false,
+    maxSupply: maxSupply
+);
+
+var tokenMetadata = await tokenIssuer.CreateIssuerToken(request);
+Console.WriteLine($"Token identifier: {tokenMetadata.identifier}");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenMetadata = await tokenIssuer.createIssuerToken({
+  name: 'My Token',
+  ticker: 'MTK',
+  decimals: 6,
+  isFreezable: false,
+  maxSupply: BigInt(1_000_000)
+})
+console.debug(`Token identifier: ${tokenMetadata.identifier}`)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenMetadata = await tokenIssuer.createIssuerToken({
+  name: 'My Token',
+  ticker: 'MTK',
+  decimals: 6,
+  isFreezable: false,
+  maxSupply: BigInt(1_000_000)
+})
+console.debug(`Token identifier: ${tokenMetadata.identifier}`)
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">CreateIssuerTokenRequest request = CreateIssuerTokenRequest(
+  name: "My Token",
+  ticker: "MTK",
+  decimals: 6,
+  isFreezable: false,
+  maxSupply: BigInt.from(1000000),
+);
+TokenMetadata tokenMetadata =
+    await tokenIssuer.createIssuerToken(request: request);
+print("Token identifier: ${tokenMetadata.identifier}");
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    request = CreateIssuerTokenRequest(
+        name="My Token",
+        ticker="MTK",
+        decimals=6,
+        is_freezable=False,
+        max_supply=1_000_000,
+    )
+    token_metadata = await token_issuer.create_issuer_token(request)
+    logging.debug(f"Token identifier: {token_metadata.identifier}")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">request := breez_sdk_spark.CreateIssuerTokenRequest{
+	Name:        "My Token",
+	Ticker:      "MTK",
+	Decimals:    6,
+	IsFreezable: false,
+	MaxSupply:   new(big.Int).SetInt64(1_000_000),
+}
+tokenMetadata, err := tokenIssuer.CreateIssuerToken(request)
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+log.Printf("Token identifier: %v", tokenMetadata.Identifier)
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="creating-multiple-tokens"><a class="header" href="#creating-multiple-tokens">Creating multiple tokens</a></h3>
+<p>Token creation is limited to one token per issuer wallet. If you need to create and then manage more than one token using the same mnemonic, we recommend using different account numbers when initializing the SDK.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let account_number = 21;
+
+let mnemonic = "&lt;mnemonic words&gt;".to_string();
+let seed = Seed::Mnemonic {
+    mnemonic,
+    passphrase: None,
+};
+let config = default_config(Network::Mainnet);
+let mut builder = SdkBuilder::new(config, seed);
+builder = builder.with_default_storage("./.data".to_string());
+
+// Set the account number for the SDK
+builder = builder.with_key_set(KeySetConfig {
+    key_set_type: KeySetType::Default,
+    use_address_index: false,
+    account_number: Some(account_number),
+});
+
+let sdk = builder.build().await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let accountNumber = UInt32(21)
+
+let mnemonic = "&lt;mnemonic words&gt;"
+let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+let config = defaultConfig(network: Network.mainnet)
+let builder = SdkBuilder(config: config, seed: seed)
+await builder.withDefaultStorage(storageDir: "./.data")
+
+// Set the account number for the SDK
+let keySetConfig = KeySetConfig(
+    keySetType: KeySetType.default,
+    useAddressIndex: false,
+    accountNumber: accountNumber
+)
+await builder.withKeySet(config: keySetConfig)
+
+let sdk = try await builder.build()
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val accountNumber = 21u
+
+val mnemonic = "&lt;mnemonic words&gt;"
+val seed = Seed.Mnemonic(mnemonic, null)
+val config = defaultConfig(Network.MAINNET)
+config.apiKey = "&lt;breez api key&gt;"
+
+try {
+    val builder = SdkBuilder(config, seed)
+    builder.withDefaultStorage("./.data")
+
+    // Set the account number for the SDK
+    val keySetConfig = KeySetConfig(
+        keySetType = KeySetType.DEFAULT,
+        useAddressIndex = false,
+        accountNumber = accountNumber
+    )
+    builder.withKeySet(keySetConfig)
+
+    val sdk = builder.build()
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var accountNumber = 21u;
+
+var mnemonic = "&lt;mnemonic words&gt;";
+var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+{
+    apiKey = "&lt;breez api key&gt;"
+};
+var builder = new SdkBuilder(config: config, seed: seed);
+await builder.WithDefaultStorage(storageDir: "./.data");
+
+// Set the account number for the SDK
+var keySetConfig = new KeySetConfig(
+    keySetType: KeySetType.Default,
+    useAddressIndex: false,
+    accountNumber
+);
+await builder.WithKeySet(keySetConfig);
+
+var sdk = await builder.Build();
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">await init()
+
+const accountNumber = 21
+
+const mnemonic = '&lt;mnemonic words&gt;'
+const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+const config = defaultConfig('mainnet')
+config.apiKey = '&lt;breez api key&gt;'
+let builder = SdkBuilder.new(config, seed)
+builder = await builder.withDefaultStorage('./.data')
+
+// Set the account number for the SDK
+builder = builder.withKeySet({
+  keySetType: 'default',
+  useAddressIndex: false,
+  accountNumber
+})
+
+const sdk = await builder.build()
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const accountNumber = 21
+
+const mnemonic = '&lt;mnemonics words&gt;'
+const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
+const config = defaultConfig(Network.Mainnet)
+config.apiKey = '&lt;breez api key&gt;'
+const builder = new SdkBuilder(config, seed)
+await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
+
+// Set the account number for the SDK
+const keySetConfig: KeySetConfig = {
+  keySetType: KeySetType.Default,
+  useAddressIndex: false,
+  accountNumber
+}
+await builder.withKeySet(keySetConfig)
+
+const sdk = await builder.build()
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">var accountNumber = 21;
+
+String mnemonic = "&lt;mnemonic words&gt;";
+final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+final config = defaultConfig(network: Network.mainnet)
+    .copyWith(apiKey: "&lt;breez api key&gt;");
+final builder = SdkBuilder(config: config, seed: seed);
+builder.withDefaultStorage(storageDir: "./.data");
+
+// Set the account number for the SDK
+builder.withKeySet(
+  config: KeySetConfig(
+    keySetType: KeySetType.default_,
+    useAddressIndex: false,
+    accountNumber: accountNumber,
+  ),
+);
+
+var sdk = await builder.build();
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">account_number = 21
+
+mnemonic = "&lt;mnemonic words&gt;"
+seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+config = default_config(network=Network.MAINNET)
+config.api_key = "&lt;breez api key&gt;"
+try:
+    builder = SdkBuilder(config=config, seed=seed)
+    await builder.with_default_storage(storage_dir="./.data")
+
+    # Set the account number for the SDK
+    key_set_config = KeySetConfig(
+        key_set_type=KeySetType.DEFAULT,
+        use_address_index=False,
+        account_number=account_number,
+    )
+    await builder.with_key_set(config=key_set_config)
+
+    sdk = await builder.build()
+    return sdk
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">accountNumber := uint32(21)
+
+mnemonic := "&lt;mnemonic words&gt;"
+var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+	Mnemonic:   mnemonic,
+	Passphrase: nil,
+}
+apiKey := "&lt;breez api key&gt;"
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+config.ApiKey = &amp;apiKey
+builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+builder.WithDefaultStorage("./.data")
+
+// Set the account number for the SDK
+keySetConfig := breez_sdk_spark.KeySetConfig{
+	KeySetType:      breez_sdk_spark.KeySetTypeDefault,
+	UseAddressIndex: false,
+	AccountNumber:   &amp;accountNumber,
+}
+builder.WithKeySet(keySetConfig)
+
+sdk, err := builder.Build()
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="supply-management"><a class="header" href="#supply-management">Supply Management</a></h2>
+<h3 id="minting-a-token">
+    <a class="header" href="#minting-a-token">Minting a token</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.TokenIssuer.html#method.mint_issuer_token">API docs</a>
+</h3>
+<p>Mint to increase the circulating supply of the token.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let request = MintIssuerTokenRequest { amount: 1_000 };
+
+let payment = token_issuer.mint_issuer_token(request).await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let request = MintIssuerTokenRequest(
+    amount: BInt(1_000)
+)
+let payment = try await tokenIssuer.mintIssuerToken(request: request)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val request =
+            MintIssuerTokenRequest(
+                    amount = BigInteger.fromLong(1_000L),
+            )
+    val payment = tokenIssuer.mintIssuerToken(request)
+} catch (e: Exception) {
+    // Handle exception
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var amount = new BigInteger(1000);
+var request = new MintIssuerTokenRequest(
+    amount: amount
+);
+var payment = await tokenIssuer.MintIssuerToken(request);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const payment = await tokenIssuer.mintIssuerToken({
+  amount: BigInt(1_000)
+})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const payment = await tokenIssuer.mintIssuerToken({
+  amount: BigInt(1_000)
+})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">MintIssuerTokenRequest request = MintIssuerTokenRequest(
+  amount: BigInt.from(1000),
+);
+Payment payment = await tokenIssuer.mintIssuerToken(request: request);
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    request = MintIssuerTokenRequest(
+        amount=1_000,
+    )
+    payment = await token_issuer.mint_issuer_token(request)
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">request := breez_sdk_spark.MintIssuerTokenRequest{
+	Amount: new(big.Int).SetInt64(1_000),
+}
+payment, err := tokenIssuer.MintIssuerToken(request)
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="burning-a-token">
+    <a class="header" href="#burning-a-token">Burning a token</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.TokenIssuer.html#method.burn_issuer_token">API docs</a>
+</h3>
+<p>Permanently remove tokens from the circulating supply by burning them.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let request = BurnIssuerTokenRequest { amount: 1_000 };
+
+let payment = token_issuer.burn_issuer_token(request).await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let request = BurnIssuerTokenRequest(
+    amount: BInt(1_000)
+)
+let payment = try await tokenIssuer.burnIssuerToken(request: request)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val request =
+            BurnIssuerTokenRequest(
+                    amount = BigInteger.fromLong(1_000L),
+            )
+    val payment = tokenIssuer.burnIssuerToken(request)
+} catch (e: Exception) {
+    // Handle exception
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var amount = new BigInteger(1000);
+var request = new BurnIssuerTokenRequest(
+    amount: amount
+);
+var payment = await tokenIssuer.BurnIssuerToken(request);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const payment = await tokenIssuer.burnIssuerToken({
+  amount: BigInt(1_000)
+})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const payment = await tokenIssuer.burnIssuerToken({
+  amount: BigInt(1_000)
+})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">BurnIssuerTokenRequest request = BurnIssuerTokenRequest(
+  amount: BigInt.from(1000),
+);
+Payment payment = await tokenIssuer.burnIssuerToken(request: request);
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    request = BurnIssuerTokenRequest(
+        amount=1_000,
+    )
+    payment = await token_issuer.burn_issuer_token(request)
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">request := breez_sdk_spark.BurnIssuerTokenRequest{
+	Amount: new(big.Int).SetInt64(1_000),
+}
+payment, err := tokenIssuer.BurnIssuerToken(request)
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="query-balance--metadata"><a class="header" href="#query-balance--metadata">Query balance &amp; metadata</a></h2>
+<p>Retrieve the current issue token balance and fetch the token metadata.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let token_balance = token_issuer.get_issuer_token_balance().await?;
+info!("Token balance: {}", token_balance.balance);
+
+let token_metadata = token_issuer.get_issuer_token_metadata().await?;
+info!("Token ticker: {}", token_metadata.ticker);</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let tokenBalance = try await tokenIssuer.getIssuerTokenBalance()
+print("Token balance: {}", tokenBalance.balance)
+
+let tokenMetadata = try await tokenIssuer.getIssuerTokenMetadata()
+print("Token ticker: {}", tokenMetadata.ticker)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val tokenBalance = tokenIssuer.getIssuerTokenBalance()
+    // Log.v("Breez", "Token balance: ${tokenBalance.balance}")
+
+    val tokenMetadata = tokenIssuer.getIssuerTokenMetadata()
+    // Log.v("Breez", "Token ticker: ${tokenMetadata.ticker}")
+} catch (e: Exception) {
+    // Handle exception
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var tokenBalance = await tokenIssuer.GetIssuerTokenBalance();
+Console.WriteLine($"Token balance: {tokenBalance.balance}");
+
+var tokenMetadata = await tokenIssuer.GetIssuerTokenMetadata();
+Console.WriteLine($"Token ticker: {tokenMetadata.ticker}");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenBalance = await tokenIssuer.getIssuerTokenBalance()
+console.debug(`Token balance: ${tokenBalance.balance}`)
+
+const tokenMetadata = await tokenIssuer.getIssuerTokenMetadata()
+console.debug(`Token ticker: ${tokenMetadata.ticker}`)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenBalance = await tokenIssuer.getIssuerTokenBalance()
+console.debug(`Token balance: ${tokenBalance.balance}`)
+
+const tokenMetadata = await tokenIssuer.getIssuerTokenMetadata()
+console.debug(`Token ticker: ${tokenMetadata.ticker}`)
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">TokenBalance tokenBalance = await tokenIssuer.getIssuerTokenBalance();
+print("Token balance: ${tokenBalance.balance}");
+
+TokenMetadata tokenMetadata = await tokenIssuer.getIssuerTokenMetadata();
+print("Token ticker: ${tokenMetadata.ticker}");
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    token_balance = await token_issuer.get_issuer_token_balance()
+    logging.debug(f"Token balance: {token_balance.balance}")
+
+    token_metadata = await token_issuer.get_issuer_token_metadata()
+    logging.debug(f"Token ticker: {token_metadata.ticker}")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">tokenBalance, err := tokenIssuer.GetIssuerTokenBalance()
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+log.Printf("Token balance: %v", tokenBalance.Balance)
+
+tokenMetadata, err := tokenIssuer.GetIssuerTokenMetadata()
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+log.Printf("Token ticker: %v", tokenMetadata.Ticker)
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="freeze-and-unfreeze-tokens"><a class="header" href="#freeze-and-unfreeze-tokens">Freeze and unfreeze tokens</a></h2>
+<p>Freeze and unfreeze tokens at a specific Spark address if the token metadata allows it.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let spark_address = "&lt;spark address&gt;".to_string();
+// Freeze the tokens held at the specified Spark address
+let freeze_request = FreezeIssuerTokenRequest {
+    address: spark_address.clone(),
+};
+let freeze_response = token_issuer.freeze_issuer_token(freeze_request).await?;
+
+// Unfreeze the tokens held at the specified Spark address
+let unfreeze_request = UnfreezeIssuerTokenRequest {
+    address: spark_address,
+};
+let unfreeze_response = token_issuer.unfreeze_issuer_token(unfreeze_request).await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let sparkAddress = "&lt;spark address&gt;"
+// Freeze the tokens held at the specified Spark address
+let freezeRequest = FreezeIssuerTokenRequest(
+    address: sparkAddress
+)
+let freezeResponse = try await tokenIssuer.freezeIssuerToken(request: freezeRequest)
+
+// Unfreeze the tokens held at the specified Spark address
+let unfreezeRequest = UnfreezeIssuerTokenRequest(
+    address: sparkAddress
+)
+let unfreezeResponse = try await tokenIssuer.unfreezeIssuerToken(request: unfreezeRequest)
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val sparkAddress = "&lt;spark address&gt;"
+    // Freeze the tokens held at the specified Spark address
+    val freezeRequest =
+            FreezeIssuerTokenRequest(
+                    address = sparkAddress,
+            )
+    val freezeResponse = tokenIssuer.freezeIssuerToken(freezeRequest)
+
+    // Unfreeze the tokens held at the specified Spark address
+    val unfreezeRequest =
+            UnfreezeIssuerTokenRequest(
+                    address = sparkAddress,
+            )
+    val unfreezeResponse = tokenIssuer.unfreezeIssuerToken(unfreezeRequest)
+} catch (e: Exception) {
+    // Handle exception
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var sparkAddress = "&lt;spark address&gt;";
+var freezeRequest = new FreezeIssuerTokenRequest(
+    address: sparkAddress
+);
+var freezeReponse = await tokenIssuer.FreezeIssuerToken(freezeRequest);
+
+var unfreezeRequest = new UnfreezeIssuerTokenRequest(
+    address: sparkAddress
+);
+var unfreezeResponse = await tokenIssuer.UnfreezeIssuerToken(unfreezeRequest);
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const sparkAddress = '&lt;spark address&gt;'
+// Freeze the tokens held at the specified Spark address
+const freezeResponse = await tokenIssuer.freezeIssuerToken({
+  address: sparkAddress
+})
+
+// Unfreeze the tokens held at the specified Spark address
+const unfreezeResponse = await tokenIssuer.unfreezeIssuerToken({
+  address: sparkAddress
+})
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const sparkAddress = '&lt;spark address&gt;'
+// Freeze the tokens held at the specified Spark address
+const freezeResponse = await tokenIssuer.freezeIssuerToken({
+  address: sparkAddress
+})
+
+// To unfreeze the tokens, use the following:
+const unfreezeResponse = await tokenIssuer.unfreezeIssuerToken({
+  address: sparkAddress
+})
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String sparkAddress = "&lt;spark address&gt;";
+// Freeze the tokens held at the specified Spark address
+FreezeIssuerTokenRequest freezeRequest =
+    FreezeIssuerTokenRequest(address: sparkAddress);
+FreezeIssuerTokenResponse freezeResponse =
+    await tokenIssuer.freezeIssuerToken(request: freezeRequest);
+
+// Unfreeze the tokens held at the specified Spark address
+UnfreezeIssuerTokenRequest unfreezeRequest =
+    UnfreezeIssuerTokenRequest(address: sparkAddress);
+UnfreezeIssuerTokenResponse unfreezeResponse =
+    await tokenIssuer.unfreezeIssuerToken(request: unfreezeRequest);
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    spark_address = "&lt;spark address&gt;"
+    # Freeze the tokens held at the specified Spark address
+    freeze_request = FreezeIssuerTokenRequest(
+        address=spark_address,
+    )
+    freeze_response = await token_issuer.freeze_issuer_token(freeze_request)
+    # Unfreeze the tokens held at the specified Spark address
+    unfreeze_request = UnfreezeIssuerTokenRequest(
+        address=spark_address,
+    )
+    unfreeze_response = await token_issuer.unfreeze_issuer_token(unfreeze_request)
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">sparkAddress := "&lt;spark address&gt;"
+// Freeze the tokens held at the specified Spark address
+freezeRequest := breez_sdk_spark.FreezeIssuerTokenRequest{
+	Address: sparkAddress,
+}
+freezeResponse, err := tokenIssuer.FreezeIssuerToken(freezeRequest)
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+// Unfreeze the tokens held at the specified Spark address
+unfreezeRequest := breez_sdk_spark.UnfreezeIssuerTokenRequest{
+	Address: sparkAddress,
+}
+unfreezeResponse, err := tokenIssuer.UnfreezeIssuerToken(unfreezeRequest)
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+</code></pre>
+</section>
+</custom-tabs>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/token_conversion.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/advanced.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/token_conversion.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/advanced.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
