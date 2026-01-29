@@ -31,21 +31,14 @@ kotlin {
         iosArm64(),
         iosSimulatorArm64()
     ).forEach {
-        val platform = when (it.targetName) {
-            "iosSimulatorArm64" -> "ios_simulator_arm64"
-            "iosArm64" -> "ios_arm64"
-            "iosX64" -> "ios_x64"
-            else -> error("Unsupported target $name")
-        }
-
         it.compilations["main"].cinterops {
             create("breezSdkSparkCInterop") {
                 defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark.def"))
-                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark"), project.file("src/lib/$platform"))
+                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark"))
             }
             create("breezSdkSparkBindingsCInterop") {
                 defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark_bindings.def"))
-                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark_bindings"), project.file("src/lib/$platform"))
+                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark_bindings"))
             }
         }
     }
