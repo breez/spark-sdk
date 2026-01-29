@@ -69,7 +69,9 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
 
     // Set the fee for the refund transaction using the half-hour feerate
     let recommended_fees = sdk.recommended_fees().await?;
-    let fee = Fee::Rate { sat_per_vbyte: recommended_fees.half_hour_fee };
+    let fee = Fee::Rate {
+        sat_per_vbyte: recommended_fees.half_hour_fee,
+    };
     // or using a fixed amount
     //let fee = Fee::Fixed { amount: 500 };
     //
@@ -108,7 +110,8 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
 async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
     // ANCHOR: custom-claim-logic
     if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
-        required_fee_rate_sat_per_vbyte, ..
+        required_fee_rate_sat_per_vbyte,
+        ..
     }) = &deposit.claim_error
     {
         let recommended_fees = sdk.recommended_fees().await?;
