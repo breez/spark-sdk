@@ -106,9 +106,12 @@ impl SyncedStorage {
         });
     }
 
-    /// Feed existing payment metadata into sync storage. This is really only needed the first time sync is set up,
-    /// but there doesn't seem to be a good way to detect that, so we just do it every time.
+    /// Feed existing payment metadata into sync storage during initial sync setup.
+    /// The operation is guarded by persistent cache markers to avoid duplicate or
+    /// concurrent executions and to allow safe retry on failure.
+
     async fn feed_existing_payment_metadata(&self) -> anyhow::Result<()> {
+        // Check if already completed
         if self
             .get_cached_item(INITIAL_SYNC_CACHE_KEY.to_string())
             .await?
@@ -117,62 +120,93 @@ impl SyncedStorage {
             return Ok(());
         }
 
-        let payments = self
-            .inner
-            .list_payments(ListPaymentsRequest::default())
-            .await?;
-        for payment in payments {
-            let Some(details) = payment.details else {
-                continue;
-            };
-            let (description, lnurl_pay_info, lnurl_withdraw_info, conversion_info) = match details
-            {
-                PaymentDetails::Lightning {
-                    description,
-                    lnurl_pay_info,
-                    lnurl_withdraw_info,
-                    ..
-                } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
-                PaymentDetails::Spark {
-                    conversion_info, ..
-                }
-                | PaymentDetails::Token {
-                    conversion_info, ..
-                } => (None, None, None, conversion_info),
-                _ => continue,
-            };
-
-            if lnurl_pay_info.is_none()
-                && lnurl_withdraw_info.is_none()
-                && conversion_info.is_none()
-            {
-                continue;
-            }
-
-            let metadata = PaymentMetadata {
-                lnurl_description: description,
-                lnurl_pay_info,
-                lnurl_withdraw_info,
-                conversion_info,
-                ..Default::default()
-            };
-            let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
-            let record_change_request = RecordChangeRequest {
-                id: record_id,
-                updated_fields: serde_json::from_value(
-                    serde_json::to_value(&metadata)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                )
-                .map_err(|e| StorageError::Serialization(e.to_string()))?,
-            };
-            self.sync_service
-                .set_outgoing_record(&record_change_request)
-                .await?;
+        // Set "in_progress" marker to prevent concurrent runs
+        let in_progress_key = format!("{}_in_progress", INITIAL_SYNC_CACHE_KEY);
+        if self
+            .get_cached_item(in_progress_key.clone())
+            .await?
+            .is_some()
+        {
+            debug!("Initial sync already in progress, skipping");
+            return Ok(());
         }
 
-        self.set_cached_item(INITIAL_SYNC_CACHE_KEY.to_string(), "true".to_string())
+        self.set_cached_item(in_progress_key.clone(), "true".to_string())
             .await?;
-        Ok(())
+
+        let result: anyhow::Result<()> = async {
+            let payments = self
+                .inner
+                .list_payments(ListPaymentsRequest::default())
+                .await?;
+
+            for payment in payments {
+                let Some(details) = payment.details else {
+                    continue;
+                };
+                let (description, lnurl_pay_info, lnurl_withdraw_info, conversion_info) =
+                    match details {
+                        PaymentDetails::Lightning {
+                            description,
+                            lnurl_pay_info,
+                            lnurl_withdraw_info,
+                            ..
+                        } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
+                        PaymentDetails::Spark {
+                            conversion_info, ..
+                        }
+                        | PaymentDetails::Token {
+                            conversion_info, ..
+                        } => (None, None, None, conversion_info),
+                        _ => continue,
+                    };
+
+                if lnurl_pay_info.is_none()
+                    && lnurl_withdraw_info.is_none()
+                    && conversion_info.is_none()
+                {
+                    continue;
+                }
+
+                let metadata = PaymentMetadata {
+                    lnurl_description: description,
+                    lnurl_pay_info,
+                    lnurl_withdraw_info,
+                    conversion_info,
+                    ..Default::default()
+                };
+                let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
+                let record_change_request = RecordChangeRequest {
+                    id: record_id,
+                    updated_fields: serde_json::from_value(
+                        serde_json::to_value(&metadata)
+                            .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                    )
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                };
+                self.sync_service
+                    .set_outgoing_record(&record_change_request)
+                    .await?;
+            }
+            Ok(())
+        }
+        .await;
+
+        // Handle success/failure
+        match result {
+            Ok(_) => {
+                // Mark as complete only on success
+                self.set_cached_item(INITIAL_SYNC_CACHE_KEY.to_string(), "true".to_string())
+                    .await?;
+                self.delete_cached_item(in_progress_key).await?;
+                Ok(())
+            }
+            Err(e) => {
+                // Clear in-progress marker to allow retry
+                self.delete_cached_item(in_progress_key).await?;
+                Err(e)
+            }
+        }
     }
 
     async fn handle_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
