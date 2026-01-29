@@ -515,53 +515,73 @@ impl PostgresStorage {
     async fn migrate(&self) -> Result<(), StorageError> {
         let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
-        // Create migrations table if it doesn't exist
+        // Advisory lock prevents concurrent migration attempts from multiple instances
+        // Lock ID 48879 (0xBEEF) chosen arbitrarily for this SDK's migrations
         client
-            .execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TIMESTAMPTZ DEFAULT NOW()
-                )",
-                &[],
-            )
+            .execute("SELECT pg_advisory_lock(48879)", &[])
             .await
-            .map_err(map_db_error)?;
+            .map_err(|e| {
+                StorageError::InitializationError(format!("Failed to acquire migration lock: {e}"))
+            })?;
 
-        // Get current version
-        let current_version: i32 = client
-            .query_opt(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                &[],
-            )
-            .await
-            .map_err(map_db_error)?
-            .map_or(0, |row| row.get(0));
-
-        let migrations = Self::migrations();
-
-        for (i, migration) in migrations.iter().enumerate() {
-            let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
-            if version > current_version {
-                // Run each migration in a transaction for atomicity
-                let tx = client.transaction().await.map_err(map_db_error)?;
-
-                for statement in *migration {
-                    tx.execute(*statement, &[]).await.map_err(|e| {
-                        StorageError::Implementation(format!("Migration {version} failed: {e}"))
-                    })?;
-                }
-                tx.execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)",
-                    &[&version],
+        // Run migrations, capturing result to ensure lock is always released
+        let result = async {
+            // Create migrations table if it doesn't exist
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TIMESTAMPTZ DEFAULT NOW()
+                    )",
+                    &[],
                 )
                 .await
                 .map_err(map_db_error)?;
 
-                tx.commit().await.map_err(map_db_error)?;
-            }
-        }
+            // Get current version
+            let current_version: i32 = client
+                .query_opt(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                    &[],
+                )
+                .await
+                .map_err(map_db_error)?
+                .map_or(0, |row| row.get(0));
 
-        Ok(())
+            let migrations = Self::migrations();
+
+            for (i, migration) in migrations.iter().enumerate() {
+                let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
+                if version > current_version {
+                    // Run each migration in a transaction for atomicity
+                    let tx = client.transaction().await.map_err(map_db_error)?;
+
+                    for statement in *migration {
+                        tx.execute(*statement, &[]).await.map_err(|e| {
+                            StorageError::Implementation(format!("Migration {version} failed: {e}"))
+                        })?;
+                    }
+                    tx.execute(
+                        "INSERT INTO schema_migrations (version) VALUES ($1)",
+                        &[&version],
+                    )
+                    .await
+                    .map_err(map_db_error)?;
+
+                    tx.commit().await.map_err(map_db_error)?;
+                }
+            }
+
+            Ok(())
+        }
+        .await;
+
+        // Always release the lock, even on failure
+        let _ = client
+            .execute("SELECT pg_advisory_unlock(48879)", &[])
+            .await;
+
+        result
     }
 
     #[allow(clippy::too_many_lines)]
