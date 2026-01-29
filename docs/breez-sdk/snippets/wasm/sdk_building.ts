@@ -41,7 +41,6 @@ const exampleGettingStartedAdvanced = async () => {
   builder = await builder.withDefaultStorage('./.data')
   // You can also pass your custom implementations:
   // builder = builder.withStorage(<your storage implementation>)
-  // builder = builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
   // builder = builder.withChainService(<your chain service implementation>)
   // builder = builder.withRestClient(<your rest client implementation>)
   // builder = builder.withKeySet({ keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number> })

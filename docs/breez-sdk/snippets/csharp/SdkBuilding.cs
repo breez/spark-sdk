@@ -20,7 +20,6 @@ namespace BreezSdkSnippets
             await builder.WithDefaultStorage(storageDir: "./.data");
             // You can also pass your custom implementations:
             // await builder.WithStorage(<your storage implementation>)
-            // await builder.WithRealTimeSyncStorage(<your real-time sync storage implementation>)
             // await builder.WithChainService(<your chain service implementation>)
             // await builder.WithRestClient(<your rest client implementation>)
             // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
@@ -81,5 +80,39 @@ namespace BreezSdkSnippets
             await builder.WithPaymentObserver(paymentObserver);
         }
         // ANCHOR_END: with-payment-observer
+
+        async Task InitSdkPostgres()
+        {
+            // ANCHOR: init-sdk-postgres
+            // Construct the seed using mnemonic words or entropy bytes
+            var mnemonic = "<mnemonic words>";
+            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+
+            // Create the default config
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Configure PostgreSQL storage
+            // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+            // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+            var postgresConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
+                connectionString: "host=localhost user=postgres dbname=spark"
+            );
+            // Optionally pool settings can be adjusted. Some examples:
+            postgresConfig = postgresConfig with
+            {
+                maxPoolSize = 8u,        // Max connections in pool
+                waitTimeoutSecs = 30ul   // Timeout waiting for connection
+            };
+
+            // Create the storage and build the SDK
+            var storage = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
+            var builder = new SdkBuilder(config: config, seed: seed);
+            await builder.WithStorage(storage);
+            var sdk = await builder.Build();
+            // ANCHOR_END: init-sdk-postgres
+        }
     }
 }

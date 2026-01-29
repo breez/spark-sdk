@@ -7,11 +7,11 @@ use crate::{
     PaymentMetadata, PaymentMethod, PaymentStatus, PaymentType, SparkHtlcDetails, SparkHtlcStatus,
     Storage, UpdateDepositPayload,
     persist::ObjectCacheRepository,
-    sync_storage::{Record, RecordId, SyncStorage, UnversionedRecordChange},
+    sync_storage::{Record, RecordId, UnversionedRecordChange},
 };
 
 #[allow(clippy::too_many_lines)]
-pub async fn test_sqlite_sync_storage(storage: Box<dyn SyncStorage>) {
+pub async fn test_sqlite_sync_storage(storage: Box<dyn Storage>) {
     use std::collections::HashMap;
 
     // Test 1: Initial state - get_last_revision should return 0

@@ -24,7 +24,7 @@ Once connected, you’re ready to start interacting with the SDK.
 <div class="warning">
 <h4>Developer note</h4>
 
-On some platforms (e.g., Android, iOS), you must use an application-specific writable directory within the app’s sandbox for SDK storage.
+On some platforms (e.g., Android, iOS), you must use an application-specific writable directory within the app's sandbox for SDK storage.
 
 </div>
 

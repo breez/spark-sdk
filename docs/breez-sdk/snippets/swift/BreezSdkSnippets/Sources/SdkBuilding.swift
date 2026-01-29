@@ -15,7 +15,6 @@ func initSdkAdvanced() async throws -> BreezSdk {
     await builder.withDefaultStorage(storageDir: "./.data")
     // You can also pass your custom implementations:
     // await builder.withStorage(<your storage implementation>)
-    // await builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
     // await builder.withChainService(<your chain service implementation>)
     // await builder.withRestClient(<your rest client implementation>)
     // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
@@ -72,3 +71,33 @@ func withPaymentObserver(builder: SdkBuilder) async {
     await builder.withPaymentObserver(paymentObserver: paymentObserver)
 }
 // ANCHOR_END: with-payment-observer
+
+func initSdkPostgres() async throws -> BreezSdk {
+    // ANCHOR: init-sdk-postgres
+    // Construct the seed using mnemonic words or entropy bytes
+    let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Configure PostgreSQL storage
+    // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+    // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+    var postgresConfig = defaultPostgresStorageConfig(
+        connectionString: "host=localhost user=postgres dbname=spark"
+    )
+    // Optionally pool settings can be adjusted. Some examples:
+    postgresConfig.maxPoolSize = UInt32(8) // Max connections in pool
+    postgresConfig.waitTimeoutSecs = UInt64(30) // Timeout waiting for connection
+
+    // Create the storage and build the SDK
+    let storage = try await createPostgresStorage(config: postgresConfig)
+    let builder = SdkBuilder(config: config, seed: seed)
+    await builder.withStorage(storage: storage)
+    let sdk = try await builder.build()
+    // ANCHOR_END: init-sdk-postgres
+
+    return sdk
+}

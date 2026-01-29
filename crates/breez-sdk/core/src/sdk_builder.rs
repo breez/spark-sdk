@@ -33,7 +33,6 @@ use crate::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, nostr::NostrSigner,
         rtsync::RTSyncSigner, spark::SparkSigner,
     },
-    sync_storage::SyncStorage,
 };
 
 /// Source for the signer - either a seed or an external signer implementation
@@ -61,7 +60,6 @@ pub struct SdkBuilder {
     lnurl_client: Option<Arc<dyn RestClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
-    sync_storage: Option<Arc<dyn SyncStorage>>,
 }
 
 impl SdkBuilder {
@@ -89,7 +87,6 @@ impl SdkBuilder {
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
-            sync_storage: None,
         }
     }
 
@@ -110,7 +107,6 @@ impl SdkBuilder {
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
-            sync_storage: None,
         }
     }
 
@@ -154,15 +150,6 @@ impl SdkBuilder {
     /// - `storage`: The storage implementation to be used.
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
-        self
-    }
-
-    #[must_use]
-    /// Sets the real-time sync storage implementation to be used by the SDK.
-    /// Arguments:
-    /// - `storage`: The sync storage implementation to be used.
-    pub fn with_real_time_sync_storage(mut self, storage: Arc<dyn SyncStorage>) -> Self {
-        self.sync_storage = Some(storage);
         self
     }
 
@@ -314,38 +301,40 @@ impl SdkBuilder {
             }
         };
 
-        let (storage, sync_storage) = match (self.storage, self.storage_dir) {
-            // Use provided storages directly
-            (Some(storage), _) => (storage, self.sync_storage),
-            // Initialize default storages based on provided directory
+        // Validate storage configuration
+        match (self.storage.is_some(), self.storage_dir.is_some()) {
+            (false, false) => {
+                return Err(SdkError::Generic("No storage configured".to_string()));
+            }
+            (true, true) => {
+                return Err(SdkError::Generic(
+                    "Multiple storage configurations provided".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // Initialize storage
+        let storage: Arc<dyn Storage> = if let Some(storage) = self.storage {
+            storage
+        } else if let Some(storage_dir) = self.storage_dir {
             #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-            (None, Some(storage_dir)) => {
+            {
                 let identity_pub_key = spark_signer
                     .get_identity_public_key()
                     .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
-                let storage =
-                    default_storage(&storage_dir, self.config.network, &identity_pub_key)?;
-                let sync_storage = match (self.sync_storage, &self.config.real_time_sync_server_url)
-                {
-                    // Use provided sync storage directly
-                    (Some(sync_storage), _) => Some(sync_storage),
-                    // Initialize default sync storage based on provided directory
-                    // if real-time sync is enabled
-                    (None, Some(_)) => Some(default_sync_storage(
-                        &storage_dir,
-                        self.config.network,
-                        &identity_pub_key,
-                    )?),
-                    _ => None,
-                };
-                (storage, sync_storage)
+                default_storage(&storage_dir, self.config.network, &identity_pub_key)?
             }
-            _ => {
+            #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+            {
+                let _ = storage_dir;
                 return Err(SdkError::Generic(
-                    "Either storage or storage_dir must be set before building the SDK".to_string(),
+                    "with_default_storage is not supported on WASM".to_string(),
                 ));
             }
+        } else {
+            return Err(SdkError::Generic("No storage configured".to_string()));
         };
 
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
@@ -409,18 +398,11 @@ impl SdkBuilder {
             self.config.real_time_sync_server_url.is_some(),
         ));
         let storage = if let Some(server_url) = &self.config.real_time_sync_server_url {
-            let Some(sync_storage) = sync_storage else {
-                return Err(SdkError::Generic(
-                    "Real-time sync is enabled, but no sync storage is supplied".to_string(),
-                ));
-            };
-
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: self.config.api_key.clone(),
                 signer: rtsync_signer,
                 storage: Arc::clone(&storage),
-                sync_storage,
                 shutdown_receiver: shutdown_sender.subscribe(),
                 event_emitter: Arc::clone(&event_emitter),
             })
@@ -457,17 +439,6 @@ fn default_storage(
     network: Network,
     identity_pub_key: &spark_wallet::PublicKey,
 ) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
-    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
-    Ok(storage)
-}
-
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-fn default_sync_storage(
-    data_dir: &str,
-    network: Network,
-    identity_pub_key: &spark_wallet::PublicKey,
-) -> Result<Arc<dyn SyncStorage>, SdkError> {
     let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
     let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
     Ok(storage)

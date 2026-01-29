@@ -164,13 +164,11 @@ impl SdkBuilder {
                     storage: default_storage(&storage_dir, &self.network, &identity_pub_key)
                         .await?,
                 });
-                self.builder = self.builder.with_storage(storage.clone());
-                self.builder = self.builder.with_real_time_sync_storage(storage);
+                self.builder = self.builder.with_storage(storage);
             }
             (None, Some(storage)) => {
                 let storage_arc = Arc::new(WasmStorage { storage });
-                self.builder = self.builder.with_storage(storage_arc.clone());
-                self.builder = self.builder.with_real_time_sync_storage(storage_arc);
+                self.builder = self.builder.with_storage(storage_arc);
             }
             _ => {
                 return Err(WasmError::new(

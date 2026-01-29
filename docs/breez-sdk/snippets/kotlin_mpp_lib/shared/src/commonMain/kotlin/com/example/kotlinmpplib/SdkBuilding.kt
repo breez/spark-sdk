@@ -18,7 +18,6 @@ class SdkBuilding {
             builder.withDefaultStorage("./.data")
             // You can also pass your custom implementations:
             // builder.withStorage(<your storage implementation>)
-            // builder.withRealTimeSyncStorage(<your real-time sync storage implementation>)
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)
@@ -76,4 +75,34 @@ class SdkBuilding {
         builder.withPaymentObserver(paymentObserver)
     }
     // ANCHOR_END: with-payment-observer
+
+    suspend fun initSdkPostgres() {
+        // ANCHOR: init-sdk-postgres
+        // Construct the seed using mnemonic words or entropy bytes
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Configure PostgreSQL storage
+        // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
+        // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
+        val postgresConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+        // Optionally pool settings can be adjusted. Some examples:
+        postgresConfig.maxPoolSize = 8u // Max connections in pool
+        postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
+
+        try {
+            // Create the storage and build the SDK
+            val storage = createPostgresStorage(postgresConfig)
+            val builder = SdkBuilder(config, seed)
+            builder.withStorage(storage)
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-postgres
+    }
 }

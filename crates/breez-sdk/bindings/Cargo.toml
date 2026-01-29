@@ -3,6 +3,11 @@ name = "breez-sdk-bindings"
 edition = "2024"
 version.workspace = true
 
+[features]
+default = ["postgres"]
+# PostgreSQL storage backend (disable for mobile builds to reduce binary size)
+postgres = ["breez-sdk-spark/postgres"]
+
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
