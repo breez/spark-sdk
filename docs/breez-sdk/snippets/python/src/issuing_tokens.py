@@ -14,6 +14,8 @@ from breez_sdk_spark import (
     KeySetType,
     KeySetConfig,
     default_config,
+    PaymentDetailsFilter,
+    TokenTransactionType,
 )
 
 
@@ -93,6 +95,26 @@ async def burn_token(token_issuer: TokenIssuer):
         raise
     # ANCHOR_END: burn-token
 
+async def list_mint_burn_payments():
+    # ANCHOR: list-mint-burn-payments
+    # Provide one or multiple of the following filters to
+    # the `payment_details_filter` field when listing payments
+    payment_details_transfer_filter = PaymentDetailsFilter.TOKEN(
+        tx_type=TokenTransactionType.TRANSFER,
+        tx_hash=None,
+        conversion_refund_needed=None
+    )
+    payment_details_mint_filter = PaymentDetailsFilter.TOKEN(
+        tx_type=TokenTransactionType.MINT,
+        tx_hash=None,
+        conversion_refund_needed=None
+    )
+    payment_details_burn_filter = PaymentDetailsFilter.TOKEN(
+        tx_type=TokenTransactionType.BURN,
+        tx_hash=None,
+        conversion_refund_needed=None
+    )
+    # ANCHOR_END: list-mint-burn-payments
 
 async def get_token_metadata(token_issuer: TokenIssuer):
     # ANCHOR: get-token-metadata

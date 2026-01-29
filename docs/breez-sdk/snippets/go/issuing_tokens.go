@@ -102,6 +102,20 @@ func BurnToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payme
 	return &payment, nil
 }
 
+func ListMintBurnPayments() ([]breez_sdk_spark.PaymentDetailsFilter, error) {
+	// ANCHOR: list-mint-burn-payments
+	// Provide one or multiple of the following filters to
+	// the `PaymentDetailsFilter` field when listing payments
+	transferType := breez_sdk_spark.TokenTransactionTypeTransfer
+	mintType := breez_sdk_spark.TokenTransactionTypeMint
+	burnType := breez_sdk_spark.TokenTransactionTypeBurn
+	paymentDetailsTransferFilter := breez_sdk_spark.PaymentDetailsFilterToken{TxType: &transferType}
+	paymentDetailsMintFilter := breez_sdk_spark.PaymentDetailsFilterToken{TxType: &mintType}
+	paymentDetailsBurnFilter := breez_sdk_spark.PaymentDetailsFilterToken{TxType: &burnType}
+	// ANCHOR_END: list-mint-burn-payments
+	return []breez_sdk_spark.PaymentDetailsFilter{paymentDetailsTransferFilter, paymentDetailsMintFilter, paymentDetailsBurnFilter}, nil
+}
+
 func GetTokenMetadata(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.TokenMetadata, error) {
 	// ANCHOR: get-token-metadata
 	tokenBalance, err := tokenIssuer.GetIssuerTokenBalance()
