@@ -282,6 +282,22 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn initiate_swap_primary_transfer(
+        &self,
+        req: InitiateSwapPrimaryTransferRequest,
+    ) -> Result<InitiateSwapPrimaryTransferResponse> {
+        debug!(
+            "Calling initiate_swap_primary_transfer with request: {:?}",
+            req
+        );
+        Ok(self
+            .spark_service_client()
+            .await?
+            .initiate_swap_primary_transfer(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn renew_leaf(&self, req: RenewLeafRequest) -> Result<RenewLeafResponse> {
         debug!("Calling renew_leaf with request: {:?}", req);
         Ok(self

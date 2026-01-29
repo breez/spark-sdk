@@ -92,7 +92,7 @@ pub async fn sign_signing_jobs(
                 signing_public_key: signing_job.signing_public_key,
                 tx: signing_job.tx.clone(),
                 user_signature,
-                user_signature_commitment: signing_job.signing_commitments.commitments,
+                self_nonce_commitment: signing_job.signing_commitments.clone(),
                 signing_commitments: signing_commitments[i].clone(),
                 network,
             },

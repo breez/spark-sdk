@@ -20,7 +20,7 @@ use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
 use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
-use crate::signer::SecretSource;
+use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource};
 use crate::ssp::BitcoinNetwork;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
@@ -111,8 +111,15 @@ pub struct SignedTx {
     pub tx: Transaction,
     pub user_signature: SignatureShare,
     pub signing_commitments: BTreeMap<Identifier, SigningCommitments>,
-    pub user_signature_commitment: SigningCommitments,
+    pub self_nonce_commitment: FrostSigningCommitmentsWithNonces,
     pub network: Network,
+}
+
+/// Result of preparing a transfer request, containing both the RPC request and
+/// the signed transaction data needed for later FROST aggregation (e.g., in swap v3).
+pub struct PreparedTransferRequest {
+    pub transfer_request: operator_rpc::spark::StartTransferRequest,
+    pub cpfp_signed_txs: Vec<SignedTx>,
 }
 
 impl AsRef<SignedTx> for SignedTx {
@@ -129,7 +136,7 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
             leaf_id: signed_tx.node_id.to_string(),
             signing_public_key: signed_tx.signing_public_key.serialize().to_vec(),
             raw_tx: bitcoin::consensus::serialize(&signed_tx.tx),
-            signing_nonce_commitment: Some(signed_tx.user_signature_commitment.try_into()?),
+            signing_nonce_commitment: Some(signed_tx.self_nonce_commitment.commitments.try_into()?),
             signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,
             }),

@@ -49,6 +49,8 @@ pub struct SignRefundsParams<'a> {
     pub receiver_pubkey: &'a PublicKey,
     pub payment_hash: Option<&'a sha256::Hash>,
     pub network: Network,
+    /// Optional adaptor public key for creating adaptor signatures (used in swap v3)
+    pub cpfp_adaptor_public_key: Option<&'a PublicKey>,
 }
 
 pub struct SignedRefundTransactions {
@@ -104,6 +106,7 @@ pub async fn sign_refunds(
         receiver_pubkey,
         payment_hash,
         network,
+        cpfp_adaptor_public_key,
     } = params;
     let identity_pubkey = signer.get_identity_public_key().await?;
 
@@ -174,6 +177,7 @@ pub async fn sign_refunds(
             signing_public_key,
             cpfp_signing_commitments[i].clone(),
             network,
+            cpfp_adaptor_public_key,
         )
         .await?;
         cpfp_signed_refunds.push(cpfp_signed_tx);
@@ -198,6 +202,7 @@ pub async fn sign_refunds(
                 signing_public_key,
                 direct_signing_commitments[i].clone(),
                 network,
+                None, // Direct transactions don't use adaptor signatures
             )
             .await?;
             direct_signed_refunds.push(direct_refund_tx);
@@ -210,6 +215,7 @@ pub async fn sign_refunds(
                 signing_public_key,
                 direct_from_cpfp_signing_commitments[i].clone(),
                 network,
+                None, // Direct transactions don't use adaptor signatures
             )
             .await?;
             direct_from_cpfp_signed_refunds.push(direct_from_cpfp_signed_tx);
@@ -248,6 +254,7 @@ pub async fn sign_refunds(
 ///
 /// * `Ok(SignedTx)` - A structure containing the signed transaction and signing metadata
 /// * `Err(SignerError)` - If the signing process fails
+#[allow(clippy::too_many_arguments)]
 async fn sign_refund(
     signer: &Arc<dyn Signer>,
     leaf: &LeafKeyTweak,
@@ -256,19 +263,20 @@ async fn sign_refund(
     signing_public_key: PublicKey,
     spark_commitments: BTreeMap<Identifier, SigningCommitments>,
     network: Network,
+    adaptor_public_key: Option<&PublicKey>,
 ) -> Result<SignedTx, SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
-    let self_commitment = signer.generate_random_signing_commitment().await?;
+    let self_nonce_commitment = signer.generate_random_signing_commitment().await?;
     let user_signature = signer
         .sign_frost(SignFrostRequest {
             message: sighash.to_raw_hash().to_byte_array().as_ref(),
             public_key: &signing_public_key,
             private_key: &leaf.signing_key,
             verifying_key: &leaf.node.verifying_public_key,
-            self_nonce_commitment: &self_commitment,
+            self_nonce_commitment: &self_nonce_commitment,
             statechain_commitments: spark_commitments.clone(),
-            adaptor_public_key: None,
+            adaptor_public_key,
         })
         .await?;
 
@@ -277,7 +285,7 @@ async fn sign_refund(
         signing_public_key,
         tx: refund_tx,
         user_signature,
-        user_signature_commitment: self_commitment.commitments,
+        self_nonce_commitment,
         signing_commitments: spark_commitments,
         network,
     })

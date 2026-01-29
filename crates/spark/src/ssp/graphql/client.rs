@@ -13,9 +13,9 @@ use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
-    self, claim_static_deposit, complete_coop_exit, complete_leaves_swap, coop_exit_fee_quote,
-    get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
-    request_leaves_swap, request_lightning_receive, request_lightning_send, static_deposit_quote,
+    self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote, get_challenge,
+    leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
+    request_lightning_receive, request_lightning_send, request_swap, static_deposit_quote,
     transfers, user_request, verify_challenge,
 };
 use crate::ssp::graphql::{
@@ -23,8 +23,8 @@ use crate::ssp::graphql::{
     LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote,
 };
 use crate::ssp::{
-    ClaimStaticDepositInput, CompleteLeavesSwapInput, CoopExitFeeQuote, RequestCoopExitInput,
-    RequestLeavesSwapInput, RequestLightningReceiveInput, RequestLightningSendInput, SspTransfer,
+    ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLightningReceiveInput,
+    RequestLightningSendInput, RequestSwapInput, SspTransfer,
 };
 
 /// GraphQL client for interacting with the Spark server
@@ -322,32 +322,13 @@ impl GraphQLClient {
         Ok(response.request_lightning_send.request.into())
     }
 
-    /// Request a leaves swap
-    pub async fn request_leaves_swap(
-        &self,
-        input: RequestLeavesSwapInput,
-    ) -> GraphQLResult<LeavesSwapRequest> {
-        let vars = request_leaves_swap::Variables { input };
+    /// Request a swap
+    pub async fn request_swap(&self, input: RequestSwapInput) -> GraphQLResult<LeavesSwapRequest> {
+        let vars = request_swap::Variables { input };
 
-        let response = self
-            .post_query::<queries::RequestLeavesSwap, _>(vars)
-            .await?;
+        let response = self.post_query::<queries::RequestSwap, _>(vars).await?;
 
-        Ok(response.request_leaves_swap.request.into())
-    }
-
-    /// Complete a leaves swap
-    pub async fn complete_leaves_swap(
-        &self,
-        input: CompleteLeavesSwapInput,
-    ) -> GraphQLResult<LeavesSwapRequest> {
-        let vars = complete_leaves_swap::Variables { input };
-
-        let response = self
-            .post_query::<queries::CompleteLeavesSwap, _>(vars)
-            .await?;
-
-        Ok(response.complete_leaves_swap.request.into())
+        Ok(response.request_swap.request.into())
     }
 
     /// Get a lightning receive request by ID

@@ -46,16 +46,6 @@ pub struct CompleteCoopExit;
     schema_path = "schema/spark.graphql",
     variables_derives = "Clone",
     response_derives = "Debug,Clone,Serialize",
-    extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus",)
-)]
-pub struct CompleteLeavesSwap;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    query_path = "schema/queries.graphql",
-    schema_path = "schema/spark.graphql",
-    variables_derives = "Clone",
-    response_derives = "Debug,Clone,Serialize",
     extern_enums("BitcoinNetwork", "CurrencyUnit")
 )]
 pub struct CoopExitFeeQuote;
@@ -112,7 +102,7 @@ pub struct RequestCoopExit;
     response_derives = "Debug,Clone,Serialize",
     extern_enums("CurrencyUnit", "BitcoinNetwork", "SparkLeavesSwapRequestStatus",)
 )]
-pub struct RequestLeavesSwap;
+pub struct RequestSwap;
 
 #[derive(GraphQLQuery)]
 #[graphql(

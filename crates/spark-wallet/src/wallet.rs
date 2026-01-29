@@ -1900,8 +1900,11 @@ impl BackgroundProcessor {
     }
 
     async fn process_transfer_event(&self, transfer: Transfer) -> Result<(), SparkWalletError> {
+        info!("Processing transfer event: {:?}", transfer.transfer_type);
         // Skip claiming counter swap transfer as these are claimed synchronously by the Swap::swap_leaves() method.
-        if transfer.transfer_type == spark::services::TransferType::CounterSwap {
+        if transfer.transfer_type == spark::services::TransferType::CounterSwap
+            || transfer.transfer_type == spark::services::TransferType::CounterSwapV3
+        {
             debug!(
                 "Received counter swap transfer, not claiming: {:?}",
                 transfer

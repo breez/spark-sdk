@@ -381,7 +381,7 @@ async fn test_token_conversion_failure(
     #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
     info!("=== Starting test_token_conversion_failure ===");
-    let sats_to_token_failure_amount: u128 = 50_000_000_000;
+    let sats_to_token_failure_amount: u128 = 40_000_000_000;
 
     let mut alice = alice_sdk.await?;
     let bob = bob_sdk.await?;

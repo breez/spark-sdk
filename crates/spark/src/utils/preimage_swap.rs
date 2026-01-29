@@ -99,6 +99,7 @@ pub(crate) async fn swap_nodes_for_preimage(
         receiver_pubkey,
         payment_hash: None,
         network,
+        cpfp_adaptor_public_key: None, // Preimage swaps don't use adaptor signatures
     })
     .await?;
 
