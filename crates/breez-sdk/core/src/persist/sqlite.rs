@@ -1464,14 +1464,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sqlite_storage() {
+    async fn test_storage() {
         let temp_dir = create_temp_dir("sqlite_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        Box::pin(crate::persist::tests::test_sqlite_storage(Box::new(
-            storage,
-        )))
-        .await;
+        Box::pin(crate::persist::tests::test_storage(Box::new(storage))).await;
     }
 
     #[tokio::test]
@@ -1575,6 +1572,6 @@ mod tests {
         let temp_dir = create_temp_dir("sqlite_sync_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_sqlite_sync_storage(Box::new(storage)).await;
+        crate::persist::tests::test_sync_storage(Box::new(storage)).await;
     }
 }

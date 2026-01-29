@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[allow(clippy::too_many_lines)]
-pub async fn test_sqlite_sync_storage(storage: Box<dyn Storage>) {
+pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     use std::collections::HashMap;
 
     // Test 1: Initial state - get_last_revision should return 0
@@ -314,7 +314,7 @@ pub async fn test_sqlite_sync_storage(storage: Box<dyn Storage>) {
 }
 
 #[allow(clippy::too_many_lines)]
-pub async fn test_sqlite_storage(storage: Box<dyn Storage>) {
+pub async fn test_storage(storage: Box<dyn Storage>) {
     use crate::SetLnurlMetadataItem;
     use crate::models::{LnurlPayInfo, TokenMetadata};
 

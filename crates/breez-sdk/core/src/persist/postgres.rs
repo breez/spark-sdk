@@ -923,9 +923,9 @@ impl Storage for PostgresStorage {
         let limit = i64::from(request.limit.unwrap_or(u32::MAX));
         let offset = i64::from(request.offset.unwrap_or(0));
 
+        let offset_idx = param_idx + 1;
         let query = format!(
-            "{SELECT_PAYMENT_SQL} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT ${param_idx} OFFSET ${}",
-            param_idx + 1
+            "{SELECT_PAYMENT_SQL} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT ${param_idx} OFFSET ${offset_idx}"
         );
 
         params.push(Box::new(limit));
@@ -1862,7 +1862,7 @@ mod tests {
     #[tokio::test]
     async fn test_postgres_storage() {
         let fixture = PostgresTestFixture::new().await;
-        Box::pin(crate::persist::tests::test_sqlite_storage(Box::new(
+        Box::pin(crate::persist::tests::test_storage(Box::new(
             fixture.storage,
         )))
         .await;
@@ -1945,7 +1945,7 @@ mod tests {
     #[tokio::test]
     async fn test_sync_storage() {
         let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_sqlite_sync_storage(Box::new(fixture.storage)).await;
+        crate::persist::tests::test_sync_storage(Box::new(fixture.storage)).await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.
