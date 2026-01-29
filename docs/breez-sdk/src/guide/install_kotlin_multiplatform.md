@@ -32,7 +32,14 @@ kotlin {
 
 ## iOS Setup
 
-When targeting iOS, you must also install the native binary framework. This is the same framework used by the Swift SDK and can be installed via Swift Package Manager or CocoaPods. The Gradle plugin automatically configures the framework search path from Xcode's build environment.
+When targeting iOS, you must also install the native binary framework. This is the same framework used by the [Swift package](install_ios_swift.md) and can be installed via [Swift Package Manager](#swift-package-manager) or [CocoaPods](#cocoapods). The Gradle plugin automatically configures the framework search path from Xcode's build environment.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+The `breez-sdk-spark-kmp` Gradle dependency and the native binary framework (installed via SPM or CocoaPods) **MUST** have the same version. A version mismatch between the two will cause linking or runtime errors.
+
+</div>
 
 Add the Gradle plugin to your module's `build.gradle.kts` and update the iOS framework binaries to use a dynamic framework:
 
@@ -73,6 +80,22 @@ Add the following to the dependencies array of your `Package.swift`:
 
 ``` swift
 .package(url: "https://github.com/breez/breez-sdk-spark-swift.git", from: "{VERSION}"),
+```
+
+### Custom Framework Path
+
+If the automatic framework detection doesn't work for your setup, you can override it by setting the `breezSdkSparkFrameworkPath` project property to the directory containing `breez_sdk_sparkFFI.framework`.
+
+In `gradle.properties`:
+
+```properties
+breezSdkSparkFrameworkPath=/path/to/framework/dir
+```
+
+Or via the command line:
+
+```bash
+./gradlew build -PbreezSdkSparkFrameworkPath=/path/to/framework/dir
 ```
 
 ### CocoaPods
