@@ -1,0 +1,893 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Spark HTLC Payments - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/htlcs.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="spark-htlc-payments"><a class="header" href="#spark-htlc-payments">Spark HTLC payments</a></h1>
+<p>Hash Time-Locked Contract (HTLC) payments are conditional payments that enable atomic cross-chain swaps. The SDK supports Spark HTLCs through a simple API.</p>
+<p>In an HTLC payment, the sender locks funds using a cryptographic hash of a secret preimage and sets an expiration time. The receiver can claim the payment by revealing the preimage before expiration. If the receiver fails to claim the payment in time, the funds are automatically returned to the sender.</p>
+<h2 id="sending-htlc-payments"><a class="header" href="#sending-htlc-payments">Sending HTLC Payments</a></h2>
+<p>HTLC payments use the standard payment API described in <a href="send_payment.html">Sending payments</a>. To create an HTLC payment, prepare the payment normally, then provide the Spark HTLC options when <a href="send_payment.html#spark">sending</a>. These options include the payment hash (SHA-256 hash of the preimage) and the expiry duration.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;spark address&gt;".to_string();
+// Set the amount you wish the pay the receiver
+let pay_amount = PayAmount::Bitcoin { amount_sats: 50_000 };
+let prepare_request = PrepareSendPaymentRequest {
+    payment_request,
+    pay_amount: Some(pay_amount),
+    conversion_options: None,
+};
+let prepare_response = sdk.prepare_send_payment(prepare_request).await?;
+
+// If the fees are acceptable, continue to create the HTLC Payment
+if let SendPaymentMethod::SparkAddress { fee, .. } = prepare_response.payment_method {
+    info!("Fees: {} sats", fee);
+}
+
+let preimage = "&lt;32-byte unique preimage hex&gt;";
+let preimage_bytes = hex::decode(preimage)?;
+let payment_hash_bytes = sha256::digest(preimage_bytes);
+let payment_hash = hex::encode(payment_hash_bytes);
+
+// Set the HTLC options
+let options = SendPaymentOptions::SparkAddress {
+    htlc_options: Some(SparkHtlcOptions {
+        payment_hash,
+        expiry_duration_secs: 1000,
+    }),
+};
+
+let request = SendPaymentRequest {
+    prepare_response,
+    options: Some(options),
+    idempotency_key: None,
+};
+let send_response = sdk.send_payment(request).await?;
+let payment = send_response.payment;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+let payAmount = PayAmount.bitcoin(amountSats: 50_000)
+let prepareRequest = PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    payAmount: payAmount
+)
+let prepareResponse = try await sdk.prepareSendPayment(request: prepareRequest)
+
+// If the fees are acceptable, continue to create the HTLC Payment
+if case let .sparkAddress(_, fee, _) = prepareResponse.paymentMethod {
+    print("Fees: \(fee) sats")
+}
+
+let preimage = "&lt;32-byte unique preimage hex&gt;"
+let preimageData = Data(hexString: preimage)!
+let paymentHashDigest = SHA256.hash(data: preimageData)
+let paymentHash = Data(paymentHashDigest).hexEncodedString()
+
+// Set the HTLC options
+let htlcOptions = SparkHtlcOptions(
+    paymentHash: paymentHash,
+    expiryDurationSecs: 1000
+)
+let options = SendPaymentOptions.sparkAddress(htlcOptions: htlcOptions)
+
+let request = SendPaymentRequest(
+    prepareResponse: prepareResponse,
+    options: options
+)
+let sendResponse = try await sdk.sendPayment(request: request)
+let payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val paymentRequest = "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+try {
+    val prepareRequest = PrepareSendPaymentRequest(
+        paymentRequest = paymentRequest,
+        payAmount = payAmount,
+    )
+    val prepareResponse = sdk.prepareSendPayment(prepareRequest)
+
+    // If the fees are acceptable, continue to create the HTLC Payment
+    val paymentMethod = prepareResponse.paymentMethod
+    if (paymentMethod is SendPaymentMethod.SparkAddress) {
+        val fee = paymentMethod.fee
+        // Log.v("Breez", "Fees: ${fee} sats")
+    }
+
+    val preimage = "&lt;32-byte unique preimage hex&gt;"
+    val preimageBytes = preimage.hexToByteArray()
+    val digest = SHA256()
+    digest.update(preimageBytes)
+    val paymentHashBytes = digest.digest()
+    val paymentHash = paymentHashBytes.toHexString()
+
+    // Set the HTLC options
+    val htlcOptions = SparkHtlcOptions(
+        paymentHash = paymentHash,
+        expiryDurationSecs = 1000u
+    )
+    val options = SendPaymentOptions.SparkAddress(htlcOptions = htlcOptions)
+
+    val request = SendPaymentRequest(
+        prepareResponse = prepareResponse,
+        options = options
+    )
+    val sendResponse = sdk.sendPayment(request)
+    val payment = sendResponse.payment
+} catch (e: Exception) {
+    // handle error
+    throw e
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var paymentRequest = "&lt;spark address&gt;";
+// Set the amount you wish the pay the receiver
+var payAmount = new PayAmount.Bitcoin(amountSats: 50_000UL);
+var prepareRequest = new PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    payAmount: payAmount
+);
+var prepareResponse = await sdk.PrepareSendPayment(request: prepareRequest);
+
+// If the fees are acceptable, continue to create the HTLC Payment
+if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkMethod)
+{
+    var fee = sparkMethod.fee;
+    Console.WriteLine($"Fees: {fee} sats");
+}
+
+var preimage = "&lt;32-byte unique preimage hex&gt;";
+var preimageBytes = Convert.FromHexString(preimage);
+var paymentHashBytes = System.Security.Cryptography.SHA256.HashData(preimageBytes);
+var paymentHash = Convert.ToHexString(paymentHashBytes).ToLower();
+
+// Set the HTLC options
+var options = new SendPaymentOptions.SparkAddress(
+    htlcOptions: new SparkHtlcOptions(
+        paymentHash: paymentHash,
+        expiryDurationSecs: 1000
+    )
+);
+
+var request = new SendPaymentRequest(
+    prepareResponse: prepareResponse,
+    options: options
+);
+var sendResponse = await sdk.SendPayment(request: request);
+var payment = sendResponse.payment;
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address&gt;'
+// Set the amount you wish the pay the receiver
+const payAmount: PayAmount = {
+  type: 'bitcoin',
+  amountSats: 50_000
+}
+const prepareRequest = {
+  paymentRequest,
+  payAmount
+}
+const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
+
+// If the fees are acceptable, continue to create the HTLC Payment
+if (prepareResponse.paymentMethod.type === 'sparkAddress') {
+  const fee = prepareResponse.paymentMethod.fee
+  console.debug(`Fees: ${fee} sats`)
+}
+
+const preimage = '&lt;32-byte unique preimage hex&gt;'
+const preimageBuffer = Buffer.from(preimage, 'hex')
+const paymentHash = createHash('sha256').update(preimageBuffer).digest('hex')
+
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options: {
+    type: 'sparkAddress',
+    htlcOptions: {
+      paymentHash,
+      expiryDurationSecs: 1000
+    }
+  }
+})
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address&gt;'
+// Set the amount you wish to pay the receiver
+const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50000) })
+const prepareRequest = {
+  paymentRequest,
+  payAmount,
+  conversionOptions: undefined
+}
+const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
+
+// If the fees are acceptable, continue to create the HTLC Payment
+if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
+  const fee = prepareResponse.paymentMethod.inner.fee
+  console.debug(`Fees: ${fee} sats`)
+}
+
+const preimage = '&lt;32-byte unique preimage hex&gt;'
+const preimageBuffer = Buffer.from(preimage, 'hex')
+const paymentHash = createHash('sha256').update(preimageBuffer).digest('hex')
+
+// Set the HTLC options
+const options = new SendPaymentOptions.SparkAddress({
+  htlcOptions: {
+    paymentHash,
+    expiryDurationSecs: BigInt(1000)
+  }
+})
+
+const request = {
+  prepareResponse,
+  options,
+  idempotencyKey: undefined
+}
+const sendResponse = await sdk.sendPayment(request)
+const payment = sendResponse.payment
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String paymentRequest = "&lt;spark address&gt;";
+// Set the amount you wish the pay the receiver
+var payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
+final prepareRequest = PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    payAmount: payAmount);
+final prepareResponse = await sdk.prepareSendPayment(request: prepareRequest);
+
+// If the fees are acceptable, continue to create the HTLC Payment
+final paymentMethod = prepareResponse.paymentMethod;
+if (paymentMethod is SendPaymentMethod_SparkAddress) {
+  final fee = paymentMethod.fee;
+  print("Fees: $fee sats");
+}
+
+String preimage = "&lt;32-byte unique preimage hex&gt;";
+List&lt;int&gt; preimageBytes = hex.decode(preimage);
+Digest paymentHashDigest = sha256.convert(preimageBytes);
+String paymentHash = hex.encode(paymentHashDigest.bytes);
+
+// Set the HTLC options
+final htlcOptions = SparkHtlcOptions(
+    paymentHash: paymentHash, expiryDurationSecs: BigInt.from(1000));
+final options = SendPaymentOptions.sparkAddress(htlcOptions: htlcOptions);
+
+final request =
+    SendPaymentRequest(prepareResponse: prepareResponse, options: options);
+final sendResponse = await sdk.sendPayment(request: request);
+final payment = sendResponse.payment;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">payment_request = "&lt;spark address&gt;"
+# Set the amount you wish the pay the receiver
+pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
+prepare_request = PrepareSendPaymentRequest(
+    payment_request=payment_request,
+    pay_amount=pay_amount,
+)
+prepare_response = await sdk.prepare_send_payment(request=prepare_request)
+
+# If the fees are acceptable, continue to create the HTLC Payment
+if hasattr(prepare_response.payment_method, "fee"):
+    fee = prepare_response.payment_method.fee
+    logging.debug(f"Fees: {fee} sats")
+
+preimage = "&lt;32-byte unique preimage hex&gt;"
+preimage_bytes = bytes.fromhex(preimage)
+payment_hash_bytes = hashlib.sha256(preimage_bytes).digest()
+payment_hash = payment_hash_bytes.hex()
+
+# Set the HTLC options
+options = SendPaymentOptions.SPARK_ADDRESS(
+    htlc_options=SparkHtlcOptions(
+        payment_hash=payment_hash, expiry_duration_secs=1000
+    )
+)
+
+request = SendPaymentRequest(
+    prepare_response=prepare_response, options=options
+)
+send_response = await sdk.send_payment(request=request)
+payment = send_response.payment
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;spark address&gt;"
+// Set the amount you wish the pay the receiver
+var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
+	AmountSats: 50_000,
+}
+prepareRequest := breez_sdk_spark.PrepareSendPaymentRequest{
+	PaymentRequest: paymentRequest,
+	PayAmount:      &amp;payAmount,
+}
+prepareResponse, err := sdk.PrepareSendPayment(prepareRequest)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+// If the fees are acceptable, continue to create the HTLC Payment
+switch paymentMethod := prepareResponse.PaymentMethod.(type) {
+case breez_sdk_spark.SendPaymentMethodSparkAddress:
+	fee := paymentMethod.Fee
+	log.Printf("Fees: %v sats", fee)
+}
+
+preimage := "&lt;32-byte unique preimage hex&gt;"
+preimageBytes, err := hex.DecodeString(preimage)
+if err != nil {
+	return nil, err
+}
+paymentHashBytes := sha256.Sum256(preimageBytes)
+paymentHash := hex.EncodeToString(paymentHashBytes[:])
+
+// Set the HTLC options
+htlcOptions := breez_sdk_spark.SparkHtlcOptions{
+	PaymentHash:        paymentHash,
+	ExpiryDurationSecs: 1000,
+}
+var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsSparkAddress{
+	HtlcOptions: &amp;htlcOptions,
+}
+
+request := breez_sdk_spark.SendPaymentRequest{
+	PrepareResponse: prepareResponse,
+	Options:         &amp;options,
+}
+sendResponse, err := sdk.SendPayment(request)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+payment := sendResponse.Payment
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+Preimages are required to be unique and are not managed by the SDK. It is your responsibility as a developer to manage them, including how to generate them, store them, and eventually share them with the receiver.
+</div>
+<h2 id="listing-claimable-htlc-payments">
+    <a class="header" href="#listing-claimable-htlc-payments">Listing claimable HTLC payments</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
+</h2>
+<p>Once detected, claimable HTLC payments are immediately listed as pending in the <a href="/guide/list_payments.html">list of payments</a>. Additionally, a <code>PaymentPending</code> event is emitted to notify your application. See <a href="/guide/events.html">Listening to events</a> for more details.</p>
+<p>To list only claimable HTLC payments, you can filter by HTLC status.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let request = ListPaymentsRequest {
+    type_filter: Some(vec![PaymentType::Receive]),
+    status_filter: Some(vec![PaymentStatus::Pending]),
+    payment_details_filter: Some(vec![PaymentDetailsFilter::Spark {
+        htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+        conversion_refund_needed: None,
+    }]),
+    ..Default::default()
+};
+
+let response = sdk.list_payments(request).await?;
+let payments = response.payments;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let request = ListPaymentsRequest(
+    typeFilter: [PaymentType.receive],
+    statusFilter: [PaymentStatus.pending],
+    paymentDetailsFilter: [PaymentDetailsFilter.spark(
+        htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+        conversionRefundNeeded: nil
+    )]
+)
+
+let response = try await sdk.listPayments(request: request)
+let payments = response.payments
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val request = ListPaymentsRequest(
+        typeFilter = listOf(PaymentType.RECEIVE),
+        statusFilter = listOf(PaymentStatus.PENDING),
+        paymentDetailsFilter = listOf(
+            PaymentDetailsFilter.Spark(
+                htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
+                conversionRefundNeeded = null
+            )
+        )
+    )
+
+    val response = sdk.listPayments(request)
+    val payments = response.payments
+} catch (e: Exception) {
+    // handle error
+    throw e
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var request = new ListPaymentsRequest(
+    typeFilter: new List&lt;PaymentType&gt; { PaymentType.Receive },
+    statusFilter: new List&lt;PaymentStatus&gt; { PaymentStatus.Pending },
+    paymentDetailsFilter: new List&lt;PaymentDetailsFilter&gt; {
+        new PaymentDetailsFilter.Spark(
+            htlcStatus: new List&lt;SparkHtlcStatus&gt; {
+                SparkHtlcStatus.WaitingForPreimage
+            },
+            conversionRefundNeeded: null
+        )
+    }
+);
+
+var response = await sdk.ListPayments(request: request);
+var payments = response.payments;
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const response = await sdk.listPayments({
+  typeFilter: ['receive'],
+  statusFilter: ['pending'],
+  paymentDetailsFilter: [{
+    type: 'spark',
+    htlcStatus: ['waitingForPreimage']
+  }],
+  assetFilter: undefined
+})
+const payments = response.payments
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const request = {
+  typeFilter: [PaymentType.Receive],
+  statusFilter: [PaymentStatus.Pending],
+  paymentDetailsFilter: [new PaymentDetailsFilter.Spark({
+    htlcStatus: [SparkHtlcStatus.WaitingForPreimage],
+    conversionRefundNeeded: undefined
+  })],
+  assetFilter: undefined,
+  fromTimestamp: undefined,
+  toTimestamp: undefined,
+  offset: undefined,
+  limit: undefined,
+  sortAscending: undefined
+}
+
+const response = await sdk.listPayments(request)
+const payments = response.payments
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final request = ListPaymentsRequest(
+  typeFilter: [PaymentType.receive],
+  statusFilter: [PaymentStatus.pending],
+  paymentDetailsFilter: [PaymentDetailsFilter.spark(
+    htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+  )],
+);
+
+final response = await sdk.listPayments(request: request);
+final payments = response.payments;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">request = ListPaymentsRequest(
+    type_filter=[PaymentType.RECEIVE],
+    status_filter=[PaymentStatus.PENDING],
+    payment_details_filter=[cast(PaymentDetailsFilter, PaymentDetailsFilter.SPARK(
+        htlc_status=[SparkHtlcStatus.WAITING_FOR_PREIMAGE],
+        conversion_refund_needed=None
+    ))],
+)
+
+response = await sdk.list_payments(request=request)
+payments = response.payments
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">typeFilter := []breez_sdk_spark.PaymentType{
+	breez_sdk_spark.PaymentTypeReceive,
+}
+statusFilter := []breez_sdk_spark.PaymentStatus{
+	breez_sdk_spark.PaymentStatusPending,
+}
+paymentDetailsFilter := []breez_sdk_spark.PaymentDetailsFilter{
+	breez_sdk_spark.PaymentDetailsFilterSpark{
+		HtlcStatus: &amp;[]breez_sdk_spark.SparkHtlcStatus{
+			breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
+		},
+	},
+}
+
+request := breez_sdk_spark.ListPaymentsRequest{
+	TypeFilter:            &amp;typeFilter,
+	StatusFilter:          &amp;statusFilter,
+	PaymentDetailsFilter:  &amp;paymentDetailsFilter,
+}
+
+response, err := sdk.ListPayments(request)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+payments := response.Payments
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="claiming-htlc-payments">
+    <a class="header" href="#claiming-htlc-payments">Claiming HTLC Payments</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.claim_htlc_payment">API docs</a>
+</h2>
+<p>To claim an HTLC payment, provide the preimage that matches the payment hash.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let preimage = "&lt;preimage hex&gt;".to_string();
+let response = sdk
+    .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+    .await?;
+let payment = response.payment;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let preimage = "&lt;preimage hex&gt;"
+let response = try await sdk.claimHtlcPayment(
+    request: ClaimHtlcPaymentRequest(preimage: preimage)
+)
+let payment = response.payment
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val preimage = "&lt;preimage hex&gt;"
+    val request = ClaimHtlcPaymentRequest(preimage = preimage)
+    val response = sdk.claimHtlcPayment(request)
+    val payment = response.payment
+} catch (e: Exception) {
+    // handle error
+    throw e
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var preimage = "&lt;preimage hex&gt;";
+var response = await sdk.ClaimHtlcPayment(
+    request: new ClaimHtlcPaymentRequest(preimage: preimage)
+);
+var payment = response.payment;
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const preimage = '&lt;preimage hex&gt;'
+const response = await sdk.claimHtlcPayment({
+  preimage
+})
+const payment = response.payment
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const preimage = '&lt;preimage hex&gt;'
+const response = await sdk.claimHtlcPayment(
+  { preimage }
+)
+const payment = response.payment
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String preimage = "&lt;preimage hex&gt;";
+final response = await sdk.claimHtlcPayment(
+    request: ClaimHtlcPaymentRequest(preimage: preimage));
+final payment = response.payment;
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">preimage = "&lt;preimage hex&gt;"
+response = await sdk.claim_htlc_payment(
+    request=ClaimHtlcPaymentRequest(preimage=preimage)
+)
+payment = response.payment
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">preimage := "&lt;preimage hex&gt;"
+request := breez_sdk_spark.ClaimHtlcPaymentRequest{
+	Preimage: preimage,
+}
+response, err := sdk.ClaimHtlcPayment(request)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+payment := response.Payment
+</code></pre>
+</section>
+</custom-tabs>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/config.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/optimize.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/config.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/optimize.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
