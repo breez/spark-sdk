@@ -90,29 +90,11 @@ jobs:
           name: bindings-kotlin-multiplatform
           path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 
-      - name: Download aarch64-apple-ios
-        uses: actions/download-artifact@v4
-        with:
-          name: bindings-aarch64-apple-ios
-          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/lib/ios-arm64
-
-      - name: Download aarch64-apple-ios-sim
-        uses: actions/download-artifact@v4
-        with:
-          name: bindings-aarch64-apple-ios-sim
-          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/lib/ios-simulator-arm64
-
-      - name: Download x86_64-apple-ios
-        uses: actions/download-artifact@v4
-        with:
-          name: bindings-x86_64-apple-ios
-          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/lib/ios-simulator-x64
-
       - name: Build Kotlin Multiplatform project
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
         env:
           ORG_GRADLE_PROJECT_libraryVersion: ${{ inputs.package-version || '0.0.1' }}
-        run: ./gradlew :breez-sdk-spark-kmp:assemble
+        run: ./gradlew :breez-sdk-spark-kmp:assemble :breez-sdk-spark-kmp-plugin:assemble
 
       - name: Archive aar
         if: ${{ !inputs.publish }}
