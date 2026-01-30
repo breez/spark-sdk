@@ -343,6 +343,58 @@ pub async fn wait_for_balance(
     .await
 }
 
+/// Wait for a token balance to increase above a previous value.
+///
+/// Polls the SDK until the token balance for the given identifier exceeds `previous_balance`.
+/// Syncs the wallet on each poll iteration.
+///
+/// # Arguments
+/// * `sdk` - The SDK instance to query
+/// * `token_identifier` - The token identifier to check balance for
+/// * `previous_balance` - The balance threshold that must be exceeded
+/// * `timeout_secs` - Maximum time to wait in seconds
+///
+/// # Returns
+/// The new token balance once it exceeds `previous_balance`, or error if timeout
+pub async fn wait_for_token_balance_increase(
+    sdk: &BreezSdk,
+    token_identifier: &str,
+    previous_balance: u128,
+    timeout_secs: u64,
+) -> Result<u128> {
+    let token_id = token_identifier.to_string();
+    wait_for(
+        || {
+            let sdk = sdk.clone();
+            let token_id = token_id.clone();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let info = sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                let token_balance = info
+                    .token_balances
+                    .get(&token_id)
+                    .map(|b| b.balance)
+                    .unwrap_or(0);
+                if token_balance > previous_balance {
+                    Ok(token_balance)
+                } else {
+                    anyhow::bail!(
+                        "Token balance not yet increased: {} (was {})",
+                        token_balance,
+                        previous_balance
+                    )
+                }
+            }
+        },
+        timeout_secs,
+    )
+    .await
+}
+
 /// Ensure SDK has at least the specified balance, funding if necessary
 pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;

@@ -17,7 +17,8 @@ use tokio_with_wasm::alias as tokio;
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    nostr::NostrClient, persist::Storage, token_conversion::TokenConverter,
+    nostr::NostrClient, persist::Storage, stable_balance::StableBalance,
+    token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -111,6 +112,7 @@ pub struct BreezSdk {
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) nostr_client: Arc<NostrClient>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
+    pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
 }
 
@@ -212,6 +214,7 @@ pub fn default_config(network: Network) -> Config {
             auto_enabled: true,
             multiplicity: 1,
         },
+        stable_balance_config: None,
     }
 }
 

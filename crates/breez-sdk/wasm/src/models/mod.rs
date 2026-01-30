@@ -621,12 +621,21 @@ pub struct Config {
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
     pub optimization_config: OptimizationConfig,
+    pub stable_balance_config: Option<StableBalanceConfig>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]
 pub struct OptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConfig)]
+pub struct StableBalanceConfig {
+    pub token_identifier: String,
+    pub threshold_sats: Option<u64>,
+    pub max_slippage_bps: Option<u32>,
+    pub reserved_sats: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
@@ -1187,6 +1196,7 @@ pub struct ConversionEstimate {
 pub enum ConversionPurpose {
     OngoingPayment { payment_request: String },
     SelfTransfer,
+    AutoConversion,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStatus)]

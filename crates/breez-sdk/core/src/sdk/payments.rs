@@ -13,7 +13,7 @@ use crate::{
     FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
-    TokenConversionResponse, WaitForPaymentIdentifier,
+    WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -22,7 +22,9 @@ use crate::{
         ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
     },
     persist::PaymentMetadata,
-    token_conversion::DEFAULT_CONVERSION_TIMEOUT_SECS,
+    token_conversion::{
+        ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
+    },
     utils::{
         send_payment_validation::validate_prepare_send_payment_request,
         token::map_and_persist_token_transaction,
@@ -172,9 +174,16 @@ impl BreezSdk {
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
                     None
                 } else {
+                    let conversion_options = self
+                        .get_conversion_options_for_payment(
+                            request.conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            amount,
+                        )
+                        .await?;
                     self.token_converter
                         .validate(
-                            request.conversion_options.as_ref(),
+                            conversion_options.as_ref(),
                             token_identifier.as_ref(),
                             amount,
                         )
@@ -207,9 +216,16 @@ impl BreezSdk {
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
                     None
                 } else {
+                    let conversion_options = self
+                        .get_conversion_options_for_payment(
+                            request.conversion_options.as_ref(),
+                            effective_token_identifier.as_ref(),
+                            amount,
+                        )
+                        .await?;
                     self.token_converter
                         .validate(
-                            request.conversion_options.as_ref(),
+                            conversion_options.as_ref(),
                             effective_token_identifier.as_ref(),
                             amount,
                         )
@@ -271,11 +287,19 @@ impl BreezSdk {
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
                     None
                 } else {
-                    self.token_converter
-                        .validate(
+                    let total_amount = amount.saturating_add(u128::from(lightning_fee_sats));
+                    let conversion_options = self
+                        .get_conversion_options_for_payment(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            amount.saturating_add(u128::from(lightning_fee_sats)),
+                            total_amount,
+                        )
+                        .await?;
+                    self.token_converter
+                        .validate(
+                            conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            total_amount,
                         )
                         .await?
                 };
@@ -310,15 +334,21 @@ impl BreezSdk {
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
                     None
                 } else {
-                    let amount_u64: u64 = amount.try_into()?;
                     // For conversion estimate, use fast fee as worst case
-                    let fee_sats_for_estimate = fee_quote.speed_fast.total_fee_sat();
-                    self.token_converter
-                        .validate(
+                    let total_amount =
+                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat()));
+                    let conversion_options = self
+                        .get_conversion_options_for_payment(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            u128::from(amount_u64)
-                                .saturating_add(u128::from(fee_sats_for_estimate)),
+                            total_amount,
+                        )
+                        .await?;
+                    self.token_converter
+                        .validate(
+                            conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            total_amount,
                         )
                         .await?
                 };
@@ -501,6 +531,16 @@ impl BreezSdk {
         let amount = request.prepare_response.amount;
         let token_identifier = request.prepare_response.token_identifier.clone();
 
+        // Create a reservation for the expected sats from conversion.
+        // This prevents auto-convert from converting these sats back to tokens.
+        let _reservation_guard = match &self.stable_balance {
+            Some(sb) => {
+                let amount_sats = u64::try_from(amount).unwrap_or(u64::MAX);
+                Some(sb.create_reservation(amount_sats))
+            }
+            None => None,
+        };
+
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =
             match &request.prepare_response.payment_method {
@@ -517,16 +557,16 @@ impl BreezSdk {
                             payment_request: address.clone(),
                         }
                     };
-                    let res = self
+                    let conversion_response = self
                         .token_converter
                         .convert(
                             conversion_options,
                             &conversion_purpose,
                             token_identifier.as_ref(),
-                            amount,
+                            ConversionAmount::MinAmountOut(amount),
                         )
                         .await?;
-                    (res, conversion_purpose)
+                    (conversion_response, conversion_purpose)
                 }
                 SendPaymentMethod::SparkInvoice {
                     spark_invoice_details:
@@ -546,16 +586,16 @@ impl BreezSdk {
                             payment_request: invoice.clone(),
                         }
                     };
-                    let res = self
+                    let conversion_response = self
                         .token_converter
                         .convert(
                             conversion_options,
                             &conversion_purpose,
                             token_identifier.as_ref(),
-                            amount,
+                            ConversionAmount::MinAmountOut(amount),
                         )
                         .await?;
-                    (res, conversion_purpose)
+                    (conversion_response, conversion_purpose)
                 }
                 SendPaymentMethod::Bolt11Invoice {
                     spark_transfer_fee_sats,
@@ -566,7 +606,7 @@ impl BreezSdk {
                     let conversion_purpose = ConversionPurpose::OngoingPayment {
                         payment_request: invoice_details.invoice.bolt11.clone(),
                     };
-                    let res = self
+                    let conversion_response = self
                         .convert_token_for_bolt11_invoice(
                             conversion_options,
                             *spark_transfer_fee_sats,
@@ -577,13 +617,13 @@ impl BreezSdk {
                             token_identifier.as_ref(),
                         )
                         .await?;
-                    (res, conversion_purpose)
+                    (conversion_response, conversion_purpose)
                 }
                 SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                     let conversion_purpose = ConversionPurpose::OngoingPayment {
                         payment_request: address.address.clone(),
                     };
-                    let res = self
+                    let conversion_response = self
                         .convert_token_for_bitcoin_address(
                             conversion_options,
                             fee_quote,
@@ -593,7 +633,7 @@ impl BreezSdk {
                             token_identifier.as_ref(),
                         )
                         .await?;
-                    (res, conversion_purpose)
+                    (conversion_response, conversion_purpose)
                 }
             };
         // Trigger a wallet state sync if converting from Bitcoin to token
@@ -653,6 +693,7 @@ impl BreezSdk {
         .map(|res| SendPaymentResponse {
             payment: res.payment,
         })
+        // _reservation_guard drops here, releasing reserved sats for auto-convert
     }
 
     pub(super) async fn send_payment_internal(
@@ -1203,10 +1244,30 @@ impl BreezSdk {
                 conversion_options,
                 conversion_purpose,
                 token_identifier,
-                min_amount_out,
+                ConversionAmount::MinAmountOut(min_amount_out),
             )
             .await
             .map_err(Into::into)
+    }
+
+    /// Gets conversion options for a payment, auto-populating from stable balance config if needed.
+    ///
+    /// Returns the provided options if set, or auto-populates from stable balance config
+    /// if configured and there's not enough sats balance to cover the payment.
+    async fn get_conversion_options_for_payment(
+        &self,
+        options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        payment_amount: u128,
+    ) -> Result<Option<ConversionOptions>, SdkError> {
+        if let Some(stable_balance) = &self.stable_balance {
+            stable_balance
+                .get_conversion_options(options, token_identifier, payment_amount)
+                .await
+                .map_err(Into::into)
+        } else {
+            Ok(options.cloned())
+        }
     }
 
     async fn convert_token_for_bitcoin_address(
@@ -1238,7 +1299,7 @@ impl BreezSdk {
                 conversion_options,
                 conversion_purpose,
                 token_identifier,
-                min_amount_out,
+                ConversionAmount::MinAmountOut(min_amount_out),
             )
             .await
             .map_err(Into::into)

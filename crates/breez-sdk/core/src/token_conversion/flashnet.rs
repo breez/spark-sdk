@@ -17,7 +17,9 @@ use web_time::Duration;
 
 use crate::{
     ListPaymentsRequest, Network, Payment, PaymentDetails, PaymentDetailsFilter, PaymentMetadata,
-    Storage, persist::ObjectCacheRepository, token_conversion::DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS,
+    Storage,
+    persist::ObjectCacheRepository,
+    token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::token::token_transaction_to_payments,
 };
 
@@ -28,6 +30,9 @@ use super::{
 };
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
+///
+/// This implementation handles the mechanics of executing conversions via Flashnet,
+/// including pool selection, swap execution, and refund handling.
 pub(crate) struct FlashnetTokenConverter {
     flashnet_client: Arc<FlashnetClient>,
     storage: Arc<dyn Storage>,
@@ -532,33 +537,73 @@ impl FlashnetTokenConverter {
 
 #[macros::async_trait]
 impl TokenConverter for FlashnetTokenConverter {
+    #[allow(clippy::too_many_lines)]
     async fn convert(
         &self,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
-        min_amount_out: u128,
+        amount: ConversionAmount,
     ) -> Result<TokenConversionResponse, ConversionError> {
+        // Determine amount_in and min_amount_out based on ConversionAmount variant
+        let (amount_in, min_amount_out) = match amount {
+            ConversionAmount::MinAmountOut(min_out) => {
+                // Calculate amount_in from min_amount_out
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, min_out)
+                    .await?;
+                let estimate = self
+                    .estimate_internal(&conversion_pool, options, min_out)
+                    .await?
+                    .ok_or(ConversionError::ConversionFailed(
+                        "No conversion estimate available".to_string(),
+                    ))?;
+                (estimate.amount, min_out)
+            }
+            ConversionAmount::AmountIn(amount_in) => {
+                // We have the input, simulate to get expected output
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, 0)
+                    .await?;
+
+                let simulate_response = self
+                    .flashnet_client
+                    .simulate_swap(SimulateSwapRequest {
+                        asset_in_address: conversion_pool.asset_in_address.clone(),
+                        asset_out_address: conversion_pool.asset_out_address.clone(),
+                        pool_id: conversion_pool.pool.lp_public_key,
+                        amount_in,
+                        integrator_bps: None,
+                    })
+                    .await?;
+
+                // Apply slippage tolerance to get minimum acceptable output
+                let max_slippage = options
+                    .max_slippage_bps
+                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS);
+                let min_out = simulate_response
+                    .amount_out
+                    .saturating_mul(10_000u128.saturating_sub(u128::from(max_slippage)))
+                    .saturating_div(10_000);
+
+                (amount_in, min_out)
+            }
+        };
+
+        // Get the conversion pool for execution
         let conversion_pool = self
             .get_conversion_pool(options, token_identifier, min_amount_out)
             .await?;
-
-        let conversion_estimate = self
-            .estimate_internal(&conversion_pool, options, min_amount_out)
-            .await?
-            .ok_or(ConversionError::ConversionFailed(
-                "No conversion estimate available".to_string(),
-            ))?;
+        let pool_id = conversion_pool.pool.lp_public_key;
 
         // Execute the conversion
-        let pool_id = conversion_pool.pool.lp_public_key;
         let response_res = self
             .flashnet_client
             .execute_swap(ExecuteSwapRequest {
                 asset_in_address: conversion_pool.asset_in_address.clone(),
                 asset_out_address: conversion_pool.asset_out_address.clone(),
                 pool_id,
-                amount_in: conversion_estimate.amount,
+                amount_in,
                 max_slippage_bps: options
                     .max_slippage_bps
                     .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),

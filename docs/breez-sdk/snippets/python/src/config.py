@@ -4,6 +4,7 @@ from breez_sdk_spark import (
     Network,
     MaxFee,
     OptimizationConfig,
+    StableBalanceConfig,
 )
 
 
@@ -41,4 +42,18 @@ async def configure_optimization_configuration():
     config = default_config(network=Network.MAINNET)
     config.optimization_config = OptimizationConfig(auto_enabled=True, multiplicity=1)
     # ANCHOR_END: optimization-configuration
+    logging.info(f"Config: {config}")
+
+async def configure_stable_balance():
+    # ANCHOR: stable-balance-config
+    config = default_config(network=Network.MAINNET)
+
+    # Enable stable balance with auto-conversion to a specific token
+    config.stable_balance_config = StableBalanceConfig(
+        token_identifier="<token_identifier>",
+        threshold_sats=10_000,
+        max_slippage_bps=100,
+        reserved_sats=1_000
+    )
+    # ANCHOR_END: stable-balance-config
     logging.info(f"Config: {config}")

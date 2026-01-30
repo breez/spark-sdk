@@ -12,6 +12,7 @@ extension ConfigCopyWith on Config {
     bool? useDefaultExternalInputParsers,
     bool? privateEnabledDefault,
     OptimizationConfig? optimizationConfig,
+    StableBalanceConfig? stableBalanceConfig,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -27,6 +28,7 @@ extension ConfigCopyWith on Config {
       privateEnabledDefault:
           privateEnabledDefault ?? this.privateEnabledDefault,
       optimizationConfig: optimizationConfig ?? this.optimizationConfig,
+      stableBalanceConfig: stableBalanceConfig ?? this.stableBalanceConfig,
     );
   }
 }

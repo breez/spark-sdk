@@ -8,25 +8,24 @@ pub use models::*;
 
 /// Trait for conversion implementations.
 ///
-/// This trait abstracts the conversion logic, allowing different
+/// This trait abstracts the conversion mechanics, allowing different
 /// implementations (e.g., Flashnet) to be used interchangeably.
+/// Business logic for when/how much to convert is handled by `StableBalance`.
 #[macros::async_trait]
 pub(crate) trait TokenConverter: Send + Sync {
     /// Execute a conversion swap.
-    ///
-    /// Returns the sent and received payment IDs after updating payment metadata.
     ///
     /// # Arguments
     /// * `options` - The conversion options including type and slippage
     /// * `purpose` - The purpose of the conversion
     /// * `token_identifier` - Optional token identifier for `FromBitcoin` conversions
-    /// * `min_amount_out` - The minimum amount to receive from the conversion
+    /// * `amount` - Either the minimum output amount or exact input amount
     async fn convert(
         &self,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
-        min_amount_out: u128,
+        amount: ConversionAmount,
     ) -> Result<TokenConversionResponse, ConversionError>;
 
     /// Validate a conversion and return the estimated conversion.
@@ -34,12 +33,12 @@ pub(crate) trait TokenConverter: Send + Sync {
     /// Called during `prepare_send_payment` to calculate the conversion fee.
     ///
     /// # Arguments
-    /// * `options` - Optional conversion options (returns None if not provided)
+    /// * `options` - The conversion options to validate
     /// * `token_identifier` - Optional token identifier for `FromBitcoin` conversions
     /// * `amount_out` - The amount to receive from the conversion
     ///
     /// # Returns
-    /// The estimated conversion including amount and fee, or None if no conversion options provided.
+    /// The estimated conversion including amount and fee, or None if options is None.
     async fn validate(
         &self,
         options: Option<&ConversionOptions>,

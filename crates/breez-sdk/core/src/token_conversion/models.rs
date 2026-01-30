@@ -39,6 +39,18 @@ pub enum ConversionPurpose {
     },
     /// Conversion is for self-transfer
     SelfTransfer,
+    /// Conversion triggered automatically
+    AutoConversion,
+}
+
+/// Specifies how to determine the conversion amount.
+#[derive(Debug, Clone)]
+pub(crate) enum ConversionAmount {
+    /// Specify the minimum output amount - the input will be calculated.
+    /// Used for payment conversions where we know the required output.
+    MinAmountOut(u128),
+    /// Specify the exact input amount - used for auto-conversion where we know the sats balance.
+    AmountIn(u128),
 }
 
 /// The status of the conversion

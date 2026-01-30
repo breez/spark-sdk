@@ -48,3 +48,19 @@ pub(crate) fn configure_optimization_configuration() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_stable_balance() -> Result<()> {
+    // ANCHOR: stable-balance-config
+    let mut config = default_config(Network::Mainnet);
+
+    // Enable stable balance with auto-conversion to a specific token
+    config.stable_balance_config = Some(StableBalanceConfig {
+        token_identifier: "<token_identifier>".to_string(),
+        threshold_sats: Some(10_000),
+        max_slippage_bps: Some(100),
+        reserved_sats: Some(1_000),
+    });
+    // ANCHOR_END: stable-balance-config
+    info!("Config: {:?}", config);
+    Ok(())
+}
