@@ -46,7 +46,6 @@ fn map_js_constraint_error(js_error: JsValue, operation: &str) -> StorageError {
     StorageError::Implementation(error_message)
 }
 
-
 /// Extract detailed error information from a JavaScript error value
 fn get_detailed_js_error(js_error: &JsValue) -> String {
     // Check for DomException which is common for IndexedDB errors

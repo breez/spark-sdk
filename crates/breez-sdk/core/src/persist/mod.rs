@@ -16,7 +16,8 @@ use thiserror::Error;
 use crate::{
     Contact, ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo,
     ListContactsRequest, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo, TokenBalance,
-    TokenMetadata, models::Payment,
+    TokenMetadata,
+    models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 
