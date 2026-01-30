@@ -719,12 +719,13 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
                 && p.payment_type.to_string() == expected.payment_type
                 && p.amount == expected.amount
                 && p.status.to_string() == expected.status
+                && p.timestamp == expected.timestamp
         });
 
         let payment = found.unwrap_or_else(|| {
             panic!(
-                "Expected payment not found: type={}, method={}, amount={}, status={}",
-                expected.payment_type, expected.method, expected.amount, expected.status
+                "Expected payment not found: type={}, method={}, amount={}, status={}, timestamp={}",
+                expected.payment_type, expected.method, expected.amount, expected.status,expected.timestamp
             )
         });
 
