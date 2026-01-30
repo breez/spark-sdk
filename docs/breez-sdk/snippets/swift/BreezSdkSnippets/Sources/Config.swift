@@ -38,3 +38,18 @@ func configureOptimizationConfiguration() async throws {
     // ANCHOR_END: optimization-configuration
     print("Config: \(config)")
 }
+
+func configureStableBalance() async throws {
+    // ANCHOR: stable-balance-config
+    var config = defaultConfig(network: Network.mainnet)
+
+    // Enable stable balance with auto-conversion to a specific token
+    config.stableBalanceConfig = StableBalanceConfig(
+        tokenIdentifier: "<token_identifier>",
+        thresholdSats: 10_000,
+        maxSlippageBps: 100,
+        reservedSats: 1_000
+    )
+    // ANCHOR_END: stable-balance-config
+    print("Config: \(config)")
+}
