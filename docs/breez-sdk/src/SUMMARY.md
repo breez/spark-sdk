@@ -19,6 +19,7 @@
   - [Claiming on-chain deposits](guide/onchain_claims.md)
 - [Using LNURL and Lightning addresses](guide/lnurl.md)
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
+    - [Managing contacts](guide/contacts.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [LNURL Authentication](guide/lnurl_auth.md)
