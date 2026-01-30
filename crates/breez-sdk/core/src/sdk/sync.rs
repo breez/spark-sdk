@@ -1,9 +1,59 @@
+//! Wallet synchronization with cross-instance coordination.
+//!
+//! # Why Sync Coordination is Needed
+//!
+//! When multiple SDK instances share a `PostgreSQL` database (e.g., horizontally-scaled
+//! backend services), concurrent sync operations can cause race conditions:
+//!
+//! ## Problem: Race Conditions Without Coordination
+//!
+//! **Sync offset loss (cursor regression):**
+//! - Instance A reads offset=100, fetches payments up to offset=150
+//! - Instance B reads offset=100 (before A writes), fetches to offset=120
+//! - Instance A writes offset=150
+//! - Instance B writes offset=120 → offset regresses, payments 121-150 may be re-fetched
+//!   or missed on subsequent syncs
+//!
+//! **LNURL metadata cursor loss:** Same pattern with `lnurl_metadata_updated_after`.
+//!
+//! **Deposit double-claim:**
+//! - Instance A lists unclaimed deposits, sees UTXO X
+//! - Instance B lists unclaimed deposits, sees UTXO X
+//! - Both attempt to claim UTXO X → one fails, wasted API calls
+//!
+//! **Redundant API calls:** Multiple instances fetching identical data simultaneously.
+//!
+//! ## Solution: Advisory Locks + Skip-If-Recent
+//!
+//! 1. **Advisory locks** ([`SYNC_OPERATION_LOCK_ID`]): Serialize sync operations across
+//!    instances. When one instance holds the lock, others block until it's released.
+//!
+//! 2. **Skip-if-recent**: After acquiring the lock, check if another instance just synced.
+//!    If so, skip sync entirely—state is already up-to-date.
+//!
+//! Key insight: Concurrent sync is wasteful. If Instance A just synced, Instance B gains
+//! nothing by immediately syncing again. The lock + recency check ensures exactly one
+//! instance syncs at a time and others skip redundant work.
+//!
+//! ## Single-Instance Deployments
+//!
+//! For single-instance storages (`SQLite`, single-process apps), the lock operations are
+//! no-ops. See [`Storage::acquire_operation_lock`] and [`Storage::release_operation_lock`].
+
 use spark_wallet::WalletEvent;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, Instant, SystemTime};
+
+/// Advisory lock ID for sync operations.
+///
+/// Used with [`Storage::acquire_operation_lock`] to coordinate sync across multiple
+/// SDK instances sharing the same database. See module-level documentation for details.
+///
+/// Derived from ASCII bytes of "SYNC" (`0x5359_4E43`).
+pub(crate) const SYNC_OPERATION_LOCK_ID: i64 = 0x5359_4E43;
 
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
@@ -258,6 +308,48 @@ impl BreezSdk {
 
     #[allow(clippy::too_many_lines)]
     pub(super) async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let sync_interval_secs = u64::from(self.config.sync_interval_secs);
+
+        // Acquire lock (blocking - waits for other instances to finish)
+        self.storage
+            .acquire_operation_lock(SYNC_OPERATION_LOCK_ID)
+            .await?;
+
+        // Ensure lock is released even on error
+        let result = self
+            .sync_wallet_internal_locked(&cache, sync_interval_secs, sync_type)
+            .await;
+
+        // Always release lock
+        let _ = self
+            .storage
+            .release_operation_lock(SYNC_OPERATION_LOCK_ID)
+            .await;
+
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn sync_wallet_internal_locked(
+        &self,
+        cache: &ObjectCacheRepository,
+        sync_interval_secs: u64,
+        sync_type: SyncType,
+    ) -> Result<(), SdkError> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Check if another instance just synced while we were waiting for the lock
+        if let Some(last) = cache.get_last_sync_time().await?
+            && now.saturating_sub(last) < sync_interval_secs
+        {
+            trace!("sync_wallet_internal: Another instance synced recently, skipping");
+            return Ok(()); // Return success - sync state is up-to-date
+        }
+
         let start_time = Instant::now();
 
         let sync_wallet = async {
@@ -366,6 +458,11 @@ impl BreezSdk {
 
         let ((wallet, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+
+        // Update last sync time on success
+        if let Err(e) = cache.set_last_sync_time(now).await {
+            error!("sync_wallet_internal: Failed to update last sync time: {e:?}");
+        }
 
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {

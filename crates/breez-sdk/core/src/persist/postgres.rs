@@ -27,6 +27,10 @@ use crate::{
 
 use super::{Payment, Storage, StorageError};
 
+/// Advisory lock ID for migrations.
+/// Derived from ASCII bytes of "MIGR" (`0x4D49_4752`).
+const MIGRATION_LOCK_ID: i64 = 0x4D49_4752;
+
 /// Creates a `PostgreSQL` storage instance for use with the SDK builder.
 ///
 /// Returns a `Storage` trait object backed by the `PostgreSQL` connection pool.
@@ -365,6 +369,11 @@ fn make_tls_config_verifying(
 /// PostgreSQL-based storage implementation using connection pooling
 pub struct PostgresStorage {
     pool: Pool,
+    /// Holds connections that have acquired advisory locks.
+    /// Key: `operation_id`, Value: connection holding the lock.
+    /// Using a `Mutex` ensures thread-safe access and that the same connection
+    /// is used for both acquire and release operations.
+    locked_connections: tokio::sync::Mutex<HashMap<i64, deadpool_postgres::Object>>,
 }
 
 /// Creates a rustls `ClientConfig` that accepts any server certificate.
@@ -506,7 +515,10 @@ impl PostgresStorage {
             }
         };
 
-        let storage = Self { pool };
+        let storage = Self {
+            pool,
+            locked_connections: tokio::sync::Mutex::new(HashMap::new()),
+        };
         storage.migrate().await?;
         Ok(storage)
     }
@@ -516,9 +528,8 @@ impl PostgresStorage {
         let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
         // Advisory lock prevents concurrent migration attempts from multiple instances
-        // Lock ID 48879 (0xBEEF) chosen arbitrarily for this SDK's migrations
         client
-            .execute("SELECT pg_advisory_lock(48879)", &[])
+            .execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_ID])
             .await
             .map_err(|e| {
                 StorageError::InitializationError(format!("Failed to acquire migration lock: {e}"))
@@ -578,7 +589,7 @@ impl PostgresStorage {
 
         // Always release the lock, even on failure
         let _ = client
-            .execute("SELECT pg_advisory_unlock(48879)", &[])
+            .execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_ID])
             .await;
 
         result
@@ -1662,6 +1673,45 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
+        Ok(())
+    }
+
+    async fn acquire_operation_lock(&self, operation_id: i64) -> Result<(), StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        // Blocking: waits until lock is available
+        client
+            .execute("SELECT pg_advisory_lock($1)", &[&operation_id])
+            .await
+            .map_err(map_db_error)?;
+
+        // Store the connection so release_operation_lock can use the same one
+        let mut locked = self.locked_connections.lock().await;
+        locked.insert(operation_id, client);
+        Ok(())
+    }
+
+    async fn release_operation_lock(&self, operation_id: i64) -> Result<(), StorageError> {
+        let mut locked = self.locked_connections.lock().await;
+        if let Some(client) = locked.remove(&operation_id) {
+            // Use the same connection that acquired the lock
+            match client
+                .execute("SELECT pg_advisory_unlock($1)", &[&operation_id])
+                .await
+            {
+                Ok(_) => {
+                    // Success - client drops normally, returns to pool
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to unlock advisory lock {operation_id}, closing connection: {e}"
+                    );
+                    // Remove from pool permanently, close connection (releases lock at DB level)
+                    let _ = deadpool::managed::Object::take(client);
+                }
+            }
+        } else {
+            tracing::warn!("Attempted to release lock {operation_id} but no connection held");
+        }
         Ok(())
     }
 }
