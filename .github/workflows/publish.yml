@@ -238,7 +238,6 @@ jobs:
     needs:
       - setup
       - build-bindings-android
-      - build-bindings-ios
     if: ${{ needs.setup.outputs.kotlin-multiplatform == 'true' }}
     uses: ./.github/workflows/publish-kotlin-multiplatform.yml
     with:

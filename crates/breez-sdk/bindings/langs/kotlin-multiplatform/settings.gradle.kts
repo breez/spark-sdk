@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 
 include(":breez-sdk-spark-kmp")
+include(":breez-sdk-spark-kmp-plugin")
