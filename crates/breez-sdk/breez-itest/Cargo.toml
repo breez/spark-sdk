@@ -39,3 +39,9 @@ nostr.workspace = true
 warp = "0.3"
 tokio-stream = { version = "0.1", features = ["net"] }
 bech32.workspace = true
+libc = "0.2"
+chrono.workspace = true
+
+# Memory profiling with jemalloc
+tikv-jemallocator = "0.6"
+tikv-jemalloc-ctl = { version = "0.6", features = ["stats"] }

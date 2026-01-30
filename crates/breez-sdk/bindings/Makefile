@@ -26,9 +26,24 @@ bindings-kotlin: build-release install-uniffi-bindgen-gobley
 
 bindings-golang: build-release install-uniffi-bindgen-golang
 	uniffi-bindgen-go --library $(BIN_PATH) -o $(FFI_DIR)golang -c ./uniffi.toml
+	printf 'module breez_sdk_spark_go\n\ngo 1.21\n' > $(FFI_DIR)golang/go.mod
 
 bindings-python: build-release
 	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
+
+## Go Memory Test
+go-memtest: bindings-golang
+	cd golang-memtest && \
+	unset IPHONEOS_DEPLOYMENT_TARGET && \
+	CGO_LDFLAGS="-L$(shell pwd)/$(RELEASE_DIR) -lbreez_sdk_spark_bindings" \
+	CGO_CFLAGS="-I$(shell pwd)/$(FFI_DIR)golang/breez_sdk_spark" \
+	go build -o memtest .
+
+run-go-memtest: go-memtest
+	cd golang-memtest && \
+	DYLD_LIBRARY_PATH=$(shell pwd)/$(RELEASE_DIR) \
+	LD_LIBRARY_PATH=$(shell pwd)/$(RELEASE_DIR) \
+	./memtest $(MEMTEST_ARGS)
 
 bindings-swift: build-release
 	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift

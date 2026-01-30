@@ -40,6 +40,8 @@ Run a single test:
 cargo test <test_name> -p <package>
 ```
 
+For memory leak tests (Go bindings vs Rust), see `crates/breez-sdk/breez-itest/MEMORY_TESTS.md`.
+
 ## Code Quality
 
 ```bash
