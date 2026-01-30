@@ -32,6 +32,13 @@ The SDK includes a PostgreSQL storage implementation as an alternative. This is 
 
 {{#tabs sdk_building:init-sdk-postgres}}
 
+<div class="warning">
+<h4>Developer note</h4>
+
+If multiple SDK instances share the same PostgreSQL database, real-time sync must be disabled to avoid data corruption. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
+
+</div>
+
 <h2 id="with-chain-service">
     <a class="header" href="#with-chain-service">With Chain Service</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_chain_service">API docs</a>
