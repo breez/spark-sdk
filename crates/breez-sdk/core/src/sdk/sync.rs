@@ -367,6 +367,11 @@ impl BreezSdk {
         let ((wallet, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
+        // Trigger auto-conversion after sync
+        if wallet_state && let Some(stable_balance) = &self.stable_balance {
+            stable_balance.trigger_auto_convert();
+        }
+
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {
             wallet,
