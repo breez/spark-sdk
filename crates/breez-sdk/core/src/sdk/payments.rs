@@ -11,8 +11,8 @@ use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
     ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType,
     FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PayAmount, PaymentDetails,
-    PaymentStatus, SendOnchainFeeQuote, SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions,
+    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PayAmount, PaymentStatus,
+    SendOnchainFeeQuote, SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions,
     SparkInvoiceDetails, TokenConversionResponse, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
@@ -676,23 +676,25 @@ impl BreezSdk {
         }
         // Now send the actual payment
         let response = Box::pin(self.send_payment_internal(request, None)).await?;
-        // Merge payment metadata to link the payments
-        self.merge_payment_metadata(
-            conversion_response.sent_payment_id,
-            PaymentMetadata {
-                parent_payment_id: Some(response.payment.id.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
-        self.merge_payment_metadata(
-            conversion_response.received_payment_id,
-            PaymentMetadata {
-                parent_payment_id: Some(response.payment.id.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
+        // Set payment metadata to link the payments
+        self.storage
+            .set_payment_metadata(
+                conversion_response.sent_payment_id,
+                PaymentMetadata {
+                    parent_payment_id: Some(response.payment.id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        self.storage
+            .set_payment_metadata(
+                conversion_response.received_payment_id,
+                PaymentMetadata {
+                    parent_payment_id: Some(response.payment.id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
         // Fetch the updated payment with conversion details
         self.get_payment(GetPaymentRequest {
             payment_id: response.payment.id,
@@ -1129,45 +1131,6 @@ impl BreezSdk {
 
         self.remove_event_listener(&id).await;
         timeout_res?
-    }
-
-    async fn merge_payment_metadata(
-        &self,
-        payment_id: String,
-        mut metadata: PaymentMetadata,
-    ) -> Result<(), SdkError> {
-        if let Some(details) = self
-            .storage
-            .get_payment_by_id(payment_id.clone())
-            .await
-            .ok()
-            .and_then(|p| p.details)
-        {
-            match details {
-                PaymentDetails::Lightning {
-                    lnurl_pay_info,
-                    lnurl_withdraw_info,
-                    ..
-                } => {
-                    metadata.lnurl_pay_info = metadata.lnurl_pay_info.or(lnurl_pay_info);
-                    metadata.lnurl_withdraw_info =
-                        metadata.lnurl_withdraw_info.or(lnurl_withdraw_info);
-                }
-                PaymentDetails::Spark {
-                    conversion_info, ..
-                }
-                | PaymentDetails::Token {
-                    conversion_info, ..
-                } => {
-                    metadata.conversion_info = metadata.conversion_info.or(conversion_info);
-                }
-                _ => {}
-            }
-        }
-        self.storage
-            .set_payment_metadata(payment_id, metadata)
-            .await?;
-        Ok(())
     }
 
     // Pools the lightning send payment untill it is in completed state.
