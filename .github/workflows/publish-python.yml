@@ -49,7 +49,7 @@ jobs:
       - name: Build Python bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library ../../../aarch64-unknown-linux-gnu/libbreez_sdk_spark_bindings.so --no-format --language python -o ffi/python
+          cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library ../../../aarch64-unknown-linux-gnu/libbreez_sdk_spark_bindings.so --no-format --language python -o ffi/python
 
       - name: Archive Python language bindings
         uses: actions/upload-artifact@v4

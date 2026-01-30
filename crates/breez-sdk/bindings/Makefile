@@ -28,10 +28,10 @@ bindings-golang: build-release install-uniffi-bindgen-golang
 	uniffi-bindgen-go --library $(BIN_PATH) -o $(FFI_DIR)golang -c ./uniffi.toml
 
 bindings-python: build-release
-	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
+	cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language python -o $(FFI_DIR)python
 
 bindings-swift: build-release
-	cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
+	cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
 
 build-release:
 	cargo build --release
