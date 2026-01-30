@@ -41,4 +41,19 @@ class Config {
         // ANCHOR_END: optimization-configuration
         println("Config: $config")
     }
+
+    fun configureStableBalance() {
+        // ANCHOR: stable-balance-config
+        val config = defaultConfig(Network.MAINNET)
+
+        // Enable stable balance with auto-conversion to a specific token
+        config.stableBalanceConfig = StableBalanceConfig(
+            tokenIdentifier = "<token_identifier>",
+            thresholdSats = 10_000u,
+            maxSlippageBps = 100u,
+            reservedSats = 1_000u
+        )
+        // ANCHOR_END: stable-balance-config
+        println("Config: $config")
+    }
 }

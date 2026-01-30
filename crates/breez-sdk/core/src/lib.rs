@@ -14,6 +14,7 @@ mod realtime_sync;
 mod sdk;
 mod sdk_builder;
 pub mod signer;
+mod stable_balance;
 mod sync;
 pub mod token_conversion;
 mod utils;

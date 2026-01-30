@@ -5,8 +5,8 @@ use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkEvent, Seed, create_postgres_storage, default_config,
-    default_postgres_storage_config,
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig,
+    create_postgres_storage, default_config, default_postgres_storage_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -35,6 +35,14 @@ struct Cli {
     /// `PostgreSQL` connection string (enables `PostgreSQL` storage instead of `SQLite`)
     #[arg(long)]
     postgres_connection_string: Option<String>,
+
+    /// Stable balance token identifer
+    #[arg(long)]
+    stable_balance_token_identifier: Option<String>,
+
+    /// Stable balance threshold, in sats
+    #[arg(long)]
+    stable_balance_threshold: Option<u64>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -86,6 +94,7 @@ async fn run_interactive_mode(
     network: Network,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
+    stable_balance_config: Option<StableBalanceConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -109,6 +118,7 @@ async fn run_interactive_mode(
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
     config.api_key = breez_api_key;
+    config.stable_balance_config = stable_balance_config;
 
     let seed = Seed::Mnemonic {
         mnemonic: mnemonic.to_string(),
@@ -211,12 +221,21 @@ async fn main() -> Result<(), anyhow::Error> {
         "mainnet" => Network::Mainnet,
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
+    let stable_balance_config =
+        cli.stable_balance_token_identifier
+            .map(|token_identifier| StableBalanceConfig {
+                token_identifier,
+                threshold_sats: cli.stable_balance_threshold,
+                max_slippage_bps: None,
+                reserved_sats: None,
+            });
 
     Box::pin(run_interactive_mode(
         data_dir,
         network,
         cli.account_number,
         cli.postgres_connection_string,
+        stable_balance_config,
     ))
     .await?;
 
