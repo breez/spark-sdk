@@ -55,7 +55,7 @@ jobs:
       - name: Build Swift bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo run --features=uniffi/cli --bin uniffi-bindgen generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.a --no-format --language swift -o ffi/swift
+          cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library ../../../aarch64-apple-ios/libbreez_sdk_spark_bindings.a --no-format --language swift -o ffi/swift
           # WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
           find ffi/swift -name "*.swift" -exec sed -i 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
 
