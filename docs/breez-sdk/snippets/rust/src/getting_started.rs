@@ -111,3 +111,4 @@ pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 // ANCHOR_END: disconnect
+

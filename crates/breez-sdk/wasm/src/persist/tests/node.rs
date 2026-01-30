@@ -37,10 +37,10 @@ async fn create_test_storage(dir_name: &str) -> WasmStorage {
 }
 
 #[wasm_bindgen_test]
-async fn test_sqlite_storage() {
+async fn test_storage() {
     let storage = create_test_storage("sqlite_storage").await;
 
-    breez_sdk_spark::storage_tests::test_sqlite_storage(Box::new(storage)).await;
+    breez_sdk_spark::storage_tests::test_storage(Box::new(storage)).await;
 }
 
 #[wasm_bindgen_test]
@@ -133,5 +133,5 @@ async fn test_conversion_refund_needed_filtering() {
 async fn test_sync_storage() {
     let storage = create_test_storage("sync_storage").await;
 
-    breez_sdk_spark::storage_tests::test_sqlite_sync_storage(Box::new(storage)).await;
+    breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
 }

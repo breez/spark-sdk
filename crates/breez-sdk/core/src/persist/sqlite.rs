@@ -13,8 +13,7 @@ use crate::{
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
-        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, SyncStorage,
-        SyncStorageError, UnversionedRecordChange,
+        IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
     },
 };
 
@@ -272,9 +271,25 @@ impl SqliteStorage {
     }
 }
 
+/// Maps a rusqlite error to the appropriate `StorageError`.
+/// Database busy/locked errors are mapped to `Connection` (transient),
+/// other errors are mapped to `Implementation`.
+#[allow(clippy::needless_pass_by_value)]
+fn map_sqlite_error(e: rusqlite::Error) -> StorageError {
+    match e {
+        rusqlite::Error::SqliteFailure(err, _)
+            if err.code == rusqlite::ErrorCode::DatabaseBusy
+                || err.code == rusqlite::ErrorCode::DatabaseLocked =>
+        {
+            StorageError::Connection(e.to_string())
+        }
+        _ => StorageError::Implementation(e.to_string()),
+    }
+}
+
 impl From<rusqlite::Error> for StorageError {
     fn from(value: rusqlite::Error) -> Self {
-        StorageError::Implementation(value.to_string())
+        map_sqlite_error(value)
     }
 }
 
@@ -796,38 +811,11 @@ impl Storage for SqliteStorage {
         }
         Ok(())
     }
-}
 
-/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, SyncStorageError> {
-    let revision = tx
-        .query_row(
-            "UPDATE sync_revision
-            SET revision = revision + 1
-            RETURNING revision",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(map_sqlite_error)?;
-    Ok(revision)
-}
-
-impl From<StorageError> for SyncStorageError {
-    fn from(value: StorageError) -> Self {
-        match value {
-            StorageError::Implementation(s) => SyncStorageError::Implementation(s),
-            StorageError::InitializationError(s) => SyncStorageError::InitializationError(s),
-            StorageError::Serialization(s) => SyncStorageError::Serialization(s),
-        }
-    }
-}
-
-#[macros::async_trait]
-impl SyncStorage for SqliteStorage {
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
-    ) -> Result<u64, SyncStorageError> {
+    ) -> Result<u64, StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
         let revision = get_next_revision(&tx)?;
@@ -856,7 +844,7 @@ impl SyncStorage for SqliteStorage {
         Ok(revision)
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError> {
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
@@ -893,7 +881,7 @@ impl SyncStorage for SqliteStorage {
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
-    ) -> Result<Vec<OutgoingChange>, SyncStorageError> {
+    ) -> Result<Vec<OutgoingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection
@@ -949,7 +937,7 @@ impl SyncStorage for SqliteStorage {
         Ok(results)
     }
 
-    async fn get_last_revision(&self) -> Result<u64, SyncStorageError> {
+    async fn get_last_revision(&self) -> Result<u64, StorageError> {
         let connection = self.get_connection()?;
 
         // Get the maximum revision from sync_state table
@@ -964,7 +952,7 @@ impl SyncStorage for SqliteStorage {
         Ok(revision)
     }
 
-    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), SyncStorageError> {
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -998,7 +986,7 @@ impl SyncStorage for SqliteStorage {
         Ok(())
     }
 
-    async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError> {
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection
@@ -1011,7 +999,7 @@ impl SyncStorage for SqliteStorage {
         Ok(())
     }
 
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError> {
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
@@ -1027,7 +1015,7 @@ impl SyncStorage for SqliteStorage {
 
         // Update all pending outgoing records to have revision numbers higher than the incoming record
         tx.execute(
-            "UPDATE sync_outgoing 
+            "UPDATE sync_outgoing
              SET revision = revision + ?",
             params![diff],
         )
@@ -1037,10 +1025,7 @@ impl SyncStorage for SqliteStorage {
         Ok(())
     }
 
-    async fn get_incoming_records(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<IncomingChange>, SyncStorageError> {
+    async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection
@@ -1098,7 +1083,7 @@ impl SyncStorage for SqliteStorage {
         Ok(results)
     }
 
-    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, SyncStorageError> {
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, StorageError> {
         let connection = self.get_connection()?;
 
         let mut stmt = connection
@@ -1156,7 +1141,7 @@ impl SyncStorage for SqliteStorage {
         Ok(None)
     }
 
-    async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError> {
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
         connection
@@ -1184,9 +1169,18 @@ impl SyncStorage for SqliteStorage {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-fn map_sqlite_error(value: rusqlite::Error) -> SyncStorageError {
-    SyncStorageError::Implementation(value.to_string())
+/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
+fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
+    let revision = tx
+        .query_row(
+            "UPDATE sync_revision
+            SET revision = revision + 1
+            RETURNING revision",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(map_sqlite_error)?;
+    Ok(revision)
 }
 
 /// Base query for payment lookups.
@@ -1470,14 +1464,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sqlite_storage() {
+    async fn test_storage() {
         let temp_dir = create_temp_dir("sqlite_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        Box::pin(crate::persist::tests::test_sqlite_storage(Box::new(
-            storage,
-        )))
-        .await;
+        Box::pin(crate::persist::tests::test_storage(Box::new(storage))).await;
     }
 
     #[tokio::test]
@@ -1581,6 +1572,6 @@ mod tests {
         let temp_dir = create_temp_dir("sqlite_sync_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_sqlite_sync_storage(Box::new(storage)).await;
+        crate::persist::tests::test_sync_storage(Box::new(storage)).await;
     }
 }

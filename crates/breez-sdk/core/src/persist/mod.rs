@@ -1,4 +1,9 @@
 pub(crate) mod path;
+#[cfg(all(
+    feature = "postgres",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub mod postgres;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) mod sqlite;
 
@@ -10,7 +15,9 @@ use thiserror::Error;
 
 use crate::{
     ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo, ListPaymentsRequest,
-    LnurlPayInfo, LnurlWithdrawInfo, TokenBalance, TokenMetadata, models::Payment,
+    LnurlPayInfo, LnurlWithdrawInfo, TokenBalance, TokenMetadata,
+    models::Payment,
+    sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
@@ -57,7 +64,12 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum StorageError {
-    #[error("Underline implementation error: {0}")]
+    /// Connection-related errors (pool exhaustion, timeouts, connection refused).
+    /// These are often transient and may be retried.
+    #[error("Connection error: {0}")]
+    Connection(String),
+
+    #[error("Underlying implementation error: {0}")]
     Implementation(String),
 
     /// Database initialization error
@@ -71,6 +83,12 @@ pub enum StorageError {
 impl From<serde_json::Error> for StorageError {
     fn from(e: serde_json::Error) -> Self {
         StorageError::Serialization(e.to_string())
+    }
+}
+
+impl From<std::num::TryFromIntError> for StorageError {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        StorageError::Implementation(format!("integer overflow: {e}"))
     }
 }
 
@@ -225,6 +243,38 @@ pub trait Storage: Send + Sync {
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<(), StorageError>;
+
+    // Sync storage methods
+    async fn add_outgoing_change(
+        &self,
+        record: UnversionedRecordChange,
+    ) -> Result<u64, StorageError>;
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
+    async fn get_pending_outgoing_changes(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingChange>, StorageError>;
+
+    /// Get the revision number of the last synchronized record
+    async fn get_last_revision(&self) -> Result<u64, StorageError>;
+
+    /// Insert incoming records from remote sync
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError>;
+
+    /// Delete an incoming record after it has been processed
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError>;
+
+    /// Update revision numbers of pending outgoing records to be higher than the given revision
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError>;
+
+    /// Get incoming records that need to be processed, up to the specified limit
+    async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError>;
+
+    /// Get the latest outgoing record if any exists
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, StorageError>;
+
+    /// Update the sync state record from an incoming record
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {

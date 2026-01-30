@@ -6,12 +6,18 @@ bindings:
   ts: src/generated
 android:
   useSharedLibrary: true
+  # Disable postgres feature to reduce binary size (not needed for mobile)
+  cargoExtras:
+    - --no-default-features
 ios:
   targets:
     - aarch64-apple-ios
     - aarch64-apple-ios-sim
     - x86_64-apple-ios
   frameworkName: build/RnBreezSdkSpark
+  # Disable postgres feature to reduce binary size (not needed for mobile)
+  cargoExtras:
+    - --no-default-features
 turboModule:
   cpp: cpp
   ts: src

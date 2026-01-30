@@ -6,14 +6,17 @@ use std::{
 };
 
 use breez_sdk_common::sync::{
-    IncomingChange, NewRecordHandler, OutgoingChange, RecordChangeRequest, RecordId, SyncService,
+    IncomingChange as CommonIncomingChange, NewRecordHandler,
+    OutgoingChange as CommonOutgoingChange, RecordChangeRequest, RecordId, SyncService,
 };
 use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::{
     DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
-    Storage, StorageError, UpdateDepositPayload, events::InternalSyncedEvent,
+    Storage, StorageError, UpdateDepositPayload,
+    events::InternalSyncedEvent,
+    sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 use tokio_with_wasm::alias as tokio;
 
@@ -51,11 +54,11 @@ pub struct SyncedStorage {
 
 #[macros::async_trait]
 impl NewRecordHandler for SyncedStorage {
-    async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
+    async fn on_incoming_change(&self, change: CommonIncomingChange) -> anyhow::Result<()> {
         self.handle_incoming_change(change).await
     }
 
-    async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()> {
+    async fn on_replay_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
         self.handle_outgoing_change(change).await
     }
 
@@ -175,7 +178,7 @@ impl SyncedStorage {
         Ok(())
     }
 
-    async fn handle_incoming_change(&self, change: IncomingChange) -> anyhow::Result<()> {
+    async fn handle_incoming_change(&self, change: CommonIncomingChange) -> anyhow::Result<()> {
         let record_type =
             RecordType::from_str(&change.new_state.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
         match record_type {
@@ -190,7 +193,7 @@ impl SyncedStorage {
     }
 
     /// Hook when an outgoing change is replayed, to ensure data consistency.
-    async fn handle_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()> {
+    async fn handle_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
         let record_type =
             RecordType::from_str(&change.change.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
         match record_type {
@@ -313,5 +316,51 @@ impl Storage for SyncedStorage {
         metadata: Vec<crate::persist::SetLnurlMetadataItem>,
     ) -> Result<(), StorageError> {
         self.inner.set_lnurl_metadata(metadata).await
+    }
+
+    async fn add_outgoing_change(
+        &self,
+        record: UnversionedRecordChange,
+    ) -> Result<u64, StorageError> {
+        self.inner.add_outgoing_change(record).await
+    }
+
+    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+        self.inner.complete_outgoing_sync(record).await
+    }
+
+    async fn get_pending_outgoing_changes(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<OutgoingChange>, StorageError> {
+        self.inner.get_pending_outgoing_changes(limit).await
+    }
+
+    async fn get_last_revision(&self) -> Result<u64, StorageError> {
+        self.inner.get_last_revision().await
+    }
+
+    async fn insert_incoming_records(&self, records: Vec<Record>) -> Result<(), StorageError> {
+        self.inner.insert_incoming_records(records).await
+    }
+
+    async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
+        self.inner.delete_incoming_record(record).await
+    }
+
+    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
+        self.inner.rebase_pending_outgoing_records(revision).await
+    }
+
+    async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError> {
+        self.inner.get_incoming_records(limit).await
+    }
+
+    async fn get_latest_outgoing_change(&self) -> Result<Option<OutgoingChange>, StorageError> {
+        self.inner.get_latest_outgoing_change().await
+    }
+
+    async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
+        self.inner.update_record_from_incoming(record).await
     }
 }

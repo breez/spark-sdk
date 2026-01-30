@@ -4,7 +4,10 @@ mod persist;
 use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::{EventListener, Network, SdkBuilder, SdkEvent, Seed, default_config};
+use breez_sdk_spark::{
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, create_postgres_storage, default_config,
+    default_postgres_storage_config,
+};
 use clap::Parser;
 use command::{Command, execute_command};
 use rustyline::Editor;
@@ -28,6 +31,10 @@ struct Cli {
     /// Account number to use for the Spark signer
     #[arg(long)]
     account_number: Option<u32>,
+
+    /// `PostgreSQL` connection string (enables `PostgreSQL` storage instead of `SQLite`)
+    #[arg(long)]
+    postgres_connection_string: Option<String>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -78,6 +85,7 @@ async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
     account_number: Option<u32>,
+    postgres_connection_string: Option<String>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -107,8 +115,14 @@ async fn run_interactive_mode(
         passphrase: None,
     };
 
-    let mut sdk_builder =
-        SdkBuilder::new(config, seed).with_default_storage(data_dir.to_string_lossy().to_string());
+    let mut sdk_builder = SdkBuilder::new(config, seed);
+    if let Some(connection_string) = postgres_connection_string {
+        let postgres_config = default_postgres_storage_config(connection_string);
+        let storage = create_postgres_storage(postgres_config).await?;
+        sdk_builder = sdk_builder.with_storage(storage);
+    } else {
+        sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
+    }
     if let Some(account_number) = account_number {
         sdk_builder = sdk_builder.with_key_set(breez_sdk_spark::KeySetConfig {
             key_set_type: breez_sdk_spark::KeySetType::Default,
@@ -198,7 +212,13 @@ async fn main() -> Result<(), anyhow::Error> {
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
 
-    Box::pin(run_interactive_mode(data_dir, network, cli.account_number)).await?;
+    Box::pin(run_interactive_mode(
+        data_dir,
+        network,
+        cli.account_number,
+        cli.postgres_connection_string,
+    ))
+    .await?;
 
     Ok(())
 }
