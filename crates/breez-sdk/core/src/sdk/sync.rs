@@ -117,7 +117,7 @@ impl BreezSdk {
                         let cloned_sdk = sdk.clone();
                         let initial_synced_sender = initial_synced_sender.clone();
                         if let Some(true) = Box::pin(run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
-                            if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
+                            if let Err(e) = cloned_sdk.sync_wallet_internal(&sync_request).await {
                                 error!("Failed to sync wallet: {e:?}");
                                 let () = sync_request.reply(Some(e)).await;
                                 return false;
@@ -141,7 +141,7 @@ impl BreezSdk {
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
-                            && let Err(e) = sync_trigger_sender.send(SyncRequest::full(None)) {
+                            && let Err(e) = sync_trigger_sender.send(SyncRequest::full(None, false)) {
                             error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
@@ -163,7 +163,7 @@ impl BreezSdk {
             }
             WalletEvent::Synced => {
                 info!("Synced");
-                if let Err(e) = self.sync_trigger.send(SyncRequest::full(None)) {
+                if let Err(e) = self.sync_trigger.send(SyncRequest::full(None, false)) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -185,7 +185,7 @@ impl BreezSdk {
                 }
                 if let Err(e) = self
                     .sync_trigger
-                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                    .send(SyncRequest::no_reply(SyncType::WalletState, true))
                 {
                     error!("Failed to sync wallet: {e:?}");
                 }
@@ -207,7 +207,7 @@ impl BreezSdk {
                 }
                 if let Err(e) = self
                     .sync_trigger
-                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                    .send(SyncRequest::no_reply(SyncType::WalletState, true))
                 {
                     error!("Failed to sync wallet: {e:?}");
                 }
@@ -273,7 +273,7 @@ impl BreezSdk {
         let (tx, rx) = oneshot::channel();
         if let Err(e) = self
             .sync_trigger
-            .send(SyncRequest::new(tx, SyncType::LnurlMetadata))
+            .send(SyncRequest::new(tx, SyncType::LnurlMetadata, true))
         {
             error!("Failed to trigger lnurl metadata sync: {e}");
             return;
@@ -307,7 +307,7 @@ impl BreezSdk {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
+    pub(super) async fn sync_wallet_internal(&self, request: &SyncRequest) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let sync_interval_secs = u64::from(self.config.sync_interval_secs);
 
@@ -318,7 +318,7 @@ impl BreezSdk {
 
         // Ensure lock is released even on error
         let result = self
-            .sync_wallet_internal_locked(&cache, sync_interval_secs, sync_type)
+            .sync_wallet_internal_locked(&cache, sync_interval_secs, request)
             .await;
 
         // Always release lock
@@ -335,15 +335,17 @@ impl BreezSdk {
         &self,
         cache: &ObjectCacheRepository,
         sync_interval_secs: u64,
-        sync_type: SyncType,
+        request: &SyncRequest,
     ) -> Result<(), SdkError> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // Check if another instance just synced while we were waiting for the lock
-        if let Some(last) = cache.get_last_sync_time().await?
+        // Check if another instance just synced while we were waiting for the lock.
+        // Skip this check for forced syncs (event-driven syncs that should happen immediately).
+        if !request.force
+            && let Some(last) = cache.get_last_sync_time().await?
             && now.saturating_sub(last) < sync_interval_secs
         {
             trace!("sync_wallet_internal: Another instance synced recently, skipping");
@@ -353,7 +355,7 @@ impl BreezSdk {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
+            let wallet_synced = if request.sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -377,7 +379,7 @@ impl BreezSdk {
                 false
             };
 
-            let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
+            let wallet_state_synced = if request.sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
                 match self.sync_wallet_state_to_storage().await {
@@ -405,7 +407,7 @@ impl BreezSdk {
         };
 
         let sync_lnurl = async {
-            if sync_type.contains(SyncType::LnurlMetadata) {
+            if request.sync_type.contains(SyncType::LnurlMetadata) {
                 debug!("sync_wallet_internal: Starting LnurlMetadata sync");
                 let lnurl_start = Instant::now();
                 match self.sync_lnurl_metadata().await {
@@ -431,7 +433,7 @@ impl BreezSdk {
         };
 
         let sync_deposits = async {
-            if sync_type.contains(SyncType::Deposits) {
+            if request.sync_type.contains(SyncType::Deposits) {
                 debug!("sync_wallet_internal: Starting Deposits sync");
                 let deposits_start = Instant::now();
                 match self.check_and_claim_static_deposits().await {
@@ -669,7 +671,7 @@ impl BreezSdk {
     ) -> Result<SyncWalletResponse, SdkError> {
         let (tx, rx) = oneshot::channel();
 
-        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
+        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx), true)) {
             error!("Failed to send sync trigger: {e:?}");
         }
         let _ = rx.await.map_err(|e| {

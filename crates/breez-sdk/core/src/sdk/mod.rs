@@ -48,27 +48,37 @@ pub(crate) struct SyncRequest {
     pub(crate) sync_type: SyncType,
     #[allow(clippy::type_complexity)]
     pub(crate) reply: Arc<Mutex<Option<oneshot::Sender<Result<(), SdkError>>>>>,
+    /// If true, bypass the "recently synced" check and sync immediately.
+    /// Use for event-driven syncs (after payments, transfers, etc.) that should happen immediately.
+    pub(crate) force: bool,
 }
 
 impl SyncRequest {
-    pub(crate) fn new(reply: oneshot::Sender<Result<(), SdkError>>, sync_type: SyncType) -> Self {
+    pub(crate) fn new(
+        reply: oneshot::Sender<Result<(), SdkError>>,
+        sync_type: SyncType,
+        force: bool,
+    ) -> Self {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(Some(reply))),
+            force,
         }
     }
 
-    pub(crate) fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
+    pub(crate) fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>, force: bool) -> Self {
         Self {
             sync_type: SyncType::Full,
             reply: Arc::new(Mutex::new(reply)),
+            force,
         }
     }
 
-    pub(crate) fn no_reply(sync_type: SyncType) -> Self {
+    pub(crate) fn no_reply(sync_type: SyncType, force: bool) -> Self {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(None)),
+            force,
         }
     }
 

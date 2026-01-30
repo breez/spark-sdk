@@ -32,7 +32,7 @@ impl BreezSdk {
                     .await?;
                 if let Err(e) = self
                     .sync_trigger
-                    .send(SyncRequest::no_reply(SyncType::WalletState))
+                    .send(SyncRequest::no_reply(SyncType::WalletState, true))
                 {
                     error!("Failed to execute sync after deposit claim: {e:?}");
                 }

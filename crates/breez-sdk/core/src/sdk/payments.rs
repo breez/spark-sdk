@@ -522,7 +522,7 @@ impl BreezSdk {
             }
             if let Err(e) = self
                 .sync_trigger
-                .send(SyncRequest::no_reply(SyncType::WalletState))
+                .send(SyncRequest::no_reply(SyncType::WalletState, true))
             {
                 error!("Failed to send sync trigger: {e:?}");
             }
@@ -653,7 +653,7 @@ impl BreezSdk {
         ) {
             let _ = self
                 .sync_trigger
-                .send(SyncRequest::no_reply(SyncType::WalletState));
+                .send(SyncRequest::no_reply(SyncType::WalletState, true));
         }
         // Wait for the received conversion payment to complete
         let payment = self
@@ -1163,7 +1163,7 @@ impl BreezSdk {
                             if payment.status != PaymentStatus::Pending {
                                 info!("Polling payment completed status = {}", payment.status);
                                 event_emitter.emit(&SdkEvent::from_payment(payment.clone())).await;
-                                if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState)) {
+                                if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState, true)) {
                                     error!("Failed to send sync trigger: {e:?}");
                                 }
                                 return;
