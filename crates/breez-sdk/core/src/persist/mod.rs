@@ -21,6 +21,7 @@ use crate::{
 };
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
+const LAST_SYNC_TIME_KEY: &str = "last_sync_time";
 const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
@@ -275,6 +276,45 @@ pub trait Storage: Send + Sync {
 
     /// Update the sync state record from an incoming record
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
+
+    /// Acquire exclusive lock for an operation (blocking).
+    ///
+    /// Used for cross-instance coordination when multiple SDK instances share the same
+    /// database (e.g., `PostgreSQL` in horizontally-scaled deployments). Prevents race
+    /// conditions in operations like sync where concurrent execution could cause:
+    /// - Cursor/offset regression (one instance overwrites another's progress)
+    /// - Duplicate work (multiple instances claiming the same deposit)
+    /// - Wasted API calls (redundant fetches of the same data)
+    ///
+    /// Waits (blocks) until the lock is available.
+    ///
+    /// # Default Implementation
+    ///
+    /// No-op. Single-instance storages (`SQLite`, in-memory) don't need coordination
+    /// since there's only one caller. Override for multi-instance backends like `PostgreSQL`
+    /// using database-specific advisory locks.
+    ///
+    /// # Arguments
+    ///
+    /// * `operation_id` - Unique identifier for the operation type (e.g., sync, deposit claim).
+    ///   Use distinct IDs for operations that can safely run concurrently with each other.
+    async fn acquire_operation_lock(&self, operation_id: i64) -> Result<(), StorageError> {
+        let _ = operation_id;
+        Ok(())
+    }
+
+    /// Release operation lock acquired by [`Self::acquire_operation_lock`].
+    ///
+    /// Must be called after the protected operation completes, even on error.
+    /// Implementations should be idempotent (safe to call even if lock wasn't held).
+    ///
+    /// # Default Implementation
+    ///
+    /// No-op. Single-instance storages don't acquire locks, so there's nothing to release.
+    async fn release_operation_lock(&self, operation_id: i64) -> Result<(), StorageError> {
+        let _ = operation_id;
+        Ok(())
+    }
 }
 
 pub(crate) struct ObjectCacheRepository {
@@ -517,6 +557,25 @@ impl ObjectCacheRepository {
             })?),
             None => Ok(0),
         }
+    }
+
+    pub(crate) async fn get_last_sync_time(&self) -> Result<Option<u64>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(LAST_SYNC_TIME_KEY.to_string())
+            .await?;
+        match value {
+            Some(v) => Ok(Some(v.parse().map_err(|_| {
+                StorageError::Serialization("invalid last_sync_time".to_string())
+            })?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_last_sync_time(&self, time: u64) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(LAST_SYNC_TIME_KEY.to_string(), time.to_string())
+            .await
     }
 }
 

@@ -101,6 +101,13 @@ async fn test_payment_metadata() {
 }
 
 #[wasm_bindgen_test]
+async fn test_payment_metadata_merge() {
+    let storage = create_test_storage("test_payment_metadata_merge").await;
+
+    breez_sdk_spark::storage_tests::test_payment_metadata_merge(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_payment_details_update_persistence() {
     let storage = create_test_storage("payment_details_update").await;
 
