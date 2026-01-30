@@ -660,3 +660,57 @@ pub fn generate_preimage_hash_pair() -> (String, String) {
     let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
     (preimage, payment_hash)
 }
+
+/// Build and initialize a BreezSDK instance backed by PostgreSQL storage
+///
+/// # Arguments
+/// * `connection_string` - PostgreSQL connection string
+/// * `seed_bytes` - 32-byte seed for deterministic wallet generation
+///
+/// # Returns
+/// An SdkInstance containing the SDK and event channel
+pub async fn build_sdk_with_postgres(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    use breez_sdk_spark::{create_postgres_storage, default_postgres_storage_config};
+
+    let storage = create_postgres_storage(default_postgres_storage_config(
+        connection_string.to_string(),
+    ))
+    .await?;
+
+    let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_storage(storage)
+        .build()
+        .await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(breez_sdk_spark::GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}

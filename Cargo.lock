@@ -691,6 +691,7 @@ dependencies = [
  "tempdir",
  "test-log",
  "testcontainers",
+ "testcontainers-modules",
  "tokio",
  "tokio-stream",
  "tracing",
