@@ -242,6 +242,72 @@ Working code examples for all platforms are in `docs/breez-sdk/snippets/`:
 
 **Mainnet with small amounts** is recommended for Lightning testing (regtest has limited Lightning network).
 
+### Error Handling
+
+The SDK throws `SdkError` with these variants:
+
+| Error | Meaning |
+|-------|---------|
+| `InsufficientFunds` | Not enough balance for payment |
+| `InvalidInput` | Bad parameter (address, amount, etc.) |
+| `NetworkError` | Connection/API issues |
+| `StorageError` | Database/persistence issues |
+| `MaxDepositClaimFeeExceeded` | On-chain fees too high for auto-claim |
+
+```typescript
+try {
+  await sdk.sendPayment({ prepareResponse })
+} catch (error) {
+  if (error.message.includes('InsufficientFunds')) {
+    // Handle insufficient balance
+  }
+}
+```
+
+### LNURL Operations
+
+| Operation | Flow |
+|-----------|------|
+| **LNURL-Pay** | `parse(url)` → check `type === 'lnurlPay'` or `'lightningAddress'` → `prepareLnurlPay()` → `lnurlPay()` |
+| **LNURL-Withdraw** | `parse(url)` → check `type === 'lnurlWithdraw'` → `lnurlWithdraw({ amountSats, withdrawRequest })` |
+| **LNURL-Auth** | `parse(url)` → check `type === 'lnurlAuth'` → show domain to user → `lnurlAuth(requestData)` |
+
+### Token Operations
+
+**Receiving tokens:**
+```typescript
+// Get token balances
+const info = await sdk.getInfo({ ensureSynced: true })
+for (const [tokenId, balance] of Object.entries(info.tokenBalances)) {
+  console.log(`${balance.tokenMetadata.ticker}: ${balance.balance}`)
+}
+
+// Receive via Spark invoice
+const response = await sdk.receivePayment({
+  paymentMethod: { type: 'sparkInvoice', tokenIdentifier: '<token id>', amount: '1000' }
+})
+```
+
+**Sending tokens:**
+```typescript
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: '<spark address or invoice>',
+  tokenIdentifier: '<token id>',
+  amount: BigInt(1000)
+})
+await sdk.sendPayment({ prepareResponse })
+```
+
+**Issuing tokens (for token issuers):**
+```typescript
+const issuer = sdk.getTokenIssuer()
+const metadata = await issuer.createIssuerToken({
+  name: 'My Token', ticker: 'MTK', decimals: 6, isFreezable: false, maxSupply: BigInt(1_000_000)
+})
+await issuer.mintIssuerToken({ amount: BigInt(1000) })  // Mint to self
+await issuer.burnIssuerToken({ amount: BigInt(500) })   // Burn from self
+```
+
 ### Full Documentation
 
 See `docs/breez-sdk/src/guide/` for complete documentation markdown files.
