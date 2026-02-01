@@ -20,7 +20,7 @@ impl BreezSdk {
             ));
         };
 
-        let username = sanitize_username(&req.username);
+        let username = Self::validate_and_sanitize_username(&req.username)?;
         let available = client.check_username_available(&username).await?;
         Ok(available)
     }
@@ -59,6 +59,22 @@ impl BreezSdk {
         client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
         Ok(())
+    }
+
+    fn validate_and_sanitize_username(username: &str) -> Result<String, SdkError> {
+        let sanitized = sanitize_username(username);
+
+        if sanitized.is_empty() {
+            return Err(SdkError::Generic("Username cannot be empty".to_string()));
+        }
+
+        if sanitized.len() < 3 || sanitized.len() > 32 {
+            return Err(SdkError::Generic(
+                "Username must be 3-32 characters".to_string(),
+            ));
+        }
+
+        Ok(sanitized)
     }
 }
 
@@ -100,7 +116,7 @@ impl BreezSdk {
             ));
         };
 
-        let username = sanitize_username(&request.username);
+        let username = Self::validate_and_sanitize_username(&request.username)?;
 
         let description = match request.description {
             Some(description) => description,
