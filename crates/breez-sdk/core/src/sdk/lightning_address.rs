@@ -5,23 +5,7 @@ use crate::{
     error::SdkError, persist::ObjectCacheRepository,
 };
 
-use super::BreezSdk;
-
-fn validate_and_sanitize_username(username: &str) -> Result<String, SdkError> {
-    let sanitized = sanitize_username(username);
-
-    if sanitized.is_empty() {
-        return Err(SdkError::Generic("Username cannot be empty".to_string()));
-    }
-
-    if sanitized.len() < 3 || sanitized.len() > 32 {
-        return Err(SdkError::Generic(
-            "Username must be 3-32 characters".to_string(),
-        ));
-    }
-
-    Ok(sanitized)
-}
+use super::{BreezSdk, helpers::validate_and_sanitize_username};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
