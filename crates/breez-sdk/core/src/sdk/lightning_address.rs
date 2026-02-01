@@ -1,5 +1,3 @@
-use lnurl_models::sanitize_username;
-
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
     error::SdkError, persist::ObjectCacheRepository,
