@@ -214,6 +214,34 @@ Working code examples for all platforms are in `docs/breez-sdk/snippets/`:
 - `csharp/` - C# examples
 - `react-native/` - React Native examples
 
+### Common Gotchas
+
+1. **WASM Web requires `init()`** - Call `await init()` before any SDK methods in browser environments (not needed for Node.js/Deno)
+
+2. **Node.js version** - WASM and React Native require Node.js >= 22
+
+3. **Storage paths** - On mobile (Android/iOS), use app-specific sandbox directories, not arbitrary paths
+
+4. **One SDK instance per storage** - Each SDK instance needs its own unique `storageDir`
+
+5. **Prepare before send** - Always call `prepareSendPayment()` first to get fees, then `sendPayment()` with the response
+
+6. **Balance after sync** - Call `getInfo({ ensureSynced: true })` to get accurate balance, or listen for `synced` events
+
+7. **Lightning address registration** - Call `registerLightningAddress()` to get a Lightning address; it's not automatic
+
+### Networks
+
+| Network | Config | Use Case |
+|---------|--------|----------|
+| `mainnet` | `defaultConfig('mainnet')` | Production |
+| `testnet` | `defaultConfig('testnet')` | Testing with testnet Bitcoin |
+| `regtest` | `defaultConfig('regtest')` | Development (no API key needed, use [Lightspark faucet](https://app.lightspark.com/regtest-faucet)) |
+
+**Regtest** is recommended for development - free to use, no real value, supports Spark payments, deposits, withdrawals, and token issuance.
+
+**Mainnet with small amounts** is recommended for Lightning testing (regtest has limited Lightning network).
+
 ### Full Documentation
 
 See `docs/breez-sdk/src/guide/` for complete documentation markdown files.
