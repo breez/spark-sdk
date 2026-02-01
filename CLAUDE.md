@@ -103,7 +103,7 @@ This section is for developers integrating the Breez SDK into their apps.
 ### API Key (Required)
 
 A Breez API key is required for the SDK to work. Request one for free at:
-**https://breez.technology/request-api-key/**
+**https://breez.technology/request-api-key/#contact-us-form-sdk**
 
 ### Installation
 
@@ -148,7 +148,11 @@ const sdk = await connect({
 })
 
 const info = await sdk.getInfo({ ensureSynced: true })
-// info.balanceSats, info.lightningAddress, info.sparkAddress
+// info.balanceSats, info.tokenBalances
+
+// To get addresses:
+// const lnAddress = await sdk.getLightningAddress()
+// const sparkAddr = await sdk.receivePayment({ paymentMethod: { type: 'sparkAddress' } })
 
 await sdk.disconnect()
 ```
@@ -168,7 +172,7 @@ let sdk = connect(ConnectRequest {
 }).await?;
 
 let info = sdk.get_info(GetInfoRequest { ensure_synced: Some(true) }).await?;
-// info.balance_sats, info.lightning_address, info.spark_address
+// info.balance_sats, info.token_balances
 
 sdk.disconnect().await?;
 ```
@@ -179,9 +183,11 @@ sdk.disconnect().await?;
 |--------|-------------|
 | `connect(config, seed, storageDir)` | Initialize SDK |
 | `disconnect()` | Clean shutdown |
-| `getInfo()` | Get balance, addresses, identity |
-| `sendPayment(destination, amount)` | Send to any destination type |
-| `receivePayment(amount, description)` | Generate Bolt11 invoice |
+| `getInfo()` | Get balance (sats) and token balances |
+| `getLightningAddress()` | Get registered lightning address |
+| `receivePayment(paymentMethod)` | Generate invoice, BTC address, or Spark address |
+| `sendPayment(prepareResponse)` | Send payment (call prepareSendPayment first) |
+| `prepareSendPayment(destination)` | Prepare a payment, get fees |
 | `parse(input)` | Parse any input (invoice, address, LNURL) |
 | `listPayments(filter)` | Get transaction history |
 | `addEventListener(listener)` | Subscribe to events |
