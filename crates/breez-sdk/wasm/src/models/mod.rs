@@ -768,44 +768,36 @@ pub struct ReceivePaymentResponse {
     pub fee: u128,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::PayAmount)]
-pub enum PayAmount {
-    Bitcoin {
-        amount_sats: u64,
-    },
-    Token {
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
-        amount: u128,
-        token_identifier: String,
-    },
-    Drain,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::BitcoinPayAmount)]
-pub enum BitcoinPayAmount {
-    Bitcoin { amount_sats: u64 },
-    Drain,
+#[derive(Clone, Copy, Default)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FeePolicy)]
+pub enum FeePolicy {
+    /// Fees are added on top of the specified amount (default behavior).
+    #[default]
+    FeesExcluded,
+    /// Fees are deducted from the specified amount.
+    FeesIncluded,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayRequest)]
 pub struct PrepareLnurlPayRequest {
-    pub pay_amount: BitcoinPayAmount,
+    pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
     pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayResponse)]
 pub struct PrepareLnurlPayResponse {
-    pub pay_amount: BitcoinPayAmount,
+    pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
     pub conversion_estimate: Option<ConversionEstimate>,
+    pub fee_policy: FeePolicy,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayRequest)]
@@ -836,15 +828,19 @@ pub struct LnurlWithdrawResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentRequest)]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub pay_amount: Option<PayAmount>,
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub pay_amount: PayAmount,
+    pub amount: u128,
+    pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
+    pub fee_policy: FeePolicy,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]

@@ -58,15 +58,6 @@ pub enum SdkError {
     #[error("Lnurl error: {0}")]
     LnurlError(String),
 
-    #[error("Drain not supported for this payment method")]
-    DrainNotSupported,
-
-    #[error("Balance {balance_sats} sats exceeds LNURL maximum sendable {max_sendable_sats} sats")]
-    DrainExceedsLnurlMax {
-        balance_sats: u64,
-        max_sendable_sats: u64,
-    },
-
     #[error("Signer error: {0}")]
     Signer(String),
 
