@@ -1,12 +1,3 @@
-//! File-based implementation of `PasskeyPrfProvider`.
-//!
-//! This module provides a software-based implementation of the `PasskeyPrfProvider` trait
-//! using a secret file stored in the data directory. This enables seedless wallet
-//! restore without requiring hardware security keys.
-//!
-//! The secret is stored in a file called `seedless-restore-secret` in the data directory.
-//! If the file doesn't exist, a random 32-byte secret is generated.
-
 use std::fs;
 use std::path::PathBuf;
 

@@ -1,13 +1,11 @@
 mod command;
-mod file_prf;
 mod persist;
+mod seedless_restore;
 
-use std::io::Write;
-use std::sync::Arc;
-use std::{fs, io, path::PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use breez_sdk_spark::seedless_restore::SeedlessRestore;
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkEvent, Seed, create_postgres_storage, default_config,
     default_postgres_storage_config,
@@ -20,8 +18,8 @@ use rustyline::hint::HistoryHinter;
 use tracing::{error, info};
 
 use crate::command::CliHelper;
-use crate::file_prf::FilePrfProvider;
 use crate::persist::CliPersistence;
+use crate::seedless_restore::SeedlessProvider;
 
 #[derive(Parser)]
 #[command(version, about = "CLI client for Breez SDK with Spark", long_about = None)]
@@ -43,14 +41,13 @@ struct Cli {
     #[arg(long)]
     postgres_connection_string: Option<String>,
 
-    /// Use file-based seedless restore with the given salt (mnemonic not persisted)
-    /// The secret is stored in `seedless-restore-secret` in the data directory.
-    #[arg(long)]
-    seedless_salt: Option<String>,
+    #[arg(long, value_name = "PROVIDER")]
+    /// Use seedless restore with `file` or `yubikey` provider
+    seedless: Option<SeedlessProvider>,
 
-    /// List available salts from Nostr for file-based identity, then prompt for selection
-    #[arg(long)]
-    seedless_list_salts: bool,
+    /// A specific salt to restore with (if omitted, lists available salts from Nostr)
+    #[arg(long, requires = "seedless")]
+    seedless_salt: Option<String>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -103,8 +100,8 @@ async fn run_interactive_mode(
     network: Network,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
+    seedless_provider: Option<SeedlessProvider>,
     seedless_salt: Option<String>,
-    seedless_list_salts: bool,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -128,65 +125,12 @@ async fn run_interactive_mode(
     let mut config = default_config(network);
     config.api_key = breez_api_key;
 
-    // Determine seed source: file-based seedless or persisted mnemonic
-    let seed = if let Some(salt) = seedless_salt {
-        // File-based seedless restore with provided salt
-        let provider = Arc::new(
-            FilePrfProvider::new(&data_dir)
-                .map_err(|e| anyhow!("File PRF initialization failed: {e}"))?,
-        );
-        let seedless = SeedlessRestore::new(provider, None);
-
-        println!("Deriving seed from file-based secret...");
-        seedless
-            .create_seed(salt)
-            .await
-            .map_err(|e| anyhow!("Seedless restore failed: {e}"))?
-    } else if seedless_list_salts {
-        // List salts from file-based identity
-        let provider = Arc::new(
-            FilePrfProvider::new(&data_dir)
-                .map_err(|e| anyhow!("File PRF initialization failed: {e}"))?,
-        );
-        let seedless = SeedlessRestore::new(provider, None);
-
-        println!("Querying Nostr for available salts...");
-        let salts = seedless
-            .list_salts()
-            .await
-            .map_err(|e| anyhow!("Failed to list salts: {e}"))?;
-
-        if salts.is_empty() {
-            return Err(anyhow!("No salts found on Nostr for this identity"));
-        }
-
-        println!("Available salts:");
-        for (i, salt) in salts.iter().enumerate() {
-            println!("  {}: {}", i + 1, salt);
-        }
-
-        // Prompt for selection
-        print!("Select salt (1-{}): ", salts.len());
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let idx: usize = input
-            .trim()
-            .parse()
-            .map_err(|_| anyhow!("Invalid selection"))?;
-
-        if idx < 1 || idx > salts.len() {
-            return Err(anyhow!("Selection out of range"));
-        }
-
-        let selected_salt = &salts[idx - 1];
-        println!("Restoring seed for '{selected_salt}'...");
-        seedless
-            .restore_seed(selected_salt.clone())
-            .await
-            .map_err(|e| anyhow!("Seedless restore failed: {e}"))?
+    let seed = if let Some(provider) = seedless_provider {
+        let prf = provider
+            .into_provider(&data_dir)
+            .map_err(|e| anyhow!("PRF initialization failed: {e}"))?;
+        seedless_restore::resolve_seedless_seed(prf, seedless_salt).await?
     } else {
-        // Default: use persisted mnemonic
         let mnemonic = persistence.get_or_create_mnemonic()?;
         Seed::Mnemonic {
             mnemonic: mnemonic.to_string(),
@@ -296,8 +240,8 @@ async fn main() -> Result<(), anyhow::Error> {
         network,
         cli.account_number,
         cli.postgres_connection_string,
+        cli.seedless,
         cli.seedless_salt,
-        cli.seedless_list_salts,
     ))
     .await?;
 
