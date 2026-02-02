@@ -37,6 +37,19 @@ So they are in the following structure
     └── build.gradle
 ```
 
+### Darwin (macOS)
+
+For development, `go run` and `go build` work out of the box since the bundled `.dylib` is referenced via `rpath` pointing into the Go module cache.
+
+For deployment, create a universal dylib and place it in your app bundle's Frameworks directory:
+
+```bash
+lipo -create \
+  vendor/github.com/breez/breez-sdk-spark-go/breez_sdk_spark/lib/darwin-aarch64/libbreez_sdk_spark_bindings.dylib \
+  vendor/github.com/breez/breez-sdk-spark-go/breez_sdk_spark/lib/darwin-amd64/libbreez_sdk_spark_bindings.dylib \
+  -output YourMacOSApp/Contents/Frameworks/libbreez_sdk_spark_bindings.dylib
+```
+
 ### iOS
 
 When targeting iOS, you must also install the native binary framework. This is the same framework used by the [Swift Breez SDK package](install_ios_swift.md) and can be installed via [Swift Package Manager](#swift-package-manager) or [CocoaPods](#cocoapods).
