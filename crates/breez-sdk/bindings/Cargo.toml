@@ -7,10 +7,12 @@ version.workspace = true
 default = ["postgres"]
 # PostgreSQL storage backend (disable for mobile builds to reduce binary size)
 postgres = ["breez-sdk-spark/postgres"]
+uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+required-features = ["uniffi-cli"]
 
 [lib]
 name = "breez_sdk_spark_bindings"
@@ -18,7 +20,7 @@ crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
 breez-sdk-spark = { workspace = true, features = ["uniffi"] }
-uniffi = { workspace = true, features = ["bindgen-tests", "cli", "tokio"] }
+uniffi = { workspace = true, features = ["tokio"] }
 
 [build-dependencies]
 glob.workspace = true
