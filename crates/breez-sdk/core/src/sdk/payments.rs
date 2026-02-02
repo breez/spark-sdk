@@ -530,15 +530,11 @@ impl BreezSdk {
 
         let amount = request.prepare_response.amount;
         let token_identifier = request.prepare_response.token_identifier.clone();
-
         // Create a reservation for the expected sats from conversion.
         // This prevents auto-convert from converting these sats back to tokens.
-        let _reservation_guard = match &self.stable_balance {
-            Some(sb) => {
-                let amount_sats = u64::try_from(amount).unwrap_or(u64::MAX);
-                Some(sb.create_reservation(amount_sats))
-            }
-            None => None,
+        let _reservation_guard = match (&token_identifier, &self.stable_balance) {
+            (None, Some(sb)) => Some(sb.create_reservation(u64::try_from(amount)?)),
+            _ => None,
         };
 
         // Perform a conversion before sending the payment
