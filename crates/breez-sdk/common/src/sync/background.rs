@@ -32,18 +32,15 @@ pub trait NewRecordHandler: Send + Sync {
 /// **WARNING**: Real-time sync is incompatible with shared storage deployments.
 /// This implementation assumes each `SyncProcessor` has exclusive access to its
 /// underlying storage. When multiple SDK instances share the same storage backend
-/// (e.g., replicas of the same wallet connecting to a shared database), the
-/// following race conditions make rtsync unsafe:
+/// (e.g., replicas of the same wallet connecting to a shared database), concurrent
+/// processing of incoming records causes race conditions that can corrupt revision
+/// tracking. These races span multiple storage operations,
+/// so they cannot be fixed with simple database transactions.
 ///
-/// - **Outgoing queue conflicts**: Each instance has its own in-memory mutex,
-///   so concurrent `add_outgoing_change()` calls create conflicting revisions.
-/// - **Incoming record races**: Multiple instances may fetch, process, and delete
-///   the same incoming record concurrently.
-/// - **Revision tracking races**: Concurrent `get_last_revision()` reads cause
-///   both instances to push based on stale revision numbers.
-/// - **Startup replay races**: Multiple instances may replay the same pending
-///   outgoing record during `ensure_outgoing_record_committed()`.
-/// - **Notification bypass**: Storage writes by one instance don't notify others.
+/// Example: `rebase_pending_outgoing_records` reads MAX(revision) from `sync_state`,
+/// but `sync_state` is only updated later by `update_record_from_incoming`. If two
+/// instances process concurrently, both read the same stale MAX and apply the same
+/// diff to outgoing records, double-incrementing their revisions.
 ///
 /// For server deployments with shared storage, disable rtsync and rely on
 /// direct storage coordination instead.
