@@ -570,28 +570,28 @@ impl BreezSdk {
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Extract amount and token_identifier from pay_amount
-        let (amount, token_identifier) = match &request.prepare_response.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => (u128::from(*amount_sats), None),
-            PayAmount::Token {
-                amount,
-                token_identifier,
-            } => (*amount, Some(token_identifier.clone())),
-            PayAmount::Drain => {
-                return Err(SdkError::InvalidInput(
-                    "Drain not supported with token conversion".to_string(),
-                ));
-            }
-        };
+        let (amount, token_identifier, _reservation_guard) =
+            match &request.prepare_response.pay_amount {
+                PayAmount::Bitcoin { amount_sats } => {
+                    // Create a reservation for the expected sats from conversion.
+                    // This prevents auto-convert from converting these sats back to tokens.
+                    let reservation_guard = match &self.stable_balance {
+                        Some(sb) => Some(sb.create_reservation(*amount_sats)),
+                        None => None,
+                    };
 
-        // Create a reservation for the expected sats from conversion.
-        // This prevents auto-convert from converting these sats back to tokens.
-        let _reservation_guard = match &self.stable_balance {
-            Some(sb) => {
-                let amount_sats = u64::try_from(amount).unwrap_or(u64::MAX);
-                Some(sb.create_reservation(amount_sats))
-            }
-            None => None,
-        };
+                    (u128::from(*amount_sats), None, reservation_guard)
+                }
+                PayAmount::Token {
+                    amount,
+                    token_identifier,
+                } => (*amount, Some(token_identifier.clone()), None),
+                PayAmount::Drain => {
+                    return Err(SdkError::InvalidInput(
+                        "Drain not supported with token conversion".to_string(),
+                    ));
+                }
+            };
 
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =
