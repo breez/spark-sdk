@@ -218,6 +218,7 @@ pub fn default_config(network: Network) -> Config {
             auto_enabled: true,
             multiplicity: 1,
         },
+        no_invoice_paid_support: false,
     }
 }
 

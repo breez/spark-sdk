@@ -119,7 +119,7 @@ impl BreezSdk {
             username: username.clone(),
             description: description.clone(),
             nostr_pubkey,
-            no_invoice_paid_support: false,
+            no_invoice_paid_support: self.config.no_invoice_paid_support,
         };
 
         let response = client.register_lightning_address(&params).await?;
