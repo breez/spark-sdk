@@ -32,6 +32,7 @@ pub struct _Config {
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
     pub optimization_config: OptimizationConfig,
+    pub no_invoice_paid_support: bool,
 }
 
 #[frb(mirror(OptimizationConfig))]

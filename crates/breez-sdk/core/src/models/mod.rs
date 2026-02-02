@@ -536,6 +536,7 @@ impl FromStr for Network {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     pub api_key: Option<String>,
     pub network: Network,
@@ -577,6 +578,10 @@ pub struct Config {
     /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
     pub optimization_config: OptimizationConfig,
+
+    /// When true, the LNURL server won't track invoice payments for this user (LUD-21 disabled).
+    /// This can be useful for privacy-conscious users who don't need invoice payment notifications.
+    pub no_invoice_paid_support: bool,
 }
 
 #[derive(Debug, Clone)]
