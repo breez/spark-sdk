@@ -275,6 +275,13 @@ impl BreezSdk {
             return Ok(());
         }
 
+        // Update last sync time if this is a full sync.
+        if request.sync_type.contains(SyncType::Full)
+            && let Err(e) = cache.set_last_sync_time(now).await
+        {
+            error!("sync_wallet_internal: Failed to update last sync time: {e:?}");
+        }
+
         let start_time = Instant::now();
 
         let sync_wallet = async {
@@ -383,11 +390,6 @@ impl BreezSdk {
 
         let ((wallet, wallet_state), lnurl_metadata, deposits) =
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
-
-        // Update last sync time on success
-        if let Err(e) = cache.set_last_sync_time(now).await {
-            error!("sync_wallet_internal: Failed to update last sync time: {e:?}");
-        }
 
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {
