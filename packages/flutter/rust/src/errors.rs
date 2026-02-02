@@ -77,5 +77,6 @@ pub enum _SeedlessRestoreError {
     KeyDerivationError(String),
     InvalidPrfOutput(String),
     MnemonicError(String),
+    InvalidSalt(String),
     Generic(String),
 }
