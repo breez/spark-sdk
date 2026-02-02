@@ -1,0 +1,252 @@
+# Breez SDK - Nodeless (Spark)
+
+> Self-custodial Bitcoin SDK for Lightning, on-chain, and Spark payments. No node required.
+
+## Quick Facts
+
+- API Key required (free): https://breez.technology/request-api-key/#contact-us-form-sdk
+- Networks: mainnet, testnet, regtest (regtest needs no API key)
+- Supports: Lightning (BOLT11), Bitcoin addresses, Spark addresses, LNURL, tokens
+
+## Installation
+
+- JavaScript/WASM: `npm install @breeztech/breez-sdk-spark`
+- React Native: `npm install @breeztech/breez-sdk-spark-react-native`
+- Python: `pip install breez-sdk-spark`
+- Go: `go get github.com/breez/breez-sdk-spark-go`
+- C#: `dotnet add package Breez.Sdk.Spark`
+- Swift: SPM `https://github.com/breez/breez-sdk-spark-swift.git`
+- Kotlin: Maven `https://mvn.breez.technology/releases` artifact `technology.breez.spark:breez-sdk-spark-kmp`
+- Flutter: Git `https://github.com/breez/breez-sdk-spark-flutter`
+- Rust: Git `https://github.com/breez/spark-sdk`
+
+## TypeScript Quick Start
+
+```typescript
+import { connect, defaultConfig, init } from '@breeztech/breez-sdk-spark'
+
+// For browser only (not needed in Node.js/Deno):
+await init()
+
+const config = defaultConfig('mainnet')
+config.apiKey = '<your api key>'
+
+const sdk = await connect({
+  config,
+  seed: { type: 'mnemonic', mnemonic: '<12 or 24 words>', passphrase: undefined },
+  storageDir: './.data'
+})
+
+// Get balance
+const info = await sdk.getInfo({ ensureSynced: true })
+console.log(`Balance: ${info.balanceSats} sats`)
+
+// Clean shutdown
+await sdk.disconnect()
+```
+
+## Rust Quick Start
+
+```rust
+use breez_sdk_spark::*;
+
+let mut config = default_config(Network::Mainnet);
+config.api_key = Some("<your api key>".to_string());
+
+let sdk = connect(ConnectRequest {
+    config,
+    seed: Seed::Mnemonic { mnemonic: "<words>".into(), passphrase: None },
+    storage_dir: "./.data".to_string(),
+}).await?;
+
+let info = sdk.get_info(GetInfoRequest { ensure_synced: Some(true) }).await?;
+println!("Balance: {} sats", info.balance_sats);
+
+sdk.disconnect().await?;
+```
+
+## Core API
+
+| Method | Description |
+|--------|-------------|
+| `connect(config, seed, storageDir)` | Initialize SDK |
+| `disconnect()` | Clean shutdown |
+| `getInfo({ ensureSynced })` | Get balance (sats) and token balances |
+| `prepareSendPayment({ paymentRequest, amount? })` | Prepare payment, returns fees |
+| `sendPayment({ prepareResponse })` | Execute prepared payment |
+| `receivePayment({ paymentMethod })` | Generate invoice/address to receive |
+| `parse(input)` | Parse any input (invoice, address, LNURL) |
+| `listPayments(filter?)` | Get transaction history |
+| `addEventListener(listener)` | Subscribe to events |
+| `getLightningAddress()` | Get registered Lightning address |
+| `registerLightningAddress()` | Register a Lightning address |
+
+## Receiving Payments
+
+```typescript
+// Receive via Lightning invoice
+const response = await sdk.receivePayment({
+  paymentMethod: { type: 'bolt11Invoice', amountSats: BigInt(10000) }
+})
+console.log(`Invoice: ${response.paymentMethod.invoice}`)
+
+// Receive via Spark address (no amount needed)
+const sparkResponse = await sdk.receivePayment({
+  paymentMethod: { type: 'sparkAddress' }
+})
+console.log(`Spark address: ${sparkResponse.paymentMethod.sparkAddress}`)
+
+// Receive via Bitcoin address (on-chain)
+const btcResponse = await sdk.receivePayment({
+  paymentMethod: { type: 'bitcoinAddress' }
+})
+console.log(`BTC address: ${btcResponse.paymentMethod.bitcoinAddress}`)
+```
+
+## Sending Payments
+
+Always call `prepareSendPayment` first to get fees, then `sendPayment`.
+
+```typescript
+// Send to Lightning invoice
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: '<bolt11 invoice>',
+  amount: BigInt(5000) // optional for invoices with amount
+})
+console.log(`Fee: ${prepareResponse.paymentMethod.lightningFeeSats} sats`)
+
+const { payment } = await sdk.sendPayment({ prepareResponse })
+
+// Send to Spark address
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: '<spark address>',
+  amount: BigInt(5000)
+})
+await sdk.sendPayment({ prepareResponse })
+
+// Send to Bitcoin address (on-chain)
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: '<bitcoin address>',
+  amount: BigInt(50000)
+})
+// Choose confirmation speed: 'slow', 'medium', 'fast'
+await sdk.sendPayment({
+  prepareResponse,
+  options: { type: 'bitcoinAddress', confirmationSpeed: 'medium' }
+})
+```
+
+## LNURL Operations
+
+```typescript
+// LNURL-Pay or Lightning Address
+const parsed = await sdk.parse('user@domain.com') // or LNURL string
+if (parsed.type === 'lightningAddress' || parsed.type === 'lnurlPay') {
+  const prepare = await sdk.prepareLnurlPay({
+    requestData: parsed.data,
+    amountSats: BigInt(1000)
+  })
+  const result = await sdk.lnurlPay({ prepareResponse: prepare })
+}
+
+// LNURL-Withdraw
+const parsed = await sdk.parse('<lnurl withdraw string>')
+if (parsed.type === 'lnurlWithdraw') {
+  await sdk.lnurlWithdraw({
+    withdrawRequest: parsed.data,
+    amountSats: BigInt(1000)
+  })
+}
+
+// LNURL-Auth
+const parsed = await sdk.parse('<lnurl auth string>')
+if (parsed.type === 'lnurlAuth') {
+  // Show domain to user for confirmation first
+  await sdk.lnurlAuth({ requestData: parsed.data })
+}
+```
+
+## Events
+
+```typescript
+sdk.addEventListener((event) => {
+  switch (event.type) {
+    case 'synced':
+      // Refresh UI, balance updated
+      break
+    case 'paymentSucceeded':
+      console.log(`Payment complete: ${event.payment.id}`)
+      break
+    case 'paymentFailed':
+      console.log(`Payment failed: ${event.payment.id}`)
+      break
+    case 'paymentPending':
+      // Show pending state
+      break
+  }
+})
+```
+
+## Token Operations
+
+```typescript
+// Get token balances
+const info = await sdk.getInfo({ ensureSynced: true })
+for (const [tokenId, balance] of Object.entries(info.tokenBalances)) {
+  console.log(`${balance.tokenMetadata.ticker}: ${balance.balance}`)
+}
+
+// Receive tokens via Spark invoice
+const response = await sdk.receivePayment({
+  paymentMethod: { type: 'sparkInvoice', tokenIdentifier: '<token id>', amount: '1000' }
+})
+
+// Send tokens
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest: '<spark address>',
+  tokenIdentifier: '<token id>',
+  amount: BigInt(1000)
+})
+await sdk.sendPayment({ prepareResponse })
+```
+
+## Error Handling
+
+```typescript
+try {
+  await sdk.sendPayment({ prepareResponse })
+} catch (error) {
+  // SdkError variants: InsufficientFunds, InvalidInput, NetworkError, StorageError
+  if (error.message.includes('InsufficientFunds')) {
+    // Handle insufficient balance
+  }
+}
+```
+
+## Common Gotchas
+
+1. **WASM Web requires `init()`** - Call `await init()` before any SDK methods in browser (not Node.js/Deno)
+2. **Node.js version** - Requires Node.js >= 22
+3. **Storage paths** - On mobile, use app-specific sandbox directories
+4. **One SDK per storage** - Each SDK instance needs unique `storageDir`
+5. **Prepare before send** - Always call `prepareSendPayment()` first
+6. **Balance after sync** - Use `getInfo({ ensureSynced: true })` for accurate balance
+7. **Lightning address** - Call `registerLightningAddress()` first; not automatic
+
+## Networks
+
+| Network | Usage | API Key |
+|---------|-------|---------|
+| `mainnet` | Production | Required |
+| `testnet` | Testing with testnet BTC | Required |
+| `regtest` | Development | Not needed |
+
+Use regtest for development (free, no real value). Use Lightspark faucet: https://app.lightspark.com/regtest-faucet
+
+## Resources
+
+- Full documentation: https://sdk-doc-spark.breez.technology/
+- API reference: https://breez.github.io/spark-sdk/breez_sdk_spark/
+- Example app (Glow): https://glow-app.co/
+- GitHub: https://github.com/breez/spark-sdk
+- Support: Telegram or contact@breez.technology
