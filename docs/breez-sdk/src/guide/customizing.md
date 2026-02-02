@@ -35,7 +35,7 @@ The SDK includes a PostgreSQL storage implementation as an alternative. This is 
 <div class="warning">
 <h4>Developer note</h4>
 
-If multiple SDK instances share the same PostgreSQL database, real-time sync must be disabled to avoid data corruption. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
+Sharing the same PostgreSQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
 
 </div>
 
