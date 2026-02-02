@@ -120,15 +120,27 @@ impl NostrSaltClient {
     }
 
     /// Create and connect a Nostr client to the configured relays.
+    ///
+    /// Tolerates individual relay failures — only errors if no relays could be added.
     async fn create_client(&self, keys: &nostr::Keys) -> Result<Client, SeedlessRestoreError> {
         let client = Client::new(keys.clone());
 
-        // Add all configured relays
+        // Add all configured relays, tolerating individual failures
+        let mut added = 0usize;
         for relay_url in &self.config.relay_urls {
-            client
-                .add_relay(relay_url)
-                .await
-                .map_err(|e| SeedlessRestoreError::RelayConnectionFailed(e.to_string()))?;
+            match client.add_relay(relay_url).await {
+                #[allow(clippy::arithmetic_side_effects)]
+                Ok(_) => added += 1,
+                Err(e) => {
+                    tracing::warn!("Failed to add relay {relay_url}: {e}");
+                }
+            }
+        }
+
+        if added == 0 {
+            return Err(SeedlessRestoreError::RelayConnectionFailed(
+                "failed to add any relay".to_string(),
+            ));
         }
 
         // Connect to relays

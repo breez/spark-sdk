@@ -58,6 +58,24 @@ use crate::Seed;
 use derivation::{derive_nostr_keypair, prf_to_mnemonic};
 use nostr_client::NostrSaltClient;
 
+/// Maximum allowed salt length in bytes.
+const MAX_SALT_LENGTH: usize = 1024;
+
+/// Validate a user-provided salt string.
+fn validate_salt(salt: &str) -> Result<(), SeedlessRestoreError> {
+    if salt.is_empty() {
+        return Err(SeedlessRestoreError::InvalidSalt(
+            "salt must not be empty".to_string(),
+        ));
+    }
+    if salt.len() > MAX_SALT_LENGTH {
+        return Err(SeedlessRestoreError::InvalidSalt(format!(
+            "salt exceeds maximum length of {MAX_SALT_LENGTH} bytes"
+        )));
+    }
+    Ok(())
+}
+
 /// Orchestrates seedless wallet creation and restore operations.
 ///
 /// This struct coordinates between the platform's passkey PRF provider and
@@ -130,6 +148,8 @@ impl SeedlessRestore {
     /// * `Ok(Seed)` - The derived wallet seed (24-word mnemonic)
     /// * `Err(SeedlessRestoreError)` - If any step fails
     pub async fn create_seed(&self, salt: String) -> Result<Seed, SeedlessRestoreError> {
+        validate_salt(&salt)?;
+
         // Step 1: Derive account master and Nostr keypair
         let nostr_keys = self.derive_nostr_identity().await?;
 
@@ -173,6 +193,7 @@ impl SeedlessRestore {
     /// * `Ok(Seed)` - The derived wallet seed (24-word mnemonic)
     /// * `Err(SeedlessRestoreError)` - If derivation fails
     pub async fn restore_seed(&self, salt: String) -> Result<Seed, SeedlessRestoreError> {
+        validate_salt(&salt)?;
         self.derive_seed_from_salt(&salt).await
     }
 

@@ -62,6 +62,10 @@ pub enum SeedlessRestoreError {
     #[error("Mnemonic error: {0}")]
     MnemonicError(String),
 
+    /// Invalid salt input
+    #[error("Invalid salt: {0}")]
+    InvalidSalt(String),
+
     /// Generic error
     #[error("Seedless error: {0}")]
     Generic(String),

@@ -1,9 +1,4 @@
-//! Flutter bindings for seedless wallet restore.
-//!
-//! This module provides Flutter/Dart bindings for the seedless restore functionality
-//! using `flutter_rust_bridge`. Instead of passing a trait object across FFI, this
-//! implementation uses Dart callbacks for the PRF operations.
-
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::seedless_restore::{
@@ -11,6 +6,15 @@ use breez_sdk_spark::seedless_restore::{
 };
 use breez_sdk_spark::Seed;
 use flutter_rust_bridge::{DartFnFuture, frb};
+use futures::FutureExt;
+
+/// Extract a human-readable message from a panic payload.
+fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
+    e.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_else(|| "Dart callback panicked".to_string())
+}
 
 /// Callback-based implementation of `PasskeyPrfProvider` for Flutter.
 ///
@@ -24,12 +28,19 @@ struct CallbackPrfProvider {
 #[async_trait::async_trait]
 impl PasskeyPrfProvider for CallbackPrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
-        // DartFnFuture returns the value directly (Dart throws on error)
-        Ok((self.derive_prf_seed_fn)(salt).await)
+        // DartFnFuture panics if the Dart callback throws. Catch the panic here
+        // so it doesn't unwind through the core SDK.
+        AssertUnwindSafe((self.derive_prf_seed_fn)(salt))
+            .catch_unwind()
+            .await
+            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
     }
 
     async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
-        Ok((self.is_prf_available_fn)().await)
+        AssertUnwindSafe((self.is_prf_available_fn)())
+            .catch_unwind()
+            .await
+            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
     }
 }
 
@@ -113,5 +124,74 @@ impl SeedlessRestore {
     /// `true` if PRF-capable passkey is available
     pub async fn is_prf_available(&self) -> Result<bool, SeedlessRestoreError> {
         self.inner.is_prf_available().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a `DartFnFuture<T>` from a value.
+    fn ready<T: Send + 'static>(val: T) -> DartFnFuture<T> {
+        Box::pin(std::future::ready(val))
+    }
+
+    /// Helper to create a `DartFnFuture<T>` that panics with the given message.
+    fn panicking<T: Send + 'static>(msg: &'static str) -> DartFnFuture<T> {
+        Box::pin(async move { panic!("{msg}") })
+    }
+
+    #[tokio::test]
+    async fn test_derive_prf_seed_success() {
+        let expected = vec![42u8; 32];
+        let expected_clone = expected.clone();
+        let provider = CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(move |_salt| ready(expected_clone.clone())),
+            is_prf_available_fn: Arc::new(|| ready(true)),
+        };
+
+        let result = provider.derive_prf_seed("test".to_string()).await;
+        assert_eq!(result.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_derive_prf_seed_panic_caught() {
+        let provider = CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(|_salt| panicking("Dart threw an exception")),
+            is_prf_available_fn: Arc::new(|| ready(true)),
+        };
+
+        let result = provider.derive_prf_seed("test".to_string()).await;
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("Dart threw an exception")),
+            "Expected Generic error with panic message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_is_prf_available_success() {
+        let provider = CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(|_salt| ready(vec![])),
+            is_prf_available_fn: Arc::new(|| ready(false)),
+        };
+
+        let result = provider.is_prf_available().await;
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_is_prf_available_panic_caught() {
+        let provider = CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(|_salt| ready(vec![])),
+            is_prf_available_fn: Arc::new(|| panicking("device check failed")),
+        };
+
+        let result = provider.is_prf_available().await;
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("device check failed")),
+            "Expected Generic error with panic message, got: {err:?}"
+        );
     }
 }

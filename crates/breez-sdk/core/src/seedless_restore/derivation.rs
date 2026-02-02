@@ -6,7 +6,11 @@ use bitcoin::{
 };
 
 /// The magic salt for deriving the account master.
-/// This is the hex-encoded ASCII string "NYOASTRTSAOYN" (a collision-resistant value).
+///
+/// This is the hex-encoded ASCII string "NYOASTRTSAOYN", used as a domain separator
+/// to derive the Nostr identity keypair. The account master is produced by
+/// `PRF(passkey, ACCOUNT_MASTER_SALT)` and then used for BIP32 derivation of the
+/// Nostr signing key at [`NOSTR_SALT_DERIVATION_PATH`].
 pub const ACCOUNT_MASTER_SALT: &str = "4e594f415354525453414f594e";
 
 /// Nostr derivation path for salt storage identity.
