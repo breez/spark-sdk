@@ -57,28 +57,36 @@ impl SyncRequest {
     pub(crate) fn new(
         reply: oneshot::Sender<Result<(), SdkError>>,
         sync_type: SyncType,
-        force: bool,
     ) -> Self {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(Some(reply))),
-            force,
+            force: true,
         }
     }
 
-    pub(crate) fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>, force: bool) -> Self {
+    pub(crate) fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
         Self {
             sync_type: SyncType::Full,
             reply: Arc::new(Mutex::new(reply)),
-            force,
+            force: true,
         }
     }
 
-    pub(crate) fn no_reply(sync_type: SyncType, force: bool) -> Self {
+    pub(crate) fn no_reply(sync_type: SyncType) -> Self {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(None)),
-            force,
+            force: true,
+        }
+    }
+
+    /// For timer-based periodic syncs that respect the debounce interval.
+    pub(crate) fn periodic() -> Self {
+        Self {
+            sync_type: SyncType::Full,
+            reply: Arc::new(Mutex::new(None)),
+            force: false,
         }
     }
 

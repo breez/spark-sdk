@@ -91,7 +91,7 @@ impl BreezSdk {
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
-                            && let Err(e) = sync_trigger_sender.send(SyncRequest::full(None, false)) {
+                            && let Err(e) = sync_trigger_sender.send(SyncRequest::periodic()) {
                             error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
@@ -113,7 +113,7 @@ impl BreezSdk {
             }
             WalletEvent::Synced => {
                 info!("Synced");
-                if let Err(e) = self.sync_trigger.send(SyncRequest::full(None, false)) {
+                if let Err(e) = self.sync_trigger.send(SyncRequest::full(None)) {
                     error!("Failed to sync wallet: {e:?}");
                 }
             }
@@ -135,7 +135,7 @@ impl BreezSdk {
                 }
                 if let Err(e) = self
                     .sync_trigger
-                    .send(SyncRequest::no_reply(SyncType::WalletState, true))
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
                 {
                     error!("Failed to sync wallet: {e:?}");
                 }
@@ -157,7 +157,7 @@ impl BreezSdk {
                 }
                 if let Err(e) = self
                     .sync_trigger
-                    .send(SyncRequest::no_reply(SyncType::WalletState, true))
+                    .send(SyncRequest::no_reply(SyncType::WalletState))
                 {
                     error!("Failed to sync wallet: {e:?}");
                 }
@@ -223,7 +223,7 @@ impl BreezSdk {
         let (tx, rx) = oneshot::channel();
         if let Err(e) = self
             .sync_trigger
-            .send(SyncRequest::new(tx, SyncType::LnurlMetadata, true))
+            .send(SyncRequest::new(tx, SyncType::LnurlMetadata))
         {
             error!("Failed to trigger lnurl metadata sync: {e}");
             return;
@@ -594,7 +594,7 @@ impl BreezSdk {
     ) -> Result<SyncWalletResponse, SdkError> {
         let (tx, rx) = oneshot::channel();
 
-        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx), true)) {
+        if let Err(e) = self.sync_trigger.send(SyncRequest::full(Some(tx))) {
             error!("Failed to send sync trigger: {e:?}");
         }
         let _ = rx.await.map_err(|e| {
