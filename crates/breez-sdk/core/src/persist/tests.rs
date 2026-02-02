@@ -521,6 +521,9 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         sender_comment: Some("Test sender comment".to_string()),
         nostr_zap_request: Some(r#"{"kind":9734,"content":"test zap"}"#.to_string()),
         nostr_zap_receipt: Some(r#"{"kind":9735,"content":"test receipt"}"#.to_string()),
+        preimage: Some(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
     };
     let lightning_lnurl_receive_payment = Payment {
         id: "lightning_lnurl_receive_pmt".to_string(),
@@ -758,6 +761,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
             payment_hash: lnurl_receive_payment_hash.clone(),
             sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+            preimage: lnurl_receive_metadata.preimage.clone(),
         }])
         .await
         .unwrap();
@@ -1056,6 +1060,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_receipt: Some(
                 r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string(),
             ),
+            preimage: None,
         }])
         .await
         .unwrap();
@@ -1150,12 +1155,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 sender_comment: Some("Nice work!".to_string()),
                 nostr_zap_request: None,
                 nostr_zap_receipt: None,
+                preimage: None,
             },
             SetLnurlMetadataItem {
                 payment_hash: "zaphash3".to_string(),
                 sender_comment: None,
                 nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 nostr_zap_receipt: None,
+                preimage: None,
             },
         ])
         .await
