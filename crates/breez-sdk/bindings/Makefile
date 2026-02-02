@@ -128,32 +128,18 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
 # Build all binaries + run bindgen
-build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ios-universal build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
+build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
 # Package with dummy binaries (useful for testing)
 package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
-	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
-	rm -f $(KMP_BASE)/lib/ios-arm64/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-x64/$(BIN_NAME).a
-	echo "void dummy() {}" > /tmp/dummy.c
-	xcrun -sdk iphoneos clang -c /tmp/dummy.c -o /tmp/dummy_ios.o -arch arm64
-	xcrun -sdk iphonesimulator clang -c /tmp/dummy.c -o /tmp/dummy_sim.o -arch arm64
-	xcrun -sdk iphonesimulator clang -c /tmp/dummy.c -o /tmp/dummy_sim_x64.o -arch x86_64
-	ar crs $(KMP_BASE)/lib/ios-arm64/$(BIN_NAME).a /tmp/dummy_ios.o
-	ar crs $(KMP_BASE)/lib/ios-simulator-arm64/$(BIN_NAME).a /tmp/dummy_sim.o
-	ar crs $(KMP_BASE)/lib/ios-simulator-x64/$(BIN_NAME).a /tmp/dummy_sim_x64.o
-	rm -f /tmp/dummy.c /tmp/dummy_ios.o /tmp/dummy_sim.o /tmp/dummy_sim_x64.o
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 
 # Full package with all binaries
 package-kotlin-multiplatform: build-kotlin-multiplatform
-	mkdir -p $(KMP_BASE)/lib/ios-arm64 $(KMP_BASE)/lib/ios-simulator-arm64 $(KMP_BASE)/lib/ios-simulator-x64
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/
-	cp $(TARGET_DIR)aarch64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-arm64/
-	cp $(TARGET_DIR)aarch64-apple-ios-sim/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-arm64/
-	cp $(TARGET_DIR)x86_64-apple-ios/release/$(BIN_NAME).a $(KMP_BASE)/lib/ios-simulator-x64/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 
 package-nuget: bindings-csharp build-aarch64-apple-darwin build-x86_64-apple-darwin build-release-target-aarch64-unknown-linux-gnu build-release-target-x86_64-unknown-linux-gnu build-release-target-i686-pc-windows-msvc build-release-target-x86_64-pc-windows-msvc
