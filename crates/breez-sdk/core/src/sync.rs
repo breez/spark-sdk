@@ -159,7 +159,7 @@ impl SparkSyncService {
         };
 
         self.storage
-            .set_payment_metadata(payment.id.clone(), metadata)
+            .insert_payment_metadata(payment.id.clone(), metadata)
             .await?;
 
         // Delete the payment metadata since we have applied it

@@ -678,7 +678,7 @@ impl BreezSdk {
         let response = Box::pin(self.send_payment_internal(request, None)).await?;
         // Set payment metadata to link the payments
         self.storage
-            .set_payment_metadata(
+            .insert_payment_metadata(
                 conversion_response.sent_payment_id,
                 PaymentMetadata {
                     parent_payment_id: Some(response.payment.id.clone()),
@@ -687,7 +687,7 @@ impl BreezSdk {
             )
             .await?;
         self.storage
-            .set_payment_metadata(
+            .insert_payment_metadata(
                 conversion_response.received_payment_id,
                 PaymentMetadata {
                     parent_payment_id: Some(response.payment.id.clone()),

@@ -699,11 +699,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         storage.insert_payment(payment.clone()).await.unwrap();
     }
     storage
-        .set_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
+        .insert_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             lightning_lnurl_withdraw_payment.id.clone(),
             withdraw_metadata,
         )
@@ -719,28 +719,28 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             successful_sent_conversion_payment.id.clone(),
             successful_sent_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             successful_received_conversion_payment.id.clone(),
             successful_received_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             failed_with_refund_conversion_payment.id.clone(),
             failed_with_refund_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             failed_no_refund_conversion_payment.id.clone(),
             failed_no_refund_conversion_payment_metadata,
         )
@@ -1878,18 +1878,18 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         .await
         .unwrap();
     storage
-        .set_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
+        .insert_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             "successful_conversion".to_string(),
             successful_conversion_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             "without_refund".to_string(),
             payment_without_refund_metadata,
         )
@@ -2410,7 +2410,7 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
     );
 }
 
-/// Tests that `set_payment_metadata` preserves existing fields when updating with partial data.
+/// Tests that `insert_payment_metadata` preserves existing fields when updating with partial data.
 /// This verifies the COALESCE behavior in the SQL upsert.
 pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
     let payment_id = "merge_test_payment".to_string();
@@ -2460,7 +2460,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         ..Default::default()
     };
     storage
-        .set_payment_metadata(payment_id.clone(), metadata1)
+        .insert_payment_metadata(payment_id.clone(), metadata1)
         .await
         .unwrap();
 
@@ -2481,7 +2481,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         ..Default::default()
     };
     storage
-        .set_payment_metadata(payment_id.clone(), metadata2)
+        .insert_payment_metadata(payment_id.clone(), metadata2)
         .await
         .unwrap();
 

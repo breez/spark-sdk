@@ -146,7 +146,7 @@ pub trait Storage: Send + Sync {
     /// # Returns
     ///
     /// Success or a `StorageError`
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,

@@ -907,7 +907,7 @@ class IndexedDBStorage {
     });
   }
 
-  async setPaymentMetadata(paymentId, metadata) {
+  async insertPaymentMetadata(paymentId, metadata) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }

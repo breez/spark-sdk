@@ -206,7 +206,7 @@ impl FlashnetTokenConverter {
                 );
                 // Update the payment metadata to reflect the refund status
                 storage
-                    .set_payment_metadata(
+                    .insert_payment_metadata(
                         payment.id.clone(),
                         PaymentMetadata {
                             conversion_info: Some(ConversionInfo {
@@ -450,7 +450,7 @@ impl FlashnetTokenConverter {
             .await?;
         let sent_payment_id = sent_payment.id.clone();
         self.storage
-            .set_payment_metadata(
+            .insert_payment_metadata(
                 sent_payment_id.clone(),
                 PaymentMetadata {
                     conversion_info: Some(ConversionInfo {
@@ -479,7 +479,7 @@ impl FlashnetTokenConverter {
             };
             if let Ok(payment) = self.fetch_payment_by_identifier(identifier, false).await {
                 self.storage
-                    .set_payment_metadata(payment.id.clone(), metadata)
+                    .insert_payment_metadata(payment.id.clone(), metadata)
                     .await?;
                 Some(payment.id)
             } else {
@@ -504,7 +504,7 @@ impl FlashnetTokenConverter {
             };
             if let Ok(payment) = self.fetch_payment_by_identifier(identifier, false).await {
                 self.storage
-                    .set_payment_metadata(payment.id.clone(), metadata)
+                    .insert_payment_metadata(payment.id.clone(), metadata)
                     .await?;
             } else {
                 cache.save_payment_metadata(identifier, &metadata).await?;

@@ -1068,7 +1068,7 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,

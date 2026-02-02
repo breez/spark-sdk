@@ -513,7 +513,7 @@ class SqliteStorage {
     }
   }
 
-  setPaymentMetadata(paymentId, metadata) {
+  insertPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
                 INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
