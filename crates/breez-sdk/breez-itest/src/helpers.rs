@@ -686,6 +686,13 @@ pub async fn build_sdk_with_postgres(
     config.prefer_spark_over_lightning = true;
     config.sync_interval_secs = 5;
     config.real_time_sync_server_url = None;
+    // Disable auto-optimization to avoid balance discrepancies when multiple instances run
+    // concurrently. This is unrelated to storage sharing - even with separate storage, when
+    // one instance performs a swap during optimization, other instances syncing with operators
+    // may see a temporarily lower balance (old leaves spent, new leaves not yet visible).
+    // Spark will soon add visibility into pending incoming funds, which should allow
+    // removing this limitation.
+    config.optimization_config.auto_enabled = false;
 
     let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
 
