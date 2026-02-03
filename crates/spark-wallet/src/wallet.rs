@@ -127,9 +127,10 @@ macro_rules! with_leafs_spent_retry {
 }
 
 pub struct SparkWallet {
-    /// Cancellation token to stop background tasks. It is dropped when the wallet is dropped to stop background tasks.
+    /// Cancellation token sender for internal use. When dropped, background tasks will stop.
+    /// This is `Some` only when no external cancellation token was provided.
     #[allow(dead_code)]
-    cancel: watch::Sender<()>,
+    cancel: Option<watch::Sender<()>>,
     config: SparkWalletConfig,
     deposit_service: Arc<DepositService>,
     event_manager: Arc<EventManager>,
@@ -162,6 +163,7 @@ impl SparkWallet {
             Arc::new(DefaultConnectionManager::new()),
             None,
             true,
+            None,
         )
         .await
     }
@@ -176,6 +178,7 @@ impl SparkWallet {
         connection_manager: Arc<dyn ConnectionManager>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
         with_background_processing: bool,
+        cancellation_token: Option<watch::Receiver<()>>,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
         let identity_public_key = signer.get_identity_public_key().await?;
@@ -301,7 +304,15 @@ impl SparkWallet {
             Some(optimization_event_handler),
         ));
 
-        let (cancel, cancellation_token) = watch::channel(());
+        // Use external cancellation token if provided, otherwise create an internal one
+        let (cancel, cancellation_token) = match cancellation_token {
+            Some(token) => (None, token),
+            None => {
+                let (sender, receiver) = watch::channel(());
+                (Some(sender), receiver)
+            }
+        };
+
         if with_background_processing {
             let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
             let background_processor = Arc::new(BackgroundProcessor::new(

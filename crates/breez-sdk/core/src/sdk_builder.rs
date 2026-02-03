@@ -368,8 +368,11 @@ impl SdkBuilder {
         spark_wallet_config.leaf_optimization_options.multiplicity =
             self.config.optimization_config.multiplicity;
 
+        let shutdown_sender = watch::channel::<()>(()).0;
+
         let mut wallet_builder =
-            spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer);
+            spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
+                .with_cancellation_token(shutdown_sender.subscribe());
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -392,7 +395,6 @@ impl SdkBuilder {
                 None => None,
             },
         };
-        let shutdown_sender = watch::channel::<()>(()).0;
 
         let event_emitter = Arc::new(EventEmitter::new(
             self.config.real_time_sync_server_url.is_some(),
