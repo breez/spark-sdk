@@ -590,7 +590,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
@@ -598,8 +598,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(payment_id) DO UPDATE SET
+                parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
+                lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
+                lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
+                lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
+                conversion_info = COALESCE(excluded.conversion_info, conversion_info)",
             params![
                 payment_id,
                 metadata.parent_payment_id,
@@ -1573,5 +1579,13 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_sync_storage(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_metadata_merge() {
+        let temp_dir = create_temp_dir("sqlite_payment_metadata_merge");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_payment_metadata_merge(Box::new(storage)).await;
     }
 }

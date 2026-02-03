@@ -218,7 +218,9 @@ impl SyncedStorage {
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.inner.set_payment_metadata(data_id, metadata).await?;
+        self.inner
+            .insert_payment_metadata(data_id, metadata)
+            .await?;
         Ok(())
     }
 }
@@ -245,7 +247,7 @@ impl Storage for SyncedStorage {
         self.inner.insert_payment(payment).await
     }
 
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
@@ -262,7 +264,9 @@ impl Storage for SyncedStorage {
             })
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
-        self.inner.set_payment_metadata(payment_id, metadata).await
+        self.inner
+            .insert_payment_metadata(payment_id, metadata)
+            .await
     }
 
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {

@@ -197,7 +197,7 @@ impl BreezSdk {
         description.clone_from(&lnurl_description);
 
         self.storage
-            .set_payment_metadata(
+            .insert_payment_metadata(
                 payment.id.clone(),
                 PaymentMetadata {
                     lnurl_pay_info: Some(lnurl_info),

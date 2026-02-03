@@ -48,6 +48,9 @@ pub(crate) struct SyncRequest {
     pub(crate) sync_type: SyncType,
     #[allow(clippy::type_complexity)]
     pub(crate) reply: Arc<Mutex<Option<oneshot::Sender<Result<(), SdkError>>>>>,
+    /// If true, bypass the "recently synced" check and sync immediately.
+    /// Use for event-driven syncs (after payments, transfers, etc.) that should happen immediately.
+    pub(crate) force: bool,
 }
 
 impl SyncRequest {
@@ -55,6 +58,7 @@ impl SyncRequest {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(Some(reply))),
+            force: true,
         }
     }
 
@@ -62,6 +66,7 @@ impl SyncRequest {
         Self {
             sync_type: SyncType::Full,
             reply: Arc::new(Mutex::new(reply)),
+            force: true,
         }
     }
 
@@ -69,6 +74,16 @@ impl SyncRequest {
         Self {
             sync_type,
             reply: Arc::new(Mutex::new(None)),
+            force: true,
+        }
+    }
+
+    /// For timer-based periodic syncs that respect the debounce interval.
+    pub(crate) fn periodic() -> Self {
+        Self {
+            sync_type: SyncType::Full,
+            reply: Arc::new(Mutex::new(None)),
+            force: false,
         }
     }
 

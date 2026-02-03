@@ -699,11 +699,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         storage.insert_payment(payment.clone()).await.unwrap();
     }
     storage
-        .set_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
+        .insert_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             lightning_lnurl_withdraw_payment.id.clone(),
             withdraw_metadata,
         )
@@ -719,28 +719,28 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             successful_sent_conversion_payment.id.clone(),
             successful_sent_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             successful_received_conversion_payment.id.clone(),
             successful_received_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             failed_with_refund_conversion_payment.id.clone(),
             failed_with_refund_conversion_payment_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             failed_no_refund_conversion_payment.id.clone(),
             failed_no_refund_conversion_payment_metadata,
         )
@@ -1878,18 +1878,18 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         .await
         .unwrap();
     storage
-        .set_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
+        .insert_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             "successful_conversion".to_string(),
             successful_conversion_metadata,
         )
         .await
         .unwrap();
     storage
-        .set_payment_metadata(
+        .insert_payment_metadata(
             "without_refund".to_string(),
             payment_without_refund_metadata,
         )
@@ -2408,4 +2408,106 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
         htlc_details.as_ref().unwrap().preimage.as_ref().unwrap(),
         "preimage_123"
     );
+}
+
+/// Tests that `insert_payment_metadata` preserves existing fields when updating with partial data.
+/// This verifies the COALESCE behavior in the SQL upsert.
+pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
+    let payment_id = "merge_test_payment".to_string();
+    let parent_id = "parent_payment_456".to_string();
+
+    // Create the payment first so we can fetch it via get_payment_by_id
+    let payment = Payment {
+        id: payment_id.clone(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 1000,
+        fees: 10,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage.insert_payment(payment).await.unwrap();
+
+    // Create the parent payment so get_payments_by_parent_ids works
+    let parent_payment = Payment {
+        id: parent_id.clone(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 2000,
+        fees: 20,
+        timestamp: 1_700_000_001,
+        method: PaymentMethod::Spark,
+        details: None,
+        conversion_details: None,
+    };
+    storage.insert_payment(parent_payment).await.unwrap();
+
+    // Step 1: Set metadata with only conversion_info
+    let metadata1 = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo {
+            pool_id: "pool_123".to_string(),
+            conversion_id: "conv_123".to_string(),
+            status: crate::ConversionStatus::Completed,
+            fee: Some(100),
+            purpose: None,
+        }),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata(payment_id.clone(), metadata1)
+        .await
+        .unwrap();
+
+    // Verify conversion_info is set via get_payment_by_id
+    let fetched = storage.get_payment_by_id(payment_id.clone()).await.unwrap();
+    let Some(PaymentDetails::Spark {
+        conversion_info, ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Spark payment details");
+    };
+    assert!(conversion_info.is_some());
+    assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
+
+    // Step 2: Set metadata with only parent_payment_id (conversion_info is None)
+    let metadata2 = PaymentMetadata {
+        parent_payment_id: Some(parent_id.clone()),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata(payment_id.clone(), metadata2)
+        .await
+        .unwrap();
+
+    // Verify parent_payment_id was set via get_payments_by_parent_ids
+    let related = storage
+        .get_payments_by_parent_ids(vec![parent_id.clone()])
+        .await
+        .unwrap();
+    assert!(
+        related.contains_key(&parent_id),
+        "parent_payment_id should be set"
+    );
+    assert_eq!(related.get(&parent_id).unwrap().len(), 1);
+    assert_eq!(related.get(&parent_id).unwrap()[0].id, payment_id);
+
+    // Verify conversion_info is STILL present (not cleared by partial update)
+    let fetched = storage.get_payment_by_id(payment_id.clone()).await.unwrap();
+    let Some(PaymentDetails::Spark {
+        conversion_info, ..
+    }) = &fetched.details
+    else {
+        panic!("Expected Spark payment details");
+    };
+    assert!(
+        conversion_info.is_some(),
+        "conversion_info should be preserved, not cleared by partial update"
+    );
+    assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
 }

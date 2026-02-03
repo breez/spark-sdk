@@ -25,6 +25,25 @@ pub trait NewRecordHandler: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
+/// Handles background synchronization with the data-sync service.
+///
+/// # Shared Storage Incompatibility
+///
+/// **WARNING**: Real-time sync is incompatible with shared storage deployments.
+/// This implementation assumes each `SyncProcessor` has exclusive access to its
+/// underlying storage. When multiple SDK instances share the same storage backend
+/// (e.g., replicas of the same wallet connecting to a shared database), concurrent
+/// processing of incoming records causes race conditions that can corrupt revision
+/// tracking. These races span multiple storage operations,
+/// so they cannot be fixed with simple database transactions.
+///
+/// Example: `rebase_pending_outgoing_records` reads MAX(revision) from `sync_state`,
+/// but `sync_state` is only updated later by `update_record_from_incoming`. If two
+/// instances process concurrently, both read the same stale MAX and apply the same
+/// diff to outgoing records, double-incrementing their revisions.
+///
+/// For server deployments with shared storage, disable rtsync and rely on
+/// direct storage coordination instead.
 pub struct SyncProcessor {
     push_sync_trigger: broadcast::Receiver<RecordId>,
     new_record_handler: Arc<dyn NewRecordHandler>,

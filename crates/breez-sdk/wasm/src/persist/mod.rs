@@ -138,7 +138,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: breez_sdk_spark::PaymentMetadata,
@@ -146,7 +146,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let metadata: PaymentMetadata = metadata.clone().into();
         let promise = self
             .storage
-            .set_payment_metadata(payment_id, metadata)
+            .insert_payment_metadata(payment_id, metadata)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -429,7 +429,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     deleteCachedItem: (key: string) => Promise<void>;
     listPayments: (request: ListPaymentsRequest) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
-    setPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
+    insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
     addDeposit: (txid: string, vout: number, amount_sats: number) => Promise<void>;
@@ -470,8 +470,8 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = insertPayment, catch)]
     pub fn insert_payment(this: &Storage, payment: Payment) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = setPaymentMetadata, catch)]
-    pub fn set_payment_metadata(
+    #[wasm_bindgen(structural, method, js_name = insertPaymentMetadata, catch)]
+    pub fn insert_payment_metadata(
         this: &Storage,
         payment_id: String,
         metadata: PaymentMetadata,

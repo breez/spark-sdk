@@ -27,6 +27,10 @@ use crate::{
 
 use super::{Payment, Storage, StorageError};
 
+/// Advisory lock ID for migrations.
+/// Derived from ASCII bytes of "MIGR" (`0x4D49_4752`).
+const MIGRATION_LOCK_ID: i64 = 0x4D49_4752;
+
 /// Creates a `PostgreSQL` storage instance for use with the SDK builder.
 ///
 /// Returns a `Storage` trait object backed by the `PostgreSQL` connection pool.
@@ -515,73 +519,60 @@ impl PostgresStorage {
     async fn migrate(&self) -> Result<(), StorageError> {
         let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
-        // Advisory lock prevents concurrent migration attempts from multiple instances
-        // Lock ID 48879 (0xBEEF) chosen arbitrarily for this SDK's migrations
-        client
-            .execute("SELECT pg_advisory_lock(48879)", &[])
+        // Run all migrations in a single transaction with a transaction-level advisory lock.
+        // pg_advisory_xact_lock is automatically released on commit/rollback, making it safe
+        // with connection pools (no risk of leaked locks if the task is cancelled or panics).
+        let tx = client.transaction().await.map_err(map_db_error)?;
+
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_ID])
             .await
             .map_err(|e| {
                 StorageError::InitializationError(format!("Failed to acquire migration lock: {e}"))
             })?;
 
-        // Run migrations, capturing result to ensure lock is always released
-        let result = async {
-            // Create migrations table if it doesn't exist
-            client
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TIMESTAMPTZ DEFAULT NOW()
-                    )",
-                    &[],
+        // Create migrations table if it doesn't exist
+        tx.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )",
+            &[],
+        )
+        .await
+        .map_err(map_db_error)?;
+
+        // Get current version
+        let current_version: i32 = tx
+            .query_opt(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                &[],
+            )
+            .await
+            .map_err(map_db_error)?
+            .map_or(0, |row| row.get(0));
+
+        let migrations = Self::migrations();
+
+        for (i, migration) in migrations.iter().enumerate() {
+            let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
+            if version > current_version {
+                for statement in *migration {
+                    tx.execute(*statement, &[]).await.map_err(|e| {
+                        StorageError::Implementation(format!("Migration {version} failed: {e}"))
+                    })?;
+                }
+                tx.execute(
+                    "INSERT INTO schema_migrations (version) VALUES ($1)",
+                    &[&version],
                 )
                 .await
                 .map_err(map_db_error)?;
-
-            // Get current version
-            let current_version: i32 = client
-                .query_opt(
-                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-                    &[],
-                )
-                .await
-                .map_err(map_db_error)?
-                .map_or(0, |row| row.get(0));
-
-            let migrations = Self::migrations();
-
-            for (i, migration) in migrations.iter().enumerate() {
-                let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
-                if version > current_version {
-                    // Run each migration in a transaction for atomicity
-                    let tx = client.transaction().await.map_err(map_db_error)?;
-
-                    for statement in *migration {
-                        tx.execute(*statement, &[]).await.map_err(|e| {
-                            StorageError::Implementation(format!("Migration {version} failed: {e}"))
-                        })?;
-                    }
-                    tx.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)",
-                        &[&version],
-                    )
-                    .await
-                    .map_err(map_db_error)?;
-
-                    tx.commit().await.map_err(map_db_error)?;
-                }
             }
-
-            Ok(())
         }
-        .await;
 
-        // Always release the lock, even on failure
-        let _ = client
-            .execute("SELECT pg_advisory_unlock(48879)", &[])
-            .await;
+        tx.commit().await.map_err(map_db_error)?;
 
-        result
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1065,7 +1056,7 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn set_payment_metadata(
+    async fn insert_payment_metadata(
         &self,
         payment_id: String,
         metadata: PaymentMetadata,
@@ -1081,11 +1072,11 @@ impl Storage for PostgresStorage {
                 "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT(payment_id) DO UPDATE SET
-                    parent_payment_id = EXCLUDED.parent_payment_id,
-                    lnurl_pay_info = EXCLUDED.lnurl_pay_info,
-                    lnurl_withdraw_info = EXCLUDED.lnurl_withdraw_info,
-                    lnurl_description = EXCLUDED.lnurl_description,
-                    conversion_info = EXCLUDED.conversion_info",
+                    parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
+                    lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
+                    lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
+                    lnurl_description = COALESCE(EXCLUDED.lnurl_description, payment_metadata.lnurl_description),
+                    conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info)",
                 &[
                     &payment_id,
                     &metadata.parent_payment_id,
@@ -1940,6 +1931,12 @@ mod tests {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_payment_details_update_persistence(Box::new(fixture.storage))
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_metadata_merge() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]

@@ -67,7 +67,7 @@ impl BreezSdk {
                         let cloned_sdk = sdk.clone();
                         let initial_synced_sender = initial_synced_sender.clone();
                         if let Some(true) = Box::pin(run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
-                            if let Err(e) = cloned_sdk.sync_wallet_internal(sync_request.sync_type.clone()).await {
+                            if let Err(e) = cloned_sdk.sync_wallet_internal(&sync_request).await {
                                 error!("Failed to sync wallet: {e:?}");
                                 let () = sync_request.reply(Some(e)).await;
                                 return false;
@@ -91,7 +91,7 @@ impl BreezSdk {
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval
-                            && let Err(e) = sync_trigger_sender.send(SyncRequest::full(None)) {
+                            && let Err(e) = sync_trigger_sender.send(SyncRequest::periodic()) {
                             error!("Failed to trigger periodic sync: {e:?}");
                         }
                     }
@@ -257,11 +257,35 @@ impl BreezSdk {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn sync_wallet_internal(&self, sync_type: SyncType) -> Result<(), SdkError> {
+    pub(super) async fn sync_wallet_internal(&self, request: &SyncRequest) -> Result<(), SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let sync_interval_secs = u64::from(self.config.sync_interval_secs);
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Skip if we synced recently (unless forced).
+        if !request.force
+            && let Some(last) = cache.get_last_sync_time().await?
+            && now.saturating_sub(last) < sync_interval_secs
+        {
+            debug!("sync_wallet_internal: Synced recently, skipping");
+            return Ok(());
+        }
+
+        // Update last sync time if this is a full sync.
+        if request.sync_type.contains(SyncType::Full)
+            && let Err(e) = cache.set_last_sync_time(now).await
+        {
+            error!("sync_wallet_internal: Failed to update last sync time: {e:?}");
+        }
+
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
+            let wallet_synced = if request.sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -285,7 +309,7 @@ impl BreezSdk {
                 false
             };
 
-            let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
+            let wallet_state_synced = if request.sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
                 match self.sync_wallet_state_to_storage().await {
@@ -313,7 +337,7 @@ impl BreezSdk {
         };
 
         let sync_lnurl = async {
-            if sync_type.contains(SyncType::LnurlMetadata) {
+            if request.sync_type.contains(SyncType::LnurlMetadata) {
                 debug!("sync_wallet_internal: Starting LnurlMetadata sync");
                 let lnurl_start = Instant::now();
                 match self.sync_lnurl_metadata().await {
@@ -339,7 +363,7 @@ impl BreezSdk {
         };
 
         let sync_deposits = async {
-            if sync_type.contains(SyncType::Deposits) {
+            if request.sync_type.contains(SyncType::Deposits) {
                 debug!("sync_wallet_internal: Starting Deposits sync");
                 let deposits_start = Instant::now();
                 match self.check_and_claim_static_deposits().await {

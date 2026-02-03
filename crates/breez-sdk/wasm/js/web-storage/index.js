@@ -907,7 +907,7 @@ class IndexedDBStorage {
     });
   }
 
-  async setPaymentMetadata(paymentId, metadata) {
+  async insertPaymentMetadata(paymentId, metadata) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -916,30 +916,47 @@ class IndexedDBStorage {
       const transaction = this.db.transaction("payment_metadata", "readwrite");
       const store = transaction.objectStore("payment_metadata");
 
-      const metadataToStore = {
-        paymentId,
-        parentPaymentId: metadata.parentPaymentId,
-        lnurlPayInfo: metadata.lnurlPayInfo
-          ? JSON.stringify(metadata.lnurlPayInfo)
-          : null,
-        lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
-          ? JSON.stringify(metadata.lnurlWithdrawInfo)
-          : null,
-        lnurlDescription: metadata.lnurlDescription,
-        conversionInfo: metadata.conversionInfo
-          ? JSON.stringify(metadata.conversionInfo)
-          : null,
-      };
+      // First get existing record to merge with
+      const getRequest = store.get(paymentId);
+      getRequest.onsuccess = () => {
+        const existing = getRequest.result || {};
 
-      const request = store.put(metadataToStore);
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
+        // Use COALESCE-like behavior: new value if non-null, otherwise keep existing
+        const metadataToStore = {
+          paymentId,
+          parentPaymentId: metadata.parentPaymentId ?? existing.parentPaymentId ?? null,
+          lnurlPayInfo: metadata.lnurlPayInfo
+            ? JSON.stringify(metadata.lnurlPayInfo)
+            : existing.lnurlPayInfo ?? null,
+          lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
+            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            : existing.lnurlWithdrawInfo ?? null,
+          lnurlDescription: metadata.lnurlDescription ?? existing.lnurlDescription ?? null,
+          conversionInfo: metadata.conversionInfo
+            ? JSON.stringify(metadata.conversionInfo)
+            : existing.conversionInfo ?? null,
+        };
+
+        const putRequest = store.put(metadataToStore);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => {
+          reject(
+            new StorageError(
+              `Failed to set payment metadata for '${paymentId}': ${
+                putRequest.error?.message || "Unknown error"
+              }`,
+              putRequest.error
+            )
+          );
+        };
+      };
+      getRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to set payment metadata for '${paymentId}': ${
-              request.error?.message || "Unknown error"
+            `Failed to get existing payment metadata for '${paymentId}': ${
+              getRequest.error?.message || "Unknown error"
             }`,
-            request.error
+            getRequest.error
           )
         );
       };

@@ -513,11 +513,17 @@ class SqliteStorage {
     }
   }
 
-  setPaymentMetadata(paymentId, metadata) {
+  insertPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT OR REPLACE INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info) 
+                INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
                 VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(payment_id) DO UPDATE SET
+                    parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
+                    lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
+                    lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
+                    lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
+                    conversion_info = COALESCE(excluded.conversion_info, conversion_info)
             `);
 
       stmt.run(
