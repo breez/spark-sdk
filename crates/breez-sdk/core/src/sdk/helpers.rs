@@ -211,9 +211,18 @@ pub(crate) fn validate_and_sanitize_username(username: &str) -> Result<String, S
         return Err(SdkError::Generic("Username cannot be empty".to_string()));
     }
 
-    if sanitized.len() < 3 || sanitized.len() > 32 {
+    if sanitized.len() > 64 {
         return Err(SdkError::Generic(
-            "Username must be 3-32 characters".to_string(),
+            "Username must be 64 characters or less".to_string(),
+        ));
+    }
+
+    if !sanitized
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(SdkError::Generic(
+            "Username can only contain lowercase letters, numbers, hyphens, underscores, and periods".to_string(),
         ));
     }
 
