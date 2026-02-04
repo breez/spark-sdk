@@ -277,8 +277,8 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 
 func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-fees-included
-	// By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
-	// Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
+	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
 	// The receiver gets amount minus fees.
 	paymentRequest := "<payment request>"
 	amountSats := new(big.Int).SetInt64(50_000)

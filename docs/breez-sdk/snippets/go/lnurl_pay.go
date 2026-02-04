@@ -100,8 +100,8 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 
 func PrepareLnurlPayFeesIncluded(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
 	// ANCHOR: prepare-lnurl-pay-fees-included
-	// By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
-	// Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
+	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
 	// The receiver gets amount minus fees.
 	amountSats := uint64(5_000)
 	optionalComment := "<comment>"
