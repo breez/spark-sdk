@@ -192,6 +192,7 @@ where
             Arc::clone(&connection_manager),
             None,
             true,
+            None,
         )
         .await?,
     );
