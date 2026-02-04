@@ -12,7 +12,7 @@ class LnurlPay {
         try {
             val inputType = sdk.parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
-                val payAmount = BitcoinPayAmount.Bitcoin(amountSats = 5_000.toULong())
+                val amountSats = 5_000.toULong()
                 val optionalComment = "<comment>"
                 val payRequest = inputType.v1.payRequest
                 val optionalValidateSuccessActionUrl = true
@@ -28,11 +28,12 @@ class LnurlPay {
                 )
 
                 val req = PrepareLnurlPayRequest(
-                    payAmount = payAmount,
+                    amountSats = amountSats,
                     payRequest = payRequest,
                     comment = optionalComment,
                     validateSuccessActionUrl = optionalValidateSuccessActionUrl,
-                    optionalConversionOptions,
+                    conversionOptions = optionalConversionOptions,
+                    feePolicy = null,
                 )
                 val prepareResponse = sdk.prepareLnurlPay(req)
 
@@ -62,24 +63,29 @@ class LnurlPay {
         // ANCHOR_END: lnurl-pay
     }
 
-    suspend fun prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) {
-        // ANCHOR: prepare-lnurl-pay-drain
+    suspend fun prepareLnurlPayFeesIncluded(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) {
+        // ANCHOR: prepare-lnurl-pay-fees-included
+        // By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
+        // Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
+        // The receiver gets amount minus fees.
         val optionalComment = "<comment>"
         val optionalValidateSuccessActionUrl = true
-        val payAmount = BitcoinPayAmount.Drain
+        val amountSats = 5_000.toULong()
 
         val req = PrepareLnurlPayRequest(
-            payAmount = payAmount,
+            amountSats = amountSats,
             payRequest = payRequest,
             comment = optionalComment,
             validateSuccessActionUrl = optionalValidateSuccessActionUrl,
             conversionOptions = null,
+            feePolicy = FeePolicy.FEES_INCLUDED,
         )
         val prepareResponse = sdk.prepareLnurlPay(req)
 
         // If the fees are acceptable, continue to create the LNURL Pay
         val feeSats = prepareResponse.feeSats
         // Log.v("Breez", "Fees: ${feeSats} sats")
-        // ANCHOR_END: prepare-lnurl-pay-drain
+        // The receiver gets amountSats - feeSats
+        // ANCHOR_END: prepare-lnurl-pay-fees-included
     }
 }

@@ -3,6 +3,7 @@ package example
 import (
 	"errors"
 	"log"
+	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -11,13 +12,14 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	// ANCHOR: prepare-send-payment-lightning-bolt11
 	paymentRequest := "<bolt11 invoice>"
 	// Optionally set the amount you wish to pay the receiver
-	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
-		AmountSats: 5_000,
-	}
+	optionalAmountSats := new(big.Int).SetInt64(5_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &optionalPayAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &optionalAmountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -48,13 +50,14 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	// ANCHOR: prepare-send-payment-onchain
 	paymentRequest := "<bitcoin address>"
 	// Set the amount you wish to pay the receiver
-	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
-		AmountSats: 50_000,
-	}
+	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &payAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &amountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -86,13 +89,14 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	// ANCHOR: prepare-send-payment-spark-address
 	paymentRequest := "<spark address>"
 	// Set the amount you wish to pay the receiver
-	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
-		AmountSats: 50_000,
-	}
+	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &payAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &amountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -119,13 +123,14 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	// ANCHOR: prepare-send-payment-spark-invoice
 	paymentRequest := "<spark invoice>"
 	// Optionally set the amount you wish to pay the receiver
-	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
-		AmountSats: 50_000,
-	}
+	optionalAmountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &optionalPayAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &optionalAmountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -164,7 +169,10 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest:    paymentRequest,
+		Amount:            nil,
+		TokenIdentifier:   nil,
 		ConversionOptions: &conversionOptions,
+		FeePolicy:         nil,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
@@ -267,24 +275,37 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	return &payment, nil
 }
 
-func PrepareSendPaymentDrain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
-	// ANCHOR: prepare-send-payment-drain
-	// Use PayAmountDrain to send all available funds
+func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-fees-included
+	// By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
+	// Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+	// The receiver gets amount minus fees.
 	paymentRequest := "<payment request>"
-	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountDrain{}
+	amountSats := new(big.Int).SetInt64(50_000)
+	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &payAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &amountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         &feePolicy,
 	}
 	response, err := sdk.PrepareSendPayment(request)
 
-	if sdkErr := err.(*breez_sdk_spark.SdkError); sdkErr != nil {
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
 		return nil, err
 	}
 
-	// The response contains PayAmountDrain to indicate this is a drain operation
-	log.Printf("Pay amount: %v", response.PayAmount)
-	// ANCHOR_END: prepare-send-payment-drain
+	// The response shows the fee policy used
+	log.Printf("Fee policy: %v", response.FeePolicy)
+	log.Printf("Amount: %v", response.Amount)
+	// The receiver gets amount - fees (fees are available in response.PaymentMethod)
+	// ANCHOR_END: prepare-send-payment-fees-included
 	return &response, nil
 }

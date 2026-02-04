@@ -5,11 +5,14 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
   // ANCHOR: prepare-send-payment-lightning-bolt11
   String paymentRequest = "<bolt11 invoice>";
   // Optionally set the amount you wish to pay the receiver
-  PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(5000));
+  BigInt? optionalAmountSats = BigInt.from(5000);
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: optionalPayAmount);
+      amount: optionalAmountSats,
+      tokenIdentifier: null,
+      conversionOptions: null,
+      feePolicy: null);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -31,11 +34,14 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   // ANCHOR: prepare-send-payment-onchain
   String paymentRequest = "<bitcoin address>";
   // Set the amount you wish to pay the receiver
-  PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
+  BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: payAmount);
+      amount: amountSats,
+      tokenIdentifier: null,
+      conversionOptions: null,
+      feePolicy: null);
   final response = await sdk.prepareSendPayment(request: request);
 
   // Review the fee quote for each confirmation speed
@@ -58,11 +64,14 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
   // Set the amount you wish to pay the receiver
-  PayAmount payAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
+  BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: payAmount);
+      amount: amountSats,
+      tokenIdentifier: null,
+      conversionOptions: null,
+      feePolicy: null);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -80,11 +89,14 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
   // Optionally set the amount you wish to pay the receiver
-  PayAmount optionalPayAmount = PayAmount.bitcoin(amountSats: BigInt.from(50000));
+  BigInt? optionalAmountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: optionalPayAmount);
+      amount: optionalAmountSats,
+      tokenIdentifier: null,
+      conversionOptions: null,
+      feePolicy: null);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -114,7 +126,10 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      conversionOptions: conversionOptions);
+      amount: null,
+      tokenIdentifier: null,
+      conversionOptions: conversionOptions,
+      feePolicy: null);
   final response = await sdk.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -176,20 +191,27 @@ Future<SendPaymentResponse> sendPaymentSpark(
   return response;
 }
 
-Future<PrepareSendPaymentResponse> prepareSendPaymentDrain(
+Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
     BreezSdk sdk) async {
-  // ANCHOR: prepare-send-payment-drain
-  // Use PayAmount.drain() to send all available funds
+  // ANCHOR: prepare-send-payment-fees-included
+  // By default (FeePolicy.feesExcluded), fees are added on top of the amount.
+  // Use FeePolicy.feesIncluded to deduct fees from the amount instead.
+  // The receiver gets amount minus fees.
   String paymentRequest = "<payment request>";
-  PayAmount payAmount = PayAmount.drain();
+  BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: payAmount);
+      amount: amountSats,
+      tokenIdentifier: null,
+      conversionOptions: null,
+      feePolicy: FeePolicy.feesIncluded);
   final response = await sdk.prepareSendPayment(request: request);
 
-  // The response contains PayAmount.drain() to indicate this is a drain operation
-  print("Pay amount: ${response.payAmount}");
-  // ANCHOR_END: prepare-send-payment-drain
+  // The response shows the fee policy used
+  print("Fee policy: ${response.feePolicy}");
+  print("Amount: ${response.amount}");
+  // The receiver gets amount - fees (fees are available in response.paymentMethod)
+  // ANCHOR_END: prepare-send-payment-fees-included
   return response;
 }

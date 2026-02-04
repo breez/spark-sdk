@@ -76,14 +76,17 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR: send-token-payment
     let paymentRequest = "<spark address or invoice>"
     // Token identifier must match the invoice in case it specifies one.
-    let tokenIdentifier = "<token identifier>"
-    // Set the amount of tokens you wish to send. (requires 'import BigNumber')
-    let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
+    let tokenIdentifier: String? = "<token identifier>"
+    // Set the amount of tokens you wish to send.
+    let amount: BInt? = BInt(1_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: optionalPayAmount
+            amount: amount,
+            tokenIdentifier: tokenIdentifier,
+            conversionOptions: nil,
+            feePolicy: nil
         ))
 
     // If the fees are acceptable, continue to send the token payment
@@ -145,9 +148,9 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-with-conversion
     let paymentRequest = "<spark address or invoice>"
     // Token identifier must match the invoice in case it specifies one.
-    let tokenIdentifier = "<token identifier>"
-    // Set the amount of tokens you wish to send. (requires 'import BigNumber')
-    let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
+    let tokenIdentifier: String? = "<token identifier>"
+    // Set the amount of tokens you wish to send.
+    let amount: BInt? = BInt(1_000)
     // Set to use Bitcoin funds to pay via conversion
     let optionalMaxSlippageBps = UInt32(50)
     let optionalCompletionTimeoutSecs = UInt32(30)
@@ -160,8 +163,10 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: optionalPayAmount,
-            conversionOptions: conversionOptions
+            amount: amount,
+            tokenIdentifier: tokenIdentifier,
+            conversionOptions: conversionOptions,
+            feePolicy: nil
         ))
 
     // If the fees are acceptable, continue to send the token payment

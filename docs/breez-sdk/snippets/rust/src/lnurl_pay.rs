@@ -10,7 +10,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     let lnurl_pay_url = "lightning@address.com";
 
     if let Ok(InputType::LightningAddress(details)) = sdk.parse(lnurl_pay_url).await {
-        let pay_amount = BitcoinPayAmount::Bitcoin { amount_sats: 5_000 };
+        let amount_sats = 5_000;
         let optional_comment = Some("<comment>".to_string());
         let optional_validate_success_action_url = Some(true);
         // Optionally set to use token funds to pay via token conversion
@@ -26,11 +26,12 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
 
         let prepare_response = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                pay_amount,
+                amount_sats,
                 pay_request: details.pay_request,
                 comment: optional_comment,
                 validate_success_action_url: optional_validate_success_action_url,
                 conversion_options: optional_conversion_options,
+                fee_policy: None,
             })
             .await?;
 
@@ -61,25 +62,30 @@ async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Resul
     Ok(())
 }
 
-async fn prepare_pay_drain(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) -> Result<()> {
-    // ANCHOR: prepare-lnurl-pay-drain
+async fn prepare_pay_fees_included(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) -> Result<()> {
+    // ANCHOR: prepare-lnurl-pay-fees-included
+    // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.
+    // Use FeePolicy::FeesIncluded to deduct fees from the amount instead.
+    // The receiver gets amount minus fees.
     let optional_comment = Some("<comment>".to_string());
     let optional_validate_success_action_url = Some(true);
-    let pay_amount = BitcoinPayAmount::Drain;
+    let amount_sats = 5_000;
 
     let prepare_response = sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            pay_amount,
+            amount_sats,
             pay_request,
             comment: optional_comment,
             validate_success_action_url: optional_validate_success_action_url,
             conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
         })
         .await?;
 
     // If the fees are acceptable, continue to create the LNURL Pay
     let fee_sats = prepare_response.fee_sats;
     info!("Fees: {fee_sats} sats");
-    // ANCHOR_END: prepare-lnurl-pay-drain
+    // The receiver gets amount_sats - fee_sats
+    // ANCHOR_END: prepare-lnurl-pay-fees-included
     Ok(())
 }

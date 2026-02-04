@@ -1,4 +1,4 @@
-import type { BreezSdk, ConversionOptions, PayAmount } from '@breeztech/breez-sdk-spark'
+import type { BreezSdk, ConversionOptions } from '@breeztech/breez-sdk-spark'
 
 const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR: fetch-token-balances
@@ -70,16 +70,15 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
-  // Set the amount of tokens you wish to send.
-  const optionalPayAmount: PayAmount = {
-    type: 'token',
-    amount: '1000',
-    tokenIdentifier
-  }
+  // Set the amount of tokens you wish to send (in token base units).
+  const amount = BigInt(1_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount
+    amount,
+    tokenIdentifier,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
@@ -140,12 +139,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
-  // Set the amount of tokens you wish to send.
-  const optionalPayAmount: PayAmount = {
-    type: 'token',
-    amount: '1000',
-    tokenIdentifier
-  }
+  // Set the amount of tokens you wish to send (in token base units).
+  const amount = BigInt(1_000)
   // Set to use Bitcoin funds to pay via conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
@@ -159,8 +154,10 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount,
-    conversionOptions
+    amount,
+    tokenIdentifier,
+    conversionOptions,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
