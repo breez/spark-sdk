@@ -1111,6 +1111,6 @@ pub use breez_sdk_spark::seedless_restore::*;
 
 #[frb(mirror(NostrRelayConfig))]
 pub struct _NostrRelayConfig {
-    pub relay_urls: Vec<String>,
+    pub breez_api_key: Option<String>,
     pub timeout_secs: u32,
 }

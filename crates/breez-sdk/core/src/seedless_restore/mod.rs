@@ -483,33 +483,11 @@ mod tests {
     #[test]
     fn test_nostr_relay_config_default() {
         let config = NostrRelayConfig::default();
-        assert!(!config.relay_urls.is_empty(), "Should have default relays");
-        assert!(config.timeout_secs > 0, "Should have positive timeout");
-    }
-
-    #[test]
-    fn test_nostr_relay_config_breez() {
-        let config = NostrRelayConfig::breez_relays();
-        assert!(!config.relay_urls.is_empty(), "Should have Breez relays");
-        // Verify all URLs contain "breez" or are known Breez relays
-        for url in &config.relay_urls {
-            assert!(
-                url.starts_with("wss://"),
-                "Relay URL should use wss:// scheme"
-            );
-        }
-    }
-
-    #[test]
-    fn test_nostr_relay_config_custom() {
-        let custom_relays = vec![
-            "wss://relay1.example.com".to_string(),
-            "wss://relay2.example.com".to_string(),
-        ];
-        let config = NostrRelayConfig::custom(custom_relays.clone(), 60);
-
-        assert_eq!(config.relay_urls, custom_relays);
-        assert_eq!(config.timeout_secs, 60);
+        assert!(
+            config.breez_api_key.is_none(),
+            "Default should have no API key"
+        );
+        assert_eq!(config.timeout_secs, 30, "Should have 30 sec timeout");
     }
 
     #[test]

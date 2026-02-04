@@ -1,7 +1,9 @@
 use super::error::SeedlessRestoreError;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::{
     Network,
     bip32::{DerivationPath, Xpriv},
+    hashes::{Hash, sha256},
     secp256k1::Secp256k1,
 };
 
@@ -50,6 +52,33 @@ pub fn derive_nostr_keypair(account_master: &[u8]) -> Result<nostr::Keys, Seedle
 
     // Convert to nostr secret key
     let secret_key = nostr::SecretKey::from_slice(&derived.private_key.secret_bytes())
+        .map_err(|e| SeedlessRestoreError::KeyDerivationError(e.to_string()))?;
+
+    Ok(nostr::Keys::new(secret_key))
+}
+
+/// Derives a Nostr keypair for NIP-42 authentication from a Breez API key.
+///
+/// The derivation is: `sha256(base64_decode(api_key))` → 32-byte secret key → Nostr keypair.
+/// This keypair is used to authenticate with the Breez relay via NIP-42.
+///
+/// # Arguments
+/// * `api_key` - The Breez API key (base64 encoded)
+///
+/// # Returns
+/// * `Ok(nostr::Keys)` - The Nostr keypair for NIP-42 authentication
+/// * `Err(SeedlessRestoreError)` - If the API key is invalid base64 or derivation fails
+pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, SeedlessRestoreError> {
+    // 1. Base64 decode the API key
+    let decoded = STANDARD.decode(api_key).map_err(|e| {
+        SeedlessRestoreError::KeyDerivationError(format!("Invalid base64 API key: {e}"))
+    })?;
+
+    // 2. SHA256 hash to get 32-byte secret key
+    let hash = sha256::Hash::hash(&decoded);
+
+    // 3. Create Nostr keypair from hash
+    let secret_key = nostr::SecretKey::from_slice(hash.as_byte_array())
         .map_err(|e| SeedlessRestoreError::KeyDerivationError(e.to_string()))?;
 
     Ok(nostr::Keys::new(secret_key))
@@ -139,5 +168,47 @@ mod tests {
         let mnemonic2 = prf_to_mnemonic(&prf_output).unwrap();
 
         assert_eq!(mnemonic1, mnemonic2);
+    }
+
+    #[test]
+    fn test_derive_nip42_keypair() {
+        // Use a sample base64-encoded API key
+        let api_key = base64::engine::general_purpose::STANDARD.encode(b"test-api-key");
+
+        let keys = derive_nip42_keypair(&api_key).expect("Should derive keypair");
+
+        // Verify we get a valid public key
+        let pubkey = keys.public_key();
+        assert!(!pubkey.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_derive_nip42_keypair_deterministic() {
+        // Same API key should always produce same keypair
+        let api_key = base64::engine::general_purpose::STANDARD.encode(b"test-api-key");
+
+        let keys1 = derive_nip42_keypair(&api_key).unwrap();
+        let keys2 = derive_nip42_keypair(&api_key).unwrap();
+
+        assert_eq!(keys1.public_key(), keys2.public_key());
+    }
+
+    #[test]
+    fn test_derive_nip42_keypair_different_keys() {
+        // Different API keys should produce different keypairs
+        let api_key1 = base64::engine::general_purpose::STANDARD.encode(b"api-key-1");
+        let api_key2 = base64::engine::general_purpose::STANDARD.encode(b"api-key-2");
+
+        let keys1 = derive_nip42_keypair(&api_key1).unwrap();
+        let keys2 = derive_nip42_keypair(&api_key2).unwrap();
+
+        assert_ne!(keys1.public_key(), keys2.public_key());
+    }
+
+    #[test]
+    fn test_derive_nip42_keypair_invalid_base64() {
+        let invalid_api_key = "not-valid-base64!!!";
+        let result = derive_nip42_keypair(invalid_api_key);
+        assert!(result.is_err());
     }
 }
