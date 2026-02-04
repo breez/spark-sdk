@@ -219,7 +219,7 @@ pub(crate) fn validate_and_sanitize_username(username: &str) -> Result<String, S
 
     if !sanitized
         .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.')
+        .all(|c| c.is_ascii_alphanumeric() || ['-', '_', '.'].contains(&c))
     {
         return Err(SdkError::Generic(
             "Username can only contain lowercase letters, numbers, hyphens, underscores, and periods".to_string(),
