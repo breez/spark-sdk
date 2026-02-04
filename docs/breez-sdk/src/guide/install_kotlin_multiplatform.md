@@ -30,7 +30,9 @@ kotlin {
 }
 ```
 
-## iOS Setup
+## Integration
+
+### iOS
 
 When targeting iOS, you must also install the native binary framework. This is the same framework used by the [Swift package](install_ios_swift.md) and can be installed via [Swift Package Manager](#swift-package-manager) or [CocoaPods](#cocoapods). The Gradle plugin automatically configures the framework search path from Xcode's build environment.
 
@@ -62,9 +64,9 @@ kotlin {
 }
 ```
 
-### Swift Package Manager
+#### Swift Package Manager
 
-#### Installation via Xcode
+##### Installation via Xcode
 
 Via `File > Add Packages...`, add
 
@@ -74,7 +76,7 @@ https://github.com/breez/breez-sdk-spark-swift.git
 
 as a package dependency in Xcode.
 
-#### Installation via Swift Package Manifest
+##### Installation via Swift Package Manifest
 
 Add the following to the dependencies array of your `Package.swift`:
 
@@ -82,7 +84,7 @@ Add the following to the dependencies array of your `Package.swift`:
 .package(url: "https://github.com/breez/breez-sdk-spark-swift.git", from: "{VERSION}"),
 ```
 
-### Custom Framework Path
+#### Custom Framework Path
 
 If the automatic framework detection doesn't work for your setup, you can override it by setting the `breezSdkSparkFrameworkPath` project property to the directory containing `breez_sdk_sparkFFI.framework`.
 
@@ -98,7 +100,7 @@ Or via the command line:
 ./gradlew build -PbreezSdkSparkFrameworkPath=/path/to/framework/dir
 ```
 
-### CocoaPods
+#### CocoaPods
 
 Add the Breez SDK to your `Podfile` like so and run `pod install`:
 
