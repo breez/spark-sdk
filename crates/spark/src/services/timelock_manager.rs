@@ -25,7 +25,8 @@ use crate::{
         },
     },
 };
-
+use frost_secp256k1_tr::{Identifier, round1::SigningCommitments};
+use std::collections::BTreeMap;
 enum RenewType<'a> {
     Node { parent_node: &'a TreeNode },
     Refund { parent_node: &'a TreeNode },
@@ -49,6 +50,29 @@ impl TimelockManager {
             network,
             operator_pool,
         }
+    }
+
+    async fn get_signing_commitments_for_jobs(
+        &self,
+        node_id: &TreeNodeId,
+        signing_jobs_count: usize,
+    ) -> Result<Vec<BTreeMap<Identifier, SigningCommitments>>, ServiceError> {
+        let signing_commitments = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .get_signing_commitments(GetSigningCommitmentsRequest {
+                node_ids: vec![node_id.to_string()],
+                count: signing_jobs_count as u32,
+                node_id_count: 0,
+            })
+            .await?
+            .signing_commitments
+            .iter()
+            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(signing_commitments)
     }
 
     pub async fn check_renew_nodes(
@@ -265,19 +289,8 @@ impl TimelockManager {
         }
 
         let signing_commitments = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .get_signing_commitments(GetSigningCommitmentsRequest {
-                node_ids: vec![node.id.to_string()],
-                count: signing_jobs.len() as u32,
-                node_id_count: 0,
-            })
-            .await?
-            .signing_commitments
-            .iter()
-            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
-            .collect::<Result<Vec<_>, _>>()?;
+            .get_signing_commitments_for_jobs(&node.id, signing_jobs.len())
+            .await?;
 
         let signed_jobs = sign_signing_jobs(
             &self.signer,
@@ -434,19 +447,8 @@ impl TimelockManager {
         }
 
         let signing_commitments = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .get_signing_commitments(GetSigningCommitmentsRequest {
-                node_ids: vec![node.id.to_string()],
-                count: signing_jobs.len() as u32,
-                node_id_count: 0,
-            })
-            .await?
-            .signing_commitments
-            .iter()
-            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
-            .collect::<Result<Vec<_>, _>>()?;
+            .get_signing_commitments_for_jobs(&node.id, signing_jobs.len())
+            .await?;
 
         let signed_jobs = sign_signing_jobs(
             &self.signer,
@@ -577,19 +579,8 @@ impl TimelockManager {
         }
 
         let signing_commitments = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .get_signing_commitments(GetSigningCommitmentsRequest {
-                node_ids: vec![node.id.to_string()],
-                count: signing_jobs.len() as u32,
-                node_id_count: 0,
-            })
-            .await?
-            .signing_commitments
-            .iter()
-            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
-            .collect::<Result<Vec<_>, _>>()?;
+            .get_signing_commitments_for_jobs(&node.id, signing_jobs.len())
+            .await?;
 
         let signed_jobs = sign_signing_jobs(
             &self.signer,
