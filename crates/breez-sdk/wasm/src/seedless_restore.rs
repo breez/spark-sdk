@@ -7,7 +7,10 @@ use crate::models::passkey_prf_provider::{PasskeyPrfProvider, WasmPasskeyPrfProv
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::seedless_restore::NostrRelayConfig)]
 pub struct NostrRelayConfig {
-    pub relay_urls: Vec<String>,
+    /// Optional Breez API key for authenticated access to the Breez relay.
+    /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
+    pub breez_api_key: Option<String>,
+    /// Connection timeout in seconds (default: 30)
     pub timeout_secs: u32,
 }
 
@@ -106,16 +109,4 @@ impl SeedlessRestore {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
-}
-
-/// Create a default NostrRelayConfig with public relays.
-#[wasm_bindgen(js_name = "defaultNostrRelayConfig")]
-pub fn default_nostr_relay_config() -> NostrRelayConfig {
-    breez_sdk_spark::seedless_restore::NostrRelayConfig::default().into()
-}
-
-/// Create a NostrRelayConfig with Breez-operated relays.
-#[wasm_bindgen(js_name = "breezNostrRelayConfig")]
-pub fn breez_nostr_relay_config() -> NostrRelayConfig {
-    breez_sdk_spark::seedless_restore::NostrRelayConfig::breez_relays().into()
 }

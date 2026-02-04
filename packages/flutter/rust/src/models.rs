@@ -1128,6 +1128,6 @@ pub struct _SparkStatus {
 
 #[frb(mirror(NostrRelayConfig))]
 pub struct _NostrRelayConfig {
-    pub relay_urls: Vec<String>,
+    pub breez_api_key: Option<String>,
     pub timeout_secs: u32,
 }

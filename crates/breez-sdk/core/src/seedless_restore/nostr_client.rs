@@ -3,13 +3,31 @@ use std::time::Duration;
 use nostr::Filter;
 use nostr_sdk::Client;
 
+use super::derivation::derive_nip42_keypair;
 use super::error::SeedlessRestoreError;
 use super::models::NostrRelayConfig;
+
+/// Default public Nostr relays for salt storage.
+const DEFAULT_PUBLIC_RELAYS: &[&str] = &[
+    "wss://relay.nostr.watch",
+    "wss://relaypag.es",
+    "wss://monitorlizard.nostr1.com",
+    "wss://relay.damus.io",
+    "wss://relay.nostr.band",
+    "wss://relay.primal.net",
+];
+
+/// Breez-operated relay URL (requires NIP-42 authentication).
+const BREEZ_RELAY: &str = "wss://relay.breez.technology";
 
 /// Client for publishing and discovering salts on Nostr relays.
 ///
 /// Salts are stored as kind-1 (text note) events with plain text content.
 /// The Nostr identity is derived from the passkey PRF at account 55.
+///
+/// Relay URLs are managed internally:
+/// - Public relays are always included for redundancy
+/// - Breez relay is added when an API key is configured (enables NIP-42 auth)
 pub struct NostrSaltClient {
     config: NostrRelayConfig,
 }
@@ -121,18 +139,47 @@ impl NostrSaltClient {
 
     /// Create and connect a Nostr client to the configured relays.
     ///
+    /// When an API key is configured, the client uses API key-derived keys for NIP-42
+    /// authentication with the Breez relay. Content events (salts) are signed manually
+    /// with passkey-derived keys via `sign_with_keys()`, so they use the correct identity.
+    ///
     /// Tolerates individual relay failures — only errors if no relays could be added.
     async fn create_client(&self, keys: &nostr::Keys) -> Result<Client, SeedlessRestoreError> {
-        let client = Client::new(keys.clone());
+        let client = if let Some(ref api_key) = self.config.breez_api_key {
+            // Derive auth keys from API key for NIP-42 authentication
+            // Content events are signed manually with passkey keys via sign_with_keys()
+            let auth_keys = derive_nip42_keypair(api_key)?;
+            Client::new(auth_keys)
+        } else {
+            // No API key - use passkey keys directly
+            Client::new(keys.clone())
+        };
 
-        // Add all configured relays, tolerating individual failures
+        // Add default public relays
         let mut added = 0usize;
-        for relay_url in &self.config.relay_urls {
-            match client.add_relay(relay_url).await {
+        for relay_url in DEFAULT_PUBLIC_RELAYS {
+            match client.add_relay(*relay_url).await {
                 #[allow(clippy::arithmetic_side_effects)]
                 Ok(_) => added += 1,
                 Err(e) => {
                     tracing::warn!("Failed to add relay {relay_url}: {e}");
+                }
+            }
+        }
+
+        // Add Breez relay if API key is configured
+        if self.config.breez_api_key.is_some() {
+            match client.add_relay(BREEZ_RELAY).await {
+                #[allow(clippy::arithmetic_side_effects)]
+                Ok(_) => {
+                    added += 1;
+                    tracing::info!("Added Breez relay with NIP-42 authentication");
+                }
+                Err(e) => {
+                    // Log warning but continue - fall back to public relays
+                    tracing::warn!(
+                        "Failed to add Breez relay (continuing with public relays): {e}"
+                    );
                 }
             }
         }
@@ -155,20 +202,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_nostr_salt_client_new() {
+    fn test_nostr_salt_client_new_default() {
         let config = NostrRelayConfig::default();
-        let client = NostrSaltClient::new(config.clone());
+        let client = NostrSaltClient::new(config);
 
-        assert_eq!(client.config.relay_urls, config.relay_urls);
-        assert_eq!(client.config.timeout_secs, config.timeout_secs);
+        assert!(client.config.breez_api_key.is_none());
+        assert_eq!(client.config.timeout_secs, 30);
     }
 
     #[test]
-    fn test_nostr_salt_client_breez_relays() {
-        let config = NostrRelayConfig::breez_relays();
+    fn test_nostr_salt_client_with_api_key() {
+        let config = NostrRelayConfig {
+            breez_api_key: Some("dGVzdC1hcGkta2V5".to_string()),
+            ..Default::default()
+        };
         let client = NostrSaltClient::new(config);
 
-        assert_eq!(client.config.relay_urls.len(), 1);
-        assert!(client.config.relay_urls[0].contains("breez"));
+        assert!(client.config.breez_api_key.is_some());
+        assert_eq!(client.config.timeout_secs, 30);
     }
 }
