@@ -89,15 +89,15 @@ struct RecoveryTestConfig {
 
 /// Load recovery test configuration from environment variables
 ///
-/// Returns None if either RECOVERY_TEST_MNEMONIC or RECOVERY_TEST_EXPECTED_PAYMENTS
+/// Returns None if either RECOVERY_TEST_MNEMONIC_V2 or RECOVERY_TEST_EXPECTED_PAYMENTS_V2
 /// is not set, allowing the test to skip gracefully.
 fn recovery_test_config() -> Option<RecoveryTestConfig> {
-    let mnemonic = std::env::var("RECOVERY_TEST_MNEMONIC").ok()?;
-    let expected_json = std::env::var("RECOVERY_TEST_EXPECTED_PAYMENTS").ok()?;
+    let mnemonic = std::env::var("RECOVERY_TEST_MNEMONIC_V2").ok()?;
+    let expected_json = std::env::var("RECOVERY_TEST_EXPECTED_PAYMENTS_V2").ok()?;
 
     let expected: ExpectedRecoveryPayments = serde_json::from_str(&expected_json)
         .map_err(|e| {
-            warn!("Failed to parse RECOVERY_TEST_EXPECTED_PAYMENTS: {}", e);
+            warn!("Failed to parse RECOVERY_TEST_EXPECTED_PAYMENTS_V2: {}", e);
             e
         })
         .ok()?;
@@ -207,8 +207,8 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
 /// 4. Outputs the mnemonic and expected payments JSON
 ///
 /// After running, copy the output and set as GitHub secrets:
-/// - RECOVERY_TEST_MNEMONIC
-/// - RECOVERY_TEST_EXPECTED_PAYMENTS
+/// - RECOVERY_TEST_MNEMONIC_V2
+/// - RECOVERY_TEST_EXPECTED_PAYMENTS_V2
 #[rstest]
 #[ignore] // Only run manually
 #[test_log::test(tokio::test)]
@@ -678,10 +678,10 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     info!("Final balance: {} sats", info.balance_sats);
     info!("Total payments: {}", payments.len());
     info!("\n");
-    info!("=== MNEMONIC (add as RECOVERY_TEST_MNEMONIC secret) ===");
+    info!("=== MNEMONIC (add as RECOVERY_TEST_MNEMONIC_V2 secret) ===");
     info!("{}", alice_mnemonic);
     info!("\n");
-    info!("=== EXPECTED PAYMENTS JSON (add as RECOVERY_TEST_EXPECTED_PAYMENTS secret) ===");
+    info!("=== EXPECTED PAYMENTS JSON (add as RECOVERY_TEST_EXPECTED_PAYMENTS_V2 secret) ===");
     info!("{}", serde_json::to_string(&expected)?);
     info!("\n");
     info!("=== EXPECTED PAYMENTS JSON (pretty) ===");
@@ -702,8 +702,8 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 /// phrase by syncing with Spark operators and retrieving all historical payments.
 ///
 /// Requires environment variables:
-/// - RECOVERY_TEST_MNEMONIC: BIP-39 mnemonic phrase
-/// - RECOVERY_TEST_EXPECTED_PAYMENTS: JSON with expected payment data
+/// - RECOVERY_TEST_MNEMONIC_V2: BIP-39 mnemonic phrase
+/// - RECOVERY_TEST_EXPECTED_PAYMENTS_V2: JSON with expected payment data
 ///
 /// If either variable is not set, the test skips gracefully.
 #[rstest]
@@ -717,13 +717,13 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
         if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
             panic!(
                 "Recovery test secrets not configured in CI! \
-                 Set RECOVERY_TEST_MNEMONIC and RECOVERY_TEST_EXPECTED_PAYMENTS"
+                 Set RECOVERY_TEST_MNEMONIC_V2 and RECOVERY_TEST_EXPECTED_PAYMENTS_V2"
             );
         }
         // Locally, skip gracefully
         warn!(
             "Skipping test_wallet_recovery_from_mnemonic: \
-             RECOVERY_TEST_MNEMONIC or RECOVERY_TEST_EXPECTED_PAYMENTS not set"
+             RECOVERY_TEST_MNEMONIC_V2 or RECOVERY_TEST_EXPECTED_PAYMENTS_V2 not set"
         );
         return Ok(());
     };
