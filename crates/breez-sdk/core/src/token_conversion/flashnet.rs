@@ -6,7 +6,7 @@ use flashnet::{
     FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder,
     SimulateSwapRequest,
 };
-use spark_wallet::{ListTokenTransactionsRequest, ListTransfersRequest, SparkWallet, TransferId};
+use spark_wallet::{ListTransfersRequest, SparkWallet, TransferId};
 use tokio::{
     select,
     sync::{broadcast, watch},
@@ -382,12 +382,9 @@ impl FlashnetTokenConverter {
             // It's a token transaction hash
             let token_transactions = self
                 .spark_wallet
-                .list_token_transactions(ListTokenTransactionsRequest {
-                    token_transaction_hashes: vec![identifier.to_string()],
-                    ..Default::default()
-                })
+                .get_token_transactions_by_hashes(vec![identifier.to_string()])
                 .await?;
-            let token_transaction = token_transactions.items.first().ok_or_else(|| {
+            let token_transaction = token_transactions.first().ok_or_else(|| {
                 ConversionError::ConversionFailed("Token transaction not found".into())
             })?;
             let object_repository = ObjectCacheRepository::new(self.storage.clone());

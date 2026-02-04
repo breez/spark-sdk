@@ -17,8 +17,10 @@ use crate::{
         rpc::{
             self,
             spark_token::{
-                CommitTransactionRequest, QueryTokenMetadataRequest, QueryTokenTransactionsRequest,
-                SignatureWithIndex, StartTransactionRequest,
+                CommitTransactionRequest, QueryTokenMetadataRequest,
+                QueryTokenTransactionsByFilters, QueryTokenTransactionsByTxHash,
+                QueryTokenTransactionsRequest, SignatureWithIndex, StartTransactionRequest,
+                query_token_transactions_request::QueryType,
             },
         },
     },
@@ -213,33 +215,28 @@ impl TokenService {
             .get_coordinator()
             .client
             .query_token_transactions(QueryTokenTransactionsRequest {
-                order: order.into(),
-                output_ids: filter.output_ids,
-                owner_public_keys,
-                issuer_public_keys: filter
-                    .issuer_public_keys
-                    .iter()
-                    .map(|k| k.serialize().to_vec())
-                    .collect(),
-                token_identifiers: filter
-                    .token_ids
-                    .iter()
-                    .map(|id| {
-                        bech32m_decode_token_id(id, Some(self.network))
-                            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
-                    })
-                    .collect::<Result<Vec<Vec<u8>>, _>>()?,
-                token_transaction_hashes: filter
-                    .token_transaction_hashes
-                    .iter()
-                    .map(|id| {
-                        hex::decode(id).map_err(|_| {
-                            ServiceError::Generic("Invalid token transaction hash".to_string())
+                query_type: Some(QueryType::ByFilters(QueryTokenTransactionsByFilters {
+                    output_ids: filter.output_ids,
+                    owner_public_keys,
+                    issuer_public_keys: filter
+                        .issuer_public_keys
+                        .iter()
+                        .map(|k| k.serialize().to_vec())
+                        .collect(),
+                    token_identifiers: filter
+                        .token_ids
+                        .iter()
+                        .map(|id| {
+                            bech32m_decode_token_id(id, Some(self.network))
+                                .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))
                         })
-                    })
-                    .collect::<Result<Vec<Vec<u8>>, _>>()?,
+                        .collect::<Result<Vec<Vec<u8>>, _>>()?,
+                    page_request: None,
+                })),
+                order: order.into(),
                 limit: paging.limit as i64,
                 offset: paging.offset as i64,
+                ..Default::default()
             })
             .await?;
 
@@ -269,6 +266,46 @@ impl TokenService {
             }
         };
         Ok(transactions)
+    }
+
+    /// Queries token transactions by their hashes.
+    ///
+    /// This method uses the `QueryType::ByTxHash` variant which is limited to 100 hashes
+    /// per request (enforced by proto). Returns an empty vector if input is empty.
+    pub async fn query_token_transactions_by_hashes(
+        &self,
+        token_transaction_hashes: Vec<String>,
+    ) -> Result<Vec<TokenTransaction>, ServiceError> {
+        if token_transaction_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let hashes = token_transaction_hashes
+            .iter()
+            .map(|h| {
+                hex::decode(h).map_err(|_| {
+                    ServiceError::Generic("Invalid token transaction hash".to_string())
+                })
+            })
+            .collect::<Result<Vec<Vec<u8>>, _>>()?;
+
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .query_token_transactions(QueryTokenTransactionsRequest {
+                query_type: Some(QueryType::ByTxHash(QueryTokenTransactionsByTxHash {
+                    token_transaction_hashes: hashes,
+                })),
+                ..Default::default()
+            })
+            .await?;
+
+        response
+            .token_transactions_with_status
+            .into_iter()
+            .map(|t| (t, self.network).try_into())
+            .collect::<Result<Vec<TokenTransaction>, _>>()
     }
 
     pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, ServiceError> {

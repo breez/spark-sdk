@@ -1099,7 +1099,6 @@ pub struct QueryTokenTransactionsFilter {
     /// If not provided, will use our own public key
     pub owner_public_keys: Option<Vec<PublicKey>>,
     pub issuer_public_keys: Vec<PublicKey>,
-    pub token_transaction_hashes: Vec<String>,
     pub token_ids: Vec<String>,
     pub output_ids: Vec<String>,
 }
