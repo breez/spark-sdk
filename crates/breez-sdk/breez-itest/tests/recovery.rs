@@ -38,6 +38,8 @@ pub struct ExpectedRecoveryPayments {
 /// Single expected payment specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpectedPayment {
+    /// Payment ID: `<transaction_hash>:<output_index>`
+    pub id: String,
     /// "send" or "receive"
     pub payment_type: String,
     /// "lightning", "spark", "token", "deposit", "withdraw"
@@ -146,6 +148,7 @@ fn build_expected_payments(payments: &[Payment], balance_sats: u64) -> ExpectedR
             };
 
             ExpectedPayment {
+                id: p.id.clone(),
                 payment_type: p.payment_type.to_string(),
                 method: p.method.to_string(),
                 amount: p.amount,
@@ -172,15 +175,17 @@ async fn create_mint_test_token(instance: &SdkInstance) -> Result<TokenMetadata>
             ticker: "RTT".to_string(),
             decimals: 2,
             is_freezable: false,
-            max_supply: 1_000_000,
+            max_supply: 100_000_000,
         })
         .await?;
 
     issuer
-        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
+        .mint_issuer_token(MintIssuerTokenRequest {
+            amount: 100_000_000,
+        })
         .await?;
 
-    info!("Minted 1,000,000 tokens ({})", token_metadata.identifier);
+    info!("Minted 100,000,000 tokens ({})", token_metadata.identifier);
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -498,6 +503,69 @@ async fn test_setup_recovery_wallet() -> Result<()> {
 
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
 
+    // 10a. Create many token payments to test pagination during sync
+    // Sync fetches token transactions in pages of 50 (PAYMENT_SYNC_BATCH_SIZE)
+    // We create 60 total token payments (30 each direction) to ensure pagination is triggered
+    info!("Creating 60 token payments for pagination testing...");
+    const TOKEN_PAYMENT_PAIRS: u32 = 30;
+
+    for i in 0..TOKEN_PAYMENT_PAIRS {
+        // Alice → Bob
+        let prepare = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: bob_spark_address.clone(),
+                pay_amount: Some(PayAmount::Token {
+                    amount: 1000,
+                    token_identifier: token_metadata.identifier.clone(),
+                }),
+                conversion_options: None,
+            })
+            .await?;
+
+        alice
+            .sdk
+            .send_payment(SendPaymentRequest {
+                prepare_response: prepare,
+                options: None,
+                idempotency_key: None,
+            })
+            .await?;
+
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+        // Bob → Alice
+        bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+        let prepare = bob
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: alice_spark_address.clone(),
+                pay_amount: Some(PayAmount::Token {
+                    amount: 1000,
+                    token_identifier: token_metadata.identifier.clone(),
+                }),
+                conversion_options: None,
+            })
+            .await?;
+
+        bob.sdk
+            .send_payment(SendPaymentRequest {
+                prepare_response: prepare,
+                options: None,
+                idempotency_key: None,
+            })
+            .await?;
+
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
+
+        if (i + 1) % 10 == 0 {
+            info!("Completed {} token payment pairs", i + 1);
+        }
+    }
+
+    info!("Completed all 60 token payments for pagination testing");
+
     // 11. Withdraw: Alice withdraws on-chain
     info!("Creating Withdraw payment...");
 
@@ -714,30 +782,51 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
 
     // 7. Verify each expected payment exists with matching attributes
     for expected in &config.expected.payments {
-        let found = payments.iter().find(|p| {
-            p.method.to_string() == expected.method
-                && p.payment_type.to_string() == expected.payment_type
-                && p.amount == expected.amount
-                && p.status.to_string() == expected.status
-        });
+        // Match by payment ID
+        let found = payments.iter().find(|p| p.id == expected.id);
 
-        let payment = found.unwrap_or_else(|| {
-            panic!(
-                "Expected payment not found: type={}, method={}, amount={}, status={}",
-                expected.payment_type, expected.method, expected.amount, expected.status
-            )
-        });
+        let payment =
+            found.unwrap_or_else(|| panic!("Expected payment not found: id={}", expected.id));
 
         // Verify core fields (exact match since captured after finalization)
         assert_eq!(
+            payment.method.to_string(),
+            expected.method,
+            "Method mismatch for {}: {} vs expected {}",
+            expected.id,
+            payment.method,
+            expected.method
+        );
+        assert_eq!(
+            payment.payment_type.to_string(),
+            expected.payment_type,
+            "PaymentType mismatch for {}: {} vs expected {}",
+            expected.id,
+            payment.payment_type,
+            expected.payment_type
+        );
+        assert_eq!(
+            payment.amount, expected.amount,
+            "Amount mismatch for {}: {} vs expected {}",
+            expected.id, payment.amount, expected.amount
+        );
+        assert_eq!(
+            payment.status.to_string(),
+            expected.status,
+            "Status mismatch for {}: {} vs expected {}",
+            expected.id,
+            payment.status,
+            expected.status
+        );
+        assert_eq!(
             payment.timestamp, expected.timestamp,
-            "Timestamp mismatch for {} {} payment: {} vs expected {}",
-            expected.payment_type, expected.method, payment.timestamp, expected.timestamp
+            "Timestamp mismatch for {}: {} vs expected {}",
+            expected.id, payment.timestamp, expected.timestamp
         );
         assert_eq!(
             payment.fees, expected.fees,
-            "Fees mismatch for {} {} payment: {} vs expected {}",
-            expected.payment_type, expected.method, payment.fees, expected.fees
+            "Fees mismatch for {}: {} vs expected {}",
+            expected.id, payment.fees, expected.fees
         );
 
         // Verify variant-specific details
@@ -753,14 +842,16 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
                 {
                     assert_eq!(
                         &htlc.payment_hash, payment_hash,
-                        "HTLC payment_hash mismatch"
+                        "HTLC payment_hash mismatch for {}",
+                        expected.id
                     );
-                    assert_eq!(&htlc.preimage, preimage, "HTLC preimage mismatch");
+                    assert_eq!(
+                        &htlc.preimage, preimage,
+                        "HTLC preimage mismatch for {}",
+                        expected.id
+                    );
                 } else {
-                    panic!(
-                        "Expected Spark HTLC details for {} {} payment",
-                        expected.payment_type, expected.method
-                    );
+                    panic!("Expected Spark HTLC details for {}", expected.id);
                 }
             }
             Some(ExpectedPaymentDetails::Lightning {
@@ -773,38 +864,38 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
                     ..
                 }) = &payment.details
                 {
-                    assert_eq!(h, payment_hash, "Lightning payment_hash mismatch");
-                    assert_eq!(p, preimage, "Lightning preimage mismatch");
-                } else {
-                    panic!(
-                        "Expected Lightning details for {} {} payment",
-                        expected.payment_type, expected.method
+                    assert_eq!(
+                        h, payment_hash,
+                        "Lightning payment_hash mismatch for {}",
+                        expected.id
                     );
+                    assert_eq!(
+                        p, preimage,
+                        "Lightning preimage mismatch for {}",
+                        expected.id
+                    );
+                } else {
+                    panic!("Expected Lightning details for {}", expected.id);
                 }
             }
             Some(ExpectedPaymentDetails::OnChain { tx_id }) => match &payment.details {
                 Some(PaymentDetails::Deposit { tx_id: t })
                 | Some(PaymentDetails::Withdraw { tx_id: t }) => {
-                    assert_eq!(t, tx_id, "OnChain tx_id mismatch");
+                    assert_eq!(t, tx_id, "OnChain tx_id mismatch for {}", expected.id);
                 }
                 _ => {
-                    panic!(
-                        "Expected OnChain details for {} {} payment",
-                        expected.payment_type, expected.method
-                    );
+                    panic!("Expected OnChain details for {}", expected.id);
                 }
             },
             Some(ExpectedPaymentDetails::Token { token_identifier }) => {
                 if let Some(PaymentDetails::Token { metadata, .. }) = &payment.details {
                     assert_eq!(
                         &metadata.identifier, token_identifier,
-                        "Token identifier mismatch"
+                        "Token identifier mismatch for {}",
+                        expected.id
                     );
                 } else {
-                    panic!(
-                        "Expected Token details for {} {} payment",
-                        expected.payment_type, expected.method
-                    );
+                    panic!("Expected Token details for {}", expected.id);
                 }
             }
             None => {
