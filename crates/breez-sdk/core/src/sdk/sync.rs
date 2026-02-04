@@ -208,10 +208,13 @@ impl BreezSdk {
             return;
         }
 
-        // Let's check whether the lnurl receive metadata was already synced, then return early
+        // Let's check whether the lnurl receive metadata was already synced, then return early.
+        // Important: Only return early if metadata is actually present (Some), otherwise we need
+        // to trigger a sync. This prevents a race condition where the payment is in storage but
+        // metadata sync from TransferClaimStarting hasn't completed yet.
         if let Ok(db_payment) = self.storage.get_payment_by_id(payment.id.clone()).await
             && let Some(PaymentDetails::Lightning {
-                lnurl_receive_metadata: db_lnurl_receive_metadata,
+                lnurl_receive_metadata: db_lnurl_receive_metadata @ Some(_),
                 ..
             }) = db_payment.details
         {
