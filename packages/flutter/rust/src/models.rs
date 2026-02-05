@@ -1105,3 +1105,12 @@ pub struct _FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }
+
+// Seedless restore types
+pub use breez_sdk_spark::seedless_restore::*;
+
+#[frb(mirror(NostrRelayConfig))]
+pub struct _NostrRelayConfig {
+    pub breez_api_key: Option<String>,
+    pub timeout_secs: u32,
+}

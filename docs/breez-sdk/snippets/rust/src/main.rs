@@ -9,15 +9,15 @@ mod lnurl_auth;
 mod lnurl_pay;
 mod lnurl_withdraw;
 mod messages;
+mod optimize;
 mod parsing_inputs;
 mod receive_payment;
 mod refunding_payments;
 mod sdk_building;
+mod seedless_restore;
 mod send_payment;
 mod tokens;
 mod user_settings;
-mod optimize;
-mod external_signer;
 
 use anyhow::Result;
 

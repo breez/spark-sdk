@@ -1,8 +1,10 @@
 mod command;
 mod persist;
+mod seedless_restore;
 
-use crate::command::CliHelper;
-use crate::persist::CliPersistence;
+use std::fs;
+use std::path::PathBuf;
+
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkEvent, Seed, create_postgres_storage, default_config,
@@ -13,8 +15,11 @@ use command::{Command, execute_command};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::hint::HistoryHinter;
-use std::{fs, path::PathBuf};
 use tracing::{error, info};
+
+use crate::command::CliHelper;
+use crate::persist::CliPersistence;
+use crate::seedless_restore::{SeedlessConfig, SeedlessProvider};
 
 #[derive(Parser)]
 #[command(version, about = "CLI client for Breez SDK with Spark", long_about = None)]
@@ -35,6 +40,18 @@ struct Cli {
     /// `PostgreSQL` connection string (enables `PostgreSQL` storage instead of `SQLite`)
     #[arg(long)]
     postgres_connection_string: Option<String>,
+
+    #[arg(long, value_name = "PROVIDER")]
+    /// Use seedless restore with `file`, `yubikey`, or `fido2` provider
+    seedless: Option<SeedlessProvider>,
+
+    /// A specific salt to restore with (if omitted, lists available salts from Nostr)
+    #[arg(long, requires = "seedless")]
+    seedless_salt: Option<String>,
+
+    /// Relying party ID for FIDO2 provider (default: keys.breez.technology)
+    #[arg(long, requires = "seedless")]
+    seedless_rpid: Option<String>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -81,11 +98,13 @@ impl EventListener for CliEventListener {
     }
 }
 
+#[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
 async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
+    seedless: Option<SeedlessConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -102,7 +121,6 @@ async fn run_interactive_mode(
         info!("No history found");
     }
 
-    let mnemonic = persistence.get_or_create_mnemonic()?;
     fs::create_dir_all(&data_dir)?;
 
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
@@ -110,9 +128,18 @@ async fn run_interactive_mode(
     let mut config = default_config(network);
     config.api_key = breez_api_key;
 
-    let seed = Seed::Mnemonic {
-        mnemonic: mnemonic.to_string(),
-        passphrase: None,
+    let seed = if let Some(config) = seedless {
+        let prf = config
+            .provider
+            .into_provider(&data_dir, config.rpid)
+            .map_err(|e| anyhow!("PRF initialization failed: {e}"))?;
+        seedless_restore::resolve_seedless_seed(prf, config.salt).await?
+    } else {
+        let mnemonic = persistence.get_or_create_mnemonic()?;
+        Seed::Mnemonic {
+            mnemonic: mnemonic.to_string(),
+            passphrase: None,
+        }
     };
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
@@ -212,11 +239,18 @@ async fn main() -> Result<(), anyhow::Error> {
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
 
+    let seedless = cli.seedless.map(|provider| SeedlessConfig {
+        provider,
+        salt: cli.seedless_salt,
+        rpid: cli.seedless_rpid,
+    });
+
     Box::pin(run_interactive_mode(
         data_dir,
         network,
         cli.account_number,
         cli.postgres_connection_string,
+        seedless,
     ))
     .await?;
 

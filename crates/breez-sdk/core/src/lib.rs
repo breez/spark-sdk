@@ -13,6 +13,7 @@ mod persist;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
+pub mod seedless_restore;
 pub mod signer;
 mod sync;
 pub mod token_conversion;
