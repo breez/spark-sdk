@@ -13,7 +13,7 @@ use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
     PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest, sanitize_username,validate_and_sanitize_username,
+    UnregisterLnurlPayRequest,validate_and_sanitize_username,
 };
 use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard, key::Keys};
 
