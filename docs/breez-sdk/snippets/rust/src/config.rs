@@ -48,3 +48,13 @@ pub(crate) fn configure_optimization_configuration() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_no_invoice_paid_support() -> Result<()> {
+    // ANCHOR: no-invoice-paid-support
+    // Disable invoice paid notifications to LNURL server
+    let mut config = default_config(Network::Mainnet);
+    config.no_invoice_paid_support = true;
+    // ANCHOR_END: no-invoice-paid-support
+    info!("Config: {:?}", config);
+    Ok(())
+}

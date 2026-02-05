@@ -45,3 +45,12 @@ Future<void> configureOptimizationConfiguration() async {
   // ANCHOR_END: optimization-configuration
   print(config);
 }
+
+Future<void> configureNoInvoicePaidSupport() async {
+  // ANCHOR: no-invoice-paid-support
+  // Disable invoice paid notifications to LNURL server
+  var config = defaultConfig(network: Network.mainnet)
+      .copyWith(noInvoicePaidSupport: true);
+  // ANCHOR_END: no-invoice-paid-support
+  print(config);
+}
