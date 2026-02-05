@@ -7,16 +7,36 @@ use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
 use breez_sdk_spark::seedless_restore::{PasskeyPrfError, PasskeyPrfProvider, SeedlessRestore};
 
+#[cfg(feature = "fido2")]
+pub mod fido2_prf;
 pub mod file_prf;
 pub mod yubikey_prf;
 
+#[cfg(feature = "fido2")]
+use fido2_prf::Fido2PrfProvider;
 use file_prf::FilePrfProvider;
 use yubikey_prf::YubiKeyPrfProvider;
 
+/// Seedless restore provider type.
 #[derive(Clone)]
 pub enum SeedlessProvider {
     File,
     YubiKey,
+    /// FIDO2/WebAuthn PRF using CTAP2 hmac-secret extension.
+    /// Compatible with browser `WebAuthn` PRF for cross-platform seed derivation.
+    #[cfg(feature = "fido2")]
+    Fido2,
+}
+
+/// Configuration for seedless restore.
+#[derive(Clone)]
+pub struct SeedlessConfig {
+    /// The PRF provider to use.
+    pub provider: SeedlessProvider,
+    /// Optional salt for seed derivation. If omitted, lists available salts from Nostr.
+    pub salt: Option<String>,
+    /// Optional relying party ID for FIDO2 provider (default: keys.breez.technology).
+    pub rpid: Option<String>,
 }
 
 impl std::str::FromStr for SeedlessProvider {
@@ -26,19 +46,32 @@ impl std::str::FromStr for SeedlessProvider {
         Ok(match s.to_lowercase().as_str() {
             "file" => SeedlessProvider::File,
             "yubikey" => SeedlessProvider::YubiKey,
+            #[cfg(feature = "fido2")]
+            "fido2" => SeedlessProvider::Fido2,
+            #[cfg(not(feature = "fido2"))]
+            "fido2" => {
+                return Err(
+                    "fido2 provider requires the 'fido2' feature (cargo run --features fido2)"
+                        .to_string(),
+                );
+            }
             _ => return Err(format!("invalid seedless provider '{s}'")),
         })
     }
 }
 
 impl SeedlessProvider {
+    #[allow(unused_variables, clippy::needless_pass_by_value)]
     pub fn into_provider(
         self,
         data_dir: &PathBuf,
+        fido2_rp_id: Option<String>,
     ) -> Result<Arc<dyn PasskeyPrfProvider>, PasskeyPrfError> {
         match self {
             SeedlessProvider::File => Ok(Arc::new(FilePrfProvider::new(data_dir)?)),
             SeedlessProvider::YubiKey => Ok(Arc::new(YubiKeyPrfProvider::new()?)),
+            #[cfg(feature = "fido2")]
+            SeedlessProvider::Fido2 => Ok(Arc::new(Fido2PrfProvider::new(fido2_rp_id))),
         }
     }
 }
