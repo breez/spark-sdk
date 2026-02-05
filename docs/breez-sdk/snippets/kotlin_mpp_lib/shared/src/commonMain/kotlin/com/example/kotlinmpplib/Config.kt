@@ -41,4 +41,13 @@ class Config {
         // ANCHOR_END: optimization-configuration
         println("Config: $config")
     }
+
+    fun configureNoInvoicePaidSupport() {
+        // ANCHOR: no-invoice-paid-support
+        // Disable invoice paid notifications to LNURL server
+        val config = defaultConfig(Network.MAINNET)
+        config.noInvoicePaidSupport = true
+        // ANCHOR_END: no-invoice-paid-support
+        println("Config: $config")
+    }
 }
