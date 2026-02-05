@@ -575,11 +575,10 @@ impl BreezSdk {
                 PayAmount::Bitcoin { amount_sats } => {
                     // Create a reservation for the expected sats from conversion.
                     // This prevents auto-convert from converting these sats back to tokens.
-                    let reservation_guard = match &self.stable_balance {
-                        Some(sb) => Some(sb.create_reservation(*amount_sats)),
-                        None => None,
-                    };
-
+                    let reservation_guard = self
+                        .stable_balance
+                        .as_ref()
+                        .map(|sb| sb.create_reservation(*amount_sats));
                     (u128::from(*amount_sats), None, reservation_guard)
                 }
                 PayAmount::Token {
