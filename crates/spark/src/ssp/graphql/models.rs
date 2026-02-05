@@ -116,40 +116,92 @@ pub enum CurrencyUnit {
     Eur,
     Gbp,
     Inr,
+    Brl,
+    Cad,
+    Dkk,
+    Hkd,
+    Idr,
+    Myr,
+    Sgd,
+    Thb,
+    Vnd,
+    Ngn,
+    Zar,
+    Kes,
+    Tzs,
+    Ugx,
+    Bwp,
+    Xof,
+    Xaf,
+    Mwk,
+    Rwf,
+    Zmw,
+    Aed,
     Usdt,
+    Usdc,
     #[serde(other, skip_serializing)]
     Unknown,
 }
 
 /// Coop exit request status enum
+#[allow(deprecated)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkCoopExitRequestStatus {
     Initiated,
+    CompleteRequestReceived,
     InboundTransferChecked,
-    TxSigned,
     TxBroadcasted,
-    WaitingOnTxConfirmations,
+    OnChainTxConfirmed,
+    InboundTransferClaimingFailed,
     Succeeded,
+    ExpiringScheduled,
+    ExpiringFailed,
     Expired,
+    FailingScheduled,
+    FailingFailed,
     Failed,
+    #[deprecated(note = "No more needed")]
+    TxSigned,
+    #[deprecated(note = "No more needed")]
+    WaitingOnTxConfirmations,
+    #[deprecated(note = "No more needed")]
+    InboundTransferClaimingScheduled,
     #[serde(other, skip_serializing)]
     Unknown,
 }
 
 /// Leaves swap request status enum
+#[allow(deprecated)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkLeavesSwapRequestStatus {
     Created,
-    Initiated,
-    LeavesLocked,
-    RefundTxAdaptorSigned,
-    InboundTransferClaimed,
     InboundTransferVerified,
+    InboundTransferVerifyingFailed,
+    OutboundTransferSent,
+    OutboundTransferSendingFailed,
+    TransfersCompletingScheduled,
+    OutboundTransferCompleted,
+    OutboundTransferCompletingFailed,
+    InboundTransferClaimingFailed,
+    RequestFailingFromVerifyingScheduled,
+    RequestFailingFromSendingScheduled,
+    RequestFailingFromVerifyingFailed,
+    RequestFailingFromSendingFailed,
     Succeeded,
-    Expired,
+    #[deprecated(note = "No more needed")]
     Failed,
+    #[deprecated(note = "No more needed")]
+    Initiated,
+    #[deprecated(note = "No more needed")]
+    Expired,
+    #[deprecated(note = "No more needed")]
+    LeavesLocked,
+    #[deprecated(note = "Adaptor is not needed in signing")]
+    RefundTxAdaptorSigned,
+    #[deprecated(note = "No more needed")]
+    InboundTransferClaimed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
