@@ -1140,6 +1140,7 @@ impl BreezSdk {
         info!("Polling lightning send payment {}", payment_id);
 
         let spark_wallet = self.spark_wallet.clone();
+        let storage = self.storage.clone();
         let sync_trigger = self.sync_trigger.clone();
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
@@ -1162,6 +1163,11 @@ impl BreezSdk {
                             info!("Polling payment status = {} {:?}", payment.status, p.status);
                             if payment.status != PaymentStatus::Pending {
                                 info!("Polling payment completed status = {}", payment.status);
+                                // Update storage before emitting event so that
+                                // get_payment returns the correct status immediately.
+                                if let Err(e) = storage.insert_payment(payment.clone()).await {
+                                    error!("Failed to update payment in storage: {e:?}");
+                                }
                                 event_emitter.emit(&SdkEvent::from_payment(payment.clone())).await;
                                 if let Err(e) = sync_trigger.send(SyncRequest::no_reply(SyncType::WalletState)) {
                                     error!("Failed to send sync trigger: {e:?}");
