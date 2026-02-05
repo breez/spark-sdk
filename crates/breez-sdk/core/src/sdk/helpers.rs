@@ -11,7 +11,7 @@ use breez_sdk_common::lnurl::{
     error::LnurlError,
     pay::{AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed},
 };
-use lnurl_models::sanitize_username;
+use lnurl_models::validate_and_sanitize_username;
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
@@ -204,27 +204,6 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
-pub(crate) fn validate_and_sanitize_username(username: &str) -> Result<String, SdkError> {
-    let sanitized = sanitize_username(username);
-
-    if sanitized.is_empty() {
-        return Err(SdkError::Generic("Username cannot be empty".to_string()));
-    }
-
-    if sanitized.len() > 64 {
-        return Err(SdkError::Generic(
-            "Username must be 64 characters or less".to_string(),
-        ));
-    }
-
-    if !sanitized
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || ['-', '_', '.'].contains(&c))
-    {
-        return Err(SdkError::Generic(
-            "Username can only contain lowercase letters, numbers, hyphens, underscores, and periods".to_string(),
-        ));
-    }
-
-    Ok(sanitized)
+pub(crate) fn validate_and_sanitize_username_for_sdk(username: &str) -> Result<String, SdkError> {
+    validate_and_sanitize_username(username).map_err(SdkError::InvalidInput)
 }

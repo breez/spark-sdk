@@ -84,3 +84,26 @@ pub struct PublishZapReceiptResponse {
 pub fn sanitize_username(username: &str) -> String {
     username.trim().to_lowercase()
 }
+
+pub fn validate_and_sanitize_username(username: &str) -> Result<String, String> {
+    let sanitized = sanitize_username(username);
+
+    if sanitized.is_empty() {
+        return Err("Username cannot be empty".to_string());
+    }
+
+    if sanitized.len() > 64 {
+        return Err("Username must be 64 characters or less".to_string());
+    }
+
+    if !sanitized
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || ['-', '_', '.'].contains(&c))
+    {
+        return Err(
+        "Username can only contain lowercase letters, numbers, hyphens, underscores, and periods".to_string(),
+    );
+    }
+
+    Ok(sanitized)
+}
