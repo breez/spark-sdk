@@ -30,6 +30,12 @@ type ClaimStaticDeposit implements UserRequest & Entity {
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
 
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
+
+  """The amount originally requested to be deposited."""
+  deposit_amount: CurrencyAmount!
+
   """The amount of credit to be added to the user's balance."""
   credit_amount: CurrencyAmount!
 
@@ -50,6 +56,9 @@ type ClaimStaticDeposit implements UserRequest & Entity {
 
   """The id of the transfer."""
   transfer_spark_id: UUID
+
+  """Static deposit address."""
+  static_deposit_address: String
 }
 
 input ClaimStaticDepositFixedAmountInput {
@@ -105,12 +114,39 @@ enum ClaimStaticDepositRequestType {
 }
 
 enum ClaimStaticDepositStatus {
+  """
+  Initial status when the claim request is created in the database. Validation has passed and the spend transaction is prepared.
+  """
   CREATED
+
+  """
+  Spark leaves have been locked and an outbound transfer record created. The SSP is preparing to give the user Spark balance in exchange for the UTXO.
+  """
   TRANSFER_CREATED
+
+  """
+  Failed to lock leaves or create the transfer record. This typically happens due to insufficient SSP liquidity.
+  """
   TRANSFER_CREATION_FAILED
+
+  """
+  The Spark leaves transfer to the user has been completed successfully. The user can now claim the balance. UTXO swap was finalized with the Signing Operator.
+  """
   TRANSFER_COMPLETED
+
+  """
+  Failed during UTXO swap initiation with the Signing Operator (SO). The leaves are unlocked and the request is marked as failed.
+  """
   UTXO_SWAPPING_FAILED
+
+  """
+  The L1 spend transaction has been signed (FROST aggregation completed) and is ready to be broadcast to the Bitcoin network.
+  """
   SPEND_TX_CREATED
+
+  """
+  The L1 spend transaction has been broadcast to the Bitcoin network. This is the final successful state - the UTXO has been spent to the SSP.
+  """
   SPEND_TX_BROADCAST
 }
 
@@ -144,11 +180,11 @@ type CompleteSeedReleaseOutput {
   seed: String!
 }
 
-input CompleteSwapInput {
-  user_outbound_transfer_external_id: UUID!
+input CompleteStuckLeavesSwapInput {
+  swap_request_id: UUID!
 }
 
-type CompleteSwapOutput {
+type CompleteStuckLeavesSwapOutput {
   request: LeavesSwapRequest!
 }
 
@@ -258,10 +294,16 @@ type CoopExitRequest implements UserRequest & Entity {
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
 
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
+
   """
   The fee user pays for the coop exit not including the L1 broadcast fee.
   """
   fee: CurrencyAmount!
+
+  """The bitcoin address where user would like to coop exit to."""
+  withdrawal_address: String
 
   """The L1 broadcast fee user pays for the coop exit."""
   l1_broadcast_fee: CurrencyAmount!
@@ -355,8 +397,74 @@ enum CurrencyUnit {
   """Indian Rupee."""
   INR
 
+  """Brazilian Real."""
+  BRL
+
+  """Canadian Dollar."""
+  CAD
+
+  """Danish Krone."""
+  DKK
+
+  """Hong Kong Dollar."""
+  HKD
+
+  """Indonesian Rupiah."""
+  IDR
+
+  """Malaysian Ringgit."""
+  MYR
+
+  """Singapore Dollar."""
+  SGD
+
+  """Thai Baht."""
+  THB
+
+  """Vietnamese Dong."""
+  VND
+
+  """Nigerian Naira."""
+  NGN
+
+  """South African Rand."""
+  ZAR
+
+  """Kenyan Shilling."""
+  KES
+
+  """Tanzanian Shilling."""
+  TZS
+
+  """Ugandan Shilling."""
+  UGX
+
+  """Botswana Pula."""
+  BWP
+
+  """West African CFA Franc."""
+  XOF
+
+  """Central African CFA Franc."""
+  XAF
+
+  """Malawian Kwacha."""
+  MWK
+
+  """Rwandan Franc."""
+  RWF
+
+  """Zambian Kwacha."""
+  ZMW
+
+  """United Arab Emirates Dirham."""
+  AED
+
   """Tether"""
   USDT
+
+  """USDC"""
+  USDC
 
   """
   0.000000001 (10e-9) Bitcoin or a billionth of a Bitcoin. We recommend using the Satoshi unit instead when possible.
@@ -451,6 +559,9 @@ type LeavesSwapRequest implements UserRequest & Entity {
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
 
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
+
   """The status of the request for Spark users."""
   status: SparkLeavesSwapRequestStatus!
 
@@ -490,6 +601,9 @@ type LightningReceiveRequest implements UserRequest & Entity {
 
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
+
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
 
   """The lightning invoice generated to receive lightning payment."""
   invoice: Invoice!
@@ -553,6 +667,9 @@ type LightningSendRequest implements UserRequest & Entity {
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
 
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
+
   """The lightning invoice user requested to pay."""
   encoded_invoice: String!
 
@@ -560,7 +677,7 @@ type LightningSendRequest implements UserRequest & Entity {
   fee: CurrencyAmount!
 
   """The idempotency key of the request."""
-  idempotency_key: String
+  idempotency_key: String!
 
   """The status of the request."""
   status: LightningSendRequestStatus!
@@ -604,8 +721,8 @@ type Mutation {
   """For spark users to complete a leaves swap."""
   complete_leaves_swap(input: CompleteLeavesSwapInput!): CompleteLeavesSwapOutput!
 
-  """For spark users to complete a swap."""
-  complete_swap(input: CompleteSwapInput!): CompleteSwapOutput!
+  """For spark users to complete a stuck leaves swap."""
+  complete_stuck_leaves_swap(input: CompleteStuckLeavesSwapInput!): CompleteStuckLeavesSwapOutput!
 
   """Complete the process to request releasing seed."""
   complete_seed_release(input: CompleteSeedReleaseInput!): CompleteSeedReleaseOutput!
@@ -786,6 +903,11 @@ input RequestLightningReceiveInput {
   The h tag of the invoice. This is the hash of a longer description to include in the lightning invoice. It is used in LNURL and UMA as the hash of the metadata. This field is mutually exclusive with the memo field. Only one or the other should be provided.
   """
   description_hash: Hash32 = null
+
+  """
+  The spark invoice to embed in the routing hints of the Bolt 11 lightning invoice. Spark-aware wallets can use this field to preferentially pay over spark if they find a spark invoice in the routing hints. This is mutually exclusive with include_spark_address.
+  """
+  spark_invoice: String = null
 }
 
 type RequestLightningReceiveOutput {
@@ -836,25 +958,44 @@ type RequestSwapOutput {
 
 enum SparkCoopExitRequestStatus {
   INITIATED
+  COMPLETE_REQUEST_RECEIVED
   INBOUND_TRANSFER_CHECKED
-  TX_SIGNED
   TX_BROADCASTED
-  WAITING_ON_TX_CONFIRMATIONS
+  ON_CHAIN_TX_CONFIRMED
+  INBOUND_TRANSFER_CLAIMING_FAILED
   SUCCEEDED
+  EXPIRING_SCHEDULED
+  EXPIRING_FAILED
   EXPIRED
+  FAILING_SCHEDULED
+  FAILING_FAILED
   FAILED
+  TX_SIGNED @deprecated(reason: "No more needed")
+  WAITING_ON_TX_CONFIRMATIONS @deprecated(reason: "No more needed")
+  INBOUND_TRANSFER_CLAIMING_SCHEDULED @deprecated(reason: "No more needed")
 }
 
 enum SparkLeavesSwapRequestStatus {
   CREATED
-  INITIATED
-  LEAVES_LOCKED @deprecated(reason: "No more needed")
   INBOUND_TRANSFER_VERIFIED
-  INBOUND_TRANSFER_CLAIMED
-  REFUND_TX_ADAPTOR_SIGNED @deprecated(reason: "Adaptor is not needed in signing")
+  INBOUND_TRANSFER_VERIFYING_FAILED
+  OUTBOUND_TRANSFER_SENT
+  OUTBOUND_TRANSFER_SENDING_FAILED
+  TRANSFERS_COMPLETING_SCHEDULED
+  OUTBOUND_TRANSFER_COMPLETED
+  OUTBOUND_TRANSFER_COMPLETING_FAILED
+  INBOUND_TRANSFER_CLAIMING_FAILED
+  REQUEST_FAILING_FROM_VERIFYING_SCHEDULED
+  REQUEST_FAILING_FROM_SENDING_SCHEDULED
+  REQUEST_FAILING_FROM_VERIFYING_FAILED
+  REQUEST_FAILING_FROM_SENDING_FAILED
   SUCCEEDED
-  EXPIRED
-  FAILED
+  FAILED @deprecated(reason: "No more needed")
+  INITIATED @deprecated(reason: "No more needed")
+  EXPIRED @deprecated(reason: "No more needed")
+  LEAVES_LOCKED @deprecated(reason: "No more needed")
+  REFUND_TX_ADAPTOR_SIGNED @deprecated(reason: "Adaptor is not needed in signing")
+  INBOUND_TRANSFER_CLAIMED @deprecated(reason: "No more needed")
 }
 
 type SparkTransferToLeavesConnection implements Connection {
@@ -948,6 +1089,9 @@ type StaticDepositQuote implements Entity {
   """The output index of the deposit."""
   output_index: Int!
 
+  """The amount originally requested to be deposited."""
+  deposit_amount: CurrencyAmount!
+
   """The amount of credit to be added to the user's balance."""
   credit_amount: CurrencyAmount!
 
@@ -1035,6 +1179,9 @@ interface UserRequest implements Entity {
 
   """The network the lightning send request is on."""
   network: BitcoinNetwork!
+
+  """A computed version of the status of this user request."""
+  request_status: SparkUserRequestStatus
 }
 
 input VerifyChallengeInput {

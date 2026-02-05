@@ -116,7 +116,29 @@ pub enum CurrencyUnit {
     Eur,
     Gbp,
     Inr,
+    Brl,
+    Cad,
+    Dkk,
+    Hkd,
+    Idr,
+    Myr,
+    Sgd,
+    Thb,
+    Vnd,
+    Ngn,
+    Zar,
+    Kes,
+    Tzs,
+    Ugx,
+    Bwp,
+    Xof,
+    Xaf,
+    Mwk,
+    Rwf,
+    Zmw,
+    Aed,
     Usdt,
+    Usdc,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -126,12 +148,17 @@ pub enum CurrencyUnit {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkCoopExitRequestStatus {
     Initiated,
+    CompleteRequestReceived,
     InboundTransferChecked,
-    TxSigned,
     TxBroadcasted,
-    WaitingOnTxConfirmations,
+    OnChainTxConfirmed,
+    InboundTransferClaimingFailed,
     Succeeded,
+    ExpiringScheduled,
+    ExpiringFailed,
     Expired,
+    FailingScheduled,
+    FailingFailed,
     Failed,
     #[serde(other, skip_serializing)]
     Unknown,
@@ -142,14 +169,19 @@ pub enum SparkCoopExitRequestStatus {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkLeavesSwapRequestStatus {
     Created,
-    Initiated,
-    LeavesLocked,
-    RefundTxAdaptorSigned,
-    InboundTransferClaimed,
     InboundTransferVerified,
+    InboundTransferVerifyingFailed,
+    OutboundTransferSent,
+    OutboundTransferSendingFailed,
+    TransfersCompletingScheduled,
+    OutboundTransferCompleted,
+    OutboundTransferCompletingFailed,
+    InboundTransferClaimingFailed,
+    RequestFailingFromVerifyingScheduled,
+    RequestFailingFromSendingScheduled,
+    RequestFailingFromVerifyingFailed,
+    RequestFailingFromSendingFailed,
     Succeeded,
-    Expired,
-    Failed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -360,15 +392,6 @@ impl SspUserRequest {
             _ => None,
         }
     }
-
-    pub fn get_total_fees_sats(&self) -> u64 {
-        match self {
-            SspUserRequest::LightningSendRequest(request) => request.fee.as_sats().unwrap_or(0),
-            SspUserRequest::CoopExitRequest(request) => request.get_total_fees_sats(),
-            SspUserRequest::ClaimStaticDeposit(request) => request.get_total_fees_sats(),
-            _ => 0,
-        }
-    }
 }
 
 #[macros::derive_from(TransfersClaimStaticDepositFragment)]
@@ -378,6 +401,7 @@ pub struct ClaimStaticDepositInfo {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub network: BitcoinNetwork,
+    pub deposit_amount: CurrencyAmount,
     pub deposit_status: ClaimStaticDepositStatus,
     pub credit_amount: CurrencyAmount,
     pub max_fee: CurrencyAmount,
@@ -385,12 +409,6 @@ pub struct ClaimStaticDepositInfo {
     pub output_index: i64,
     pub bitcoin_network: BitcoinNetwork,
     pub transfer_spark_id: Option<String>,
-}
-
-impl ClaimStaticDepositInfo {
-    pub fn get_total_fees_sats(&self) -> u64 {
-        self.max_fee.as_sats().unwrap_or(0)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
@@ -462,7 +480,7 @@ pub struct LightningSendRequest {
     pub network: BitcoinNetwork,
     pub encoded_invoice: String,
     pub fee: CurrencyAmount,
-    pub idempotency_key: Option<String>,
+    pub idempotency_key: String,
     pub status: LightningSendRequestStatus,
     pub transfer: Option<Transfer>,
     pub lightning_send_payment_preimage: Option<String>,
@@ -518,15 +536,6 @@ pub struct CoopExitRequest {
     pub raw_coop_exit_transaction: String,
     pub coop_exit_txid: String,
     pub transfer: Option<Transfer>,
-}
-
-impl CoopExitRequest {
-    pub fn get_total_fees_sats(&self) -> u64 {
-        self.fee
-            .as_sats()
-            .unwrap_or(0)
-            .saturating_add(self.l1_broadcast_fee.as_sats().unwrap_or(0))
-    }
 }
 
 /// CoopExitFeeQuote structure

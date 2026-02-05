@@ -181,7 +181,11 @@ impl TryFrom<WalletTransfer> for Payment {
                     (fee_sat, transfer.total_value_sat.saturating_sub(fee_sat))
                 }
                 SspUserRequest::ClaimStaticDeposit(r) => {
-                    let fee_sat = r.max_fee.as_sats().unwrap_or(0);
+                    let fee_sat = r
+                        .deposit_amount
+                        .as_sats()
+                        .unwrap_or(0)
+                        .saturating_sub(r.credit_amount.as_sats().unwrap_or(0));
                     (fee_sat, transfer.total_value_sat)
                 }
                 _ => (0, transfer.total_value_sat),
