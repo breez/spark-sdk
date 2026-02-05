@@ -1114,3 +1114,17 @@ pub struct _FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }
+
+#[frb(mirror(ServiceStatus))]
+pub enum _ServiceStatus {
+    Operational,
+    Degraded,
+    Partial,
+    Major,
+}
+
+#[frb(mirror(SparkStatus))]
+pub struct _SparkStatus {
+    pub status: ServiceStatus,
+    pub last_updated: u64,
+}

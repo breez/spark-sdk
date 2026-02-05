@@ -1235,3 +1235,17 @@ pub struct FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ServiceStatus)]
+pub enum ServiceStatus {
+    Operational,
+    Degraded,
+    Partial,
+    Major,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkStatus)]
+pub struct SparkStatus {
+    pub status: ServiceStatus,
+    pub last_updated: u64,
+}

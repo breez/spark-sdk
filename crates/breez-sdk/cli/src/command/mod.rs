@@ -282,6 +282,9 @@ pub enum Command {
         spark_private_mode_enabled: Option<bool>,
     },
 
+    /// Get the status of the Spark network services
+    GetSparkStatus,
+
     /// Issuer related commands
     #[command(subcommand)]
     Issuer(IssuerCommand),
@@ -808,6 +811,11 @@ pub(crate) async fn execute_command(
                 spark_private_mode_enabled,
             })
             .await?;
+            Ok(true)
+        }
+        Command::GetSparkStatus => {
+            let res = breez_sdk_spark::get_spark_status().await?;
+            print_value(&res)?;
             Ok(true)
         }
         Command::Issuer(issuer_command) => {
