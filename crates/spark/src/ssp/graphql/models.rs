@@ -144,7 +144,6 @@ pub enum CurrencyUnit {
 }
 
 /// Coop exit request status enum
-#[allow(deprecated)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkCoopExitRequestStatus {
@@ -161,18 +160,11 @@ pub enum SparkCoopExitRequestStatus {
     FailingScheduled,
     FailingFailed,
     Failed,
-    #[deprecated(note = "No more needed")]
-    TxSigned,
-    #[deprecated(note = "No more needed")]
-    WaitingOnTxConfirmations,
-    #[deprecated(note = "No more needed")]
-    InboundTransferClaimingScheduled,
     #[serde(other, skip_serializing)]
     Unknown,
 }
 
 /// Leaves swap request status enum
-#[allow(deprecated)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkLeavesSwapRequestStatus {
@@ -190,18 +182,6 @@ pub enum SparkLeavesSwapRequestStatus {
     RequestFailingFromVerifyingFailed,
     RequestFailingFromSendingFailed,
     Succeeded,
-    #[deprecated(note = "No more needed")]
-    Failed,
-    #[deprecated(note = "No more needed")]
-    Initiated,
-    #[deprecated(note = "No more needed")]
-    Expired,
-    #[deprecated(note = "No more needed")]
-    LeavesLocked,
-    #[deprecated(note = "Adaptor is not needed in signing")]
-    RefundTxAdaptorSigned,
-    #[deprecated(note = "No more needed")]
-    InboundTransferClaimed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
