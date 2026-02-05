@@ -1,4 +1,6 @@
+mod buying_bitcoin;
 mod config;
+mod external_signer;
 mod fiat_currencies;
 mod getting_started;
 mod htlcs;
@@ -17,7 +19,6 @@ mod sdk_building;
 mod send_payment;
 mod tokens;
 mod user_settings;
-mod external_signer;
 
 use anyhow::Result;
 

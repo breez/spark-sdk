@@ -9,7 +9,6 @@ pub trait BuyBitcoinProviderApi: Send + Sync {
         &self,
         address: String,
         locked_amount_sat: Option<u64>,
-        max_amount_sat: Option<u64>,
         redirect_url: Option<String>,
     ) -> Result<String>;
 }
