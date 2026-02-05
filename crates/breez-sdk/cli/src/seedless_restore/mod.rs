@@ -7,10 +7,12 @@ use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
 use breez_sdk_spark::seedless_restore::{PasskeyPrfError, PasskeyPrfProvider, SeedlessRestore};
 
+#[cfg(feature = "fido2")]
 pub mod fido2_prf;
 pub mod file_prf;
 pub mod yubikey_prf;
 
+#[cfg(feature = "fido2")]
 use fido2_prf::Fido2PrfProvider;
 use file_prf::FilePrfProvider;
 use yubikey_prf::YubiKeyPrfProvider;
@@ -22,6 +24,7 @@ pub enum SeedlessProvider {
     YubiKey,
     /// FIDO2/WebAuthn PRF using CTAP2 hmac-secret extension.
     /// Compatible with browser `WebAuthn` PRF for cross-platform seed derivation.
+    #[cfg(feature = "fido2")]
     Fido2,
 }
 
@@ -43,13 +46,22 @@ impl std::str::FromStr for SeedlessProvider {
         Ok(match s.to_lowercase().as_str() {
             "file" => SeedlessProvider::File,
             "yubikey" => SeedlessProvider::YubiKey,
+            #[cfg(feature = "fido2")]
             "fido2" => SeedlessProvider::Fido2,
+            #[cfg(not(feature = "fido2"))]
+            "fido2" => {
+                return Err(
+                    "fido2 provider requires the 'fido2' feature (cargo run --features fido2)"
+                        .to_string(),
+                );
+            }
             _ => return Err(format!("invalid seedless provider '{s}'")),
         })
     }
 }
 
 impl SeedlessProvider {
+    #[allow(unused_variables, clippy::needless_pass_by_value)]
     pub fn into_provider(
         self,
         data_dir: &PathBuf,
@@ -58,6 +70,7 @@ impl SeedlessProvider {
         match self {
             SeedlessProvider::File => Ok(Arc::new(FilePrfProvider::new(data_dir)?)),
             SeedlessProvider::YubiKey => Ok(Arc::new(YubiKeyPrfProvider::new()?)),
+            #[cfg(feature = "fido2")]
             SeedlessProvider::Fido2 => Ok(Arc::new(Fido2PrfProvider::new(fido2_rp_id))),
         }
     }

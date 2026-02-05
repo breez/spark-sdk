@@ -65,20 +65,23 @@ cargo run -- --seedless yubikey
 
 Uses FIDO2/WebAuthn PRF via the CTAP2 hmac-secret extension. This is **compatible with browser-based passkeys** - the same credential can derive identical seeds in both CLI and browser when using the same relying party ID (rpId).
 
+> **Note**: The FIDO2 provider requires the `fido2` feature flag (uses `hidapi` which needs system HID libraries).
+
 ```bash
 # Create or restore with a salt (uses default rpId: keys.breez.technology)
-cargo run -- --seedless fido2 --seedless-salt mysalt
+cargo run --features fido2 -- --seedless fido2 --seedless-salt mysalt
 
 # Use custom rpId for compatibility with a specific web app
-cargo run -- --seedless fido2 --seedless-rpid localhost --seedless-salt mysalt
+cargo run --features fido2 -- --seedless fido2 --seedless-rpid localhost --seedless-salt mysalt
 
 # List and select from existing salts
-cargo run -- --seedless fido2
+cargo run --features fido2 -- --seedless fido2
 ```
 
 **Requirements:**
 - YubiKey 5 series with **firmware 5.2+** (supports hmac-secret extension)
 - Or any FIDO2 authenticator that supports the hmac-secret extension
+- System HID libraries (libhidapi on Linux, included on macOS/Windows)
 
 **PIN Configuration:**
 
@@ -89,10 +92,10 @@ The FIDO2 provider requires a PIN. You can provide it via:
 
 ```bash
 # Interactive (prompts for PIN)
-cargo run -- --seedless fido2 --seedless-salt mysalt
+cargo run --features fido2 -- --seedless fido2 --seedless-salt mysalt
 
 # Non-interactive via environment variable
-FIDO2_PIN=123456 cargo run -- --seedless fido2 --seedless-salt mysalt
+FIDO2_PIN=123456 cargo run --features fido2 -- --seedless fido2 --seedless-salt mysalt
 ```
 
 **Cross-platform compatibility:**
