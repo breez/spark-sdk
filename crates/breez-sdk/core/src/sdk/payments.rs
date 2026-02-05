@@ -21,7 +21,7 @@ use crate::{
         PrepareSendPaymentResponse, ReceivePaymentMethod, ReceivePaymentRequest,
         ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
     },
-    persist::{ObjectCacheRepository, PaymentMetadata, StaticDepositAddress},
+    persist::PaymentMetadata,
     token_conversion::DEFAULT_CONVERSION_TIMEOUT_SECS,
     utils::{
         send_payment_validation::validate_prepare_send_payment_request,
@@ -35,7 +35,7 @@ use web_time::SystemTime;
 
 use super::{
     BreezSdk, SyncRequest, SyncType,
-    helpers::{InternalEventListener, is_payment_match},
+    helpers::{InternalEventListener, get_or_create_deposit_address, is_payment_match},
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -86,40 +86,8 @@ impl BreezSdk {
                 })
             }
             ReceivePaymentMethod::BitcoinAddress => {
-                let object_repository = ObjectCacheRepository::new(self.storage.clone());
-
-                // First lookup in storage cache
-                let static_deposit_address =
-                    object_repository.fetch_static_deposit_address().await?;
-                if let Some(static_deposit_address) = static_deposit_address {
-                    return Ok(ReceivePaymentResponse {
-                        payment_request: static_deposit_address.address.clone(),
-                        fee: 0,
-                    });
-                }
-
-                // Then query existing addresses
-                let deposit_addresses = self
-                    .spark_wallet
-                    .list_static_deposit_addresses(None)
-                    .await?;
-
-                // In case there are no addresses, generate a new one and cache it
-                let address = match deposit_addresses.items.last() {
-                    Some(address) => address.to_string(),
-                    None => self
-                        .spark_wallet
-                        .generate_deposit_address(true)
-                        .await?
-                        .to_string(),
-                };
-
-                object_repository
-                    .save_static_deposit_address(&StaticDepositAddress {
-                        address: address.clone(),
-                    })
-                    .await?;
-
+                let address =
+                    get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?;
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee: 0,

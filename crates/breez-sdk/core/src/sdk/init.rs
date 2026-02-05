@@ -54,6 +54,7 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
+            buy_bitcoin_provider: params.buy_bitcoin_provider,
         };
 
         sdk.start(initial_synced_sender);
