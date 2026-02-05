@@ -207,8 +207,6 @@ impl TokenService {
             ],
         };
 
-        // TODO: ask for ordering field to be added to QueryTokenTransactionsRequest
-        //  until then, PagingFilter's order is not being respected
         let order: crate::operator::rpc::spark::Order = paging.order.into();
         let response = self
             .operator_pool
