@@ -11,9 +11,11 @@ bitcoin.workspace = true
 breez-sdk-spark = { workspace = true, features = ["postgres"] }
 challenge_response = "0.5"
 clap = { workspace = true, features = ["derive"] }
+ctap-hid-fido2 = "3.5"
 dirs.workspace = true
 hex.workspace = true
 rand.workspace = true
+rpassword = "7.3"
 rustyline = { workspace = true, features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
