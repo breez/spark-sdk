@@ -1,3 +1,15 @@
+use base64::Engine;
+use bitcoin::hashes::{Hash, sha256};
+use breez_sdk_common::lnurl::{
+    error::LnurlError,
+    pay::{AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed},
+};
+use spark_wallet::SparkWallet;
+use std::{str::FromStr, sync::Arc};
+use tokio::sync::mpsc;
+use tracing::{error, info};
+use x509_parser::parse_x509_certificate;
+
 use crate::{
     PaymentDetails, WaitForPaymentIdentifier,
     error::SdkError,
@@ -5,18 +17,6 @@ use crate::{
     models::Payment,
     persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
 };
-use base64::Engine;
-use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_common::lnurl::{
-    error::LnurlError,
-    pay::{AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed},
-};
-use lnurl_models::validate_and_sanitize_username;
-use spark_wallet::SparkWallet;
-use std::{str::FromStr, sync::Arc};
-use tokio::sync::mpsc;
-use tracing::{error, info};
-use x509_parser::parse_x509_certificate;
 
 pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
     match identifier {
@@ -202,8 +202,4 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     }
 
     Ok(())
-}
-
-pub(crate) fn validate_and_sanitize_username_for_sdk(username: &str) -> Result<String, SdkError> {
-    validate_and_sanitize_username(username).map_err(SdkError::InvalidInput)
 }

@@ -13,10 +13,10 @@ use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
     PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest, sanitize_username,
+    UnregisterLnurlPayRequest, sanitize_username,validate_and_sanitize_username,
 };
 use nostr::{Alphabet, Event, JsonUtil, Kind, TagStandard, key::Keys};
-use regex::Regex;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::marker::PhantomData;
@@ -32,7 +32,7 @@ use crate::{
 use crate::{
     repository::{LnurlRepository, LnurlRepositoryError},
     state::State,
-    user::{USERNAME_VALIDATION_REGEX, User},
+    user::User,
 };
 
 const ACCEPTABLE_TIME_DIFF_SECS: u64 = 60;
@@ -104,7 +104,8 @@ where
         Path(identifier): Path<String>,
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&identifier);
+        let username = validate_and_sanitize_username(&identifier)
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
         let user = state
             .db
             .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
@@ -128,8 +129,8 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&payload.username);
-        validate_username(&username)?;
+        let username = validate_and_sanitize_username(&payload.username)
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
         let pubkey = validate(
             &pubkey,
             &payload.signature,
@@ -196,7 +197,8 @@ where
         Extension(state): Extension<State<DB>>,
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let username = sanitize_username(&payload.username);
+        let username = validate_and_sanitize_username(&payload.username)
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
         let pubkey = validate(
             &pubkey,
             &payload.signature,
@@ -521,7 +523,8 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let username = sanitize_username(&identifier);
+        let username = validate_and_sanitize_username(&identifier)
+    .map_err(|e| lnurl_error(&e))?;
         let user = state
             .db
             .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
@@ -581,7 +584,8 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         }
 
-        let username = sanitize_username(&identifier);
+        let username = validate_and_sanitize_username(&identifier)
+    .map_err(|e| lnurl_error(&e))?;
         let domain = sanitize_domain(&state, &host)?;
         let user = state
             .db
@@ -834,33 +838,6 @@ fn validate_nostr_zap_request(
 
     // 8. There MUST be 0 or 1 P tags. If there is one, it MUST be equal to the zap receipt's pubkey.
     // TODO: Implement this check.
-    Ok(())
-}
-
-fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    if username.chars().take(65).count() > 64 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("username too long".into())),
-        ));
-    }
-
-    let regex = Regex::new(USERNAME_VALIDATION_REGEX).map_err(|e| {
-        error!("failed to compile regex: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Value::String("internal server error".into())),
-        )
-    })?;
-
-    if !regex.is_match(username) {
-        trace!("invalid username doesn't match regex");
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid username".into())),
-        ));
-    }
-
     Ok(())
 }
 
