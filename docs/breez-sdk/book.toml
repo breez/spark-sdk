@@ -26,3 +26,8 @@ renderer = ["html"]
 [preprocessor.variables.variables]
 api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sdk"
 
+# Basic llmstxt.org format output
+[output.llms-txt]
+
+# Detailed llmstxt.org format output with additional information
+[output.llms-txt-full]
