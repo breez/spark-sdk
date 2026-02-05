@@ -105,8 +105,7 @@ where
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = validate_and_sanitize_username(&identifier)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
-    
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
         let user = state
             .db
             .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
@@ -131,8 +130,8 @@ where
         Json(payload): Json<RegisterLnurlPayRequest>,
     ) -> Result<Json<RegisterLnurlPayResponse>, (StatusCode, Json<Value>)> {
         let username = validate_and_sanitize_username(&payload.username)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;    
-    
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
+
         let pubkey = validate(
             &pubkey,
             &payload.signature,
@@ -200,7 +199,7 @@ where
         Json(payload): Json<UnregisterLnurlPayRequest>,
     ) -> Result<(), (StatusCode, Json<Value>)> {
         let username = validate_and_sanitize_username(&payload.username)
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(Value::String(e))))?;
         let pubkey = validate(
             &pubkey,
             &payload.signature,
