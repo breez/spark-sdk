@@ -115,6 +115,33 @@ class GettingStarted {
     }
     // ANCHOR_END: remove-event-listener
 
+    // ANCHOR: spark-status
+    suspend fun gettingStartedSparkStatus() {
+        try {
+            val sparkStatus = getSparkStatus()
+
+            when (sparkStatus.status) {
+                ServiceStatus.OPERATIONAL -> {
+                    // Log.v("Breez", "Spark is fully operational")
+                }
+                ServiceStatus.DEGRADED -> {
+                    // Log.v("Breez", "Spark is experiencing degraded performance")
+                }
+                ServiceStatus.PARTIAL -> {
+                    // Log.v("Breez", "Spark is partially unavailable")
+                }
+                ServiceStatus.MAJOR -> {
+                    // Log.v("Breez", "Spark is experiencing a major outage")
+                }
+            }
+
+            // Log.v("Breez", "Last updated: ${sparkStatus.lastUpdated}")
+        } catch (e: Exception) {
+            // handle error
+        }
+    }
+    // ANCHOR_END: spark-status
+
     // ANCHOR: disconnect
     suspend fun disconnect(sdk: BreezSdk)  {
         try {

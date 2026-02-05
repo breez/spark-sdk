@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     ConnectRequest,
     default_config,
     EventListener,
+    get_spark_status,
     GetInfoRequest,
     init_logging,
     LogEntry,
@@ -12,6 +13,7 @@ from breez_sdk_spark import (
     Network,
     SdkEvent,
     Seed,
+    ServiceStatus,
 )
 
 
@@ -118,6 +120,29 @@ async def remove_event_listener(sdk: BreezSdk, listener_id: str):
 
 
 # ANCHOR_END: remove-event-listener
+
+
+# ANCHOR: spark-status
+async def getting_started_spark_status():
+    try:
+        spark_status = await get_spark_status()
+
+        if spark_status.status == ServiceStatus.OPERATIONAL:
+            logging.debug("Spark is fully operational")
+        elif spark_status.status == ServiceStatus.DEGRADED:
+            logging.debug("Spark is experiencing degraded performance")
+        elif spark_status.status == ServiceStatus.PARTIAL:
+            logging.debug("Spark is partially unavailable")
+        elif spark_status.status == ServiceStatus.MAJOR:
+            logging.debug("Spark is experiencing a major outage")
+
+        logging.debug(f"Last updated: {spark_status.last_updated}")
+    except Exception as error:
+        logging.error(error)
+        raise
+
+
+# ANCHOR_END: spark-status
 
 
 # ANCHOR: disconnect

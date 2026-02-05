@@ -105,6 +105,30 @@ pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> 
 }
 // ANCHOR_END: remove-event-listener
 
+// ANCHOR: spark-status
+pub(crate) async fn getting_started_spark_status() -> Result<()> {
+    let spark_status = get_spark_status().await?;
+
+    match spark_status.status {
+        ServiceStatus::Operational => {
+            info!("Spark is fully operational");
+        }
+        ServiceStatus::Degraded => {
+            info!("Spark is experiencing degraded performance");
+        }
+        ServiceStatus::Partial => {
+            info!("Spark is partially unavailable");
+        }
+        ServiceStatus::Major => {
+            info!("Spark is experiencing a major outage");
+        }
+    }
+
+    info!("Last updated: {}", spark_status.last_updated);
+    Ok(())
+}
+// ANCHOR_END: spark-status
+
 // ANCHOR: disconnect
 pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
     sdk.disconnect().await?;
