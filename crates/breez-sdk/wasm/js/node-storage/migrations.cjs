@@ -321,6 +321,10 @@ class MigrationManager {
           `ALTER TABLE payment_metadata DROP COLUMN token_conversion_info`,
           `ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT`]
       },
+      {
+        name: "Backfill sync_revision from sync_state",
+        sql: `UPDATE sync_revision SET revision = COALESCE((SELECT MAX(revision) FROM sync_state), revision)`
+      },
     ];
   }
 }
