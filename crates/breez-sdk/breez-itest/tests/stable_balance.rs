@@ -72,6 +72,9 @@ async fn test_stable_balance_auto_conversion(
         })
         .await?;
 
+    // Wait for Bob to send the payment
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 30).await?;
+
     // Wait for Alice to receive the payment
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
 
@@ -102,7 +105,7 @@ async fn test_stable_balance_auto_conversion(
         alice_info_after_small.balance_sats
     );
 
-    // Verify token balance didn't change significantly (no auto-conversion)
+    // Verify token balance didn't change (no auto-conversion)
     let alice_token_balance_after_small = alice_info_after_small
         .token_balances
         .get(REGTEST_TOKEN_ID)
@@ -116,17 +119,12 @@ async fn test_stable_balance_auto_conversion(
 
     info!("Part 1 complete: No auto-conversion (below threshold)");
 
-    // Sync and clear events to ensure background re-syncs from Part 1 are flushed
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    clear_event_receiver(&mut alice.events).await;
-    clear_event_receiver(&mut bob.events).await;
-
     // ==========================================
     // Part 2: Bob sends more sats to exceed threshold - auto-conversion triggers
     // ==========================================
     info!("--- Part 2: Bob sends sats to exceed threshold (5000 sats) ---");
 
-    // Bob sends 9000 more sats to Alice (now total exceeds threshold)
+    // Bob sends 5000 more sats to Alice (now total exceeds threshold)
     let prepare_large = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
@@ -138,9 +136,6 @@ async fn test_stable_balance_auto_conversion(
         })
         .await?;
 
-    // Clear any events that arrived during prepare
-    clear_event_receiver(&mut alice.events).await;
-
     bob.sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare_large,
@@ -149,24 +144,25 @@ async fn test_stable_balance_auto_conversion(
         })
         .await?;
 
-    // Wait for Alice to receive the payment
-    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
+    // Wait for Bob to send the payment
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 30).await?;
 
-    // Wait for auto-conversion to complete by polling token balance
-    let alice_token_balance_after_large = wait_for_token_balance_increase(
-        &alice.sdk,
-        REGTEST_TOKEN_ID,
-        alice_token_balance_after_small,
-        60,
-    )
-    .await?;
+    // Wait for all auto-conversion events: receive spark → send spark → receive token
+    wait_for_auto_conversion_events(&mut alice.events, PaymentMethod::Spark, 60).await?;
 
+    // Sync to get updated balances
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_info_after_large = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?;
+    let alice_token_balance_after_large = alice_info_after_large
+        .token_balances
+        .get(REGTEST_TOKEN_ID)
+        .map(|b| b.balance)
+        .unwrap_or(0);
 
     info!(
         "Alice after receiving 5000 more sats: {} sats, {} tokens (was {} tokens)",
@@ -190,8 +186,6 @@ async fn test_stable_balance_auto_conversion(
     );
 
     info!("Part 2 complete: Auto-conversion triggered successfully");
-    clear_event_receiver(&mut alice.events).await;
-    clear_event_receiver(&mut bob.events).await;
 
     // ==========================================
     // Part 3: Alice sends tokens directly to Bob
@@ -226,9 +220,6 @@ async fn test_stable_balance_auto_conversion(
         prepare_token.amount
     );
 
-    // Clear any stale events before sending
-    clear_event_receiver(&mut bob.events).await;
-
     let send_result = alice
         .sdk
         .send_payment(SendPaymentRequest {
@@ -242,6 +233,9 @@ async fn test_stable_balance_auto_conversion(
         "Alice sent token payment: status={:?}",
         send_result.payment.status
     );
+
+    // Wait for Alice to send the payment
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
 
     // Wait for Bob to receive the payment
     wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
@@ -337,8 +331,6 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?;
 
-    clear_event_receiver(&mut alice.events).await;
-
     bob.sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare_1,
@@ -347,25 +339,32 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?;
 
-    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
+    info!("Wait for Bob to send the payment");
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 30).await?;
 
-    // Wait for first auto-conversion to complete
-    let alice_token_balance_after_first = wait_for_token_balance_increase(
-        &alice.sdk,
-        REGTEST_TOKEN_ID,
-        alice_token_balance_before,
-        60,
-    )
-    .await?;
+    info!("Wait for all auto-conversion events: receive spark → send spark → receive token");
+    wait_for_auto_conversion_events(&mut alice.events, PaymentMethod::Spark, 60).await?;
+
+    // Sync to get updated balances
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_info_after_first = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let alice_token_balance_after_first = alice_info_after_first
+        .token_balances
+        .get(REGTEST_TOKEN_ID)
+        .map(|b| b.balance)
+        .unwrap_or(0);
 
     info!(
         "Alice after first payment: {} tokens (was {})",
         alice_token_balance_after_first, alice_token_balance_before
     );
 
-    clear_event_receiver(&mut alice.events).await;
-    clear_event_receiver(&mut bob.events).await;
-
+    info!("--- Part 1b: Second payment: 5000 sats to Alice (creates a second token output) ---");
     // Second payment: 5000 sats to Alice (creates a second token output)
     let prepare_2 = bob
         .sdk
@@ -378,8 +377,6 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?;
 
-    clear_event_receiver(&mut alice.events).await;
-
     bob.sdk
         .send_payment(SendPaymentRequest {
             prepare_response: prepare_2,
@@ -388,23 +385,25 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?;
 
-    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
+    info!("Wait for Bob to send the payment");
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Send, 30).await?;
 
-    // Wait for second auto-conversion to complete
-    let alice_token_balance = wait_for_token_balance_increase(
-        &alice.sdk,
-        REGTEST_TOKEN_ID,
-        alice_token_balance_after_first,
-        60,
-    )
-    .await?;
+    info!("Wait for all auto-conversion events: receive spark → send spark → receive token");
+    wait_for_auto_conversion_events(&mut alice.events, PaymentMethod::Spark, 60).await?;
 
+    // Sync to get updated sats balance
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let alice_info = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?;
+    let alice_token_balance = alice_info
+        .token_balances
+        .get(REGTEST_TOKEN_ID)
+        .map(|b| b.balance)
+        .unwrap_or(0);
 
     info!(
         "Alice after two payments: {} sats, {} tokens (was {} tokens)",
@@ -427,8 +426,6 @@ async fn test_stable_balance_reserved_sats(
     );
 
     info!("Part 1 complete: Auto-conversion with reserved sats");
-    clear_event_receiver(&mut alice.events).await;
-    clear_event_receiver(&mut bob.events).await;
 
     // ==========================================
     // Part 2: Alice pays Bob using reserved Bitcoin (no conversion)
@@ -477,7 +474,10 @@ async fn test_stable_balance_reserved_sats(
         send_result.payment.status
     );
 
-    // Wait for Bob to receive the payment
+    info!("Wait for Alice to send the payment");
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+
+    info!("Wait for Bob to receive the payment");
     let bob_received =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
@@ -494,7 +494,6 @@ async fn test_stable_balance_reserved_sats(
             ensure_synced: Some(false),
         })
         .await?;
-
     let alice_final_token_balance = alice_final_info
         .token_balances
         .get(REGTEST_TOKEN_ID)
@@ -511,22 +510,112 @@ async fn test_stable_balance_reserved_sats(
         "Alice's sats should decrease after payment"
     );
 
-    // Token balance should remain approximately the same (no conversion used)
+    // Token balance should remain the same (no conversion used)
     assert_eq!(
         alice_final_token_balance, alice_token_balance,
         "Alice's token balance should remain unchanged when paying with reserved sats"
     );
 
     info!("Part 2 complete: Bitcoin payment using reserved sats successful");
-    clear_event_receiver(&mut alice.events).await;
-    clear_event_receiver(&mut bob.events).await;
 
     // ==========================================
-    // Part 3: Concurrent Bitcoin payments
+    // Part 3: Alice pays Bob over the reserve (require token→BTC conversion)
+    // ==========================================
+    info!("--- Part 3: Alice pays Bob over the reserve ---");
+
+    let payment_amount: u128 = 2_000;
+
+    // Bob creates a Spark address to receive
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    // Alice prepares payment (over reserve, needs token→BTC)
+    let prepare_btc = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address.clone(),
+            amount: Some(payment_amount),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    info!(
+        "Alice prepared Bitcoin payment: amount={:?}",
+        prepare_btc.amount
+    );
+    assert!(
+        prepare_btc.conversion_estimate.is_some(),
+        "Should have a conversion estimate"
+    );
+
+    let send_result = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare_btc,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!(
+        "Alice sent Bitcoin payment: status={:?}",
+        send_result.payment.status
+    );
+
+    info!("Wait for all conversion events: send token → receive spark → send spark");
+    wait_for_payment_conversion_events(&mut alice.events, PaymentMethod::Spark, 60).await?;
+
+    info!("Wait for Bob to receive the payment");
+    let bob_received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    assert_eq!(
+        bob_received.amount, payment_amount,
+        "Bob should receive the exact payment amount"
+    );
+
+    // Verify Alice's sats balance decreased but tokens unchanged
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final_info = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let alice_final_token_balance = alice_final_info
+        .token_balances
+        .get(REGTEST_TOKEN_ID)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+
+    info!(
+        "Alice final balances: {} sats (was ~1000), {} tokens (was {})",
+        alice_final_info.balance_sats, alice_final_token_balance, alice_token_balance
+    );
+
+    assert!(
+        alice_final_info.balance_sats >= alice_info.balance_sats,
+        "Alice's sats might increase marginally after payment"
+    );
+    assert!(
+        alice_final_token_balance < alice_token_balance,
+        "Alice's token balance should decrease after payment"
+    );
+
+    info!("Part 3 complete: Bitcoin payment using reserved sats successful");
+
+    // ==========================================
+    // Part 4: Concurrent Bitcoin payments
     // - 2 payments over the reserve (require token→BTC conversion, using separate token outputs)
     // - 1 payment under the reserve (uses BTC directly)
     // ==========================================
-    info!("--- Part 3: Concurrent Bitcoin payments (2 conversion + 1 direct) ---");
+    info!("--- Part 4: Concurrent Bitcoin payments (2 conversion + 1 direct) ---");
 
     let conversion_payment_amount: u128 = 2_000;
     let direct_payment_amount: u128 = 500;
@@ -574,8 +663,6 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?;
 
-    clear_event_receiver(&mut bob.events).await;
-
     let send_fut_1 = alice.sdk.send_payment(SendPaymentRequest {
         prepare_response: prepare_conv_1,
         options: None,
@@ -609,7 +696,8 @@ async fn test_stable_balance_reserved_sats(
     wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
     wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
 
-    info!("Part 3 complete: Concurrent payments successful");
+    info!("Part 4 complete: Concurrent payments successful");
     info!("=== Test test_stable_balance_reserved_sats PASSED ===");
+
     Ok(())
 }

@@ -39,15 +39,15 @@ impl ReservationTracker {
     }
 
     fn add(&self, amount: u64) {
-        self.total_reserved.fetch_add(amount, Ordering::SeqCst);
+        self.total_reserved.fetch_add(amount, Ordering::Release);
     }
 
     fn remove(&self, amount: u64) {
-        self.total_reserved.fetch_sub(amount, Ordering::SeqCst);
+        self.total_reserved.fetch_sub(amount, Ordering::Release);
     }
 
     fn total(&self) -> u64 {
-        self.total_reserved.load(Ordering::SeqCst)
+        self.total_reserved.load(Ordering::Acquire)
     }
 }
 
@@ -139,8 +139,7 @@ impl StableBalance {
     ///
     /// The task:
     /// 1. Waits for a trigger signal
-    /// 2. Tries to acquire the conversion lock (skips if busy)
-    /// 3. Executes auto-conversion if conditions are met
+    /// 2. Executes auto-conversion if conditions are met
     fn spawn_auto_convert_task(&self, mut shutdown_receiver: watch::Receiver<()>) {
         let stable_balance = self.clone();
 
@@ -157,18 +156,8 @@ impl StableBalance {
                     }
                 }
 
-                match stable_balance.auto_convert().await {
-                    Ok(true) => {
-                        // After a successful conversion, wait briefly to let balance
-                        // changes propagate through sync before accepting new triggers.
-                        // This prevents immediately re-triggering on balance changes
-                        // caused by the conversion itself.
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        warn!("Auto-conversion failed: {e:?}");
-                    }
+                if let Err(e) = stable_balance.auto_convert().await {
+                    warn!("Auto-conversion failed: {e:?}");
                 }
             }
         });
@@ -214,7 +203,7 @@ impl StableBalance {
             completion_timeout_secs: None,
         };
 
-        let _response = self
+        let response = self
             .token_converter
             .convert(
                 &options,
@@ -223,7 +212,10 @@ impl StableBalance {
                 ConversionAmount::AmountIn(u128::from(amount_to_convert)),
             )
             .await?;
-        info!("Auto-conversion completed");
+        info!(
+            "Auto-conversion completed: converted {} sats (sent_payment_id={}, received_payment_id={})",
+            amount_to_convert, response.sent_payment_id, response.received_payment_id
+        );
 
         Ok(true)
     }

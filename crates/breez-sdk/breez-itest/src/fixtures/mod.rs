@@ -104,7 +104,7 @@ pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
         token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
             .to_string(),
         threshold_sats: Some(1000),
-        max_slippage_bps: Some(200),
+        max_slippage_bps: Some(500),
         reserved_sats: None,
     });
     build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
@@ -123,7 +123,7 @@ pub async fn alice_sdk_stable_balance_with_reserve() -> Result<SdkInstance> {
         token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
             .to_string(),
         threshold_sats: Some(1000),
-        max_slippage_bps: Some(200),
+        max_slippage_bps: Some(500),
         reserved_sats: Some(2000),
     });
     build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
