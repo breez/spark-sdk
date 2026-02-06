@@ -268,6 +268,11 @@ impl SqliteStorage {
             ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT;
             ",
             "UPDATE sync_revision SET revision = COALESCE((SELECT MAX(revision) FROM sync_state), revision)",
+            "DELETE FROM sync_outgoing;
+             DELETE FROM sync_incoming;
+             DELETE FROM sync_state;
+             UPDATE sync_revision SET revision = 0;
+             DELETE FROM settings WHERE key = 'sync_initial_complete';",
         ]
     }
 }
