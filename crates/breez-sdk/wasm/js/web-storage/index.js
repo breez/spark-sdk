@@ -342,7 +342,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 9; // Current schema version
+    this.dbVersion = 10; // Current schema version
   }
 
   /**
