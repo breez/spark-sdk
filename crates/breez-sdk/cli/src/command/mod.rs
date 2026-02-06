@@ -255,10 +255,6 @@ pub enum Command {
     ListUnclaimedDeposits,
     /// Buy Bitcoin using an external provider (`MoonPay`)
     BuyBitcoin {
-        /// The Bitcoin address to receive the purchased bitcoin. If not provided, a deposit address will be generated automatically.
-        #[arg(long)]
-        address: Option<String>,
-
         /// Lock the purchase to a specific amount in satoshis. When provided, the user cannot change the amount in the purchase flow.
         #[arg(long)]
         locked_amount_sat: Option<u64>,
@@ -490,13 +486,11 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::BuyBitcoin {
-            address,
             locked_amount_sat,
             redirect_url,
         } => {
             let value = sdk
                 .buy_bitcoin(BuyBitcoinRequest {
-                    address,
                     locked_amount_sat,
                     redirect_url,
                 })

@@ -41,17 +41,4 @@ class BuyingBitcoin {
         // ANCHOR_END: buy-bitcoin-with-redirect
     }
 
-    suspend fun buyBitcoinWithAddress(sdk: BreezSdk) {
-        // ANCHOR: buy-bitcoin-with-address
-        // Specify a custom Bitcoin address to receive funds
-        val request = BuyBitcoinRequest(
-            address = "bc1qexample...",
-            lockedAmountSat = 100_000u
-        )
-
-        val response = sdk.buyBitcoin(request)
-        // Log.v("Breez", "Open this URL in a browser to complete the purchase:")
-        // Log.v("Breez", "${response.url}")
-        // ANCHOR_END: buy-bitcoin-with-address
-    }
 }

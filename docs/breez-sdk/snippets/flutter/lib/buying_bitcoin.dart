@@ -35,15 +35,3 @@ Future<void> buyBitcoinWithRedirect(BreezSdk sdk) async {
   // ANCHOR_END: buy-bitcoin-with-redirect
 }
 
-Future<void> buyBitcoinWithAddress(BreezSdk sdk) async {
-  // ANCHOR: buy-bitcoin-with-address
-  // Specify a custom Bitcoin address to receive funds
-  final request = BuyBitcoinRequest(
-      address: "bc1qexample...",
-      lockedAmountSat: 100000);
-
-  final response = await sdk.buyBitcoin(request: request);
-  print("Open this URL in a browser to complete the purchase:");
-  print(response.url);
-  // ANCHOR_END: buy-bitcoin-with-address
-}

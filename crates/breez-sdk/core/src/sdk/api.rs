@@ -284,12 +284,12 @@ impl BreezSdk {
     /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).
     ///
     /// This method generates a URL that the user can open in a browser to complete
-    /// the Bitcoin purchase. The purchased Bitcoin will be sent to either the
-    /// provided address or an automatically generated deposit address.
+    /// the Bitcoin purchase. The purchased Bitcoin will be sent to an automatically
+    /// generated deposit address.
     ///
     /// # Arguments
     ///
-    /// * `request` - The purchase request containing optional address, amount, and redirect URL
+    /// * `request` - The purchase request containing optional amount and redirect URL
     ///
     /// # Returns
     ///
@@ -298,11 +298,8 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        // Use provided address or generate a deposit address
-        let address = match request.address {
-            Some(addr) => addr,
-            None => get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?,
-        };
+        let address =
+            get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?;
 
         let url = self
             .buy_bitcoin_provider

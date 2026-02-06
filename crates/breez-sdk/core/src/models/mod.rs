@@ -725,10 +725,6 @@ pub struct ListUnclaimedDepositsResponse {
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct BuyBitcoinRequest {
-    /// Optional: The Bitcoin address to receive the purchased bitcoin.
-    /// If not provided, a deposit address will be generated automatically.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub address: Option<String>,
     /// Optional: Lock the purchase to a specific amount in satoshis.
     /// When provided, the user cannot change the amount in the purchase flow.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
