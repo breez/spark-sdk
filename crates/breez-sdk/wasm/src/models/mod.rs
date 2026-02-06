@@ -1229,7 +1229,6 @@ pub struct FetchConversionLimitsResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
 pub struct BuyBitcoinRequest {
-    pub address: Option<String>,
     pub locked_amount_sat: Option<u64>,
     pub redirect_url: Option<String>,
 }

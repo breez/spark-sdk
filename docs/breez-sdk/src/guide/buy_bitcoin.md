@@ -1,10 +1,10 @@
 # Buying Bitcoin
 
-The Breez SDK provides a simple way to enable users to purchase Bitcoin through external providers like MoonPay. Users are directed to a provider URL in their browser, where they can complete the purchase and have funds sent directly to a specified Bitcoin address.
+The Breez SDK provides a simple way to enable users to purchase Bitcoin through external providers like MoonPay. Users are directed to a provider URL in their browser, where they can complete the purchase and have funds sent directly to an automatically generated deposit address.
 
 ## Basic usage
 
-To initiate a Bitcoin purchase, call the `buy_bitcoin` method with a Bitcoin address and optional parameters:
+To initiate a Bitcoin purchase, call the `buy_bitcoin` method:
 
 {{#tabs buying_bitcoin:buy-bitcoin-basic}}
 
@@ -26,9 +26,8 @@ Provide a custom redirect URL to direct the user to a specific page after comple
 
 Here's a typical integration pattern:
 
-1. **Get a Bitcoin address** - Use an existing address from your wallet or generate a new one
-2. **Call `buy_bitcoin`** - Initiate the purchase request with appropriate parameters
-3. **Open the URL** - Display the returned URL to the user in a browser
-4. **Handle the result** - The user completes the purchase on the provider's site and is redirected
+1. **Call `buy_bitcoin`** - Initiate the purchase request with optional parameters
+2. **Open the URL** - Display the returned URL to the user in a browser
+3. **Handle the result** - The user completes the purchase on the provider's site and is redirected
 
-The funds purchased by the user will be sent directly to the specified Bitcoin address on the blockchain.
+The funds purchased by the user will be sent directly to an automatically generated deposit address on the blockchain.

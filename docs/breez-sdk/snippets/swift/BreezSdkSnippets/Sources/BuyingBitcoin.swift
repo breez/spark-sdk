@@ -38,16 +38,3 @@ func buyBitcoinWithRedirect(sdk: BreezSdk) async throws {
     // ANCHOR_END: buy-bitcoin-with-redirect
 }
 
-func buyBitcoinWithAddress(sdk: BreezSdk) async throws {
-    // ANCHOR: buy-bitcoin-with-address
-    // Specify a custom Bitcoin address to receive funds
-    let request = BuyBitcoinRequest(
-        address: "bc1qexample...",
-        lockedAmountSat: 100_000
-    )
-
-    let response = try await sdk.buyBitcoin(request: request)
-    print("Open this URL in a browser to complete the purchase:")
-    print("\(response.url)")
-    // ANCHOR_END: buy-bitcoin-with-address
-}

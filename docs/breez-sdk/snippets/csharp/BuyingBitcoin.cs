@@ -45,19 +45,5 @@ namespace BreezSdkSnippets
             // ANCHOR_END: buy-bitcoin-with-redirect
         }
 
-        async Task BuyBitcoinWithAddress(BreezSdk sdk)
-        {
-            // ANCHOR: buy-bitcoin-with-address
-            // Specify a custom Bitcoin address to receive funds
-            var request = new BuyBitcoinRequest(
-                address: "bc1qexample...",
-                lockedAmountSat: 100000
-            );
-
-            var response = await sdk.BuyBitcoin(request: request);
-            Console.WriteLine("Open this URL in a browser to complete the purchase:");
-            Console.WriteLine($"{response.url}");
-            // ANCHOR_END: buy-bitcoin-with-address
-        }
     }
 }

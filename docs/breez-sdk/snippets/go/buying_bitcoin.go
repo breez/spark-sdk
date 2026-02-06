@@ -62,23 +62,3 @@ func BuyBitcoinWithRedirect(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func BuyBitcoinWithAddress(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: buy-bitcoin-with-address
-	// Specify a custom Bitcoin address to receive funds
-	address := "bc1qexample..."
-	lockedAmountSat := uint64(100_000)
-	request := breez_sdk_spark.BuyBitcoinRequest{
-		Address:         &address,
-		LockedAmountSat: &lockedAmountSat,
-	}
-
-	response, err := sdk.BuyBitcoin(request)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Open this URL in a browser to complete the purchase:")
-	log.Printf("%v", response.Url)
-	// ANCHOR_END: buy-bitcoin-with-address
-	return nil
-}

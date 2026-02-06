@@ -45,18 +45,3 @@ async fn buy_bitcoin_with_redirect(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn buy_bitcoin_with_address(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: buy-bitcoin-with-address
-    // Specify a custom Bitcoin address to receive funds
-    let request = BuyBitcoinRequest {
-        address: Some("bc1qexample...".to_string()),
-        locked_amount_sat: Some(100_000),
-        ..Default::default()
-    };
-
-    let response = sdk.buy_bitcoin(request).await?;
-    info!("Open this URL in a browser to complete the purchase:");
-    info!("{}", response.url);
-    // ANCHOR_END: buy-bitcoin-with-address
-    Ok(())
-}

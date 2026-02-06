@@ -56,19 +56,3 @@ async def buy_bitcoin_with_redirect(sdk: BreezSdk):
     # ANCHOR_END: buy-bitcoin-with-redirect
 
 
-async def buy_bitcoin_with_address(sdk: BreezSdk):
-    # ANCHOR: buy-bitcoin-with-address
-    try:
-        # Specify a custom Bitcoin address to receive funds
-        request = BuyBitcoinRequest(
-            address="bc1qexample...",
-            locked_amount_sat=100_000,
-        )
-
-        response = await sdk.buy_bitcoin(request=request)
-        logging.debug("Open this URL in a browser to complete the purchase:")
-        logging.debug(response.url)
-    except Exception as error:
-        logging.error(error)
-        raise
-    # ANCHOR_END: buy-bitcoin-with-address

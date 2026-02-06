@@ -38,16 +38,3 @@ const buyBitcoinWithRedirect = async (sdk: BreezSdk) => {
     // ANCHOR_END: buy-bitcoin-with-redirect
 }
 
-const buyBitcoinWithAddress = async (sdk: BreezSdk) => {
-    // ANCHOR: buy-bitcoin-with-address
-    // Specify a custom Bitcoin address to receive funds
-    const request: BuyBitcoinRequest = {
-        address: "bc1qexample...",
-        lockedAmountSat: 100_000,
-    }
-
-    const response = await sdk.buyBitcoin(request)
-    console.log("Open this URL in a browser to complete the purchase:")
-    console.log(response.url)
-    // ANCHOR_END: buy-bitcoin-with-address
-}
