@@ -46,6 +46,8 @@ const HRP_STR_TESTNET: &str = "btknt";
 const HRP_STR_REGTEST: &str = "btknrt";
 const HRP_STR_SIGNET: &str = "btkns";
 
+pub const BURN_PUBLIC_KEY: &[u8; 33] = &[2; 33];
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokensConfig {
     pub expected_withdraw_bond_sats: u64,
@@ -329,7 +331,7 @@ impl TokenService {
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
         let burn_public_key =
-            PublicKey::from_slice(&[2; 33]).map_err(|_| ServiceError::InvalidPublicKey)?;
+            PublicKey::from_slice(BURN_PUBLIC_KEY).map_err(|_| ServiceError::InvalidPublicKey)?;
         let burn_spark_address = SparkAddress::new(burn_public_key, self.network, None);
         let receiver_outputs = vec![TransferTokenOutput {
             token_id: self.get_issuer_token_metadata().await?.identifier,

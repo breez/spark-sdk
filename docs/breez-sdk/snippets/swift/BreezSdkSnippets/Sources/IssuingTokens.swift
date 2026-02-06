@@ -67,6 +67,22 @@ func burnToken(tokenIssuer: TokenIssuer) async throws -> Payment {
     return payment
 }
 
+func listMintBurnPayments(tokenIssuer: TokenIssuer) async throws {
+    // ANCHOR: list-mint-burn-payments
+    // Provide one or multiple of the following filters to
+    // the `paymentDetailsFilter` field when listing payments
+    let paymentDetailsTransferFilter = PaymentDetailsFilter.token(
+        conversionRefundNeeded: nil, txHash: nil,
+        txType: TokenTransactionType.transfer)
+    let paymentDetailsMintFilter = PaymentDetailsFilter.token(
+        conversionRefundNeeded: nil, txHash: nil,
+        txType: TokenTransactionType.mint)
+    let paymentDetailsBurnFilter = PaymentDetailsFilter.token(
+        conversionRefundNeeded: nil, txHash: nil,
+        txType: TokenTransactionType.burn)
+    // ANCHOR_END: list-mint-burn-payments
+}
+
 func getTokenMetadata(tokenIssuer: TokenIssuer) async throws -> TokenMetadata {
     // ANCHOR: get-token-metadata
     let tokenBalance = try await tokenIssuer.getIssuerTokenBalance()

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
-use spark_wallet::SparkWallet;
+use spark_wallet::{BURN_PUBLIC_KEY, PublicKey, SparkWallet};
 use tracing::warn;
 use web_time::UNIX_EPOCH;
 
 use crate::{
     Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, Storage,
-    TokenMetadata, persist::ObjectCacheRepository,
+    TokenMetadata, TokenTransactionType, persist::ObjectCacheRepository,
 };
 
 /// Returns the metadata for the given token identifiers.
@@ -137,6 +137,20 @@ pub async fn token_transaction_to_payments(
         }
         let invoice = invoices.first().map(|&inv| inv.clone());
 
+        let mut tx_type = match transaction.inputs {
+            spark_wallet::TokenInputs::Mint(..) => TokenTransactionType::Mint,
+            spark_wallet::TokenInputs::Transfer(..) => TokenTransactionType::Transfer,
+            spark_wallet::TokenInputs::Create(..) => {
+                return Err(SdkError::Generic(
+                    "Create token transactions are not expected to have outputs".to_string(),
+                ));
+            }
+        };
+
+        if output.owner_public_key == PublicKey::from_slice(BURN_PUBLIC_KEY).unwrap() {
+            tx_type = TokenTransactionType::Burn;
+        }
+
         let payment = Payment {
             id,
             payment_type,
@@ -151,6 +165,7 @@ pub async fn token_transaction_to_payments(
             details: Some(PaymentDetails::Token {
                 metadata: metadata.clone(),
                 tx_hash: transaction.hash.clone(),
+                tx_type,
                 invoice_details: invoice.map(Into::into),
                 conversion_info: None,
             }),

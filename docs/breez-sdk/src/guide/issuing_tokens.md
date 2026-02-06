@@ -42,9 +42,17 @@ Permanently remove tokens from the circulating supply by burning them.
 
 {{#tabs issuing_tokens:burn-token}}
 
+### Listing mint or burn payments
+
+Mint or burn payments are included in the regular payment history that is obtained when [Listing payments](./list_payments.md).
+
+You can filter by token transaction type to only include mint, burn or transfer payments. Transfer payments are regular token payments that are not mint or burn payments.
+
+{{#tabs issuing_tokens:list-mint-burn-payments}}
+
 ## Query balance & metadata
 
-Retrieve the current issue token balance and fetch the token metadata.
+Retrieve the current issued token balance and fetch the token metadata.
 
 {{#tabs issuing_tokens:get-token-metadata}}
 

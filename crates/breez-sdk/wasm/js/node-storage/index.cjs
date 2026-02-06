@@ -53,6 +53,7 @@ const SELECT_PAYMENT_SQL = `
            pm.conversion_info,
            t.metadata AS token_metadata,
            t.tx_hash AS token_tx_hash,
+           t.tx_type AS token_tx_type,
            t.invoice_details AS token_invoice_details,
            s.invoice_details AS spark_invoice_details,
            s.htlc_details AS spark_htlc_details,
@@ -236,6 +237,14 @@ class SqliteStorage {
             paymentDetailsClauses.push("t.tx_hash = ?");
             params.push(paymentDetailsFilter.txHash);
           }
+          // Filter by token transaction type
+          if (
+            paymentDetailsFilter.type === "token" &&
+            paymentDetailsFilter.txType !== undefined
+          ) {
+            paymentDetailsClauses.push("t.tx_type = ?");
+            params.push(paymentDetailsFilter.txType);
+          }
 
           if (paymentDetailsClauses.length > 0) {
             allPaymentDetailsClauses.push(`(${paymentDetailsClauses.join(" AND ")})`);
@@ -324,11 +333,12 @@ class SqliteStorage {
       );
       const tokenInsert = this.db.prepare(
         `INSERT INTO payment_details_token 
-          (payment_id, metadata, tx_hash, invoice_details) 
-          VALUES (@id, @metadata, @txHash, @invoiceDetails)
+          (payment_id, metadata, tx_hash, tx_type, invoice_details) 
+          VALUES (@id, @metadata, @txHash, @txType, @invoiceDetails)
           ON CONFLICT(payment_id) DO UPDATE SET
             metadata=excluded.metadata,
             tx_hash=excluded.tx_hash,
+            tx_type=excluded.tx_type,
             invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)`
       );
       const sparkInsert = this.db.prepare(
@@ -387,6 +397,7 @@ class SqliteStorage {
             id: payment.id,
             metadata: JSON.stringify(payment.details.metadata),
             txHash: payment.details.txHash,
+            txType: payment.details.txType,
             invoiceDetails: payment.details.invoiceDetails
               ? JSON.stringify(payment.details.invoiceDetails)
               : null,
@@ -748,6 +759,7 @@ class SqliteStorage {
         type: "token",
         metadata: JSON.parse(row.token_metadata),
         txHash: row.token_tx_hash,
+        txType: row.token_tx_type,
         invoiceDetails: row.token_invoice_details
           ? JSON.parse(row.token_invoice_details)
           : null,

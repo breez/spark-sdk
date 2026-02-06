@@ -6,7 +6,8 @@ import {
   type Seed,
   defaultConfig,
   SdkBuilder,
-  KeySetType
+  KeySetType,
+  PaymentDetailsFilter
 } from '@breeztech/breez-sdk-spark'
 import { Network } from 'node:inspector'
 
@@ -74,6 +75,25 @@ const burnToken = async (tokenIssuer: TokenIssuer): Promise<Payment> => {
   })
   // ANCHOR_END: burn-token
   return payment
+}
+
+const listMintBurnPayments = async (tokenIssuer: TokenIssuer): Promise<void> => {
+  // ANCHOR: list-mint-burn-payments
+  // Provide one or multiple of the following filters to
+  // the `paymentDetailsFilter` field when listing payments
+  const paymentDetailsTransferFilter = {
+    type: 'token',
+    txType: 'transfer'
+  }
+  const paymentDetailsMintFilter = {
+    type: 'token',
+    txType: 'mint'
+  }
+  const paymentDetailsBurnFilter = {
+    type: 'token',
+    txType: 'burn'
+  }
+  // ANCHOR_END: list-mint-burn-payments
 }
 
 const getTokenMetadata = async (tokenIssuer: TokenIssuer): Promise<TokenMetadata> => {

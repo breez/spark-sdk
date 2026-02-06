@@ -684,6 +684,10 @@ impl PostgresStorage {
                 "CREATE INDEX IF NOT EXISTS idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)",
                 "CREATE INDEX IF NOT EXISTS idx_payment_metadata_parent ON payment_metadata(parent_payment_id)",
             ],
+            // Migration 4: Add tx_type to token payments
+            &[
+                "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'",
+            ],
         ]
     }
 }
@@ -882,6 +886,16 @@ impl Storage for PostgresStorage {
                     param_idx += 1;
                     params.push(Box::new(tx_hash.clone()));
                 }
+                // Filter by token transaction type
+                if let PaymentDetailsFilter::Token {
+                    tx_type: Some(tx_type),
+                    ..
+                } = payment_details_filter
+                {
+                    payment_details_clauses.push(format!("t.tx_type = ${param_idx}"));
+                    param_idx += 1;
+                    params.push(Box::new(tx_type.to_string()));
+                }
 
                 if !payment_details_clauses.is_empty() {
                     all_payment_details_clauses
@@ -1010,6 +1024,7 @@ impl Storage for PostgresStorage {
             Some(PaymentDetails::Token {
                 metadata,
                 tx_hash,
+                tx_type,
                 invoice_details,
                 ..
             }) => {
@@ -1017,13 +1032,14 @@ impl Storage for PostgresStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 let invoice_json = to_json_opt(invoice_details.as_ref())?;
                 tx.execute(
-                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, invoice_details)
-                         VALUES ($1, $2, $3, $4)
+                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
+                         VALUES ($1, $2, $3, $4, $5)
                          ON CONFLICT(payment_id) DO UPDATE SET
                             metadata = EXCLUDED.metadata,
                             tx_hash = EXCLUDED.tx_hash,
+                            tx_type = EXCLUDED.tx_type,
                             invoice_details = COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)",
-                    &[&payment.id, &metadata_json, &tx_hash, &invoice_json],
+                    &[&payment.id, &metadata_json, &tx_hash, &tx_type.to_string(), &invoice_json],
                 )
                 .await?;
             }
@@ -1196,7 +1212,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(26);
+            let parent_payment_id: String = row.get(27);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1658,7 +1674,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-25 are used by `map_payment`, index 26 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-26 are used by `map_payment`, index 27 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1680,6 +1696,7 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.conversion_info,
            t.metadata AS token_metadata,
            t.tx_hash AS token_tx_hash,
+           t.tx_type AS token_tx_type,
            t.invoice_details AS token_invoice_details,
            s.invoice_details AS spark_invoice_details,
            s.htlc_details AS spark_htlc_details,
@@ -1716,9 +1733,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let preimage: Option<String> = row.get(14);
             let lnurl_pay_info_json: Option<serde_json::Value> = row.get(15);
             let lnurl_withdraw_info_json: Option<serde_json::Value> = row.get(16);
-            let lnurl_nostr_zap_request: Option<String> = row.get(23);
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(24);
-            let lnurl_sender_comment: Option<String> = row.get(25);
+            let lnurl_nostr_zap_request: Option<String> = row.get(24);
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(25);
+            let lnurl_sender_comment: Option<String> = row.get(26);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -1748,9 +1765,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_json: Option<serde_json::Value> = row.get(21);
+            let invoice_details_json: Option<serde_json::Value> = row.get(22);
             let invoice_details = from_json_opt(invoice_details_json)?;
-            let htlc_details_json: Option<serde_json::Value> = row.get(22);
+            let htlc_details_json: Option<serde_json::Value> = row.get(23);
             let htlc_details = from_json_opt(htlc_details_json)?;
             let conversion_info_json: Option<serde_json::Value> = row.get(17);
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
@@ -1761,7 +1778,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let invoice_details_json: Option<serde_json::Value> = row.get(20);
+            let tx_type_str: String = row.get(20);
+            let tx_type = tx_type_str
+                .parse()
+                .map_err(|e: String| StorageError::Serialization(e))?;
+            let invoice_details_json: Option<serde_json::Value> = row.get(21);
             let invoice_details = from_json_opt(invoice_details_json)?;
             let conversion_info_json: Option<serde_json::Value> = row.get(17);
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
@@ -1769,6 +1790,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 metadata: serde_json::from_value(metadata)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 tx_hash: row.get(19),
+                tx_type,
                 invoice_details,
                 conversion_info,
             })
@@ -1905,6 +1927,13 @@ mod tests {
     async fn test_conversion_refund_needed_filtering() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_token_transaction_type_filtering() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_token_transaction_type_filtering(Box::new(fixture.storage))
             .await;
     }
 

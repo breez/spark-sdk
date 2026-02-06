@@ -77,6 +77,29 @@ namespace BreezSdkSnippets
             // ANCHOR_END: burn-token
         }
 
+        async Task ListMintBurnPayments(BreezSdk sdk)
+        {
+            // ANCHOR: list-mint-burn-payments
+            // Provide one or multiple of the following filters to 
+            // the `paymentDetailsFilter` field when listing payments
+            var paymentDefailsTransferFilter = new PaymentDetailsFilter.Token(
+                txType: TokenTransactionType.Transfer,
+                txHash: null,
+                conversionRefundNeeded: null
+            );
+            var paymentDefailsMintFilter = new PaymentDetailsFilter.Token(
+                txType: TokenTransactionType.Mint,
+                txHash: null,
+                conversionRefundNeeded: null
+            );
+            var paymentDefailsBurnFilter = new PaymentDetailsFilter.Token(
+                txType: TokenTransactionType.Burn,
+                txHash: null,
+                conversionRefundNeeded: null
+            );
+            // ANCHOR_END: list-mint-burn-payments
+        }
+
         async Task GetTokenMetadata(TokenIssuer tokenIssuer)
         {
             // ANCHOR: get-token-metadata

@@ -31,8 +31,14 @@ fn optimization_events(event: OptimizationEvent) {
         OptimizationEvent::Started { total_rounds } => {
             info!("Optimization started with {} rounds", total_rounds);
         }
-        OptimizationEvent::RoundCompleted { current_round, total_rounds } => {
-            info!("Optimization round {} of {} completed", current_round, total_rounds);
+        OptimizationEvent::RoundCompleted {
+            current_round,
+            total_rounds,
+        } => {
+            info!(
+                "Optimization round {} of {} completed",
+                current_round, total_rounds
+            );
         }
         OptimizationEvent::Completed => {
             info!("Optimization completed successfully");

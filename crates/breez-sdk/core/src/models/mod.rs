@@ -353,6 +353,7 @@ pub enum PaymentDetails {
     Token {
         metadata: TokenMetadata,
         tx_hash: String,
+        tx_type: TokenTransactionType,
         /// The invoice details if the payment fulfilled a spark invoice
         invoice_details: Option<SparkInvoicePaymentDetails>,
         /// The information for a conversion
@@ -389,6 +390,37 @@ pub enum PaymentDetails {
     Deposit {
         tx_id: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TokenTransactionType {
+    Transfer,
+    Mint,
+    Burn,
+}
+
+impl fmt::Display for TokenTransactionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenTransactionType::Transfer => write!(f, "transfer"),
+            TokenTransactionType::Mint => write!(f, "mint"),
+            TokenTransactionType::Burn => write!(f, "burn"),
+        }
+    }
+}
+
+impl FromStr for TokenTransactionType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "transfer" => Ok(TokenTransactionType::Transfer),
+            "mint" => Ok(TokenTransactionType::Mint),
+            "burn" => Ok(TokenTransactionType::Burn),
+            _ => Err(format!("Invalid token transaction type '{s}'")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1102,6 +1134,8 @@ pub enum PaymentDetailsFilter {
         conversion_refund_needed: Option<bool>,
         /// Filter by transaction hash
         tx_hash: Option<String>,
+        /// Filter by transaction type
+        tx_type: Option<TokenTransactionType>,
     },
 }
 
