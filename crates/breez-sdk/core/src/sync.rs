@@ -3,7 +3,7 @@ use std::sync::Arc;
 use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, SdkEvent, Storage,
@@ -80,8 +80,16 @@ impl SparkSyncService {
             );
             // Process transfers in this batch
             for transfer in &transfers_response.items {
-                // Create a payment record
-                let payment: Payment = transfer.clone().try_into()?;
+                // Create a payment record, skipping swap-related transfers
+                // which are internal mechanism transfers (CounterSwap, CounterSwapV3,
+                // Swap, PrimarySwapV3) and not user-facing payments.
+                let payment: Payment = match transfer.clone().try_into() {
+                    Ok(payment) => payment,
+                    Err(e) => {
+                        debug!("Skipping transfer {}: {e}", transfer.id);
+                        continue;
+                    }
+                };
                 // Apply any payment metadata for the payment
                 if let Err(e) = self.apply_payment_metadata(&payment).await {
                     error!(
