@@ -350,7 +350,7 @@ impl SyncProcessor {
         if let Some(existing) = &*backoff_handle {
             let elapsed = now.duration_since(existing.started_at).unwrap_or_default();
             let remaining = existing.duration.saturating_sub(elapsed);
-            if remaining < duration {
+            if remaining != Duration::ZERO && remaining < duration {
                 debug!(
                     "Existing backoff of {:?} still in effect (remaining {:?}), not scheduling new backoff of {:?}",
                     existing.duration, remaining, duration
@@ -359,7 +359,7 @@ impl SyncProcessor {
             }
             existing.handle.abort();
             debug!(
-                "New backoff of {:?} is shorter than existing backoff of {:?} (remaining {:?}), replacing it",
+                "New backoff of {:?} is better than existing backoff of {:?} (remaining {:?}), replacing it",
                 duration, existing.duration, remaining
             );
         }
