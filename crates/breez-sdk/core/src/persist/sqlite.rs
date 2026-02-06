@@ -277,6 +277,11 @@ impl SqliteStorage {
             SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
             WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL;",
             "UPDATE sync_revision SET revision = COALESCE((SELECT MAX(revision) FROM sync_state), revision)",
+            "DELETE FROM sync_outgoing;
+             DELETE FROM sync_incoming;
+             DELETE FROM sync_state;
+             UPDATE sync_revision SET revision = 0;
+             DELETE FROM settings WHERE key = 'sync_initial_complete';",
         ]
     }
 }

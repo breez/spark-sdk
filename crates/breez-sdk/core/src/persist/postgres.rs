@@ -692,6 +692,14 @@ impl PostgresStorage {
             &[
                 "UPDATE sync_revision SET revision = GREATEST(revision, COALESCE((SELECT MAX(revision) FROM sync_state), 0))",
             ],
+            // Migration 5: Clear sync tables to force re-sync
+            &[
+                "DELETE FROM sync_outgoing",
+                "DELETE FROM sync_incoming",
+                "DELETE FROM sync_state",
+                "UPDATE sync_revision SET revision = 0",
+                "DELETE FROM settings WHERE key = 'sync_initial_complete'",
+            ],
         ]
     }
 }

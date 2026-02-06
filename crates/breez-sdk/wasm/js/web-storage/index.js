@@ -346,6 +346,28 @@ class MigrationManager {
             }
           };
         }
+      },
+      {
+        name: "Clear sync tables to force re-sync",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("sync_outgoing")) {
+            transaction.objectStore("sync_outgoing").clear();
+          }
+          if (db.objectStoreNames.contains("sync_incoming")) {
+            transaction.objectStore("sync_incoming").clear();
+          }
+          if (db.objectStoreNames.contains("sync_state")) {
+            transaction.objectStore("sync_state").clear();
+          }
+          if (db.objectStoreNames.contains("sync_revision")) {
+            const syncRevision = transaction.objectStore("sync_revision");
+            syncRevision.clear();
+            syncRevision.put({ id: 1, revision: "0" });
+          }
+          if (db.objectStoreNames.contains("settings")) {
+            transaction.objectStore("settings").delete("sync_initial_complete");
+          }
+        }
       }
     ];
   }
