@@ -313,8 +313,8 @@ pub(crate) fn create_initial_timelock_refund_txs(
 /// The function generates three possible transactions:
 /// 1. A CPFP transaction that spends from both the CPFP outpoint and connector outpoint
 /// 2. An optional direct transaction that spends from both the direct outpoint and connector outpoint (if provided)
-/// 3. An optional alternative direct transaction that spends from both the CPFP outpoint and connector outpoint,
-///    but using the direct sequence number (if direct_outpoint is provided)
+/// 3. An alternative direct transaction that spends from both the CPFP outpoint and connector outpoint,
+///    but using the direct sequence number (always present)
 ///
 /// All transactions pay to a P2TR (Pay-to-Taproot) address derived from the provided public key.
 ///
@@ -334,8 +334,8 @@ pub(crate) fn create_initial_timelock_refund_txs(
 /// A `RefundTransactions` struct containing:
 /// - `cpfp_tx`: Always present, spends both CPFP and connector outpoints
 /// - `direct_tx`: Only present if `direct_tx` is provided, spends direct and connector outpoints
-/// - `direct_from_cpfp_tx`: Alternative transaction that spends CPFP and connector outpoints with
-///   the direct sequence number (only present if `direct_tx` is provided)
+/// - `direct_from_cpfp_tx`: Always present, alternative transaction that spends CPFP and connector
+///   outpoints with the direct sequence number
 pub(crate) fn create_connector_refund_txs(
     params: ConnectorRefundTxsParams<'_>,
 ) -> RefundTransactions {
@@ -388,7 +388,7 @@ pub(crate) fn create_connector_refund_txs(
         tx
     });
 
-    let direct_from_cpfp_tx = params.direct_tx.map(|_| {
+    let direct_from_cpfp_tx = {
         let mut tx = create_spark_tx(
             cpfp_outpoint,
             params.direct_sequence,
@@ -401,8 +401,8 @@ pub(crate) fn create_connector_refund_txs(
             previous_output: params.connector_outpoint,
             ..Default::default()
         });
-        tx
-    });
+        Some(tx)
+    };
 
     RefundTransactions {
         cpfp_tx,

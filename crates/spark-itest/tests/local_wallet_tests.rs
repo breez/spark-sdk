@@ -42,11 +42,12 @@ async fn test_claim_unconfirmed_deposit(#[future] wallets: WalletsFixture) -> Re
 #[test_log::test]
 async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Result<()> {
     let fixture = wallets.await;
-    let wallet = fixture.alice_wallet;
+    let alice = &fixture.alice_wallet;
+    let bob = &fixture.bob_wallet;
     let bitcoind = &fixture.fixtures.bitcoind;
 
     // Generate a deposit address
-    let deposit_address = wallet.generate_deposit_address(false).await?;
+    let deposit_address = alice.generate_deposit_address(false).await?;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the deposit address with a certain amount
@@ -92,12 +93,36 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     let vout = output_index.expect("Could not find deposit address in transaction outputs");
     info!("Found deposit output at index: {}", vout);
 
-    let leaves = wallet.claim_deposit(tx, vout).await?;
+    let leaves = alice.claim_deposit(tx, vout).await?;
     info!("Claimed deposit, got leaves: {:?}", leaves);
 
     // Check that balance increased immediately after claiming
-    let balance = wallet.get_balance().await?;
+    let balance = alice.get_balance().await?;
     assert_eq!(balance, 100_000, "Balance should be the deposit amount");
+
+    // Spend the entire balance via a Spark transfer to Bob
+    let bob_address = bob.get_spark_address()?;
+    info!("Transferring entire balance to Bob at {:?}", bob_address);
+
+    alice.transfer(100_000, &bob_address, None).await?;
+    info!("Transfer completed");
+
+    // Wait for Bob to receive the funds
+    wait_for(
+        || async { bob.get_balance().await.unwrap_or(0) == 100_000 },
+        30,
+        "Bob's balance to become 100000",
+    )
+    .await?;
+
+    let bob_balance = bob.get_balance().await?;
+    info!("Bob balance after transfer: {}", bob_balance);
+    assert_eq!(bob_balance, 100_000);
+
+    let alice_balance = alice.get_balance().await?;
+    info!("Alice balance after transfer: {}", alice_balance);
+    assert_eq!(alice_balance, 0);
+
     Ok(())
 }
 
