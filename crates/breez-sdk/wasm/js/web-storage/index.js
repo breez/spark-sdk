@@ -307,6 +307,45 @@ class MigrationManager {
             };
           }
         },
+      },
+      {
+        name: "Backfill sync_revision from sync_state",
+        upgrade: (db, transaction) => {
+          if (!db.objectStoreNames.contains("sync_state") || !db.objectStoreNames.contains("sync_revision")) {
+            return;
+          }
+
+          const stateStore = transaction.objectStore("sync_state");
+          const revisionStore = transaction.objectStore("sync_revision");
+
+          // Find the maximum revision across all sync_state records
+          const cursorRequest = stateStore.openCursor();
+          let maxRevision = BigInt(0);
+
+          cursorRequest.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (cursor) {
+              const record = cursor.value.record;
+              if (record && record.revision !== undefined) {
+                const rev = BigInt(record.revision);
+                if (rev > maxRevision) {
+                  maxRevision = rev;
+                }
+              }
+              cursor.continue();
+            } else {
+              // Cursor exhausted — update sync_revision if needed
+              const getRequest = revisionStore.get(1);
+              getRequest.onsuccess = () => {
+                const current = getRequest.result || { id: 1, revision: "0" };
+                const currentRevision = BigInt(current.revision);
+                if (maxRevision > currentRevision) {
+                  revisionStore.put({ id: 1, revision: maxRevision.toString() });
+                }
+              };
+            }
+          };
+        }
       }
     ];
   }
@@ -331,7 +370,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 9; // Current schema version
+    this.dbVersion = 10; // Current schema version
   }
 
   /**
@@ -1341,11 +1380,12 @@ class IndexedDBStorage {
 
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction(
-        ["sync_outgoing", "sync_state"],
+        ["sync_outgoing", "sync_state", "sync_revision"],
         "readwrite"
       );
       const outgoingStore = transaction.objectStore("sync_outgoing");
       const stateStore = transaction.objectStore("sync_state");
+      const revisionStore = transaction.objectStore("sync_revision");
 
       const deleteRequest = outgoingStore.delete([
         record.id.type,
@@ -1360,7 +1400,25 @@ class IndexedDBStorage {
           record: record,
         };
         stateStore.put(stateRecord);
-        resolve();
+
+        // Update sync_revision to track the highest known revision
+        const getRevisionRequest = revisionStore.get(1);
+        getRevisionRequest.onsuccess = () => {
+          const current = getRevisionRequest.result || { id: 1, revision: "0" };
+          const currentRevision = BigInt(current.revision);
+          const recordRevision = BigInt(record.revision);
+          if (recordRevision > currentRevision) {
+            revisionStore.put({ id: 1, revision: recordRevision.toString() });
+          }
+          resolve();
+        };
+        getRevisionRequest.onerror = (event) => {
+          reject(
+            new StorageError(
+              `Failed to update sync revision: ${event.target.error.message}`
+            )
+          );
+        };
       };
 
       deleteRequest.onerror = (event) => {
@@ -1776,8 +1834,9 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(["sync_state"], "readwrite");
+      const transaction = this.db.transaction(["sync_state", "sync_revision"], "readwrite");
       const stateStore = transaction.objectStore("sync_state");
+      const revisionStore = transaction.objectStore("sync_revision");
 
       const storeRecord = {
         type: record.id.type,
@@ -1788,7 +1847,24 @@ class IndexedDBStorage {
       const request = stateStore.put(storeRecord);
 
       request.onsuccess = () => {
-        resolve();
+        // Update sync_revision to track the highest known revision
+        const getRevisionRequest = revisionStore.get(1);
+        getRevisionRequest.onsuccess = () => {
+          const current = getRevisionRequest.result || { id: 1, revision: "0" };
+          const currentRevision = BigInt(current.revision);
+          const incomingRevision = BigInt(record.revision);
+          if (incomingRevision > currentRevision) {
+            revisionStore.put({ id: 1, revision: incomingRevision.toString() });
+          }
+          resolve();
+        };
+        getRevisionRequest.onerror = (event) => {
+          reject(
+            new StorageError(
+              `Failed to update sync revision: ${event.target.error.message}`
+            )
+          );
+        };
       };
 
       request.onerror = (event) => {

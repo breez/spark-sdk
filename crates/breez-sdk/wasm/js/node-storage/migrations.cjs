@@ -333,6 +333,10 @@ class MigrationManager {
            WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL`,
         ],
       },
+      {
+        name: "Backfill sync_revision from sync_state",
+        sql: `UPDATE sync_revision SET revision = COALESCE((SELECT MAX(revision) FROM sync_state), revision)`
+      },
     ];
   }
 }

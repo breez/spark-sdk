@@ -688,6 +688,10 @@ impl PostgresStorage {
             &[
                 "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'",
             ],
+            // Migration 5: Backfill sync_revision from sync_state
+            &[
+                "UPDATE sync_revision SET revision = GREATEST(revision, COALESCE((SELECT MAX(revision) FROM sync_state), 0))",
+            ],
         ]
     }
 }
@@ -1380,42 +1384,56 @@ impl Storage for PostgresStorage {
     }
 
     async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
-        client
-            .execute(
-                "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
-                &[
-                    &record.id.r#type,
-                    &record.id.data_id,
-                    &i64::try_from(record.revision)?,
-                ],
-            )
+        let tx = client
+            .transaction()
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.execute(
+            "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
+            &[
+                &record.id.r#type,
+                &record.id.data_id,
+                &i64::try_from(record.revision)?,
+            ],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         let data_json = serde_json::to_value(&record.data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let commit_time = chrono::Utc::now().timestamp();
 
-        client
-            .execute(
-                "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
+        tx.execute(
+            "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT(record_type, data_id) DO UPDATE SET
                     schema_version = EXCLUDED.schema_version,
                     commit_time = EXCLUDED.commit_time,
                     data = EXCLUDED.data,
                     revision = EXCLUDED.revision",
-                &[
-                    &record.id.r#type,
-                    &record.id.data_id,
-                    &record.schema_version,
-                    &commit_time,
-                    &data_json,
-                    &i64::try_from(record.revision)?,
-                ],
-            )
+            &[
+                &record.id.r#type,
+                &record.id.data_id,
+                &record.schema_version,
+                &commit_time,
+                &data_json,
+                &i64::try_from(record.revision)?,
+            ],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.execute(
+            "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
+            &[&i64::try_from(record.revision)?],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.commit()
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
@@ -1471,7 +1489,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
 
         let revision: i64 = client
-            .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
+            .query_one("SELECT revision FROM sync_revision", &[])
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
@@ -1533,21 +1551,29 @@ impl Storage for PostgresStorage {
     }
 
     async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
-        let last_revision: i64 = client
-            .query_one("SELECT COALESCE(MAX(revision), 0) FROM sync_state", &[])
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        let last_revision: i64 = tx
+            .query_one("SELECT revision FROM sync_revision", &[])
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?
             .get(0);
 
         let diff = i64::try_from(revision)?.saturating_sub(last_revision);
 
-        client
-            .execute(
-                "UPDATE sync_outgoing SET revision = revision + $1",
-                &[&diff],
-            )
+        tx.execute(
+            "UPDATE sync_outgoing SET revision = revision + $1",
+            &[&diff],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.commit()
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
@@ -1642,30 +1668,45 @@ impl Storage for PostgresStorage {
     }
 
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         let data_json = serde_json::to_value(&record.data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
         let commit_time = chrono::Utc::now().timestamp();
 
-        client
-            .execute(
-                "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
+        tx.execute(
+            "INSERT INTO sync_state (record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT(record_type, data_id) DO UPDATE SET
                     schema_version = EXCLUDED.schema_version,
                     commit_time = EXCLUDED.commit_time,
                     data = EXCLUDED.data,
                     revision = EXCLUDED.revision",
-                &[
-                    &record.id.r#type,
-                    &record.id.data_id,
-                    &record.schema_version,
-                    &commit_time,
-                    &data_json,
-                    &i64::try_from(record.revision)?,
-                ],
-            )
+            &[
+                &record.id.r#type,
+                &record.id.data_id,
+                &record.schema_version,
+                &commit_time,
+                &data_json,
+                &i64::try_from(record.revision)?,
+            ],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.execute(
+            "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
+            &[&i64::try_from(record.revision)?],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        tx.commit()
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 

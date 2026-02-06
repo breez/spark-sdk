@@ -876,6 +876,12 @@ class SqliteStorage {
           Math.floor(Date.now() / 1000),
           JSON.stringify(record.data)
         );
+
+        // Update sync_revision to track the highest known revision
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
+        `);
+        updateRevisionStmt.run(record.revision.toString());
       });
 
       transaction();
@@ -958,7 +964,7 @@ class SqliteStorage {
   syncGetLastRevision() {
     try {
       const stmt = this.db.prepare(
-        `SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as revision FROM sync_state`
+        `SELECT CAST(revision AS TEXT) as revision FROM sync_revision`
       );
       const row = stmt.get();
 
@@ -1036,9 +1042,9 @@ class SqliteStorage {
   syncRebasePendingOutgoingRecords(revision) {
     try {
       const transaction = this.db.transaction(() => {
-        // Get current revision
+        // Get current revision from sync_revision table
         const getLastRevisionStmt = this.db.prepare(`
-          SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as last_revision FROM sync_state
+          SELECT CAST(revision AS TEXT) as last_revision FROM sync_revision
         `);
         const revisionRow = getLastRevisionStmt.get();
         const lastRevision = revisionRow
@@ -1211,26 +1217,35 @@ class SqliteStorage {
 
   syncUpdateRecordFromIncoming(record) {
     try {
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO sync_state (
-          record_type, 
-          data_id, 
-          revision,
-          schema_version,
-          commit_time,
-          data
-        ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
-      `);
+      const transaction = this.db.transaction(() => {
+        const stmt = this.db.prepare(`
+          INSERT OR REPLACE INTO sync_state (
+            record_type,
+            data_id,
+            revision,
+            schema_version,
+            commit_time,
+            data
+          ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
+        `);
 
-      stmt.run(
-        record.id.type,
-        record.id.dataId,
-        record.revision.toString(),
-        record.schemaVersion,
-        Math.floor(Date.now() / 1000),
-        JSON.stringify(record.data)
-      );
+        stmt.run(
+          record.id.type,
+          record.id.dataId,
+          record.revision.toString(),
+          record.schemaVersion,
+          Math.floor(Date.now() / 1000),
+          JSON.stringify(record.data)
+        );
 
+        // Update sync_revision to track the highest known revision
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
+        `);
+        updateRevisionStmt.run(record.revision.toString());
+      });
+
+      transaction();
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(
