@@ -429,12 +429,23 @@ impl SyncProcessor {
         );
         // Pushes the record to the remote server.
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
-        self.client.set_record(&record).await?;
+        let reply = self.client.set_record(&record).await?;
+        match reply.status() {
+            crate::sync::proto::SetRecordStatus::Success => {
+                debug!(
+                    "Successfully pushed outgoing change with id {} for type {}, revision {}",
+                    &record.id.data_id, &record.id.r#type, &record.revision
+                );
+            }
+            crate::sync::proto::SetRecordStatus::Conflict => {
+                warn!(
+                    "Got conflict when trying to push outgoing change with id {} for type {}",
+                    &record.id.data_id, &record.id.r#type
+                );
+                anyhow::bail!("Conflict when trying to push outgoing change");
+            }
+        }
 
-        debug!(
-            "Completing outgoing record {:?}, revision {}",
-            record.id, record.revision
-        );
         // Removes the pending outgoing record and updates the existing record with the new one.
         self.storage
             .complete_outgoing_sync((&record).try_into()?)
