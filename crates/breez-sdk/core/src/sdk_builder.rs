@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
+    buy::{BuyBitcoinProviderApi, moonpay::MoonpayProvider},
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
 
@@ -337,12 +338,14 @@ impl SdkBuilder {
             return Err(SdkError::Generic("No storage configured".to_string()));
         };
 
+        let breez_server = Arc::new(
+            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
+                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        );
+
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
-            None => Arc::new(
-                BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
+            None => breez_server.clone(),
         };
 
         let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
@@ -415,6 +418,10 @@ impl SdkBuilder {
 
         let nostr_client = Arc::new(NostrClient::new(nostr_signer));
 
+        // Create the MoonPay provider for buying Bitcoin
+        let buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi> =
+            Arc::new(MoonpayProvider::new(breez_server.clone()));
+
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
@@ -428,6 +435,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
+            buy_bitcoin_provider,
         })?;
         debug!("Initialized and started breez sdk.");
 

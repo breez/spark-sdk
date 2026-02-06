@@ -15,7 +15,7 @@ use crate::{
     error::SdkError,
     events::{EventListener, SdkEvent},
     models::Payment,
-    persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
+    persist::{CachedAccountInfo, ObjectCacheRepository, StaticDepositAddress, Storage},
 };
 
 pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
@@ -202,4 +202,40 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     }
 
     Ok(())
+}
+
+/// Gets an existing deposit address from cache/network or creates a new one.
+///
+/// This helper is used by both `receive_payment(BitcoinAddress)` and `buy_bitcoin`.
+pub(crate) async fn get_or_create_deposit_address(
+    spark_wallet: &SparkWallet,
+    storage: Arc<dyn Storage>,
+) -> Result<String, SdkError> {
+    let object_repository = ObjectCacheRepository::new(storage);
+
+    // First lookup in storage cache
+    if let Some(static_deposit_address) = object_repository.fetch_static_deposit_address().await? {
+        return Ok(static_deposit_address.address);
+    }
+
+    // Then query existing addresses
+    let deposit_addresses = spark_wallet.list_static_deposit_addresses(None).await?;
+
+    // Use existing address or generate a new one
+    let address = match deposit_addresses.items.last() {
+        Some(address) => address.to_string(),
+        None => spark_wallet
+            .generate_deposit_address(false)
+            .await?
+            .to_string(),
+    };
+
+    // Cache the address
+    object_repository
+        .save_static_deposit_address(&StaticDepositAddress {
+            address: address.clone(),
+        })
+        .await?;
+
+    Ok(address)
 }
