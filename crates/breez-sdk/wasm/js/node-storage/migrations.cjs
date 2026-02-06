@@ -321,6 +321,13 @@ class MigrationManager {
           `ALTER TABLE payment_metadata DROP COLUMN token_conversion_info`,
           `ALTER TABLE payment_metadata ADD COLUMN conversion_info TEXT`]
       },
+      {
+        name: "Add preimage column to lnurl_receive_metadata for LUD-21",
+        sql: [
+          `ALTER TABLE lnurl_receive_metadata ADD COLUMN preimage TEXT`,
+          `DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'`
+        ]
+      },
     ];
   }
 }

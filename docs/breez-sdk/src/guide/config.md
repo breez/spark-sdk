@@ -58,6 +58,17 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 </div>
 
+## Invoice paid notifications
+
+Controls whether the SDK notifies the LNURL server when invoices created by the LNURL server are paid. Enabled by default, which provides:
+
+- **[LUD-21](https://github.com/lnurl/luds/blob/luds/21.md)**: Invoice verification via public endpoint
+- **[NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md)**: Server-side zap receipt publishing
+
+Disable for privacy using the configuration option below.
+
+{{#tabs config:no-invoice-paid-support}}
+
 ## Optimization configuration
 
 The SDK can automatically optimize the Spark leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.

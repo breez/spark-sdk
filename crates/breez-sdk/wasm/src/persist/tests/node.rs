@@ -122,6 +122,13 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_pending_lnurl_preimages() {
+    let storage = create_test_storage("pending_lnurl_preimages").await;
+
+    breez_sdk_spark::storage_tests::test_pending_lnurl_preimages(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_spark_htlc_status_filtering() {
     let storage = create_test_storage("spark_htlc_status_filtering").await;
 

@@ -108,3 +108,11 @@ If the payment was sent as a Nostr Zap (as defined in [NIP-57](https://github.co
 {{#tabs lightning_address:access-nostr-zap}}
 
 > **Note:** When used in [private mode](./config.md#private-mode-enabled-by-default), the nostr zap receipt will be published by the SDK when online. When used in public mode, the zap receipt will be published by the LNURL server on your behalf.
+
+<h3 id="payment-verification">
+    <a class="header" href="#payment-verification">Payment verification (LUD-21)</a>
+</h3>
+
+Payments received through your Lightning address support [LUD-21](https://github.com/lnurl/luds/blob/luds/21.md) invoice verification, allowing third parties to verify payment completion via a public verify URL.
+
+> **Note:** For LUD-21 the LNURL server needs to know whether invoices were paid. This can be disabled for privacy reasons. See [Invoice paid notifications](./config.md#invoice-paid-notifications).
