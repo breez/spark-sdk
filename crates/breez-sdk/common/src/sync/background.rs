@@ -5,6 +5,7 @@ use tracing::{debug, error, warn};
 use web_time::SystemTime;
 
 use crate::sync::{
+    Record,
     model::{IncomingChange, OutgoingChange, RecordId},
     signing_client::SigningClient,
     storage::SyncStorage,
@@ -420,21 +421,30 @@ impl SyncProcessor {
     }
 
     async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
-        // Merges the updated fields with the existing record data in the local sync state to form the new record.
-        let record = change.merge();
+        // The server expects to receive the existing revision number, if any.
+        let revision = change.parent.as_ref().map_or(0, |p| p.revision);
 
+        // Merges the updated fields with the existing record data in the local sync state to form the new record.
+        let mut record = change.merge();
         debug!(
             "Pushing outgoing record {:?}, revision {} to remote",
             record.id, record.revision
         );
         // Pushes the record to the remote server.
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
-        let reply = self.client.set_record(&record).await?;
+        let reply = self
+            .client
+            .set_record(&Record {
+                revision,
+                ..record.clone()
+            })
+            .await?;
+
         match reply.status() {
             crate::sync::proto::SetRecordStatus::Success => {
                 debug!(
-                    "Successfully pushed outgoing change with id {} for type {}, revision {}",
-                    &record.id.data_id, &record.id.r#type, &record.revision
+                    "Successfully pushed outgoing change with id {} for type {}, revision {}. Server returned revision {}.",
+                    &record.id.data_id, &record.id.r#type, &record.revision, reply.new_revision,
                 );
             }
             crate::sync::proto::SetRecordStatus::Conflict => {
@@ -444,6 +454,14 @@ impl SyncProcessor {
                 );
                 anyhow::bail!("Conflict when trying to push outgoing change");
             }
+        }
+
+        if reply.new_revision != record.revision {
+            warn!(
+                "Real-time sync server assigned revision number {} to change with id {}, type {}, where we expected it would get {}. Going with server's judgement.",
+                reply.new_revision, record.id.data_id, record.id.r#type, record.revision
+            );
+            record.revision = reply.new_revision;
         }
 
         // Removes the pending outgoing record and updates the existing record with the new one.
