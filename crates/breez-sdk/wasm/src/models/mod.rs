@@ -1235,3 +1235,32 @@ pub struct FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]
+pub struct Contact {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AddContactRequest)]
+pub struct AddContactRequest {
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateContactRequest)]
+pub struct UpdateContactRequest {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListContactsRequest)]
+pub struct ListContactsRequest {
+    pub name: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}

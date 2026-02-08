@@ -37,7 +37,18 @@ pub trait SyncStorage: Send + Sync {
         &self,
         record: UnversionedRecordChange,
     ) -> Result<u64, SyncStorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError>;
+    /// Completes an outgoing sync by:
+    /// 1. Deleting the pending change from `sync_outgoing` (using `local_revision`)
+    /// 2. Updating `sync_state` with the server's new state (using `record.revision`)
+    ///
+    /// Two separate revisions are needed:
+    /// - `local_revision`: Identifies the specific change row in `sync_outgoing` to delete.
+    /// - `record.revision`: The server-assigned revision to store in `sync_state`.
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), SyncStorageError>;
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,

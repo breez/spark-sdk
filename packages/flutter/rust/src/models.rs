@@ -1114,3 +1114,32 @@ pub struct _FetchConversionLimitsResponse {
     pub min_from_amount: Option<u128>,
     pub min_to_amount: Option<u128>,
 }
+
+#[frb(mirror(Contact))]
+pub struct _Contact {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[frb(mirror(AddContactRequest))]
+pub struct _AddContactRequest {
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[frb(mirror(UpdateContactRequest))]
+pub struct _UpdateContactRequest {
+    pub id: String,
+    pub name: String,
+    pub payment_identifier: String,
+}
+
+#[frb(mirror(ListContactsRequest))]
+pub struct _ListContactsRequest {
+    pub name: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
