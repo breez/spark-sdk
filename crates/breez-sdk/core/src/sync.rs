@@ -249,19 +249,10 @@ impl SparkSyncService {
                 .collect::<Vec<_>>();
 
             // Since we are trying to fetch at most 1 parent transaction per token transaction,
-            // we can fetch all in one go using same batch size
+            // we can fetch all in one go (get_token_transactions_by_hashes is limited to 100 items)
             let Ok(parent_transactions) = self
                 .spark_wallet
-                .list_token_transactions(ListTokenTransactionsRequest {
-                    paging: Some(PagingFilter::new(
-                        None,
-                        Some(PAYMENT_SYNC_BATCH_SIZE),
-                        Some(Order::Descending),
-                    )),
-                    owner_public_keys: Some(Vec::new()),
-                    token_transaction_hashes: token_transactions_prevout_hashes,
-                    ..Default::default()
-                })
+                .get_token_transactions_by_hashes(token_transactions_prevout_hashes)
                 .await
             else {
                 error!(
@@ -283,7 +274,6 @@ impl SparkSyncService {
                             SdkError::Generic("No input in token transfer input".to_string()),
                         )?;
                         let parent_transaction = parent_transactions
-                            .items
                             .iter()
                             .find(|tx| tx.hash == first_input.prev_token_tx_hash)
                             .ok_or(SdkError::Generic(

@@ -1207,12 +1207,24 @@ impl SparkWallet {
                 QueryTokenTransactionsFilter {
                     owner_public_keys: request.owner_public_keys,
                     issuer_public_keys: request.issuer_public_keys,
-                    token_transaction_hashes: request.token_transaction_hashes,
                     token_ids: request.token_ids,
                     output_ids: request.output_ids,
                 },
                 request.paging,
             )
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Queries token transactions by their hashes.
+    ///
+    /// Limited to 100 hashes per request.
+    pub async fn get_token_transactions_by_hashes(
+        &self,
+        hashes: Vec<String>,
+    ) -> Result<Vec<TokenTransaction>, SparkWalletError> {
+        self.token_service
+            .query_token_transactions_by_hashes(hashes)
             .await
             .map_err(Into::into)
     }
