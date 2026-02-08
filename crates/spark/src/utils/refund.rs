@@ -188,11 +188,6 @@ pub async fn sign_refunds(
                     "Direct refund transaction is missing".to_string(),
                 ));
             };
-            let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx else {
-                return Err(SignerError::Generic(
-                    "Direct from CPFP refund transaction is missing".to_string(),
-                ));
-            };
 
             let direct_refund_tx = sign_refund(
                 signer,
@@ -206,7 +201,11 @@ pub async fn sign_refunds(
             )
             .await?;
             direct_signed_refunds.push(direct_refund_tx);
+        }
 
+        // direct_from_cpfp_refund_tx spends from the CPFP (node_tx) output, not from
+        // direct_tx, so it must be signed regardless of whether direct_tx exists.
+        if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
             let direct_from_cpfp_signed_tx = sign_refund(
                 signer,
                 leaf,
@@ -372,88 +371,90 @@ pub async fn sign_aggregate_refunds(
         let mut direct_refund_tx_signature = Vec::new();
         let mut direct_from_cpfp_refund_tx_signature = Vec::new();
 
-        if let Some(direct_tx) = &leaf_data.direct_tx {
-            if let Some(direct_refund_tx) = &leaf_data.direct_refund_tx {
-                trace!("Signing direct refund tx for leaf");
-                let direct_refund_tx_signing_result = operator_signing_result
-                    .direct_refund_tx_signing_result
-                    .as_ref()
-                    .map(|sr| sr.try_into())
-                    .transpose()?
-                    .ok_or(ServiceError::ValidationError(
-                        "Missing direct refund tx signing result".to_string(),
-                    ))?;
+        if let Some(direct_tx) = &leaf_data.direct_tx
+            && let Some(direct_refund_tx) = &leaf_data.direct_refund_tx
+        {
+            trace!("Signing direct refund tx for leaf");
+            let direct_refund_tx_signing_result = operator_signing_result
+                .direct_refund_tx_signing_result
+                .as_ref()
+                .map(|sr| sr.try_into())
+                .transpose()?
+                .ok_or(ServiceError::ValidationError(
+                    "Missing direct refund tx signing result".to_string(),
+                ))?;
 
-                // Build all_prev_outs for direct refund (direct_tx + connector)
-                // BIP 341 Taproot sighash requires ALL inputs' prevouts
-                let direct_all_prev_outs = leaf_data
-                    .connector_prev_out
-                    .as_ref()
-                    .map(|connector_out| vec![direct_tx.output[0].clone(), connector_out.clone()]);
+            // Build all_prev_outs for direct refund (direct_tx + connector)
+            // BIP 341 Taproot sighash requires ALL inputs' prevouts
+            let direct_all_prev_outs = leaf_data
+                .connector_prev_out
+                .as_ref()
+                .map(|connector_out| vec![direct_tx.output[0].clone(), connector_out.clone()]);
 
-                // Compute sighash for direct refund tx
-                let direct_refund_sighash = if let Some(prev_outs) = direct_all_prev_outs
-                    .as_ref()
-                    .filter(|_| direct_refund_tx.input.len() > 1)
-                {
-                    sighash_from_multi_input_tx(direct_refund_tx, 0, prev_outs)
-                } else {
-                    sighash_from_tx(direct_refund_tx, 0, &direct_tx.output[0])
-                }
-                .map_err(|e| ServiceError::Generic(e.to_string()))?;
-
-                let signature = sign_aggregate_frost(SignAggregateFrostParams {
-                    signer,
-                    sighash: &direct_refund_sighash,
-                    signing_public_key: &leaf_data.signing_public_key,
-                    aggregating_public_key: &leaf_data.signing_public_key,
-                    signing_private_key: &leaf_data.signing_private_key,
-                    self_nonce_commitment: &leaf_data.direct_signing_nonce_commitment,
-                    adaptor_public_key: direct_adaptor_pubkey,
-                    verifying_key: &verifying_key,
-                    signing_result: direct_refund_tx_signing_result,
-                })
-                .await?;
-                direct_refund_tx_signature = signature.serialize()?.to_vec();
+            // Compute sighash for direct refund tx
+            let direct_refund_sighash = if let Some(prev_outs) = direct_all_prev_outs
+                .as_ref()
+                .filter(|_| direct_refund_tx.input.len() > 1)
+            {
+                sighash_from_multi_input_tx(direct_refund_tx, 0, prev_outs)
+            } else {
+                sighash_from_tx(direct_refund_tx, 0, &direct_tx.output[0])
             }
+            .map_err(|e| ServiceError::Generic(e.to_string()))?;
 
-            if let Some(direct_from_cpfp_refund_tx) = &leaf_data.direct_from_cpfp_refund_tx {
-                trace!("Signing direct from CPFP refund tx for leaf");
-                let direct_from_cpfp_refund_tx_signing_result = operator_signing_result
-                    .direct_from_cpfp_refund_tx_signing_result
-                    .as_ref()
-                    .map(|sr| sr.try_into())
-                    .transpose()?
-                    .ok_or(ServiceError::ValidationError(
-                        "Missing direct from CPFP refund tx signing result".to_string(),
-                    ))?;
+            let signature = sign_aggregate_frost(SignAggregateFrostParams {
+                signer,
+                sighash: &direct_refund_sighash,
+                signing_public_key: &leaf_data.signing_public_key,
+                aggregating_public_key: &leaf_data.signing_public_key,
+                signing_private_key: &leaf_data.signing_private_key,
+                self_nonce_commitment: &leaf_data.direct_signing_nonce_commitment,
+                adaptor_public_key: direct_adaptor_pubkey,
+                verifying_key: &verifying_key,
+                signing_result: direct_refund_tx_signing_result,
+            })
+            .await?;
+            direct_refund_tx_signature = signature.serialize()?.to_vec();
+        }
 
-                // Compute sighash for direct from CPFP refund tx
-                // Reuse all_prev_outs from CPFP refund (same inputs: node_tx + connector)
-                let direct_from_cpfp_sighash = if let Some(prev_outs) = all_prev_outs
-                    .as_ref()
-                    .filter(|_| direct_from_cpfp_refund_tx.input.len() > 1)
-                {
-                    sighash_from_multi_input_tx(direct_from_cpfp_refund_tx, 0, prev_outs)
-                } else {
-                    sighash_from_tx(direct_from_cpfp_refund_tx, 0, &tx.output[0])
-                }
-                .map_err(|e| ServiceError::Generic(e.to_string()))?;
+        // direct_from_cpfp_refund_tx spends from the CPFP (node_tx) output, not from
+        // direct_tx, so it must be signed regardless of whether direct_tx exists.
+        if let Some(direct_from_cpfp_refund_tx) = &leaf_data.direct_from_cpfp_refund_tx {
+            trace!("Signing direct from CPFP refund tx for leaf");
+            let direct_from_cpfp_refund_tx_signing_result = operator_signing_result
+                .direct_from_cpfp_refund_tx_signing_result
+                .as_ref()
+                .map(|sr| sr.try_into())
+                .transpose()?
+                .ok_or(ServiceError::ValidationError(
+                    "Missing direct from CPFP refund tx signing result".to_string(),
+                ))?;
 
-                let signature = sign_aggregate_frost(SignAggregateFrostParams {
-                    signer,
-                    sighash: &direct_from_cpfp_sighash,
-                    signing_public_key: &leaf_data.signing_public_key,
-                    aggregating_public_key: &leaf_data.signing_public_key,
-                    signing_private_key: &leaf_data.signing_private_key,
-                    self_nonce_commitment: &leaf_data.direct_from_cpfp_signing_nonce_commitment,
-                    adaptor_public_key: direct_from_cpfp_adaptor_pubkey,
-                    verifying_key: &verifying_key,
-                    signing_result: direct_from_cpfp_refund_tx_signing_result,
-                })
-                .await?;
-                direct_from_cpfp_refund_tx_signature = signature.serialize()?.to_vec();
+            // Compute sighash for direct from CPFP refund tx
+            // Reuse all_prev_outs from CPFP refund (same inputs: node_tx + connector)
+            let direct_from_cpfp_sighash = if let Some(prev_outs) = all_prev_outs
+                .as_ref()
+                .filter(|_| direct_from_cpfp_refund_tx.input.len() > 1)
+            {
+                sighash_from_multi_input_tx(direct_from_cpfp_refund_tx, 0, prev_outs)
+            } else {
+                sighash_from_tx(direct_from_cpfp_refund_tx, 0, &tx.output[0])
             }
+            .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
+            let signature = sign_aggregate_frost(SignAggregateFrostParams {
+                signer,
+                sighash: &direct_from_cpfp_sighash,
+                signing_public_key: &leaf_data.signing_public_key,
+                aggregating_public_key: &leaf_data.signing_public_key,
+                signing_private_key: &leaf_data.signing_private_key,
+                self_nonce_commitment: &leaf_data.direct_from_cpfp_signing_nonce_commitment,
+                adaptor_public_key: direct_from_cpfp_adaptor_pubkey,
+                verifying_key: &verifying_key,
+                signing_result: direct_from_cpfp_refund_tx_signing_result,
+            })
+            .await?;
+            direct_from_cpfp_refund_tx_signature = signature.serialize()?.to_vec();
         }
 
         node_signatures.push(crate::operator::rpc::spark::NodeSignatures {

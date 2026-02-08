@@ -70,7 +70,8 @@ where
 /// # Returns
 /// A tuple of (SparkWallet, event listener)
 pub async fn create_regtest_wallet() -> Result<(SparkWallet, Receiver<WalletEvent>)> {
-    let config = SparkWalletConfig::default_config(Network::Regtest);
+    let mut config = SparkWalletConfig::default_config(Network::Regtest);
+    config.leaf_auto_optimize_enabled = false;
 
     let mut seed = [0u8; 32];
     rand::thread_rng().fill(&mut seed);
