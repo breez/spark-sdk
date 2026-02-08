@@ -523,11 +523,10 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: bob_spark_address.clone(),
-                pay_amount: Some(PayAmount::Token {
-                    amount: 1000,
-                    token_identifier: token_metadata.identifier.clone(),
-                }),
+                amount: Some(1000),
+                token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
+                fee_policy: None,
             })
             .await?;
 
@@ -549,11 +548,10 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: alice_spark_address.clone(),
-                pay_amount: Some(PayAmount::Token {
-                    amount: 1000,
-                    token_identifier: token_metadata.identifier.clone(),
-                }),
+                amount: Some(1000),
+                token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
+                fee_policy: None,
             })
             .await?;
 
