@@ -1,0 +1,605 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Using an External Signer - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/external_signer.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="using-an-external-signer"><a class="header" href="#using-an-external-signer">Using an External Signer</a></h1>
+<p>The External Signer feature allows you to provide custom signing logic for the SDK rather than relying on the SDK's internal key management. This is useful when you want to:</p>
+<ul>
+<li>Keep keys in a secured environment</li>
+<li>Implement custom key derivation logic</li>
+<li>Integrate with existing wallet infrastructure</li>
+</ul>
+<h2 id="using-the-default-external-signer"><a class="header" href="#using-the-default-external-signer">Using the Default External Signer</a></h2>
+<p>The SDK provides a convenient factory function <code>default_external_signer</code> that creates a signer from a mnemonic. This is the easiest way to get started:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">fn create_signer() -&gt; Result&lt;Arc&lt;dyn ExternalSigner&gt;, SdkError&gt; {
+    let mnemonic = "&lt;mnemonic words&gt;".to_string();
+    let network = Network::Mainnet;
+
+    let signer = default_external_signer(
+        mnemonic,
+        None, // passphrase
+        network,
+        Some(KeySetConfig {
+            key_set_type: KeySetType::Default,
+            use_address_index: false,
+            account_number: Some(0),
+        }),
+    )?;
+
+    Ok(signer)
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">func createSigner() throws -&gt; ExternalSigner {
+    let mnemonic = "&lt;mnemonic words&gt;"
+    let network = Network.mainnet
+
+    let signer = try defaultExternalSigner(
+        mnemonic: mnemonic,
+        passphrase: nil,
+        network: network,
+        keySetConfig: KeySetConfig(
+            keySetType: KeySetType.default,
+            useAddressIndex: false,
+            accountNumber: 0
+        )
+    )
+
+    return signer
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">fun createSigner(): breez_sdk_spark.ExternalSigner {
+    val mnemonic = "&lt;mnemonic words&gt;"
+    val network = Network.MAINNET
+    val keySetType = KeySetType.DEFAULT
+    val useAddressIndex = false
+    val accountNumber = 0U
+
+    val keySetConfig = KeySetConfig(
+        keySetType = keySetType,
+        useAddressIndex = useAddressIndex,
+        accountNumber = accountNumber
+    )
+
+    val signer = defaultExternalSigner(
+        mnemonic = mnemonic,
+        passphrase = null,
+        network = network,
+        keySetConfig = keySetConfig
+    )
+
+    return signer
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">public static ExternalSigner CreateSigner()
+{
+    var mnemonic = "&lt;mnemonic words&gt;";
+    var network = Network.Mainnet;
+    var keySetType = KeySetType.Default;
+    var useAddressIndex = false;
+    uint accountNumber = 0;
+
+    var keySetConfig = new KeySetConfig(
+        keySetType: keySetType,
+        useAddressIndex: useAddressIndex,
+        accountNumber: accountNumber
+    );
+
+    var signer = BreezSdkSparkMethods.DefaultExternalSigner(
+        mnemonic: mnemonic,
+        passphrase: null,
+        network: network,
+        keySetConfig: keySetConfig
+    );
+
+    return signer;
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const createSigner = () =&gt; {
+  const mnemonic = '&lt;mnemonic words&gt;'
+  const keySetConfig: KeySetConfig = {
+    keySetType: 'default',
+    useAddressIndex: false,
+    accountNumber: 0
+  }
+
+  // Create the default signer from the SDK
+  const signer = defaultExternalSigner(mnemonic, null, 'mainnet', keySetConfig)
+
+  return signer
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const createSigner = () =&gt; {
+  const mnemonic = '&lt;mnemonic words&gt;'
+  const keySetConfig: KeySetConfig = {
+    keySetType: KeySetType.Default,
+    useAddressIndex: false,
+    accountNumber: 0
+  }
+
+  // Create the default signer from the SDK
+  const signer = defaultExternalSigner(mnemonic, undefined, Network.Mainnet, keySetConfig)
+
+  return signer
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">def create_signer() -&gt; ExternalSigner:
+    mnemonic = "&lt;mnemonic words&gt;"
+    network = Network.MAINNET
+    key_set_type = KeySetType.DEFAULT
+    use_address_index = False
+    account_number = 0
+
+    key_set_config = KeySetConfig(
+        key_set_type=key_set_type,
+        use_address_index=use_address_index,
+        account_number=account_number,
+    )
+
+    signer = default_external_signer(
+        mnemonic=mnemonic,
+        passphrase=None,
+        network=network,
+        key_set_config=key_set_config,
+    )
+
+    return signer
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">func createSigner() (breez_sdk_spark.ExternalSigner, error) {
+	mnemonic := "&lt;mnemonic words&gt;"
+	network := breez_sdk_spark.NetworkMainnet
+	keySetType := breez_sdk_spark.KeySetTypeDefault
+	useAddressIndex := false
+	var accountNumber uint32 = 0
+
+	keySetConfig := breez_sdk_spark.KeySetConfig{
+		KeySetType:      keySetType,
+		UseAddressIndex: useAddressIndex,
+		AccountNumber:   &amp;accountNumber,
+	}
+
+	signer, err := breez_sdk_spark.DefaultExternalSigner(
+		mnemonic,
+		nil, // passphrase
+		network,
+		&amp;keySetConfig,
+	)
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &amp;sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return nil, err
+	}
+
+	return signer, nil
+}
+</code></pre>
+</section>
+</custom-tabs>
+<p>Once you have a signer, you can use it when connecting to the SDK with the <code>connect_with_signer</code> method instead of the regular <code>connect</code> method:</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">async fn connect_example(signer: Arc&lt;dyn ExternalSigner&gt;) -&gt; Result&lt;BreezSdk, SdkError&gt; {
+    // Create the config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("&lt;breez api key&gt;".to_string());
+
+    // Connect using the external signer
+    let sdk = connect_with_signer(ConnectWithSignerRequest {
+        config,
+        signer,
+        storage_dir: "./.data".to_string(),
+    })
+    .await?;
+
+    Ok(sdk)
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">func connectExample(signer: ExternalSigner) async throws -&gt; BreezSdk {
+    // Create the config
+    var config = defaultConfig(network: .mainnet)
+    config.apiKey = "&lt;breez api key&gt;"
+
+    // Connect using the external signer
+    let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
+        config: config,
+        signer: signer,
+        storageDir: "./.data"
+    ))
+
+    return sdk
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">suspend fun connectWithSigner(signer: breez_sdk_spark.ExternalSigner) {
+    // Create the config
+    val config = defaultConfig(Network.MAINNET)
+    config.apiKey = "&lt;breez api key&gt;"
+
+    try {
+        // Connect using the external signer
+        val sdk = connectWithSigner(ConnectWithSignerRequest(
+            config = config,
+            signer = signer,
+            storageDir = "./.data"
+        ))
+    } catch (e: Exception) {
+        // handle error
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">public static async Task&lt;BreezSdk&gt; ConnectWithSigner(ExternalSigner signer)
+{
+    // Create the config
+    var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+    {
+        apiKey = "&lt;breez api key&gt;"
+    };
+
+    // Connect using the external signer
+    var sdk = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
+        config: config,
+        signer: signer,
+        storageDir: "./.data"
+    ));
+
+    return sdk;
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const exampleConnectWithSigner = async (signer: ReturnType&lt;typeof defaultExternalSigner&gt;) =&gt; {
+  // Create the config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '&lt;breez api key&gt;'
+
+  // Connect using the external signer
+  const sdk = await connectWithSigner(
+    config,
+    signer,
+    'breez_spark_db' // For WASM, this is the IndexedDB database name
+  )
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const exampleConnectWithSigner = async (signer: ReturnType&lt;typeof defaultExternalSigner&gt;) =&gt; {
+  // Create the config
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '&lt;breez api key&gt;'
+
+  // Connect using the external signer
+  const sdk = await connectWithSigner({
+    config,
+    signer,
+    storageDir: `${RNFS.DocumentDirectoryPath}/data`
+  })
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">async def example_connect_with_signer(signer: ExternalSigner) -&gt; BreezSdk:
+    # Create the config
+    config = default_config(Network.MAINNET)
+    config.api_key = "&lt;breez api key&gt;"
+
+    # Connect using the external signer
+    sdk = await connect_with_signer(ConnectWithSignerRequest(
+        config=config,
+        signer=signer,
+        storage_dir="./.data"
+    ))
+
+    return sdk
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.BreezSdk, error) {
+	// Create the config
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	apiKey := "&lt;breez api key&gt;"
+	config.ApiKey = &amp;apiKey
+
+	// Connect using the external signer
+	sdk, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
+		Config:     config,
+		Signer:     signer,
+		StorageDir: "./.data",
+	})
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &amp;sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return nil, err
+	}
+
+	return sdk, nil
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+When using an external signer, you don't provide a seed directly to the SDK. Instead, the signer handles all cryptographic operations internally.
+</div>
+<h2 id="implementing-a-custom-signer"><a class="header" href="#implementing-a-custom-signer">Implementing a Custom Signer</a></h2>
+<p>If you need full control over the signing process, you can implement the <a href="https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs">ExternalSigner</a> interface in your application. This interface defines all the cryptographic operations the SDK needs.</p>
+<p>The <a href="https://github.com/breez/spark-sdk/blob/main/crates/spark/src/signer/default_signer.rs">DefaultSigner</a> implementation can be used as a reference for what's expected.</p>
+<div class="warning">
+<h4 id="developer-note-1"><a class="header" href="#developer-note-1">Developer note</a></h4>
+<p>Implementing a custom signer requires deep understanding of Bitcoin cryptography. The default signer implementation provides a solid reference for what's expected.</p>
+<p>Most applications should use the default external signer factory function rather than implementing their own.</p>
+</div>
+<div class="warning">
+<h4 id="flutter-limitation"><a class="header" href="#flutter-limitation">Flutter Limitation</a></h4>
+<p>External signers are not supported in Flutter due to limitations with passing trait objects through the flutter_rust_bridge FFI. Flutter applications should use the standard <code>connect</code> method with mnemonic-based key management.</p>
+</div>
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/optimize.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/moving_to_production.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/optimize.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/moving_to_production.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

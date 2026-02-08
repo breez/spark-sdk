@@ -1,0 +1,1287 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Token payments - Breez SDK - Nodeless (Spark)</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Nodeless (Spark)</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/token_payments.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="sending-and-receiving-tokens"><a class="header" href="#sending-and-receiving-tokens">Sending and receiving tokens</a></h1>
+<p>Spark supports tokens using the <a href="https://docs.spark.money/learn/tokens/hello-btkn">BTKN protocol</a>. The Breez SDK enables you to send and receive these tokens using the standard payments API.</p>
+<h2 id="fetching-the-balance">
+    <a class="header" href="#fetching-the-balance">Fetching token balances</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_info">API docs</a>
+</h2>
+<p>Token balances for all tokens currently held in the wallet can be retrieved along with general wallet information. Each token balance includes both the balance amount and the token metadata (identifier, name, ticker, issuer public key, etc.).</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let info = sdk
+    .get_info(GetInfoRequest {
+        // ensure_synced: true will ensure the SDK is synced with the Spark network
+        // before returning the balance
+        ensure_synced: Some(false),
+    })
+    .await?;
+
+// Token balances are a map of token identifier to balance
+let token_balances = info.token_balances;
+for (token_id, token_balance) in token_balances {
+    info!("Token ID: {}", token_id);
+    info!("Balance: {}", token_balance.balance);
+    info!("Name: {}", token_balance.token_metadata.name);
+    info!("Ticker: {}", token_balance.token_metadata.ticker);
+    info!("Decimals: {}", token_balance.token_metadata.decimals);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// ensureSynced: true will ensure the SDK is synced with the Spark network
+// before returning the balance
+let info = try await sdk.getInfo(
+    request: GetInfoRequest(
+        ensureSynced: false
+    ))
+
+// Token balances are a map of token identifier to balance
+let tokenBalances = info.tokenBalances
+for (tokenId, tokenBalance) in tokenBalances {
+    print("Token ID: \(tokenId)")
+    print("Balance: \(tokenBalance.balance)")
+    print("Name: \(tokenBalance.tokenMetadata.name)")
+    print("Ticker: \(tokenBalance.tokenMetadata.ticker)")
+    print("Decimals: \(tokenBalance.tokenMetadata.decimals)")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    // ensureSynced: true will ensure the SDK is synced with the Spark network
+    // before returning the balance
+    val info = sdk.getInfo(GetInfoRequest(false))
+
+    // Token balances are a map of token identifier to balance
+    val tokenBalances = info.tokenBalances
+    for ((tokenId, tokenBalance) in tokenBalances) {
+        println("Token ID: $tokenId")
+        println("Balance: ${tokenBalance.balance}")
+        println("Name: ${tokenBalance.tokenMetadata.name}")
+        println("Ticker: ${tokenBalance.tokenMetadata.ticker}")
+        println("Decimals: ${tokenBalance.tokenMetadata.decimals}")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// ensureSynced: true will ensure the SDK is synced with the Spark network
+// before returning the balance
+var info = await sdk.GetInfo(request: new GetInfoRequest(ensureSynced: false));
+
+// Token balances are a map of token identifier to balance
+var tokenBalances = info.tokenBalances;
+foreach (var kvp in tokenBalances)
+{
+    var tokenId = kvp.Key;
+    var tokenBalance = kvp.Value;
+    Console.WriteLine($"Token ID: {tokenId}");
+    Console.WriteLine($"Balance: {tokenBalance.balance}");
+    Console.WriteLine($"Name: {tokenBalance.tokenMetadata.name}");
+    Console.WriteLine($"Ticker: {tokenBalance.tokenMetadata.ticker}");
+    Console.WriteLine($"Decimals: {tokenBalance.tokenMetadata.decimals}");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const info = await sdk.getInfo({
+  // ensureSynced: true will ensure the SDK is synced with the Spark network
+  // before returning the balance
+  ensureSynced: false
+})
+
+// Token balances are a map of token identifier to balance
+const tokenBalances = info.tokenBalances
+for (const [tokenId, tokenBalance] of Object.entries(tokenBalances)) {
+  console.log(`Token ID: ${tokenId}`)
+  console.log(`Balance: ${tokenBalance.balance}`)
+  console.log(`Name: ${tokenBalance.tokenMetadata.name}`)
+  console.log(`Ticker: ${tokenBalance.tokenMetadata.ticker}`)
+  console.log(`Decimals: ${tokenBalance.tokenMetadata.decimals}`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const info = await sdk.getInfo({
+  // ensureSynced: true will ensure the SDK is synced with the Spark network
+  // before returning the balance
+  ensureSynced: false
+})
+
+// Token balances are a map of token identifier to balance
+const tokenBalances = info.tokenBalances
+for (const [tokenId, tokenBalance] of Object.entries(tokenBalances)) {
+  console.log(`Token ID: ${tokenId}`)
+  console.log(`Balance: ${tokenBalance.balance}`)
+  console.log(`Name: ${tokenBalance.tokenMetadata.name}`)
+  console.log(`Ticker: ${tokenBalance.tokenMetadata.ticker}`)
+  console.log(`Decimals: ${tokenBalance.tokenMetadata.decimals}`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// ensureSynced: true will ensure the SDK is synced with the Spark network
+// before returning the balance
+final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
+
+// Token balances are a map of token identifier to balance
+final tokenBalances = info.tokenBalances;
+tokenBalances.forEach((tokenId, tokenBalance) {
+  print('Token ID: $tokenId');
+  print('Balance: ${tokenBalance.balance}');
+  print('Name: ${tokenBalance.tokenMetadata.name}');
+  print('Ticker: ${tokenBalance.tokenMetadata.ticker}');
+  print('Decimals: ${tokenBalance.tokenMetadata.decimals}');
+});
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    # ensure_synced: True will ensure the SDK is synced with the Spark network
+    # before returning the balance
+    info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
+
+    # Token balances are a map of token identifier to balance
+    token_balances = info.token_balances
+    for token_id, token_balance in token_balances.items():
+        print(f"Token ID: {token_id}")
+        print(f"Balance: {token_balance.balance}")
+        print(f"Name: {token_balance.token_metadata.name}")
+        print(f"Ticker: {token_balance.token_metadata.ticker}")
+        print(f"Decimals: {token_balance.token_metadata.decimals}")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">ensureSynced := false
+info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
+	// EnsureSynced: true will ensure the SDK is synced with the Spark network
+	// before returning the balance
+	EnsureSynced: &amp;ensureSynced,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+// Token balances are a map of token identifier to balance
+tokenBalances := info.TokenBalances
+for tokenId, tokenBalance := range tokenBalances {
+	log.Printf("Token ID: %v", tokenId)
+	log.Printf("Balance: %v", tokenBalance.Balance)
+	log.Printf("Name: %v", tokenBalance.TokenMetadata.Name)
+	log.Printf("Ticker: %v", tokenBalance.TokenMetadata.Ticker)
+	log.Printf("Decimals: %v", tokenBalance.TokenMetadata.Decimals)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+Token balances are cached for fast responses. For details on ensuring up-to-date balances, see the <a href="./get_info.html#fetching-the-balance">Fetching the balance</a> section.
+</div>
+<h2 id="fetching-token-metadata">
+    <a class="header" href="#fetching-token-metadata">Fetching token metadata</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_tokens_metadata">API docs</a>
+</h2>
+<p>Token metadata can be fetched for specific tokens by providing their identifiers. This is especially useful for retrieving metadata for tokens that are not currently held in the wallet. The metadata is cached locally after the first fetch for faster subsequent lookups.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let response = sdk
+    .get_tokens_metadata(GetTokensMetadataRequest {
+        token_identifiers: vec![
+            String::from("&lt;token identifier 1&gt;"),
+            String::from("&lt;token identifier 2&gt;"),
+        ],
+    })
+    .await?;
+
+let tokens_metadata = response.tokens_metadata;
+for token_metadata in tokens_metadata {
+    info!("Token ID: {}", token_metadata.identifier);
+    info!("Name: {}", token_metadata.name);
+    info!("Ticker: {}", token_metadata.ticker);
+    info!("Decimals: {}", token_metadata.decimals);
+    info!("Max Supply: {}", token_metadata.max_supply);
+    info!("Is Freezable: {}", token_metadata.is_freezable);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let response = try await sdk.getTokensMetadata(
+    request: GetTokensMetadataRequest(tokenIdentifiers: [
+        "&lt;token identifier 1&gt;", "&lt;token identifier 2&gt;",
+    ]))
+
+let tokensMetadata = response.tokensMetadata
+for tokenMetadata in tokensMetadata {
+    print("Token ID: \(tokenMetadata.identifier)")
+    print("Name: \(tokenMetadata.name)")
+    print("Ticker: \(tokenMetadata.ticker)")
+    print("Decimals: \(tokenMetadata.decimals)")
+    print("Max Supply: \(tokenMetadata.maxSupply)")
+    print("Is Freezable: \(tokenMetadata.isFreezable)")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val response = 
+        sdk.getTokensMetadata(
+            GetTokensMetadataRequest(
+                tokenIdentifiers = listOf("&lt;token identifier 1&gt;", "&lt;token identifier 2&gt;")
+        )
+    )   
+
+    val tokensMetadata = response.tokensMetadata
+    for (tokenMetadata in tokensMetadata) {
+        println("Token ID: ${tokenMetadata.identifier}")
+        println("Name: ${tokenMetadata.name}")
+        println("Ticker: ${tokenMetadata.ticker}")
+        println("Decimals: ${tokenMetadata.decimals}")
+        println("Max Supply: ${tokenMetadata.maxSupply}")
+        println("Is Freezable: ${tokenMetadata.isFreezable}")
+    }
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var response = await sdk.GetTokensMetadata(
+    request: new GetTokensMetadataRequest(
+        tokenIdentifiers: new List&lt;string&gt; { "&lt;token identifier 1&gt;", "&lt;token identifier 2&gt;" }
+    )
+);
+
+var tokensMetadata = response.tokensMetadata;
+foreach (var tokenMetadata in tokensMetadata)
+{
+    Console.WriteLine($"Token ID: {tokenMetadata.identifier}");
+    Console.WriteLine($"Name: {tokenMetadata.name}");
+    Console.WriteLine($"Ticker: {tokenMetadata.ticker}");
+    Console.WriteLine($"Decimals: {tokenMetadata.decimals}");
+    Console.WriteLine($"Max Supply: {tokenMetadata.maxSupply}");
+    Console.WriteLine($"Is Freezable: {tokenMetadata.isFreezable}");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const response = await sdk.getTokensMetadata({
+  tokenIdentifiers: ['&lt;token identifier 1&gt;', '&lt;token identifier 2&gt;']
+})
+
+const tokensMetadata = response.tokensMetadata
+for (const tokenMetadata of tokensMetadata) {
+  console.log(`Token ID: ${tokenMetadata.identifier}`)
+  console.log(`Name: ${tokenMetadata.name}`)
+  console.log(`Ticker: ${tokenMetadata.ticker}`)
+  console.log(`Decimals: ${tokenMetadata.decimals}`)
+  console.log(`Max Supply: ${tokenMetadata.maxSupply}`)
+  console.log(`Is Freezable: ${tokenMetadata.isFreezable}`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const response = await sdk.getTokensMetadata({
+  tokenIdentifiers: ['&lt;token identifier 1&gt;', '&lt;token identifier 2&gt;']
+})
+
+const tokensMetadata = response.tokensMetadata
+for (const tokenMetadata of tokensMetadata) {
+  console.log(`Token ID: ${tokenMetadata.identifier}`)
+  console.log(`Name: ${tokenMetadata.name}`)
+  console.log(`Ticker: ${tokenMetadata.ticker}`)
+  console.log(`Decimals: ${tokenMetadata.decimals}`)
+  console.log(`Max Supply: ${tokenMetadata.maxSupply}`)
+  console.log(`Is Freezable: ${tokenMetadata.isFreezable}`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final response = await sdk.getTokensMetadata(
+  request: GetTokensMetadataRequest(
+    tokenIdentifiers: ['&lt;token identifier 1&gt;', '&lt;token identifier 2&gt;']
+    )
+  );
+
+final tokensMetadata = response.tokensMetadata;
+for (final tokenMetadata in tokensMetadata) {
+  print('Token ID: $tokenMetadata.identifier');
+  print('Name: ${tokenMetadata.name}');
+  print('Ticker: ${tokenMetadata.ticker}');
+  print('Decimals: ${tokenMetadata.decimals}');
+  print('Max Supply: ${tokenMetadata.maxSupply}');
+  print('Is Freezable: ${tokenMetadata.isFreezable}');
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    response = await sdk.get_tokens_metadata(
+        request=GetTokensMetadataRequest(
+            token_identifiers=["&lt;token identifier 1&gt;", "&lt;token identifier 2&gt;"]
+            )
+        )
+
+    tokens_metadata = response.tokens_metadata
+    for token_metadata in tokens_metadata:
+        print(f"Token ID: {token_metadata.identifier}")
+        print(f"Name: {token_metadata.name}")
+        print(f"Ticker: {token_metadata.ticker}")
+        print(f"Decimals: {token_metadata.decimals}")
+        print(f"Max Supply: {token_metadata.max_supply}")
+        print(f"Is Freezable: {token_metadata.is_freezable}")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">tokenIdentifiers := []string{"&lt;token identifier 1&gt;", "&lt;token identifier 2&gt;"}
+response, err := sdk.GetTokensMetadata(breez_sdk_spark.GetTokensMetadataRequest{
+	TokenIdentifiers: tokenIdentifiers,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+tokensMetadata := response.TokensMetadata
+for _, tokenMetadata := range tokensMetadata {
+	log.Printf("Token ID: %v", tokenMetadata.Identifier)
+	log.Printf("Name: %v", tokenMetadata.Name)
+	log.Printf("Ticker: %v", tokenMetadata.Ticker)
+	log.Printf("Decimals: %v", tokenMetadata.Decimals)
+	log.Printf("Max Supply: %v", tokenMetadata.MaxSupply)
+	log.Printf("Is Freezable: %v", tokenMetadata.IsFreezable)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="receiving-payments">
+    <a class="header" href="#receiving-payments">Receiving a token payment</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
+</h2>
+<p>Token payments can be received using either a Spark address or invoice. Using an invoice is useful to impose restrictions on the payment, such as the token to receive, amount, expiry, and who can pay it.</p>
+<h3 id="spark-address"><a class="header" href="#spark-address">Spark address</a></h3>
+<p>Token payments use the same Spark address as Bitcoin payments - no separate address is required. Your application can retrieve the Spark address as described in the <a href="./receive_payment.html#spark">Receiving a payment</a> guide. The payer will use this address to send tokens to the wallet.</p>
+<h3 id="spark-invoice"><a class="header" href="#spark-invoice">Spark invoice</a></h3>
+<p>Spark token invoices can be created using the same API as Bitcoin Spark invoices. The only difference is that a token identifier is provided.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let token_identifier = Some("&lt;token identifier&gt;".to_string());
+let optional_description = Some("&lt;invoice description&gt;".to_string());
+let optional_amount = Some(5_000);
+// Optionally set the expiry UNIX timestamp in seconds
+let optional_expiry_time_seconds = Some(1716691200);
+let optional_sender_public_key = Some("&lt;sender public key&gt;".to_string());
+
+let response = sdk
+    .receive_payment(ReceivePaymentRequest {
+        payment_method: ReceivePaymentMethod::SparkInvoice {
+            token_identifier,
+            description: optional_description,
+            amount: optional_amount,
+            expiry_time: optional_expiry_time_seconds,
+            sender_public_key: optional_sender_public_key,
+        },
+    })
+    .await?;
+
+let payment_request = response.payment_request;
+info!("Payment request: {payment_request}");
+let receive_fee = response.fee;
+info!("Fees: {receive_fee} token base units");</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let tokenIdentifier = "&lt;token identifier&gt;"
+let optionalDescription = "&lt;invoice description&gt;"
+let optionalAmount = BInt(5_000)
+// Optionally set the expiry UNIX timestamp in seconds
+let optionalExpiryTimeSeconds: UInt64 = 1_716_691_200
+let optionalSenderPublicKey = "&lt;sender public key&gt;"
+
+let response =
+    try await sdk
+    .receivePayment(
+        request: ReceivePaymentRequest(
+            paymentMethod: ReceivePaymentMethod.sparkInvoice(
+                amount: optionalAmount,
+                tokenIdentifier: tokenIdentifier,
+                expiryTime: optionalExpiryTimeSeconds,
+                description: optionalDescription,
+                senderPublicKey: optionalSenderPublicKey
+            )
+        ))
+
+let paymentRequest = response.paymentRequest
+print("Payment request: \(paymentRequest)")
+let receiveFeeSats = response.fee
+print("Fees: \(receiveFeeSats) token base units")
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val tokenIdentifier = "&lt;token identifier&gt;"
+    val optionalDescription = "&lt;invoice description&gt;"
+    // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+    // package)
+    val optionalAmount = BigInteger.fromLong(5_000L)
+    // Android (BigInteger from java.math)
+    // val optionalAmount = BigInteger.valueOf(5_000L)
+    // Optionally set the expiry UNIX timestamp in seconds
+    val optionalExpiryTimeSeconds = 1716691200.toULong()
+    val optionalSenderPublicKey = "&lt;sender public key&gt;"
+
+    val request = ReceivePaymentRequest(
+        ReceivePaymentMethod.SparkInvoice(
+            tokenIdentifier = tokenIdentifier,
+            description = optionalDescription,
+            amount = optionalAmount,
+            expiryTime = optionalExpiryTimeSeconds,
+            senderPublicKey = optionalSenderPublicKey
+        )
+    )
+    val response = sdk.receivePayment(request)
+
+    val paymentRequest = response.paymentRequest
+    println("Payment request: $paymentRequest")
+    val receiveFee = response.fee
+    println("Fees: $receiveFee token base units")
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var tokenIdentifier = "&lt;token identifier&gt;";
+var optionalDescription = "&lt;invoice description&gt;";
+var optionalAmount = new BigInteger(5000);
+// Optionally set the expiry UNIX timestamp in seconds
+var optionalExpiryTimeSeconds = 1716691200UL;
+var optionalSenderPublicKey = "&lt;sender public key&gt;";
+
+var request = new ReceivePaymentRequest(
+    paymentMethod: new ReceivePaymentMethod.SparkInvoice(
+        tokenIdentifier: tokenIdentifier,
+        description: optionalDescription,
+        amount: optionalAmount,
+        expiryTime: optionalExpiryTimeSeconds,
+        senderPublicKey: optionalSenderPublicKey
+    )
+);
+var response = await sdk.ReceivePayment(request: request);
+
+var paymentRequest = response.paymentRequest;
+Console.WriteLine($"Payment request: {paymentRequest}");
+var receiveFee = response.fee;
+Console.WriteLine($"Fees: {receiveFee} token base units");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenIdentifier = '&lt;token identifier&gt;'
+const optionalDescription = '&lt;invoice description&gt;'
+const optionalAmount = '5000'
+// Optionally set the expiry UNIX timestamp in seconds
+const optionalExpiryTimeSeconds = 1716691200
+const optionalSenderPublicKey = '&lt;sender public key&gt;'
+
+const response = await sdk.receivePayment({
+  paymentMethod: {
+    type: 'sparkInvoice',
+    tokenIdentifier,
+    description: optionalDescription,
+    amount: optionalAmount,
+    expiryTime: optionalExpiryTimeSeconds,
+    senderPublicKey: optionalSenderPublicKey
+  }
+})
+
+const paymentRequest = response.paymentRequest
+console.log(`Payment request: ${paymentRequest}`)
+const receiveFeeSats = response.fee
+console.log(`Fees: ${receiveFeeSats} token base units`)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const tokenIdentifier = '&lt;token identifier&gt;'
+const optionalDescription = '&lt;invoice description&gt;'
+const optionalAmount = BigInt(5_000)
+// Optionally set the expiry UNIX timestamp in seconds
+const optionalExpiryTimeSeconds = BigInt(1716691200)
+const optionalSenderPublicKey = '&lt;sender public key&gt;'
+
+const response = await sdk.receivePayment({
+  paymentMethod: new ReceivePaymentMethod.SparkInvoice({
+    tokenIdentifier,
+    description: optionalDescription,
+    amount: optionalAmount,
+    expiryTime: optionalExpiryTimeSeconds,
+    senderPublicKey: optionalSenderPublicKey
+  })
+})
+
+const paymentRequest = response.paymentRequest
+console.log(`Payment request: ${paymentRequest}`)
+const receiveFee = response.fee
+console.log(`Fees: ${receiveFee} token base units`)
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">String tokenIdentifier = '&lt;token identifier&gt;';
+String optionalDescription = "&lt;invoice description&gt;";
+BigInt optionalAmount = BigInt.from(5000);
+// Optionally set the expiry UNIX timestamp in seconds
+BigInt optionalExpiryTimeSeconds = BigInt.from(1716691200);
+String optionalSenderPublicKey = "&lt;sender public key&gt;"; 
+
+ReceivePaymentRequest request =
+    ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkInvoice(
+      tokenIdentifier: tokenIdentifier,
+      description: optionalDescription,
+      amount: optionalAmount,
+      expiryTime: optionalExpiryTimeSeconds,
+      senderPublicKey: optionalSenderPublicKey,
+    ));
+ReceivePaymentResponse response = await sdk.receivePayment(
+  request: request,
+);
+
+String paymentRequest = response.paymentRequest;
+print("Payment request: $paymentRequest");
+BigInt receiveFee = response.fee;
+print("Fees: $receiveFee token base units");
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    token_identifier = "&lt;token identifier&gt;"
+    optional_description = "&lt;invoice description&gt;"
+    optional_amount = 5_000
+    # Optionally set the expiry UNIX timestamp in seconds
+    optional_expiry_time_seconds = 1716691200
+    optional_sender_public_key = "&lt;sender public key&gt;"
+
+    request = ReceivePaymentRequest(
+        payment_method=ReceivePaymentMethod.SPARK_INVOICE(
+            token_identifier=token_identifier,
+            description=optional_description,
+            amount=optional_amount,
+            expiry_time=optional_expiry_time_seconds,
+            sender_public_key=optional_sender_public_key,
+        )
+    )
+    response = await sdk.receive_payment(request=request)
+
+    payment_request = response.payment_request
+    print(f"Payment request: {payment_request}")
+    receive_fee = response.fee
+    print(f"Fees: {receive_fee} token base units")
+    return response
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">tokenIdentifier := "&lt;token identifier&gt;"
+optionalDescription := "&lt;invoice description&gt;"
+optionalAmount := new(big.Int).SetInt64(5_000)
+// Optionally set the expiry UNIX timestamp in seconds
+optionalExpiryTimeSeconds := uint64(1716691200)
+optionalSenderPublicKey := "&lt;sender public key&gt;"
+
+request := breez_sdk_spark.ReceivePaymentRequest{
+	PaymentMethod: breez_sdk_spark.ReceivePaymentMethodSparkInvoice{
+		TokenIdentifier: &amp;tokenIdentifier,
+		Description:     &amp;optionalDescription,
+		Amount:          &amp;optionalAmount,
+		ExpiryTime:      &amp;optionalExpiryTimeSeconds,
+		SenderPublicKey: &amp;optionalSenderPublicKey,
+	},
+}
+
+response, err := sdk.ReceivePayment(request)
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return nil, err
+}
+
+paymentRequest := response.PaymentRequest
+log.Printf("Payment Request: %v", paymentRequest)
+receiveFees := response.Fee
+log.Printf("Fees: %v token base units", receiveFees)
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="preparing-payments">
+    <a class="header" href="#preparing-payments">Sending a token payment</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+</h2>
+<p>To send tokens, provide a Spark address as the payment request. The token identifier must be specified in one of two ways:</p>
+<ol>
+<li><strong>Using a Spark invoice</strong>: If the payee provides a Spark address with an embedded token identifier and amount (a Spark invoice), the SDK automatically extracts and uses those values.</li>
+<li><strong>Manual specification</strong>: For a plain Spark address without embedded payment details, your application must provide both the token identifier and amount parameters when preparing the payment.</li>
+</ol>
+<p>Your application can use the <a href="./parse.html">parse</a> functionality to determine if a Spark address contains embedded token payment details before preparing the payment.</p>
+<p>The code example below demonstrates manual specification. Follow the standard prepare/send payment flow as described in the <a href="./send_payment.html">Sending a payment</a> guide.</p>
+<div class="warning">
+<h4 id="developer-note-1"><a class="header" href="#developer-note-1">Developer note</a></h4>
+Payments can be sent without holding an asset by converting on-the-fly as a step before sending a payment. See <a href="./token_conversion.html">Converting tokens</a> for more information.
+</div>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let payment_request = "&lt;spark address or invoice&gt;".to_string();
+// Token identifier must match the invoice in case it specifies one.
+let token_identifier = "&lt;token identifier&gt;".to_string();
+// Set the amount of tokens you wish to send.
+let optional_pay_amount = Some(PayAmount::Token { amount: 1_000, token_identifier });
+
+let prepare_response = sdk
+    .prepare_send_payment(PrepareSendPaymentRequest {
+        payment_request,
+        pay_amount: optional_pay_amount,
+        conversion_options: None,
+    })
+    .await?;
+
+// If the fees are acceptable, continue to send the token payment
+match &amp;prepare_response.payment_method {
+    SendPaymentMethod::SparkAddress {
+        fee,
+        token_identifier: token_id,
+        ..
+    } =&gt; {
+        info!("Token ID: {:?}", token_id);
+        info!("Fees: {} token base units", fee);
+    }
+    SendPaymentMethod::SparkInvoice {
+        fee,
+        token_identifier: token_id,
+        ..
+    } =&gt; {
+        info!("Token ID: {:?}", token_id);
+        info!("Fees: {} token base units", fee);
+    }
+    _ =&gt; {}
+}
+
+// Send the token payment
+let send_response = sdk
+    .send_payment(SendPaymentRequest {
+        prepare_response,
+        options: None,
+        idempotency_key: None,
+    })
+    .await?;
+let payment = send_response.payment;
+info!("Payment: {payment:?}");</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let paymentRequest = "&lt;spark address or invoice&gt;"
+// Token identifier must match the invoice in case it specifies one.
+let tokenIdentifier = "&lt;token identifier&gt;"
+// Set the amount of tokens you wish to send. (requires 'import BigNumber')
+let optionalPayAmount = PayAmount.token(amount: 1_000, tokenIdentifier: tokenIdentifier)
+
+let prepareResponse = try await sdk.prepareSendPayment(
+    request: PrepareSendPaymentRequest(
+        paymentRequest: paymentRequest,
+        payAmount: optionalPayAmount
+    ))
+
+// If the fees are acceptable, continue to send the token payment
+if case let .sparkAddress(address, fee, tokenId) = prepareResponse.paymentMethod {
+    print("Token ID: \(String(describing: tokenId))")
+    print("Fees: \(fee) token base units")
+}
+if case let .sparkInvoice(invoice, fee, tokenId) = prepareResponse.paymentMethod {
+    print("Token ID: \(String(describing: tokenId))")
+    print("Fees: \(fee) token base units")
+}
+
+// Send the token payment
+let sendResponse = try await sdk.sendPayment(
+    request: SendPaymentRequest(
+        prepareResponse: prepareResponse,
+        options: nil
+    ))
+let payment = sendResponse.payment
+print("Payment: \(payment)")
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">try {
+    val paymentRequest = "&lt;spark address or invoice&gt;"
+    // Token identifier must match the invoice in case it specifies one.
+    val tokenIdentifier = "&lt;token identifier&gt;"
+    // Set the amount of tokens you wish to send.
+    // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
+    // package)
+    val amount = BigInteger.fromLong(1_000L)
+    // Android (BigInteger from java.math)
+    // val amount = BigInteger.valueOf(1_000L)
+    val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
+
+    val prepareResponse =
+        sdk.prepareSendPayment(
+            PrepareSendPaymentRequest(
+                paymentRequest = paymentRequest,
+                payAmount = optionalPayAmount,
+            )
+        )
+
+    // If the fees are acceptable, continue to send the token payment
+    when (val method = prepareResponse.paymentMethod) {
+        is SendPaymentMethod.SparkAddress -&gt; {
+            println("Token ID: ${method.tokenIdentifier}")
+            println("Fees: ${method.fee} token base units")
+        }
+        is SendPaymentMethod.SparkInvoice -&gt; {
+            println("Token ID: ${method.tokenIdentifier}")
+            println("Fees: ${method.fee} token base units")
+        }
+        else -&gt; {}
+    }
+
+    // Send the token payment
+    val sendResponse =
+        sdk.sendPayment(
+            SendPaymentRequest(prepareResponse = prepareResponse, options = null)
+        )
+    val payment = sendResponse.payment
+    println("Payment: $payment")
+} catch (e: Exception) {
+    // handle error
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var paymentRequest = "&lt;spark address or invoice&gt;";
+// Token identifier must match the invoice in case it specifies one.
+var tokenIdentifier = "&lt;token identifier&gt;";
+// Set the amount of tokens you wish to send.
+var optionalPayAmount = new PayAmount.Token(amount: new BigInteger(1000), tokenIdentifier: tokenIdentifier);
+
+var prepareResponse = await sdk.PrepareSendPayment(
+    request: new PrepareSendPaymentRequest(
+        paymentRequest: paymentRequest,
+        payAmount: optionalPayAmount
+    )
+);
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkAddress)
+{
+    Console.WriteLine($"Token ID: {sparkAddress.tokenIdentifier}");
+    Console.WriteLine($"Fees: {sparkAddress.fee} token base units");
+}
+if (prepareResponse.paymentMethod is SendPaymentMethod.SparkInvoice sparkInvoice)
+{
+    Console.WriteLine($"Token ID: {sparkInvoice.tokenIdentifier}");
+    Console.WriteLine($"Fees: {sparkInvoice.fee} token base units");
+}
+
+// Send the token payment
+var sendResponse = await sdk.SendPayment(
+    request: new SendPaymentRequest(
+        prepareResponse: prepareResponse,
+        options: null
+    )
+);
+var payment = sendResponse.payment;
+Console.WriteLine($"Payment: {payment}");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address or invoice&gt;'
+// Token identifier must match the invoice in case it specifies one.
+const tokenIdentifier = '&lt;token identifier&gt;'
+// Set the amount of tokens you wish to send.
+const optionalPayAmount: PayAmount = {
+  type: 'token',
+  amount: '1000',
+  tokenIdentifier
+}
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  payAmount: optionalPayAmount
+})
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.paymentMethod.type === 'sparkAddress') {
+  console.log(`Token ID: ${prepareResponse.paymentMethod.tokenIdentifier}`)
+  console.log(`Fees: ${prepareResponse.paymentMethod.fee} token base units`)
+}
+if (prepareResponse.paymentMethod.type === 'sparkInvoice') {
+  console.log(`Token ID: ${prepareResponse.paymentMethod.tokenIdentifier}`)
+  console.log(`Fees: ${prepareResponse.paymentMethod.fee} token base units`)
+}
+
+// Send the token payment
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options: undefined
+})
+const payment = sendResponse.payment
+console.log(`Payment: ${JSON.stringify(payment)}`)
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const paymentRequest = '&lt;spark address or invoice&gt;'
+// Token identifier must match the invoice in case it specifies one.
+const tokenIdentifier = '&lt;token identifier&gt;'
+// Set the amount of tokens you wish to send.
+const optionalPayAmount = new PayAmount.Token({ amount: BigInt(1_000), tokenIdentifier })
+
+const prepareResponse = await sdk.prepareSendPayment({
+  paymentRequest,
+  payAmount: optionalPayAmount,
+  conversionOptions: undefined
+})
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
+  console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
+  console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
+}
+if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkInvoice) {
+  console.log(`Token ID: ${prepareResponse.paymentMethod.inner.tokenIdentifier}`)
+  console.log(`Fees: ${prepareResponse.paymentMethod.inner.fee} token base units`)
+}
+
+// Send the token payment
+const sendResponse = await sdk.sendPayment({
+  prepareResponse,
+  options: undefined,
+  idempotencyKey: undefined
+})
+const payment = sendResponse.payment
+console.log(`Payment: ${JSON.stringify(payment)}`)
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final paymentRequest = '&lt;spark address or invoice&gt;';
+// Token identifier must match the invoice in case it specifies one.
+final tokenIdentifier = '&lt;token identifier&gt;';
+// Set the amount of tokens you wish to send.
+final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
+
+final prepareResponse = await sdk.prepareSendPayment(
+  request: PrepareSendPaymentRequest(
+    paymentRequest: paymentRequest,
+    payAmount: optionalPayAmount,
+  ),
+);
+
+// If the fees are acceptable, continue to send the token payment
+if (prepareResponse.paymentMethod is SendPaymentMethod_SparkAddress) {
+  final method = prepareResponse.paymentMethod as SendPaymentMethod_SparkAddress;
+  print('Token ID: ${method.tokenIdentifier}');
+  print('Fees: ${method.fee} token base units');
+}
+if (prepareResponse.paymentMethod is SendPaymentMethod_SparkInvoice) {
+  final method = prepareResponse.paymentMethod as SendPaymentMethod_SparkInvoice;
+  print('Token ID: ${method.tokenIdentifier}');
+  print('Fees: ${method.fee} token base units');
+}
+
+// Send the token payment
+final sendResponse = await sdk.sendPayment(
+  request: SendPaymentRequest(
+    prepareResponse: prepareResponse,
+    options: null,
+  ),
+);
+final payment = sendResponse.payment;
+print('Payment: $payment');
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">try:
+    payment_request = "&lt;spark address or invoice&gt;"
+    # Token identifier must match the invoice in case it specifies one.
+    token_identifier = "&lt;token identifier&gt;"
+    # Set the amount of tokens you wish to send.
+    optional_pay_amount = PayAmount.TOKEN(amount=1_000, token_identifier=token_identifier)
+
+    prepare_response = await sdk.prepare_send_payment(
+        request=PrepareSendPaymentRequest(
+            payment_request=payment_request,
+            pay_amount=optional_pay_amount,
+        )
+    )
+
+    # If the fees are acceptable, continue to send the token payment
+    if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
+        print(f"Token ID: {prepare_response.payment_method.token_identifier}")
+        print(f"Fees: {prepare_response.payment_method.fee} token base units")
+    if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
+        print(f"Token ID: {prepare_response.payment_method.token_identifier}")
+        print(f"Fees: {prepare_response.payment_method.fee} token base units")
+
+    # Send the token payment
+    send_response = await sdk.send_payment(
+        request=SendPaymentRequest(
+            prepare_response=prepare_response,
+            options=None,
+        )
+    )
+    payment = send_response.payment
+    print(f"Payment: {payment}")
+except Exception as error:
+    logging.error(error)
+    raise
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">paymentRequest := "&lt;spark address or invoice&gt;"
+// Token identifier must match the invoice in case it specifies one.
+tokenIdentifier := "&lt;token identifier&gt;"
+// Set the amount of tokens you wish to send.
+optionalAmount := new(big.Int).SetInt64(1_000)
+
+var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountToken{
+	Amount:          optionalAmount,
+	TokenIdentifier: tokenIdentifier,
+}
+
+prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
+	PaymentRequest: paymentRequest,
+	PayAmount:      &amp;optionalPayAmount,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+// If the fees are acceptable, continue to send the token payment
+switch method := prepareResponse.PaymentMethod.(type) {
+case breez_sdk_spark.SendPaymentMethodSparkAddress:
+	log.Printf("Token ID: %v", method.TokenIdentifier)
+	log.Printf("Fees: %v token base units", method.Fee)
+case breez_sdk_spark.SendPaymentMethodSparkInvoice:
+	log.Printf("Token ID: %v", method.TokenIdentifier)
+	log.Printf("Fees: %v token base units", method.Fee)
+}
+
+// Send the token payment
+sendResponse, err := sdk.SendPayment(breez_sdk_spark.SendPaymentRequest{
+	PrepareResponse: prepareResponse,
+	Options:         nil,
+})
+
+if err != nil {
+	var sdkErr *breez_sdk_spark.SdkError
+	if errors.As(err, &amp;sdkErr) {
+		// Handle SdkError - can inspect specific variants if needed
+		// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+	}
+	return err
+}
+
+payment := sendResponse.Payment
+log.Printf("Payment: %#v", payment)
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="listing-payments">
+    <a class="header" href="#listing-payments">Listing token payments</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
+</h2>
+<p>Token payments are included in the regular payment history alongside Bitcoin payments. Your application can retrieve and distinguish token payments from other payment types using the standard payment listing functionality. See the <a href="./list_payments.html">Listing payments</a> guide for more details.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/tokens.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/token_conversion.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/tokens.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/token_conversion.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
