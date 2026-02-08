@@ -123,6 +123,32 @@ func RemoveEventListener(sdk *breez_sdk_spark.BreezSdk, listenerId string) bool 
 
 // ANCHOR_END: remove-event-listener
 
+// ANCHOR: spark-status
+func GetSparkStatus() error {
+	sparkStatus, err := breez_sdk_spark.GetSparkStatus()
+	if err != nil {
+		return err
+	}
+
+	switch sparkStatus.Status {
+	case breez_sdk_spark.ServiceStatusOperational:
+		log.Printf("Spark is fully operational")
+	case breez_sdk_spark.ServiceStatusDegraded:
+		log.Printf("Spark is experiencing degraded performance")
+	case breez_sdk_spark.ServiceStatusPartial:
+		log.Printf("Spark is partially unavailable")
+	case breez_sdk_spark.ServiceStatusMajor:
+		log.Printf("Spark is experiencing a major outage")
+	case breez_sdk_spark.ServiceStatusUnknown:
+		log.Printf("Spark status is unknown")
+	}
+
+	log.Printf("Last updated: %v", sparkStatus.LastUpdated)
+	return nil
+}
+
+// ANCHOR_END: spark-status
+
 // ANCHOR: disconnect
 func Disconnect(sdk *breez_sdk_spark.BreezSdk) {
 	sdk.Disconnect()

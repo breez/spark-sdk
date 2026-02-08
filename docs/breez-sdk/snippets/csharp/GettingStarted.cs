@@ -115,6 +115,34 @@ namespace BreezSdkSnippets
         }
         // ANCHOR_END: remove-event-listener
 
+        // ANCHOR: spark-status
+        async Task GetSparkStatus()
+        {
+            var sparkStatus = await BreezSdkSparkMethods.GetSparkStatus();
+
+            switch (sparkStatus.status)
+            {
+                case ServiceStatus.Operational:
+                    Console.WriteLine("Spark is fully operational");
+                    break;
+                case ServiceStatus.Degraded:
+                    Console.WriteLine("Spark is experiencing degraded performance");
+                    break;
+                case ServiceStatus.Partial:
+                    Console.WriteLine("Spark is partially unavailable");
+                    break;
+                case ServiceStatus.Major:
+                    Console.WriteLine("Spark is experiencing a major outage");
+                    break;
+                case ServiceStatus.Unknown:
+                    Console.WriteLine("Spark status is unknown");
+                    break;
+            }
+
+            Console.WriteLine($"Last updated: {sparkStatus.lastUpdated}");
+        }
+        // ANCHOR_END: spark-status
+
         // ANCHOR: disconnect
         async Task Disconnect(BreezSdk sdk)
         {

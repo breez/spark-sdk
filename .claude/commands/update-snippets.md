@@ -49,7 +49,7 @@ You are updating the {LANGUAGE} snippet to match Rust.
 
 ## Conventions
 Read: docs/breez-sdk/snippets/SNIPPET_CONVENTIONS.md
-Focus on the {LANGUAGE} patterns for: imports, function signatures, enum discrimination, logging, error handling.
+Focus on the {LANGUAGE} patterns for: imports, function signatures, enum discrimination (both simple enums AND tagged unions), logging, error handling.
 
 ## Your Task
 1. Read the current {LANGUAGE} snippet at: {LANGUAGE_FILE_PATH}
@@ -59,24 +59,32 @@ Focus on the {LANGUAGE} patterns for: imports, function signatures, enum discrim
 5. Ensure comments/descriptions match semantically
 6. Use the Edit tool to make changes (or Write if new file)
 
+## TypeScript-specific (WASM & React Native only)
+- ESLint enforces single quotes. Only use backtick template literals when there is `${...}` interpolation. Static strings MUST use single quotes: `console.log('message')` NOT `console.log(\`message\`)`
+
 Do NOT run verification - the main agent will handle that.
 ```
 
 ### Phase 4: Verify All Languages
 
-After all agents complete, run verifications. Can be parallel:
+After all agents complete, run verifications. Can be parallel.
 
+**IMPORTANT:** WASM and React Native require Node >= 22. Always prefix those commands with `source ~/.nvm/nvm.sh && nvm use 22 &&`.
+
+Run non-Node languages in parallel:
 ```bash
-# Run all verifications (parallel in background or sequential):
-cargo xtask check-doc-snippets --package go --skip-build &
-cargo xtask check-doc-snippets --package python --skip-build &
-cargo xtask check-doc-snippets --package kotlin-mpp --skip-build &
-cargo xtask check-doc-snippets --package swift --skip-build &
-cargo xtask check-doc-snippets --package csharp --skip-build &
-cargo xtask check-doc-snippets --package flutter --skip-build &
-cargo xtask check-doc-snippets --package wasm --skip-build &
-cargo xtask check-doc-snippets --package react-native --skip-build &
-wait
+cargo xtask check-doc-snippets --package go --skip-build
+cargo xtask check-doc-snippets --package python --skip-build
+cargo xtask check-doc-snippets --package kotlin-mpp --skip-build
+cargo xtask check-doc-snippets --package swift --skip-build
+cargo xtask check-doc-snippets --package csharp --skip-build
+cargo xtask check-doc-snippets --package flutter --skip-build
+```
+
+Run WASM and React Native with Node 22:
+```bash
+source ~/.nvm/nvm.sh && nvm use 22 && cargo xtask check-doc-snippets --package wasm --skip-build
+source ~/.nvm/nvm.sh && nvm use 22 && cargo xtask check-doc-snippets --package react-native --skip-build
 ```
 
 If any verification fails:

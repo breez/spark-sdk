@@ -8,7 +8,9 @@ import {
   type LogEntry,
   type SdkEvent,
   SdkEvent_Tags,
-  Seed
+  Seed,
+  getSparkStatus,
+  ServiceStatus
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -96,6 +98,32 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
   // ANCHOR: remove-event-listener
   await sdk.removeEventListener(listenerId)
   // ANCHOR_END: remove-event-listener
+}
+
+const exampleGetSparkStatus = async () => {
+  // ANCHOR: spark-status
+  const sparkStatus = await getSparkStatus()
+
+  switch (sparkStatus.status) {
+    case ServiceStatus.Operational:
+      console.log('Spark is fully operational')
+      break
+    case ServiceStatus.Degraded:
+      console.log('Spark is experiencing degraded performance')
+      break
+    case ServiceStatus.Partial:
+      console.log('Spark is partially unavailable')
+      break
+    case ServiceStatus.Major:
+      console.log('Spark is experiencing a major outage')
+      break
+    case ServiceStatus.Unknown:
+      console.log('Spark status is unknown')
+      break
+  }
+
+  console.log(`Last updated: ${sparkStatus.lastUpdated}`)
+  // ANCHOR_END: spark-status
 }
 
 const exampleDisconnect = async (sdk: BreezSdk) => {

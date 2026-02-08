@@ -93,6 +93,27 @@ func removeEventListener(sdk: BreezSdk, listenerId: String) async {
 }
 // ANCHOR_END: remove-event-listener
 
+// ANCHOR: spark-status
+func gettingStartedSparkStatus() async throws {
+    let sparkStatus = try await getSparkStatus()
+
+    switch sparkStatus.status {
+    case .operational:
+        print("Spark is fully operational")
+    case .degraded:
+        print("Spark is experiencing degraded performance")
+    case .partial:
+        print("Spark is partially unavailable")
+    case .major:
+        print("Spark is experiencing a major outage")
+    case .unknown:
+        print("Spark status is unknown")
+    }
+
+    print("Last updated: \(sparkStatus.lastUpdated)")
+}
+// ANCHOR_END: spark-status
+
 // ANCHOR: disconnect
 func disconnect(sdk: BreezSdk) async throws {
     try await sdk.disconnect()

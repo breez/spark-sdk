@@ -37,6 +37,32 @@ Future<void> fetchBalance(BreezSdk sdk) async {
   print(balanceSats);
 }
 
+// ANCHOR: spark-status
+Future<void> gettingStartedSparkStatus() async {
+  final sparkStatus = await getSparkStatus();
+
+  switch (sparkStatus.status) {
+    case ServiceStatus.operational:
+      print("Spark is fully operational");
+      break;
+    case ServiceStatus.degraded:
+      print("Spark is experiencing degraded performance");
+      break;
+    case ServiceStatus.partial:
+      print("Spark is partially unavailable");
+      break;
+    case ServiceStatus.major:
+      print("Spark is experiencing a major outage");
+      break;
+    case ServiceStatus.unknown:
+      print("Spark status is unknown");
+      break;
+  }
+
+  print("Last updated: ${sparkStatus.lastUpdated}");
+}
+// ANCHOR_END: spark-status
+
 class BreezSdkSpark {
   // ANCHOR: logging
   StreamSubscription<LogEntry>? _logSubscription;
