@@ -8,9 +8,6 @@ pub use crate::token_conversion::{
     ConversionType, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
 };
 
-// Re-export internal types for crate use only
-pub(crate) use crate::token_conversion::TokenConversionResponse;
-
 use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
@@ -577,6 +574,12 @@ pub struct Config {
     /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
     pub optimization_config: OptimizationConfig,
+
+    /// Configuration for automatic conversion of Bitcoin to stable tokens.
+    ///
+    /// When set, received sats will be automatically converted to the specified token
+    /// once the balance exceeds the threshold.
+    pub stable_balance_config: Option<StableBalanceConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -597,6 +600,44 @@ pub struct OptimizationConfig {
     ///
     /// Default value is 1.
     pub multiplicity: u8,
+}
+
+/// Configuration for automatic conversion of Bitcoin to stable tokens.
+///
+/// When configured, the SDK automatically monitors the Bitcoin balance after each
+/// wallet sync. When the balance exceeds the configured threshold plus the reserved
+/// amount, the SDK automatically converts the excess balance (above the reserve)
+/// to the specified stable token.
+///
+/// When the balance is held in a stable token, Bitcoin payments can still be sent.
+/// The SDK automatically detects when there's not enough Bitcoin balance to cover a
+/// payment and auto-populates the token-to-Bitcoin conversion options to facilitate
+/// the payment.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StableBalanceConfig {
+    /// The token identifier to convert Bitcoin to (required).
+    pub token_identifier: String,
+
+    /// The minimum sats balance that triggers auto-conversion.
+    ///
+    /// If not provided, uses the minimum from conversion limits.
+    /// If provided but less than the conversion limit minimum, the limit minimum is used.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub threshold_sats: Option<u64>,
+
+    /// Maximum slippage in basis points (1/100 of a percent).
+    ///
+    /// Defaults to 50 bps (0.5%) if not set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub max_slippage_bps: Option<u32>,
+
+    /// Amount of sats to keep as Bitcoin and not convert to stable tokens.
+    ///
+    /// This reserve ensures you can send Bitcoin payments without hitting
+    /// the minimum conversion limit. Defaults to the conversion minimum if not set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub reserved_sats: Option<u64>,
 }
 
 impl Config {

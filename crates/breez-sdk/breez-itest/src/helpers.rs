@@ -17,6 +17,7 @@ struct ChannelEventListener {
 #[async_trait::async_trait]
 impl EventListener for ChannelEventListener {
     async fn on_event(&self, event: SdkEvent) {
+        info!("Received SDK event: {event}");
         let _ = self.tx.try_send(event);
     }
 }
@@ -343,6 +344,58 @@ pub async fn wait_for_balance(
     .await
 }
 
+/// Wait for a token balance to increase above a previous value.
+///
+/// Polls the SDK until the token balance for the given identifier exceeds `previous_balance`.
+/// Syncs the wallet on each poll iteration.
+///
+/// # Arguments
+/// * `sdk` - The SDK instance to query
+/// * `token_identifier` - The token identifier to check balance for
+/// * `previous_balance` - The balance threshold that must be exceeded
+/// * `timeout_secs` - Maximum time to wait in seconds
+///
+/// # Returns
+/// The new token balance once it exceeds `previous_balance`, or error if timeout
+pub async fn wait_for_token_balance_increase(
+    sdk: &BreezSdk,
+    token_identifier: &str,
+    previous_balance: u128,
+    timeout_secs: u64,
+) -> Result<u128> {
+    let token_id = token_identifier.to_string();
+    wait_for(
+        || {
+            let sdk = sdk.clone();
+            let token_id = token_id.clone();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let info = sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                let token_balance = info
+                    .token_balances
+                    .get(&token_id)
+                    .map(|b| b.balance)
+                    .unwrap_or(0);
+                if token_balance > previous_balance {
+                    Ok(token_balance)
+                } else {
+                    anyhow::bail!(
+                        "Token balance not yet increased: {} (was {})",
+                        token_balance,
+                        previous_balance
+                    )
+                }
+            }
+        },
+        timeout_secs,
+    )
+    .await
+}
+
 /// Ensure SDK has at least the specified balance, funding if necessary
 pub async fn ensure_funded(sdk_instance: &mut SdkInstance, min_balance: u64) -> Result<()> {
     sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -526,7 +579,7 @@ pub async fn wait_for_claimed_event(
                 unclaimed_deposits.len()
             )),
             other => {
-                info!("Received SDK event: {:?}", other);
+                info!("Ignored SDK event: {:?}", other);
                 Ok(None)
             }
         },
@@ -561,7 +614,7 @@ pub async fn wait_for_payment_succeeded_event(
                 Ok(Some(EventResult::PaymentSucceeded(Box::new(payment))))
             }
             other => {
-                info!("Received SDK event: {:?}", other);
+                info!("Ignored SDK event: {:?}", other);
                 Ok(None)
             }
         },
@@ -591,7 +644,7 @@ pub async fn wait_for_payment_pending_event(
                 Ok(Some(EventResult::PaymentPending(Box::new(payment))))
             }
             other => {
-                info!("Received SDK event: {:?}", other);
+                info!("Ignored SDK event: {:?}", other);
                 Ok(None)
             }
         },
@@ -621,7 +674,7 @@ pub async fn wait_for_payment_failed_event(
                 Ok(Some(EventResult::PaymentFailed(Box::new(payment))))
             }
             other => {
-                info!("Received SDK event: {:?}", other);
+                info!("Ignored SDK event: {:?}", other);
                 Ok(None)
             }
         },
@@ -645,12 +698,126 @@ pub async fn wait_for_synced_event(
     wait_for_event(event_rx, timeout_secs, "Synced", |event| match event {
         SdkEvent::Synced => Ok(Some(EventResult::Synced)),
         other => {
-            info!("Received SDK event: {:?}", other);
+            info!("Ignored SDK event: {:?}", other);
             Ok(None)
         }
     })
     .await
     .map(|_| ())
+}
+
+/// Wait for a set of payment events in any order.
+///
+/// Collects PaymentSucceeded events and marks them off from the expected list.
+/// Returns Ok(()) when all expected events have been received.
+/// Ignores non-matching events (e.g., Synced) and continues waiting.
+///
+/// Each expected event is specified as a (PaymentType, PaymentMethod) tuple.
+async fn wait_for_payment_events_unordered(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    expected: Vec<(PaymentType, PaymentMethod)>,
+    timeout_secs: u64,
+) -> Result<()> {
+    let mut remaining = expected;
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    while !remaining.is_empty() {
+        let time_left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if time_left.is_zero() {
+            anyhow::bail!(
+                "Timeout after {} seconds. Still waiting for: {:?}",
+                timeout_secs,
+                remaining
+            );
+        }
+
+        match tokio::time::timeout(time_left, event_rx.recv()).await {
+            Ok(Some(SdkEvent::PaymentSucceeded { payment })) => {
+                // Find and remove the first matching expected event
+                if let Some(pos) = remaining
+                    .iter()
+                    .position(|(pt, pm)| *pt == payment.payment_type && *pm == payment.method)
+                {
+                    remaining.swap_remove(pos);
+                    info!(
+                        "Matched SDK event: {:?}/{:?} ({} remaining)",
+                        payment.payment_type,
+                        payment.method,
+                        remaining.len()
+                    );
+                } else {
+                    info!(
+                        "Unmatched PaymentSucceeded event: {:?}/{:?} (still waiting for: {:?})",
+                        payment.payment_type, payment.method, remaining
+                    );
+                }
+            }
+            Ok(Some(other)) => {
+                info!("Ignored SDK event: {:?}", other);
+                continue;
+            }
+            Ok(None) => anyhow::bail!("Event channel closed"),
+            Err(_) => anyhow::bail!(
+                "Timeout after {} seconds. Still waiting for: {:?}",
+                timeout_secs,
+                remaining
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// Wait for and consume all auto-conversion events (BTC → Token) in any order:
+/// - Receive payment (incoming BTC that triggered conversion)
+/// - Send Spark (BTC to swap service)
+/// - Receive Token (tokens from swap service)
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `receive_method` - The payment method of the incoming payment (Spark or Lightning)
+/// * `timeout_secs` - Maximum time to wait in seconds
+pub async fn wait_for_auto_conversion_events(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    receive_method: PaymentMethod,
+    timeout_secs: u64,
+) -> Result<()> {
+    wait_for_payment_events_unordered(
+        event_rx,
+        vec![
+            (PaymentType::Receive, receive_method),
+            (PaymentType::Send, PaymentMethod::Spark),
+            (PaymentType::Receive, PaymentMethod::Token),
+        ],
+        timeout_secs,
+    )
+    .await
+}
+
+/// Wait for and consume all payment conversion events (Token → BTC) in any order:
+/// - Send Token (to swap service)
+/// - Receive Spark (BTC from swap service)
+/// - Send payment (actual outgoing payment)
+///
+/// # Arguments
+/// * `event_rx` - Event receiver channel from build_sdk
+/// * `payment_method` - The payment method of the final outgoing payment (Spark or Lightning)
+/// * `timeout_secs` - Maximum time to wait in seconds
+pub async fn wait_for_payment_conversion_events(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_method: PaymentMethod,
+    timeout_secs: u64,
+) -> Result<()> {
+    wait_for_payment_events_unordered(
+        event_rx,
+        vec![
+            (PaymentType::Send, PaymentMethod::Token),
+            (PaymentType::Receive, PaymentMethod::Spark),
+            (PaymentType::Send, payment_method),
+        ],
+        timeout_secs,
+    )
+    .await
 }
 
 pub fn generate_preimage_hash_pair() -> (String, String) {
