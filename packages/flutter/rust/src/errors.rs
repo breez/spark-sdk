@@ -40,11 +40,6 @@ pub enum _SdkError {
         vout: u32,
     },
     LnurlError(String),
-    DrainNotSupported,
-    DrainExceedsLnurlMax {
-        balance_sats: u64,
-        max_sendable_sats: u64,
-    },
     Signer(String),
     Generic(String),
 }

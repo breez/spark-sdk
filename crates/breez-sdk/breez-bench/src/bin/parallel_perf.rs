@@ -16,7 +16,7 @@ use tracing_subscriber::EnvFilter;
 
 use breez_sdk_itest::{RegtestFaucet, build_sdk_with_custom_config};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PayAmount, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
 };
 
@@ -351,10 +351,10 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType_) 
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request: address.clone(),
-                    pay_amount: Some(PayAmount::Bitcoin {
-                        amount_sats: *amount,
-                    }),
+                    amount: Some(*amount as u128),
+                    token_identifier: None,
                     conversion_options: None,
+                    fee_policy: None,
                 })
                 .await?;
 
@@ -372,8 +372,10 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType_) 
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request: invoice.clone(),
-                    pay_amount: None,
+                    amount: None,
+                    token_identifier: None,
                     conversion_options: None,
+                    fee_policy: None,
                 })
                 .await?;
 

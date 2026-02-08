@@ -10,7 +10,7 @@ func preparePay(sdk: BreezSdk) async throws {
 
     let inputType = try await sdk.parse(input: lnurlPayUrl)
     if case .lightningAddress(v1: let details) = inputType {
-        let payAmount = BitcoinPayAmount.bitcoin(amountSats: 5_000)
+        let amountSats: UInt64 = 5_000
         let optionalComment = "<comment>"
         let payRequest = details.payRequest
         let optionalValidateSuccessActionUrl = true
@@ -26,11 +26,12 @@ func preparePay(sdk: BreezSdk) async throws {
         )
 
         let request = PrepareLnurlPayRequest(
-            payAmount: payAmount,
+            amountSats: amountSats,
             payRequest: payRequest,
             comment: optionalComment,
             validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-            conversionOptions: conversionOptions
+            conversionOptions: conversionOptions,
+            feePolicy: nil
         )
         let prepareResponse = try await sdk.prepareLnurlPay(request: request)
 
@@ -47,25 +48,30 @@ func preparePay(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-lnurl-pay
 }
 
-func prepareLnurlPayDrain(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) async throws {
-    // ANCHOR: prepare-lnurl-pay-drain
+func prepareLnurlPayFeesIncluded(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) async throws {
+    // ANCHOR: prepare-lnurl-pay-fees-included
+    // By default (.feesExcluded), fees are added on top of the amount.
+    // Use .feesIncluded to deduct fees from the amount instead.
+    // The receiver gets amount minus fees.
+    let amountSats: UInt64 = 5_000
     let optionalComment = "<comment>"
     let optionalValidateSuccessActionUrl = true
-    let payAmount = BitcoinPayAmount.drain
 
     let request = PrepareLnurlPayRequest(
-        payAmount: payAmount,
+        amountSats: amountSats,
         payRequest: payRequest,
         comment: optionalComment,
         validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-        conversionOptions: nil
+        conversionOptions: nil,
+        feePolicy: .feesIncluded
     )
     let response = try await sdk.prepareLnurlPay(request: request)
 
     // If the fees are acceptable, continue to create the LNURL Pay
     let feeSats = response.feeSats
     print("Fees: \(feeSats) sats")
-    // ANCHOR_END: prepare-lnurl-pay-drain
+    // The receiver gets amountSats - feeSats
+    // ANCHOR_END: prepare-lnurl-pay-fees-included
 }
 
 func pay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) async throws {

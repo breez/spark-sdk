@@ -1,3 +1,4 @@
+import BigNumber
 import BreezSdkSpark
 import CryptoKit
 import Foundation
@@ -25,11 +26,14 @@ extension Data {
 func sendHtlcPayment(sdk: BreezSdk) async throws -> Payment {
     // ANCHOR: send-htlc-payment
     let paymentRequest = "<spark address>"
-    // Set the amount you wish the pay the receiver
-    let payAmount = PayAmount.bitcoin(amountSats: 50_000)
+    // Set the amount you wish to pay the receiver
+    let amountSats = BInt(50_000)
     let prepareRequest = PrepareSendPaymentRequest(
         paymentRequest: paymentRequest,
-        payAmount: payAmount
+        amount: amountSats,
+        tokenIdentifier: nil,
+        conversionOptions: nil,
+        feePolicy: nil
     )
     let prepareResponse = try await sdk.prepareSendPayment(request: prepareRequest)
 

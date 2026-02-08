@@ -72,15 +72,14 @@ async fn test_token_conversion_success(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            pay_amount: Some(PayAmount::Token {
-                amount: sats_to_token_success_amount,
-                token_identifier: REGTEST_TOKEN_ID.to_string(),
-            }),
+            amount: Some(sats_to_token_success_amount),
+            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(200), // 2%
                 completion_timeout_secs: None,
             }),
+            fee_policy: None,
         })
         .await?;
     let conversion_estimate = prepare_btc_to_token
@@ -88,8 +87,8 @@ async fn test_token_conversion_success(
         .as_ref()
         .expect("Conversion estimate should be present");
     info!(
-        "Prepared token payment: pay_amount={:?} (converting bitcoin amount={}, fee={})",
-        prepare_btc_to_token.pay_amount, conversion_estimate.amount, conversion_estimate.fee
+        "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
+        prepare_btc_to_token.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     let send_btc_to_token = alice
@@ -230,7 +229,8 @@ async fn test_token_conversion_success(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: alice_invoice.clone(),
-            pay_amount: None, // Amount from invoice
+            amount: None, // Amount from invoice
+            token_identifier: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::ToBitcoin {
                     from_token_identifier: REGTEST_TOKEN_ID.to_string(),
@@ -238,6 +238,7 @@ async fn test_token_conversion_success(
                 max_slippage_bps: Some(200), // 2%
                 completion_timeout_secs: None,
             }),
+            fee_policy: None,
         })
         .await?;
 
@@ -246,8 +247,8 @@ async fn test_token_conversion_success(
         .as_ref()
         .expect("Conversion estimate should be present");
     info!(
-        "Prepared bitcoin payment: pay_amount={:?} (converting token amount={}, fee={})",
-        prepare_token_to_btc.pay_amount, conversion_estimate.amount, conversion_estimate.fee
+        "Prepared bitcoin payment: amount={:?} (converting token amount={}, fee={})",
+        prepare_token_to_btc.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     let send_token_to_btc = bob
@@ -421,15 +422,14 @@ async fn test_token_conversion_failure(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            pay_amount: Some(PayAmount::Token {
-                amount: sats_to_token_failure_amount,
-                token_identifier: non_existent_token_id.to_string(),
-            }),
+            amount: Some(sats_to_token_failure_amount),
+            token_identifier: Some(non_existent_token_id.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(100),
                 completion_timeout_secs: None,
             }),
+            fee_policy: None,
         })
         .await;
     assert!(
@@ -463,15 +463,14 @@ async fn test_token_conversion_failure(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            pay_amount: Some(PayAmount::Token {
-                amount: sats_to_token_failure_amount,
-                token_identifier: REGTEST_TOKEN_ID.to_string(),
-            }),
+            amount: Some(sats_to_token_failure_amount),
+            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(2), // 0.02% - very low, likely to fail
                 completion_timeout_secs: None,
             }),
+            fee_policy: None,
         })
         .await?;
 
@@ -480,8 +479,8 @@ async fn test_token_conversion_failure(
         .as_ref()
         .expect("Conversion estimate should be present");
     info!(
-        "Prepared token payment: pay_amount={:?} (converting bitcoin amount={}, fee={})",
-        prepare_low_slippage.pay_amount, conversion_estimate.amount, conversion_estimate.fee
+        "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
+        prepare_low_slippage.amount, conversion_estimate.amount, conversion_estimate.fee
     );
 
     // Send the payment - expect it to fail due to slippage

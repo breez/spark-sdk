@@ -2,7 +2,7 @@ import {
   type BreezSdk,
   InputType_Tags,
   type LnurlPayRequestDetails,
-  BitcoinPayAmount,
+  FeePolicy,
   type PrepareLnurlPayResponse,
   ConversionType
 } from '@breeztech/breez-sdk-spark-react-native'
@@ -16,7 +16,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
 
   const input = await sdk.parse(lnurlPayUrl)
   if (input.tag === InputType_Tags.LightningAddress) {
-    const payAmount = new BitcoinPayAmount.Bitcoin({ amountSats: BigInt(5_000) })
+    const amountSats = BigInt(5_000)
     const optionalComment = '<comment>'
     const payRequest = input.inner[0].payRequest
     const optionalValidateSuccessActionUrl = true
@@ -32,11 +32,12 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
     }
 
     const prepareResponse = await sdk.prepareLnurlPay({
-      payAmount,
+      amountSats,
       payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-      conversionOptions: optionalConversionOptions
+      conversionOptions: optionalConversionOptions,
+      feePolicy: undefined
     })
 
     // If the fees are acceptable, continue to create the LNURL Pay
@@ -63,22 +64,27 @@ const exampleLnurlPay = async (sdk: BreezSdk, prepareResponse: PrepareLnurlPayRe
   console.log(response)
 }
 
-const examplePrepareLnurlPayDrain = async (sdk: BreezSdk, payRequest: LnurlPayRequestDetails) => {
-  // ANCHOR: prepare-lnurl-pay-drain
+const examplePrepareLnurlPayFeesIncluded = async (sdk: BreezSdk, payRequest: LnurlPayRequestDetails) => {
+  // ANCHOR: prepare-lnurl-pay-fees-included
+  // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
+  // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+  // The receiver gets amount minus fees.
   const optionalComment = '<comment>'
   const optionalValidateSuccessActionUrl = true
-  const payAmount = new BitcoinPayAmount.Drain()
+  const amountSats = BigInt(5_000)
 
   const prepareResponse = await sdk.prepareLnurlPay({
-    payAmount,
+    amountSats,
     payRequest,
     comment: optionalComment,
     validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-    conversionOptions: undefined
+    conversionOptions: undefined,
+    feePolicy: FeePolicy.FeesIncluded
   })
 
   // If the fees are acceptable, continue to create the LNURL Pay
   const feeSats = prepareResponse.feeSats
   console.log(`Fees: ${feeSats} sats`)
-  // ANCHOR_END: prepare-lnurl-pay-drain
+  // The receiver gets amountSats - feeSats
+  // ANCHOR_END: prepare-lnurl-pay-fees-included
 }

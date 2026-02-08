@@ -2,11 +2,11 @@ mod issuer;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BitcoinPayAmount, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FetchConversionLimitsRequest,
-    GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest, InputType,
-    LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest,
-    LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PayAmount, PaymentDetailsFilter,
+    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
+    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
+    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
     PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
@@ -151,6 +151,10 @@ pub enum Command {
         /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
         #[arg(short = 's', long)]
         convert_max_slippage_bps: Option<u32>,
+
+        /// If set, fees will be deducted from the specified amount instead of added on top.
+        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
+        fees_included: bool,
     },
 
     /// Pay using LNURL
@@ -179,6 +183,10 @@ pub enum Command {
         /// a token conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
         #[arg(short = 's', long)]
         convert_max_slippage_bps: Option<u32>,
+
+        /// If set, fees will be deducted from the specified amount instead of added on top.
+        #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
+        fees_included: bool,
     },
 
     /// Withdraw using LNURL
@@ -519,6 +527,7 @@ pub(crate) async fn execute_command(
             convert_from_bitcoin,
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
+            fees_included,
         } => {
             let conversion_options = match (convert_from_bitcoin, convert_from_token_identifier) {
                 (Some(true), _) => Some(ConversionOptions {
@@ -535,24 +544,18 @@ pub(crate) async fn execute_command(
                 }),
                 _ => None,
             };
-            // Convert amount and token_identifier to PayAmount
-            let pay_amount = match (amount, token_identifier) {
-                (Some(amt), Some(token_id)) => Some(PayAmount::Token {
-                    amount: amt,
-                    token_identifier: token_id,
-                }),
-                (Some(amt), None) => Some(PayAmount::Bitcoin {
-                    amount_sats: amt
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("Amount too large"))?,
-                }),
-                (None, _) => None,
+            let fee_policy = if fees_included {
+                Some(FeePolicy::FeesIncluded)
+            } else {
+                None
             };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
-                    pay_amount,
+                    amount,
+                    token_identifier,
                     conversion_options,
+                    fee_policy,
                 })
                 .await;
 
@@ -602,6 +605,7 @@ pub(crate) async fn execute_command(
             idempotency_key,
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
+            fees_included,
         } => {
             let conversion_options =
                 convert_from_token_identifier.map(|from_token_identifier| ConversionOptions {
@@ -611,6 +615,11 @@ pub(crate) async fn execute_command(
                     max_slippage_bps,
                     completion_timeout_secs: None,
                 });
+            let fee_policy = if fees_included {
+                Some(FeePolicy::FeesIncluded)
+            } else {
+                None
+            };
 
             let input = sdk.parse(&lnurl).await?;
             let res = match input {
@@ -624,11 +633,12 @@ pub(crate) async fn execute_command(
 
                     let prepare_response = sdk
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                            pay_amount: BitcoinPayAmount::Bitcoin { amount_sats },
+                            amount_sats,
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,
                             conversion_options,
+                            fee_policy,
                         })
                         .await?;
 

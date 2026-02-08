@@ -17,7 +17,7 @@ namespace BreezSdkSnippets
             if (parsedInput is InputType.LightningAddress lightningAddress)
             {
                 var details = lightningAddress.v1;
-                var payAmount = new BitcoinPayAmount.Bitcoin(amountSats: 5_000UL);
+                var amountSats = 5_000UL;
                 var optionalComment = "<comment>";
                 var payRequest = details.payRequest;
                 var optionalValidateSuccessActionUrl = true;
@@ -33,11 +33,12 @@ namespace BreezSdkSnippets
                 );
 
                 var request = new PrepareLnurlPayRequest(
-                    payAmount: payAmount,
+                    amountSats: amountSats,
                     payRequest: payRequest,
                     comment: optionalComment,
                     validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-                    conversionOptions: optionalConversionOptions
+                    conversionOptions: optionalConversionOptions,
+                    feePolicy: null
                 );
                 var prepareResponse = await sdk.PrepareLnurlPay(request: request);
 
@@ -55,26 +56,31 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-lnurl-pay
         }
 
-        async Task PrepareLnurlPayDrain(BreezSdk sdk, LnurlPayRequestDetails payRequest)
+        async Task PrepareLnurlPayFeesIncluded(BreezSdk sdk, LnurlPayRequestDetails payRequest)
         {
-            // ANCHOR: prepare-lnurl-pay-drain
+            // ANCHOR: prepare-lnurl-pay-fees-included
+            // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
+            // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+            // The receiver gets amount minus fees.
+            var amountSats = 5_000UL;
             var optionalComment = "<comment>";
             var optionalValidateSuccessActionUrl = true;
-            var payAmount = new BitcoinPayAmount.Drain();
 
             var request = new PrepareLnurlPayRequest(
-                payAmount: payAmount,
+                amountSats: amountSats,
                 payRequest: payRequest,
                 comment: optionalComment,
                 validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-                conversionOptions: null
+                conversionOptions: null,
+                feePolicy: FeePolicy.FeesIncluded
             );
             var prepareResponse = await sdk.PrepareLnurlPay(request: request);
 
             // If the fees are acceptable, continue to create the LNURL Pay
             var feeSats = prepareResponse.feeSats;
             Console.WriteLine($"Fees: {feeSats} sats");
-            // ANCHOR_END: prepare-lnurl-pay-drain
+            // The receiver gets amountSats - feeSats
+            // ANCHOR_END: prepare-lnurl-pay-fees-included
         }
 
         async Task Pay(BreezSdk sdk, PrepareLnurlPayResponse prepareResponse)

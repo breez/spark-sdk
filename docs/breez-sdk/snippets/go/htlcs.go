@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -12,13 +13,14 @@ import (
 func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-htlc-payment
 	paymentRequest := "<spark address>"
-	// Set the amount you wish the pay the receiver
-	var payAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountBitcoin{
-		AmountSats: 50_000,
-	}
+	// Set the amount you wish to pay the receiver
+	amountSats := new(big.Int).SetInt64(50_000)
 	prepareRequest := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &payAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &amountSats,
+		TokenIdentifier:   nil,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	}
 	prepareResponse, err := sdk.PrepareSendPayment(prepareRequest)
 

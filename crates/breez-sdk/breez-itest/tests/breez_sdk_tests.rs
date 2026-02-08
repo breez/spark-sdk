@@ -60,8 +60,10 @@ async fn test_01_spark_transfer(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            pay_amount: Some(PayAmount::Bitcoin { amount_sats: 5 }),
+            amount: Some(5),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -301,12 +303,14 @@ async fn test_03_lightning_invoice_payment(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            pay_amount: sender_amount.map(|a| PayAmount::Bitcoin { amount_sats: a }),
+            amount: sender_amount.map(|a| a as u128),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
-    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
+    info!("Payment prepared - amount: {:?}", prepare.amount);
 
     // The expected payment amount is either from the invoice or what Alice specified
     let expected_amount = invoice_amount_sats
@@ -559,8 +563,10 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            pay_amount: None,
+            amount: None,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -651,10 +657,10 @@ async fn test_06_lightning_timeout_and_wait(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            pay_amount: Some(PayAmount::Bitcoin {
-                amount_sats: expected_amount,
-            }),
+            amount: Some(expected_amount as u128),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -761,8 +767,10 @@ async fn test_07_spark_invoice(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_invoice.clone(),
-            pay_amount: None,
+            amount: None,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -922,12 +930,14 @@ async fn test_08_lightning_invoice_expiry_secs(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_invoice.clone(),
-            pay_amount: None,
+            amount: None,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
-    info!("Payment prepared - pay_amount: {:?}", prepare.pay_amount);
+    info!("Payment prepared - amount: {:?}", prepare.amount);
 
     // Alice sends the payment
     info!(
@@ -999,5 +1009,292 @@ async fn test_08_lightning_invoice_expiry_secs(
     );
 
     info!("=== Test test_08_lightning_invoice_expiry_secs PASSED ===");
+    Ok(())
+}
+
+/// Test 9: Bolt11 send all with fee overpayment
+/// Tests FeePolicy::FeesIncluded when fee drops between prepare and send
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_09_bolt11_send_all_with_fee_overpayment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_09_bolt11_send_all_with_fee_overpayment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    // Fund Alice with enough sats to have room for searching fee tiers
+    ensure_funded(&mut alice, 50_000).await?;
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance after funding: {} sats", alice_balance);
+
+    // Bob creates an amountless Lightning invoice
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Bolt11 FeesIncluded overpayment test".to_string(),
+                amount_sats: None,
+                expiry_secs: None,
+            },
+        })
+        .await?
+        .payment_request;
+    info!("Bob's amountless invoice: {}", bob_invoice);
+
+    // Minimum sendable amount for Lightning
+    let min_sendable_sats = 1_000u64;
+
+    // Helper to get lightning fee for an amount
+    async fn get_fee(sdk: &BreezSdk, invoice: &str, amount: u64) -> Result<u64> {
+        let prepare = sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: invoice.to_string(),
+                amount: Some(amount as u128),
+                token_identifier: None,
+                conversion_options: None,
+                fee_policy: None,
+            })
+            .await?;
+        match prepare.payment_method {
+            SendPaymentMethod::Bolt11Invoice {
+                lightning_fee_sats, ..
+            } => Ok(lightning_fee_sats),
+            _ => anyhow::bail!("Expected Bolt11Invoice payment method"),
+        }
+    }
+
+    // Search for fee tier boundary using binary search
+    info!("Searching for fee tier boundary using binary search...");
+
+    let fee_at_min = get_fee(&alice.sdk, &bob_invoice, min_sendable_sats).await?;
+    let fee_at_max = get_fee(&alice.sdk, &bob_invoice, alice_balance).await?;
+
+    info!(
+        "Fee at min ({} sats): {} sats, fee at max ({} sats): {} sats",
+        min_sendable_sats, fee_at_min, alice_balance, fee_at_max
+    );
+
+    if fee_at_min >= fee_at_max {
+        anyhow::bail!(
+            "No fee tier boundary found - fees are constant or decreasing ({} -> {})",
+            fee_at_min,
+            fee_at_max
+        );
+    }
+
+    // Binary search to find where fee changes
+    let mut low = min_sendable_sats;
+    let mut high = alice_balance;
+    let fee_low = fee_at_min;
+
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        let fee_mid = get_fee(&alice.sdk, &bob_invoice, mid).await?;
+        debug!(
+            "Binary search: low={}, mid={}, high={}, fee_mid={}",
+            low, mid, high, fee_mid
+        );
+        if fee_mid == fee_low {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+
+    // high is now the boundary where fee increases
+    let target_balance = high;
+    let fee1 = get_fee(&alice.sdk, &bob_invoice, target_balance).await?;
+    let adjusted = target_balance.saturating_sub(fee1);
+    let fee2 = get_fee(&alice.sdk, &bob_invoice, adjusted).await?;
+
+    info!(
+        "Found fee tier boundary at {} sats: fee1={}, fee2={} (for adjusted={})",
+        target_balance, fee1, fee2, adjusted
+    );
+
+    if fee2 >= fee1 {
+        anyhow::bail!(
+            "Fee stepping not found at boundary: fee({})={}, fee({})={}",
+            target_balance,
+            fee1,
+            adjusted,
+            fee2
+        );
+    }
+
+    let (expected_fee1, expected_fee2) = (fee1, fee2);
+
+    info!(
+        "Using stepping balance: {} sats (fee will step from {} to {})",
+        target_balance, expected_fee1, expected_fee2
+    );
+
+    // Adjust Alice's balance to target using Spark transfer
+    if alice_balance > target_balance {
+        let excess = alice_balance - target_balance;
+        info!(
+            "Adjusting Alice's balance: sending {} sats to Bob via Spark",
+            excess
+        );
+
+        // Bob creates a Spark address
+        let bob_spark_address = bob
+            .sdk
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::SparkAddress,
+            })
+            .await?
+            .payment_request;
+
+        // Alice sends excess to Bob
+        let prepare = alice
+            .sdk
+            .prepare_send_payment(PrepareSendPaymentRequest {
+                payment_request: bob_spark_address,
+                amount: Some(excess as u128),
+                token_identifier: None,
+                conversion_options: None,
+                fee_policy: None,
+            })
+            .await?;
+
+        alice
+            .sdk
+            .send_payment(SendPaymentRequest {
+                prepare_response: prepare,
+                options: None,
+                idempotency_key: None,
+            })
+            .await?;
+
+        // Wait for Spark transfer to complete
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+        // Sync and verify
+        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        let new_balance = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+
+        info!(
+            "Alice balance after adjustment: {} sats (target was {})",
+            new_balance, target_balance
+        );
+        assert_eq!(
+            new_balance, target_balance,
+            "Alice's balance should match target"
+        );
+    }
+
+    // Execute payment with FeesIncluded
+    info!("Executing bolt11 payment with fee overpayment...");
+
+    let prepare_response = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice.clone(),
+            amount: Some(target_balance as u128),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+        })
+        .await?;
+
+    // Get the fee from the prepare response
+    // For amountless Bolt11 with FeesIncluded, invoice_details.amount_msat is None
+    let prepared_fee = match &prepare_response.payment_method {
+        SendPaymentMethod::Bolt11Invoice {
+            lightning_fee_sats, ..
+        } => *lightning_fee_sats,
+        _ => anyhow::bail!("Expected Bolt11Invoice payment method"),
+    };
+
+    info!("Prepared payment: fee={} sats", prepared_fee);
+
+    // The fee should be expected_fee1 (the higher fee for full balance)
+    assert_eq!(
+        prepared_fee, expected_fee1,
+        "Payment fee should match expected fee for full balance"
+    );
+
+    // Execute the payment
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare_response.clone(),
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(30),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Bolt11 full balance payment initiated");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+    info!("Full balance payment completed on Alice's side");
+
+    let bob_payment =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+    info!("Full balance payment completed on Bob's side");
+
+    // Verify Alice's balance is zero
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+
+    assert_eq!(alice_final, 0, "Alice's balance should be fully spent");
+
+    // With fee overpayment, Bob receives target_balance - fee2 (the actual lower fee)
+    // Because: receiver_amount = target_balance - fee1, overpayment = fee1 - fee2
+    // Final amount = receiver_amount + overpayment = target_balance - fee2
+    let expected_bob_amount = target_balance - expected_fee2;
+    assert_eq!(
+        bob_payment.amount,
+        expected_bob_amount.into(),
+        "Bob should receive target_balance minus actual fee (with overpayment applied)"
+    );
+
+    // Verify payment details
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: send_resp.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.method, PaymentMethod::Lightning);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+
+    info!(
+        "Fee overpayment test passed! Expected overpayment: {} sats",
+        expected_fee1 - expected_fee2
+    );
+    info!("=== Test test_09_bolt11_send_all_with_fee_overpayment PASSED ===");
     Ok(())
 }

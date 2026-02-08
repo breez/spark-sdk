@@ -1,6 +1,6 @@
 import {
   OnchainConfirmationSpeed,
-  PayAmount,
+  FeePolicy,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
@@ -12,12 +12,14 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   const paymentRequest = '<bolt11 invoice>'
   // Optionally set the amount you wish to pay the receiver
-  const optionalPayAmount = new PayAmount.Bitcoin({ amountSats: BigInt(5_000) })
+  const optionalAmountSats = BigInt(5_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount,
-    conversionOptions: undefined
+    amount: optionalAmountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -36,12 +38,14 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-onchain
   const paymentRequest = '<bitcoin address>'
   // Set the amount you wish to pay the receiver
-  const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
+  const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount,
-    conversionOptions: undefined
+    amount: amountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // Review the fee quote for each confirmation speed
@@ -61,12 +65,14 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-spark-address
   const paymentRequest = '<spark address>'
   // Set the amount you wish to pay the receiver
-  const payAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
+  const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount,
-    conversionOptions: undefined
+    amount: amountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -81,12 +87,14 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-spark-invoice
   const paymentRequest = '<spark invoice>'
   // Optionally set the amount you wish to pay the receiver
-  const optionalPayAmount = new PayAmount.Bitcoin({ amountSats: BigInt(50_000) })
+  const optionalAmountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount,
-    conversionOptions: undefined
+    amount: optionalAmountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -113,8 +121,10 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: undefined,
-    conversionOptions
+    amount: undefined,
+    tokenIdentifier: undefined,
+    conversionOptions,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -182,19 +192,25 @@ const exampleSendPaymentSpark = async (
   console.log(payment)
 }
 
-const examplePrepareSendPaymentDrain = async (sdk: BreezSdk) => {
-  // ANCHOR: prepare-send-payment-drain
-  // Use PayAmount.Drain to send all available funds
+const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-fees-included
+  // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
+  // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+  // The receiver gets amount minus fees.
   const paymentRequest = '<payment request>'
-  const payAmount = new PayAmount.Drain()
+  const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount,
-    conversionOptions: undefined
+    amount: amountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: FeePolicy.FeesIncluded
   })
 
-  // The response contains PayAmount.Drain to indicate this is a drain operation
-  console.log(`Pay amount: ${JSON.stringify(prepareResponse.payAmount)}`)
-  // ANCHOR_END: prepare-send-payment-drain
+  // The response shows the fee policy used
+  console.log(`Fee policy: ${JSON.stringify(prepareResponse.feePolicy)}`)
+  console.log(`Amount: ${prepareResponse.amount}`)
+  // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
+  // ANCHOR_END: prepare-send-payment-fees-included
 }

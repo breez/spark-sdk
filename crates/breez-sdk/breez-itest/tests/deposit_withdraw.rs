@@ -79,10 +79,10 @@ async fn test_onchain_withdraw_to_static_address(
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address.clone(),
-            pay_amount: Some(PayAmount::Bitcoin {
-                amount_sats: amount,
-            }),
+            amount: Some(amount as u128),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -223,10 +223,10 @@ async fn test_deposit_fee_manual_claim(
     Ok(())
 }
 
-/// Test drain to Bitcoin address with speed selection
+/// Test sending full balance to Bitcoin address with speed selection
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_drain_to_bitcoin_address(
+async fn test_send_all_to_bitcoin_address(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
 ) -> Result<()> {
@@ -259,13 +259,24 @@ async fn test_drain_to_bitcoin_address(
         .payment_request;
     info!("Bob deposit address: {}", bob_address);
 
-    // Alice prepares drain
+    // Alice gets her balance to prepare FeesIncluded payment
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .balance_sats;
+
+    // Alice prepares FeesIncluded (all balance)
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_address.clone(),
-            pay_amount: Some(PayAmount::Drain),
+            amount: Some(alice_balance as u128),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
         })
         .await?;
 
@@ -280,17 +291,17 @@ async fn test_drain_to_bitcoin_address(
         fee_quote.speed_slow.total_fee_sat()
     );
 
-    // Verify pay_amount is Drain
+    // Verify fee_policy is FeesIncluded
     assert!(
-        matches!(prepare.pay_amount, PayAmount::Drain),
-        "Pay amount should be Drain"
+        matches!(prepare.fee_policy, FeePolicy::FeesIncluded),
+        "Fee policy should be FeesIncluded"
     );
     info!(
-        "Drain prepared with fast fee: {} sats",
+        "FeesIncluded prepared with fast fee: {} sats",
         fee_quote.speed_fast.total_fee_sat()
     );
 
-    // Send the drain with Fast speed
+    // Send the full balance with Fast speed
     let send_resp = alice
         .sdk
         .send_payment(SendPaymentRequest {
@@ -315,7 +326,7 @@ async fn test_drain_to_bitcoin_address(
         .await?
         .balance_sats;
     info!("Alice final balance: {} sats", alice_final);
-    assert_eq!(alice_final, 0, "Alice's balance should be fully drained");
+    assert_eq!(alice_final, 0, "Alice's balance should be fully spent");
 
     Ok(())
 }

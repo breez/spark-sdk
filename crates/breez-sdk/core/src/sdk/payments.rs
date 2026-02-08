@@ -9,11 +9,11 @@ use web_time::Duration;
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType,
+    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
     FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PayAmount, PaymentStatus,
-    SendOnchainFeeQuote, SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions,
-    SparkInvoiceDetails, TokenConversionResponse, WaitForPaymentIdentifier,
+    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
+    SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
+    TokenConversionResponse, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -191,90 +191,73 @@ impl BreezSdk {
             &self.spark_wallet.get_identity_public_key().to_string(),
         )?;
 
-        // Extract amount and token_identifier from pay_amount
-        let (request_amount, token_identifier): (Option<u128>, Option<String>) =
-            match &request.pay_amount {
-                Some(PayAmount::Bitcoin { amount_sats }) => (Some(u128::from(*amount_sats)), None),
-                Some(PayAmount::Token {
-                    amount,
-                    token_identifier,
-                }) => (Some(*amount), Some(token_identifier.clone())),
-                Some(PayAmount::Drain) | None => (None, None), // Drain handled separately
-            };
+        let fee_policy = request.fee_policy.unwrap_or_default();
+        let token_identifier = request.token_identifier.clone();
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
-                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
+                let amount = request
+                    .amount
+                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-                let (pay_amount, conversion_estimate) = if is_drain {
-                    // Drain doesn't support conversion (validated earlier)
-                    (PayAmount::Drain, None)
+                // FeesIncluded doesn't support conversion (validated earlier)
+                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
+                    None
                 } else {
-                    let amount = request_amount
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-                    let conversion_estimate = self
-                        .token_converter
+                    self.token_converter
                         .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
                             amount,
                         )
-                        .await?;
-                    let pay_amount =
-                        PayAmount::from_amount_and_token(amount, token_identifier.clone())?;
-                    (pay_amount, conversion_estimate)
+                        .await?
                 };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
                         address: spark_address_details.address.clone(),
                         fee: 0,
-                        token_identifier,
+                        token_identifier: token_identifier.clone(),
                     },
-                    pay_amount,
+                    amount,
+                    token_identifier,
                     conversion_estimate,
+                    fee_policy,
                 })
             }
             InputType::SparkInvoice(spark_invoice_details) => {
-                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
-
                 // Use request's token_identifier if provided, otherwise fall back to invoice's
-                let effective_token_identifier = token_identifier
-                    .clone()
-                    .or_else(|| spark_invoice_details.token_identifier.clone());
+                let effective_token_identifier =
+                    token_identifier.or_else(|| spark_invoice_details.token_identifier.clone());
 
-                let (pay_amount, conversion_estimate) = if is_drain {
-                    // Drain only allowed for amountless invoices (validated earlier)
-                    // Drain doesn't support conversion (validated earlier)
-                    (PayAmount::Drain, None)
+                let amount = spark_invoice_details
+                    .amount
+                    .or(request.amount)
+                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+
+                // FeesIncluded doesn't support conversion (validated earlier)
+                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
+                    None
                 } else {
-                    let amount = spark_invoice_details
-                        .amount
-                        .or(request_amount)
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-                    let conversion_estimate = self
-                        .token_converter
+                    self.token_converter
                         .validate(
                             request.conversion_options.as_ref(),
                             effective_token_identifier.as_ref(),
                             amount,
                         )
-                        .await?;
-                    let pay_amount = PayAmount::from_amount_and_token(
-                        amount,
-                        effective_token_identifier.clone(),
-                    )?;
-                    (pay_amount, conversion_estimate)
+                        .await?
                 };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
                         spark_invoice_details: spark_invoice_details.clone(),
                         fee: 0,
-                        token_identifier: effective_token_identifier,
+                        token_identifier: effective_token_identifier.clone(),
                     },
-                    pay_amount,
+                    amount,
+                    token_identifier: effective_token_identifier,
                     conversion_estimate,
+                    fee_policy,
                 })
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
@@ -288,30 +271,46 @@ impl BreezSdk {
                     None
                 };
 
-                let amount = request_amount
+                let amount = request
+                    .amount
                     .or(detailed_bolt11_invoice
                         .amount_msat
                         .map(|msat| u128::from(msat).saturating_div(1000)))
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+
+                // For FeesIncluded, estimate fee for user's full amount
                 let lightning_fee_sats = self
                     .spark_wallet
                     .fetch_lightning_send_fee_estimate(
                         &request.payment_request,
-                        request_amount
-                            .map(|a| Ok::<u64, SdkError>(a.try_into()?))
-                            .transpose()?,
-                    )
-                    .await?;
-                let conversion_estimate = self
-                    .token_converter
-                    .validate(
-                        request.conversion_options.as_ref(),
-                        token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(lightning_fee_sats)),
+                        Some(amount.try_into()?),
                     )
                     .await?;
 
-                let pay_amount = PayAmount::from_amount_and_token(amount, token_identifier)?;
+                // Validate receiver amount is positive for FeesIncluded
+                if fee_policy == FeePolicy::FeesIncluded
+                    && detailed_bolt11_invoice.amount_msat.is_none()
+                {
+                    let amount_u64: u64 = amount.try_into()?;
+                    if amount_u64 <= lightning_fee_sats {
+                        return Err(SdkError::InvalidInput(
+                            "Amount too small to cover fees".to_string(),
+                        ));
+                    }
+                }
+
+                // FeesIncluded doesn't support conversion (validated earlier)
+                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
+                    None
+                } else {
+                    self.token_converter
+                        .validate(
+                            request.conversion_options.as_ref(),
+                            token_identifier.as_ref(),
+                            amount.saturating_add(u128::from(lightning_fee_sats)),
+                        )
+                        .await?
+                };
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
@@ -319,50 +318,41 @@ impl BreezSdk {
                         spark_transfer_fee_sats,
                         lightning_fee_sats,
                     },
-                    pay_amount,
+                    amount,
+                    token_identifier,
                     conversion_estimate,
+                    fee_policy,
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
-                let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
-
-                // For drain, pass None to get drain-specific fees; otherwise pass the amount
-                let amount_for_quote = (!is_drain)
-                    .then(|| {
-                        request_amount
-                            .ok_or(SdkError::InvalidInput("Amount is required".to_string()))
-                            .and_then(|a| a.try_into().map_err(Into::into))
-                    })
-                    .transpose()?;
+                let amount = request
+                    .amount
+                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
                 let fee_quote: SendOnchainFeeQuote = self
                     .spark_wallet
-                    .fetch_coop_exit_fee_quote(&withdrawal_address.address, amount_for_quote)
+                    .fetch_coop_exit_fee_quote(
+                        &withdrawal_address.address,
+                        Some(amount.try_into()?),
+                    )
                     .await?
                     .into();
 
-                let (pay_amount, conversion_estimate) = if is_drain {
-                    // Drain doesn't support conversion (validated earlier)
-                    (PayAmount::Drain, None)
+                // FeesIncluded doesn't support conversion (validated earlier)
+                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
+                    None
                 } else {
-                    let amount: u64 = amount_for_quote
-                        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+                    let amount_u64: u64 = amount.try_into()?;
                     // For conversion estimate, use fast fee as worst case
                     let fee_sats_for_estimate = fee_quote.speed_fast.total_fee_sat();
-                    let conversion_estimate = self
-                        .token_converter
+                    self.token_converter
                         .validate(
                             request.conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            u128::from(amount).saturating_add(u128::from(fee_sats_for_estimate)),
+                            u128::from(amount_u64)
+                                .saturating_add(u128::from(fee_sats_for_estimate)),
                         )
-                        .await?;
-                    (
-                        PayAmount::Bitcoin {
-                            amount_sats: amount,
-                        },
-                        conversion_estimate,
-                    )
+                        .await?
                 };
 
                 Ok(PrepareSendPaymentResponse {
@@ -370,8 +360,10 @@ impl BreezSdk {
                         address: withdrawal_address.clone(),
                         fee_quote,
                     },
-                    pay_amount,
+                    amount,
+                    token_identifier,
                     conversion_estimate,
+                    fee_policy,
                 })
             }
             _ => Err(SdkError::InvalidInput(
@@ -474,13 +466,7 @@ impl BreezSdk {
         mut suppress_payment_event: bool,
         amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Extract token_identifier from pay_amount
-        let token_identifier = match &request.prepare_response.pay_amount {
-            PayAmount::Token {
-                token_identifier, ..
-            } => Some(token_identifier.clone()),
-            _ => None,
-        };
+        let token_identifier = request.prepare_response.token_identifier.clone();
 
         // Check the idempotency key is valid and payment doesn't already exist
         if request.idempotency_key.is_some() && token_identifier.is_some() {
@@ -537,19 +523,15 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Extract amount and token_identifier from pay_amount
-        let (amount, token_identifier) = match &request.prepare_response.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => (u128::from(*amount_sats), None),
-            PayAmount::Token {
-                amount,
-                token_identifier,
-            } => (*amount, Some(token_identifier.clone())),
-            PayAmount::Drain => {
-                return Err(SdkError::InvalidInput(
-                    "Drain not supported with token conversion".to_string(),
-                ));
-            }
-        };
+        // FeesIncluded not supported with token conversion (validated earlier)
+        if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
+            return Err(SdkError::InvalidInput(
+                "FeesIncluded not supported with token conversion".to_string(),
+            ));
+        }
+
+        let amount = request.prepare_response.amount;
+        let token_identifier = request.prepare_response.token_identifier.clone();
 
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =
@@ -710,33 +692,15 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Extract the amount from pay_amount
-        let amount = match &request.prepare_response.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => u128::from(*amount_sats),
-            PayAmount::Token { amount, .. } => *amount,
-            PayAmount::Drain => {
-                // For drain, amount is computed at send time in send_bitcoin_address
-                0
-            }
-        };
+        let amount = request.prepare_response.amount;
+        let token_identifier = request.prepare_response.token_identifier.clone();
 
         match &request.prepare_response.payment_method {
-            SendPaymentMethod::SparkAddress {
-                address,
-                token_identifier,
-                ..
-            } => {
-                // For drain, get fresh balance at send time
-                let send_amount = if matches!(request.prepare_response.pay_amount, PayAmount::Drain)
-                {
-                    u128::from(self.spark_wallet.get_balance().await?)
-                } else {
-                    amount
-                };
+            SendPaymentMethod::SparkAddress { address, .. } => {
                 self.send_spark_address(
                     address,
-                    token_identifier.clone(),
-                    send_amount,
+                    token_identifier,
+                    amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
                 )
@@ -746,14 +710,7 @@ impl BreezSdk {
                 spark_invoice_details,
                 ..
             } => {
-                // For drain, get fresh balance at send time
-                let send_amount = if matches!(request.prepare_response.pay_amount, PayAmount::Drain)
-                {
-                    u128::from(self.spark_wallet.get_balance().await?)
-                } else {
-                    amount
-                };
-                self.send_spark_invoice(&spark_invoice_details.invoice, request, send_amount)
+                self.send_spark_invoice(&spark_invoice_details.invoice, request, amount)
                     .await
             }
             SendPaymentMethod::Bolt11Invoice {
@@ -931,6 +888,58 @@ impl BreezSdk {
         Ok(SendPaymentResponse { payment })
     }
 
+    /// For `FeesIncluded` + amountless Bolt11: calculates the amount to send
+    /// (`receiver_amount` + any overpayment from fee decrease).
+    async fn calculate_fees_included_bolt11_amount(
+        &self,
+        invoice: &str,
+        user_amount: u64,
+        stored_fee: u64,
+    ) -> Result<u64, SdkError> {
+        let receiver_amount = user_amount.saturating_sub(stored_fee);
+        if receiver_amount == 0 {
+            return Err(SdkError::InvalidInput(
+                "Amount too small to cover fees".to_string(),
+            ));
+        }
+
+        // Re-estimate current fee for receiver amount
+        let current_fee = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(invoice, Some(receiver_amount))
+            .await?;
+
+        // If current fee exceeds stored fee, fail
+        if current_fee > stored_fee {
+            return Err(SdkError::Generic(
+                "Fee increased since prepare. Please retry.".to_string(),
+            ));
+        }
+
+        // Calculate overpayment
+        let overpayment = stored_fee.saturating_sub(current_fee);
+
+        // Protect against excessive fee overpayment.
+        // Allow overpayment up to 100% of actual fee, with a minimum of 1 sat.
+        let max_allowed_overpayment = current_fee.max(1);
+        if overpayment > max_allowed_overpayment {
+            return Err(SdkError::Generic(format!(
+                "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
+            )));
+        }
+
+        if overpayment > 0 {
+            info!(
+                overpayment_sats = overpayment,
+                stored_fee_sats = stored_fee,
+                current_fee_sats = current_fee,
+                "FeesIncluded fee overpayment applied for Bolt11"
+            );
+        }
+
+        Ok(receiver_amount.saturating_add(overpayment))
+    }
+
     async fn send_bolt11_invoice(
         &self,
         invoice_details: &Bolt11InvoiceDetails,
@@ -940,15 +949,30 @@ impl BreezSdk {
         amount_override: Option<u64>,
         amount: u128,
     ) -> Result<SendPaymentResponse, SdkError> {
-        let amount_to_send = match amount_override {
-            // Amount override provided (e.g., for drain overpayment)
-            Some(amt) => Some(amt.into()),
-            None => match invoice_details.amount_msat {
-                // We are not sending amount in case the invoice contains it.
-                Some(_) => None,
-                // We are sending amount for zero amount invoice
-                None => Some(amount),
-            },
+        // Handle FeesIncluded for amountless Bolt11 invoices
+        let amount_to_send = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded
+            && invoice_details.amount_msat.is_none()
+            && amount_override.is_none()
+        {
+            let amt = self
+                .calculate_fees_included_bolt11_amount(
+                    &invoice_details.invoice.bolt11,
+                    amount.try_into()?,
+                    lightning_fee_sats,
+                )
+                .await?;
+            Some(u128::from(amt))
+        } else {
+            match amount_override {
+                // Amount override provided
+                Some(amt) => Some(amt.into()),
+                None => match invoice_details.amount_msat {
+                    // We are not sending amount in case the invoice contains it.
+                    Some(_) => None,
+                    // We are sending amount for zero amount invoice
+                    None => Some(amount),
+                },
+            }
         };
         let (prefer_spark, completion_timeout_secs) = match request.options {
             Some(SendPaymentOptions::Bolt11Invoice {
@@ -1044,18 +1068,12 @@ impl BreezSdk {
             OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
         };
 
-        // Compute amount - for drain, calculate at send time
-        let amount_sats: u64 = match &request.prepare_response.pay_amount {
-            PayAmount::Bitcoin { amount_sats } => *amount_sats,
-            PayAmount::Drain => {
-                let balance_sats = self.spark_wallet.get_balance().await?;
-                balance_sats.saturating_sub(fee_sats)
-            }
-            PayAmount::Token { .. } => {
-                return Err(SdkError::InvalidInput(
-                    "Token payments not supported for Bitcoin address".to_string(),
-                ));
-            }
+        // Compute amount - for FeesIncluded, receiver gets total minus fees
+        let amount_sats: u64 = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
+            let total_sats: u64 = request.prepare_response.amount.try_into()?;
+            total_sats.saturating_sub(fee_sats)
+        } else {
+            request.prepare_response.amount.try_into()?
         };
 
         let transfer_id = request

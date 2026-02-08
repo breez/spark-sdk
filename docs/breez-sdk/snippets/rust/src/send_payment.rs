@@ -5,14 +5,16 @@ use log::info;
 async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let payment_request = "<bolt11 invoice>".to_string();
-    // Optionally set the amount you wish the pay the receiver
-    let optional_pay_amount = Some(PayAmount::Bitcoin { amount_sats: 5_000 });
+    // Optionally set the amount you wish to pay the receiver
+    let optional_amount_sats = Some(5_000);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount: optional_pay_amount,
+            amount: optional_amount_sats,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -36,13 +38,15 @@ async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-onchain
     let payment_request = "<bitcoin address>".to_string();
     // Set the amount you wish to pay the receiver
-    let pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
+    let amount_sats = Some(50_000);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount,
+            amount: amount_sats,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -60,13 +64,15 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-address
     let payment_request = "<spark address>".to_string();
     // Set the amount you wish to pay the receiver
-    let pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
+    let amount_sats = Some(50_000);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount,
+            amount: amount_sats,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -82,13 +88,15 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-invoice
     let payment_request = "<spark invoice>".to_string();
     // Optionally set the amount you wish to pay the receiver
-    let optional_pay_amount = Some(PayAmount::Bitcoin { amount_sats: 50_000 });
+    let optional_amount_sats = Some(50_000);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount: optional_pay_amount,
+            amount: optional_amount_sats,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         })
         .await?;
 
@@ -117,8 +125,10 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount: None,
+            amount: None,
+            token_identifier: None,
             conversion_options,
+            fee_policy: None,
         })
         .await?;
 
@@ -196,22 +206,28 @@ async fn send_payment_spark(
     Ok(())
 }
 
-async fn prepare_send_payment_drain(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: prepare-send-payment-drain
-    // Use PayAmount::Drain to send all available funds
+async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-fees-included
+    // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.
+    // Use FeePolicy::FeesIncluded to deduct fees from the amount instead.
+    // The receiver gets amount minus fees.
     let payment_request = "<payment request>".to_string();
-    let pay_amount = Some(PayAmount::Drain);
+    let amount_sats = Some(50_000);
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
-            pay_amount,
+            amount: amount_sats,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
         })
         .await?;
 
-    // The response contains PayAmount::Drain to indicate this is a drain operation
-    info!("Pay amount: {:?}", prepare_response.pay_amount);
-    // ANCHOR_END: prepare-send-payment-drain
+    // The response shows the fee policy used
+    info!("Fee policy: {:?}", prepare_response.fee_policy);
+    info!("Amount: {}", prepare_response.amount);
+    // The receiver gets amount - fees (fees are available in prepare_response.payment_method)
+    // ANCHOR_END: prepare-send-payment-fees-included
     Ok(())
 }

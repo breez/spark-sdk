@@ -1,5 +1,4 @@
 import {
-  PayAmount,
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
   ConversionType,
@@ -75,13 +74,15 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
-  // Set the amount of tokens you wish to send.
-  const optionalPayAmount = new PayAmount.Token({ amount: BigInt(1_000), tokenIdentifier })
+  // Set the amount of tokens you wish to send (in token base units).
+  const amount = BigInt(1_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount,
-    conversionOptions: undefined
+    amount,
+    tokenIdentifier,
+    conversionOptions: undefined,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
@@ -142,8 +143,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
-  // Set the amount of tokens you wish to send.
-  const optionalPayAmount = new PayAmount.Token({ amount: BigInt(1_000), tokenIdentifier })
+  // Set the amount of tokens you wish to send (in token base units).
+  const amount = BigInt(1_000)
   // Set to use Bitcoin funds to pay via conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
@@ -155,8 +156,10 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
 
   const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount: optionalPayAmount,
-    conversionOptions
+    amount,
+    tokenIdentifier,
+    conversionOptions,
+    feePolicy: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment

@@ -1,6 +1,7 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import com.ionspin.kotlin.bignum.integer.BigInteger
 import org.kotlincrypto.hash.sha2.SHA256
 
 @OptIn(kotlin.ExperimentalStdlibApi::class)
@@ -9,11 +10,17 @@ class Htlcs {
         // ANCHOR: send-htlc-payment
         val paymentRequest = "<spark address>"
         // Set the amount you wish the pay the receiver
-        val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
         try {
             val prepareRequest = PrepareSendPaymentRequest(
                 paymentRequest = paymentRequest,
-                payAmount = payAmount,
+                amount = amountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(prepareRequest)
 

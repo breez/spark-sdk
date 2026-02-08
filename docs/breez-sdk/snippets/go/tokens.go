@@ -112,16 +112,14 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// Token identifier must match the invoice in case it specifies one.
 	tokenIdentifier := "<token identifier>"
 	// Set the amount of tokens you wish to send.
-	optionalAmount := new(big.Int).SetInt64(1_000)
-
-	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountToken{
-		Amount:          optionalAmount,
-		TokenIdentifier: tokenIdentifier,
-	}
+	amount := new(big.Int).SetInt64(1_000)
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: paymentRequest,
-		PayAmount:      &optionalPayAmount,
+		PaymentRequest:    paymentRequest,
+		Amount:            &amount,
+		TokenIdentifier:   &tokenIdentifier,
+		ConversionOptions: nil,
+		FeePolicy:         nil,
 	})
 
 	if err != nil {
@@ -223,12 +221,8 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 	// Token identifier must match the invoice in case it specifies one.
 	tokenIdentifier := "<token identifier>"
 	// Set the amount of tokens you wish to send.
-	optionalAmount := new(big.Int).SetInt64(1_000)
+	amount := new(big.Int).SetInt64(1_000)
 
-	var optionalPayAmount breez_sdk_spark.PayAmount = breez_sdk_spark.PayAmountToken{
-		Amount:          optionalAmount,
-		TokenIdentifier: tokenIdentifier,
-	}
 	// Set to use Bitcoin funds to pay via conversion
 	optionalMaxSlippageBps := uint32(50)
 	optionalCompletionTimeoutSecs := uint32(30)
@@ -240,8 +234,10 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest:    paymentRequest,
-		PayAmount:         &optionalPayAmount,
+		Amount:            &amount,
+		TokenIdentifier:   &tokenIdentifier,
 		ConversionOptions: conversionOptions,
+		FeePolicy:         nil,
 	})
 
 	if err != nil {

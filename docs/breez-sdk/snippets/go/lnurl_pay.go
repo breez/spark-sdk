@@ -27,7 +27,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 	switch inputType := input.(type) {
 	case breez_sdk_spark.InputTypeLightningAddress:
-		payAmount := breez_sdk_spark.BitcoinPayAmountBitcoin{AmountSats: 5_000}
+		amountSats := uint64(5_000)
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
 		// Optionally set to use token funds to pay via token conversion
@@ -42,11 +42,12 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 		}
 
 		request := breez_sdk_spark.PrepareLnurlPayRequest{
-			PayAmount:                payAmount,
+			AmountSats:               amountSats,
 			PayRequest:               inputType.Field0.PayRequest,
 			Comment:                  &optionalComment,
 			ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
 			ConversionOptions:        &optionalConversionOptions,
+			FeePolicy:                nil,
 		}
 
 		prepareResponse, err := sdk.PrepareLnurlPay(request)
@@ -97,18 +98,23 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 	return &payment, nil
 }
 
-func PrepareLnurlPayDrain(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
-	// ANCHOR: prepare-lnurl-pay-drain
-	payAmount := breez_sdk_spark.BitcoinPayAmountDrain{}
+func PrepareLnurlPayFeesIncluded(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
+	// ANCHOR: prepare-lnurl-pay-fees-included
+	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
+	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
+	// The receiver gets amount minus fees.
+	amountSats := uint64(5_000)
 	optionalComment := "<comment>"
 	optionalValidateSuccessActionUrl := true
+	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
 
 	request := breez_sdk_spark.PrepareLnurlPayRequest{
-		PayAmount:                payAmount,
+		AmountSats:               amountSats,
 		PayRequest:               payRequest,
 		Comment:                  &optionalComment,
 		ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
 		ConversionOptions:        nil,
+		FeePolicy:                &feePolicy,
 	}
 
 	response, err := sdk.PrepareLnurlPay(request)
@@ -119,6 +125,7 @@ func PrepareLnurlPayDrain(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_sp
 	// If the fees are acceptable, continue to create the LNURL Pay
 	feeSats := response.FeeSats
 	log.Printf("Fees: %v sats", feeSats)
-	// ANCHOR_END: prepare-lnurl-pay-drain
+	// The receiver gets amountSats - feeSats
+	// ANCHOR_END: prepare-lnurl-pay-fees-included
 	return &response, nil
 }

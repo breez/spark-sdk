@@ -18,11 +18,13 @@ When you want the payment recipient to receive a specific amount.
 
 {{#tabs lnurl_pay:prepare-lnurl-pay}}
 
-### Draining all funds
+### Setting the fee policy
 
-When you want to send all funds from your wallet to the payment recipient.
+By default, fees are added on top of the amount (`FeesExcluded`). Use `FeesIncluded` to deduct fees from the amount instead—the receiver gets the amount minus fees.
 
-{{#tabs lnurl_pay:prepare-lnurl-pay-drain}}
+This is particularly useful when you want to spend your entire balance in a single payment—simply provide your full balance as the amount.
+
+{{#tabs lnurl_pay:prepare-lnurl-pay-fees-included}}
 
 <h2 id="lnurl-payments">
     <a class="header" href="#lnurl-payments">LNURL Payments</a>

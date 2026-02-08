@@ -199,9 +199,9 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: counterparty_address.clone(),
-            pay_amount: Some(PayAmount::Bitcoin {
-                amount_sats: payment_amount,
-            }),
+            amount: Some(payment_amount.into()),
+            token_identifier: None,
+            fee_policy: None,
             conversion_options: None,
         })
         .await?;
@@ -304,9 +304,9 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: main_address,
-            pay_amount: Some(PayAmount::Bitcoin {
-                amount_sats: return_amount,
-            }),
+            amount: Some(return_amount.into()),
+            token_identifier: None,
+            fee_policy: None,
             conversion_options: None,
         })
         .await?;
@@ -399,10 +399,10 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
                 payment_request: cp_address,
-                pay_amount: Some(PayAmount::Bitcoin {
-                    amount_sats: payment_amt,
-                }),
+                amount: Some(payment_amt.into()),
+                token_identifier: None,
                 conversion_options: None,
+                fee_policy: None,
             })
             .await?;
 

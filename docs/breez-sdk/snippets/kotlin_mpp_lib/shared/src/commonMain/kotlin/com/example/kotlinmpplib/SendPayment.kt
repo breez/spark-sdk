@@ -1,18 +1,25 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class SendPayment {
     suspend fun prepareSendPaymentLightningBolt11(sdk: BreezSdk) {
         // ANCHOR: prepare-send-payment-lightning-bolt11
         val paymentRequest = "<bolt11 invoice>"
         // Optionally set the amount you wish to pay the receiver
-        val optionalPayAmount = PayAmount.Bitcoin(amountSats = 5_000.toULong())
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val optionalAmountSats = BigInteger.fromLong(5_000L)
+        // Android (BigInteger from java.math)
+        // val optionalAmountSats = BigInteger.valueOf(5_000L)
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                payAmount = optionalPayAmount,
+                amount = optionalAmountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -36,12 +43,18 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-onchain
         val paymentRequest = "<bitcoin address>"
         // Set the amount you wish to pay the receiver
-        val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                payAmount,
+                amount = amountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -62,37 +75,53 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-onchain
     }
 
-    suspend fun prepareSendPaymentDrain(sdk: BreezSdk) {
-        // ANCHOR: prepare-send-payment-drain
-        // Use PayAmount.Drain to send all available funds
+    suspend fun prepareSendPaymentFeesIncluded(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-fees-included
+        // By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
+        // Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
+        // The receiver gets amount minus fees.
         val paymentRequest = "<payment request>"
-        val payAmount = PayAmount.Drain
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                payAmount,
+                amount = amountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = FeePolicy.FEES_INCLUDED,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
-            // The response contains PayAmount.Drain to indicate this is a drain operation
-            // Log.v("Breez", "Pay amount: ${prepareResponse.payAmount}")
+            // The response shows the fee policy used
+            // Log.v("Breez", "Fee policy: ${prepareResponse.feePolicy}")
+            // Log.v("Breez", "Amount: ${prepareResponse.amount}")
+            // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
         } catch (e: Exception) {
             // handle error
         }
-        // ANCHOR_END: prepare-send-payment-drain
+        // ANCHOR_END: prepare-send-payment-fees-included
     }
 
     suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
         // ANCHOR: prepare-send-payment-spark-address
         val paymentRequest = "<spark address>"
         // Set the amount you wish to pay the receiver
-        val payAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val amountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val amountSats = BigInteger.valueOf(50_000L)
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                payAmount,
+                amount = amountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -112,12 +141,18 @@ class SendPayment {
         // ANCHOR: prepare-send-payment-spark-invoice
         val paymentRequest = "<spark invoice>"
         // Optionally set the amount you wish to pay the receiver
-        val optionalPayAmount = PayAmount.Bitcoin(amountSats = 50_000.toULong())
+        // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
+        val optionalAmountSats = BigInteger.fromLong(50_000L)
+        // Android (BigInteger from java.math)
+        // val optionalAmountSats = BigInteger.valueOf(50_000L)
 
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                optionalPayAmount,
+                amount = optionalAmountSats,
+                tokenIdentifier = null,
+                conversionOptions = null,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 
@@ -150,8 +185,10 @@ class SendPayment {
         try {
             val req = PrepareSendPaymentRequest(
                 paymentRequest,
-                payAmount = null,
+                amount = null,
+                tokenIdentifier = null,
                 conversionOptions = conversionOptions,
+                feePolicy = null,
             )
             val prepareResponse = sdk.prepareSendPayment(req)
 

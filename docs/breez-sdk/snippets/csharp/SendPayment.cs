@@ -9,11 +9,14 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-lightning-bolt11
             var paymentRequest = "<bolt11 invoice>";
             // Optionally set the amount you wish to pay the receiver
-            var optionalPayAmount = new PayAmount.Bitcoin(5_000UL);
+            ulong? optionalAmountSats = 5_000UL;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: optionalPayAmount
+                amount: optionalAmountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -35,11 +38,14 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-onchain
             var paymentRequest = "<bitcoin address>";
             // Set the amount you wish to pay the receiver
-            var payAmount = new PayAmount.Bitcoin(50_000UL);
+            ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: payAmount
+                amount: amountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -62,11 +68,14 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-spark-address
             var paymentRequest = "<spark address>";
             // Set the amount you wish to pay the receiver
-            var payAmount = new PayAmount.Bitcoin(50_000UL);
+            ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: payAmount
+                amount: amountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -84,11 +93,14 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-send-payment-spark-invoice
             var paymentRequest = "<spark invoice>";
             // Optionally set the amount you wish to pay the receiver
-            var optionalPayAmount = new PayAmount.Bitcoin(50_000UL);
+            ulong? optionalAmountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: optionalPayAmount
+                amount: optionalAmountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
@@ -101,22 +113,29 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-spark-invoice
         }
 
-        async Task PrepareSendPaymentDrain(BreezSdk sdk)
+        async Task PrepareSendPaymentFeesIncluded(BreezSdk sdk)
         {
-            // ANCHOR: prepare-send-payment-drain
-            // Use PayAmount.Drain to send all available funds
+            // ANCHOR: prepare-send-payment-fees-included
+            // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
+            // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
+            // The receiver gets amount minus fees.
             var paymentRequest = "<payment request>";
-            var payAmount = new PayAmount.Drain();
+            ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: payAmount
+                amount: amountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: FeePolicy.FeesIncluded
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 
-            // The response contains PayAmount.Drain to indicate this is a drain operation
-            Console.WriteLine($"Pay amount: {prepareResponse.payAmount}");
-            // ANCHOR_END: prepare-send-payment-drain
+            // The response shows the fee policy used
+            Console.WriteLine($"Fee policy: {prepareResponse.feePolicy}");
+            Console.WriteLine($"Amount: {prepareResponse.amount}");
+            // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
+            // ANCHOR_END: prepare-send-payment-fees-included
         }
 
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
@@ -136,7 +155,10 @@ namespace BreezSdkSnippets
 
             var request = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                conversionOptions: conversionOptions
+                amount: null,
+                tokenIdentifier: null,
+                conversionOptions: conversionOptions,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: request);
 

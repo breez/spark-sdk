@@ -1,15 +1,19 @@
+import BigNumber
 import BreezSdkSpark
 
 func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let paymentRequest = "<bolt11 invoice>"
     // Optionally set the amount you wish to pay the receiver
-    let optionalPayAmount = PayAmount.bitcoin(amountSats: 5_000)
+    let optionalAmountSats: BInt? = BInt(5_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: optionalPayAmount
+            amount: optionalAmountSats,
+            tokenIdentifier: nil,
+            conversionOptions: nil,
+            feePolicy: nil
         ))
 
     if case let .bolt11Invoice(_, sparkTransferFeeSats, lightningFeeSats) = prepareResponse
@@ -29,12 +33,15 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-onchain
     let paymentRequest = "<bitcoin address>"
     // Set the amount you wish to pay the receiver
-    let payAmount = PayAmount.bitcoin(amountSats: 50_000)
+    let amountSats = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: payAmount
+            amount: amountSats,
+            tokenIdentifier: nil,
+            conversionOptions: nil,
+            feePolicy: nil
         ))
 
     // Review the fee quote for each confirmation speed
@@ -53,12 +60,15 @@ func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-spark-address
     let paymentRequest = "<spark address>"
     // Set the amount you wish to pay the receiver
-    let payAmount = PayAmount.bitcoin(amountSats: 50_000)
+    let amountSats = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: payAmount
+            amount: amountSats,
+            tokenIdentifier: nil,
+            conversionOptions: nil,
+            feePolicy: nil
         ))
 
     if case let .sparkAddress(_, feeSats, _) = prepareResponse.paymentMethod {
@@ -71,12 +81,15 @@ func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-spark-invoice
     let paymentRequest = "<spark invoice>"
     // Optionally set the amount you wish to pay the receiver
-    let optionalPayAmount = PayAmount.bitcoin(amountSats: 50_000)
+    let optionalAmountSats: BInt? = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: optionalPayAmount
+            amount: optionalAmountSats,
+            tokenIdentifier: nil,
+            conversionOptions: nil,
+            feePolicy: nil
         ))
 
     if case let .sparkInvoice(_, feeSats, _) = prepareResponse.paymentMethod {
@@ -102,7 +115,10 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            conversionOptions: conversionOptions
+            amount: nil,
+            tokenIdentifier: nil,
+            conversionOptions: conversionOptions,
+            feePolicy: nil
         ))
 
     if let conversionEstimate = prepareResponse.conversionEstimate {
@@ -160,19 +176,26 @@ func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse
     print(payment)
 }
 
-func prepareSendPaymentDrain(sdk: BreezSdk) async throws {
-    // ANCHOR: prepare-send-payment-drain
-    // Use PayAmount.drain to send all available funds
+func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-fees-included
+    // By default (.feesExcluded), fees are added on top of the amount.
+    // Use .feesIncluded to deduct fees from the amount instead.
+    // The receiver gets amount minus fees.
     let paymentRequest = "<payment request>"
-    let payAmount = PayAmount.drain
+    let amountSats: BInt? = BInt(50_000)
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
-            payAmount: payAmount
+            amount: amountSats,
+            tokenIdentifier: nil,
+            conversionOptions: nil,
+            feePolicy: .feesIncluded
         ))
 
-    // The response contains PayAmount.drain to indicate this is a drain operation
-    print("Pay amount: \(prepareResponse.payAmount)")
-    // ANCHOR_END: prepare-send-payment-drain
+    // The response shows the fee policy used
+    print("Fee policy: \(String(describing: prepareResponse.feePolicy))")
+    print("Amount: \(String(describing: prepareResponse.amount))")
+    // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
+    // ANCHOR_END: prepare-send-payment-fees-included
 }
