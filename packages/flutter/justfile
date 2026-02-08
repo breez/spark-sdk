@@ -1,0 +1,93 @@
+frb_bin := "flutter_rust_bridge_codegen generate"
+
+export CARGO_TERM_COLOR := "always"
+
+# Lists available recipes
+default:
+  just --list --unsorted
+
+# Initializes the workspace (run this first)
+setup: frb
+	flutter pub get
+	just check-deps
+	@echo "🎉 Setup complete! You can now run 'just build' to build the project."
+
+# Install flutter_rust_bridge_codegen dependencies
+frb:
+	# This is locked until plist PR https://github.com/ebarnard/rust-plist/pull/152 is merged/released
+	cargo install cargo-expand --locked
+	cargo install flutter_rust_bridge_codegen --version 2.9.0 --locked
+
+# Check system dependencies
+check-deps:
+	#!/usr/bin/env bash
+	set -euo pipefail
+
+	echo "🔍 Checking system dependencies..."
+
+	# Check Rust
+	if command -v cargo &> /dev/null; then
+		echo "✅ $(cargo --version)"
+	else
+		echo "❌ cargo not found. Please install Rust."
+		MISSING=1
+	fi
+
+	# Check Flutter
+	if command -v flutter &> /dev/null; then
+		echo "✅ $(flutter --version | head -n1)"
+	else
+		echo "❌ flutter not found. Please install Flutter."
+		MISSING=1
+	fi
+
+	# Check Dart
+	if command -v dart &> /dev/null; then
+		echo "✅ $(dart --version)"
+	else
+		echo "❌ dart not found (should come with Flutter)."
+		MISSING=1
+	fi
+
+	if [ "${MISSING:-0}" -eq 1 ]; then
+		echo "Please install the missing dependencies and try again."
+		exit 1
+	else
+		echo "🎉 All dependencies are installed."
+	fi
+
+# Builds the Rust library & Generates Dart/Flutter bindings
+build:
+	just build-release
+	just gen
+
+# Builds the Rust library in release mode
+build-release:
+	cd rust && cargo build --release
+
+# Generate Dart/Flutter bindings // & Softlinks C headers
+gen:
+	just codegen
+
+# Generate Dart/Flutter bindings
+codegen:
+	mkdir -p lib/src/rust
+	{{frb_bin}}
+
+# Run Flutter tests
+test: build
+	flutter test
+
+# Update version number on pubspec.yaml, podspec files & Gradle scripts
+version:
+	bash scripts/version.sh
+
+# Clean all build artifacts
+clean:
+	flutter clean
+	cd rust && cargo clean
+	rm -rf lib/src/rust
+	rm -rf rust/target/
+	find . -name "*.so" -delete
+	find . -name "*.dylib" -delete
+	find . -name "*.a" -delete
