@@ -1,11 +1,10 @@
-use lnurl_models::sanitize_username;
-
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
     error::SdkError, persist::ObjectCacheRepository,
 };
 
 use super::BreezSdk;
+use lnurl_models::validate_and_sanitize_username;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -20,7 +19,8 @@ impl BreezSdk {
             ));
         };
 
-        let username = sanitize_username(&req.username);
+        let username =
+            validate_and_sanitize_username(&req.username).map_err(SdkError::InvalidInput)?;
         let available = client.check_username_available(&username).await?;
         Ok(available)
     }
@@ -100,7 +100,8 @@ impl BreezSdk {
             ));
         };
 
-        let username = sanitize_username(&request.username);
+        let username =
+            validate_and_sanitize_username(&request.username).map_err(SdkError::InvalidInput)?;
 
         let description = match request.description {
             Some(description) => description,

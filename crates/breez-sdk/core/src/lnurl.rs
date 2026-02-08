@@ -2,7 +2,7 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    UnregisterLnurlPayRequest, validate_and_sanitize_username,
 };
 use reqwest::{
     StatusCode,
@@ -168,6 +168,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
     }
 
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
+        validate_and_sanitize_username(username).map_err(LnurlServerError::RequestFailure)?;
         let url = format!("{}/lnurlpay/available/{}", self.base_url(), username);
         let result = self.client.get(url).send().await;
         let response = match result {
@@ -246,6 +247,8 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         request: &RegisterLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         // Get the pubkey from the wallet
+        validate_and_sanitize_username(&request.username)
+            .map_err(LnurlServerError::RequestFailure)?;
         let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
