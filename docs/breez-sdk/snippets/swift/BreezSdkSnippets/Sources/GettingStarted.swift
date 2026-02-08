@@ -106,6 +106,8 @@ func gettingStartedSparkStatus() async throws {
         print("Spark is partially unavailable")
     case .major:
         print("Spark is experiencing a major outage")
+    case .unknown:
+        print("Spark status is unknown")
     }
 
     print("Last updated: \(sparkStatus.lastUpdated)")

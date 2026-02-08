@@ -1366,6 +1366,8 @@ pub enum ServiceStatus {
     Degraded,
     /// Service is partially unavailable.
     Partial,
+    /// Service status is unknown.
+    Unknown,
     /// Service is experiencing a major outage.
     Major,
 }

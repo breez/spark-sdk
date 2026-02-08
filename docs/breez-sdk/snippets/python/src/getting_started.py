@@ -135,6 +135,8 @@ async def getting_started_spark_status():
             logging.debug("Spark is partially unavailable")
         elif spark_status.status == ServiceStatus.MAJOR:
             logging.debug("Spark is experiencing a major outage")
+        elif spark_status.status == ServiceStatus.UNKNOWN:
+            logging.debug("Spark status is unknown")
 
         logging.debug(f"Last updated: {spark_status.last_updated}")
     except Exception as error:

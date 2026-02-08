@@ -134,6 +134,9 @@ namespace BreezSdkSnippets
                 case ServiceStatus.Major:
                     Console.WriteLine("Spark is experiencing a major outage");
                     break;
+                case ServiceStatus.Unknown:
+                    Console.WriteLine("Spark status is unknown");
+                    break;
             }
 
             Console.WriteLine($"Last updated: {sparkStatus.lastUpdated}");

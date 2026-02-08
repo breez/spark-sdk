@@ -1120,6 +1120,7 @@ pub enum _ServiceStatus {
     Operational,
     Degraded,
     Partial,
+    Unknown,
     Major,
 }
 

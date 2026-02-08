@@ -54,6 +54,9 @@ Future<void> gettingStartedSparkStatus() async {
     case ServiceStatus.major:
       print("Spark is experiencing a major outage");
       break;
+    case ServiceStatus.unknown:
+      print("Spark status is unknown");
+      break;
   }
 
   print("Last updated: ${sparkStatus.lastUpdated}");

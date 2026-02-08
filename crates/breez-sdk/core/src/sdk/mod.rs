@@ -285,7 +285,11 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
             "operational" => crate::ServiceStatus::Operational,
             "degraded" => crate::ServiceStatus::Degraded,
             "partial" => crate::ServiceStatus::Partial,
-            _ => crate::ServiceStatus::Major,
+            "major" => crate::ServiceStatus::Major,
+            _ => {
+                tracing::warn!("Unknown service status: {s}");
+                crate::ServiceStatus::Unknown
+            }
         }
     }
 
@@ -306,7 +310,7 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         .filter(|s| s.name == "Spark Operators" || s.name == "SSP")
         .map(|s| parse_service_status(&s.status))
         .max()
-        .unwrap_or(crate::ServiceStatus::Major);
+        .unwrap_or(crate::ServiceStatus::Unknown);
 
     let last_updated = DateTime::parse_from_rfc3339(&api_response.last_updated)
         .map(|dt| dt.timestamp().cast_unsigned())

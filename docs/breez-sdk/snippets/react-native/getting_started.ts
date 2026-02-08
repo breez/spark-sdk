@@ -117,6 +117,9 @@ const exampleGetSparkStatus = async () => {
     case ServiceStatus.Major:
       console.log('Spark is experiencing a major outage')
       break
+    case ServiceStatus.Unknown:
+      console.log('Spark status is unknown')
+      break
   }
 
   console.log(`Last updated: ${sparkStatus.lastUpdated}`)

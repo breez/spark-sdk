@@ -133,6 +133,9 @@ class GettingStarted {
                 ServiceStatus.MAJOR -> {
                     // Log.v("Breez", "Spark is experiencing a major outage")
                 }
+                ServiceStatus.UNKNOWN -> {
+                    // Log.v("Breez", "Spark status is unknown")
+                }
             }
 
             // Log.v("Breez", "Last updated: ${sparkStatus.lastUpdated}")

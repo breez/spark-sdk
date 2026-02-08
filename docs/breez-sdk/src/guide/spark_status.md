@@ -7,11 +7,12 @@ The SDK provides a standalone function to check the current operational status o
 
 It returns the overall status of the Spark network, along with a timestamp of when the status was last updated.
 
-The returned `ServiceStatus` has four levels, from least to most severe:
+The returned `ServiceStatus` has the following values:
 
 - **Operational** - All services are fully operational.
 - **Degraded** - Services are experiencing degraded performance.
 - **Partial** - Services are partially unavailable.
 - **Major** - Services are experiencing a major outage.
+- **Unknown** - Service status is unknown.
 
 {{#tabs getting_started:spark-status}}

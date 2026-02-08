@@ -122,6 +122,9 @@ pub(crate) async fn getting_started_spark_status() -> Result<()> {
         ServiceStatus::Major => {
             info!("Spark is experiencing a major outage");
         }
+        ServiceStatus::Unknown => {
+            info!("Spark status is unknown");
+        }
     }
 
     info!("Last updated: {}", spark_status.last_updated);

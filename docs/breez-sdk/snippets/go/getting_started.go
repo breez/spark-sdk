@@ -139,6 +139,8 @@ func GetSparkStatus() error {
 		log.Printf("Spark is partially unavailable")
 	case breez_sdk_spark.ServiceStatusMajor:
 		log.Printf("Spark is experiencing a major outage")
+	case breez_sdk_spark.ServiceStatusUnknown:
+		log.Printf("Spark status is unknown")
 	}
 
 	log.Printf("Last updated: %v", sparkStatus.LastUpdated)
