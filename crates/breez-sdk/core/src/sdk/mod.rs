@@ -54,14 +54,6 @@ pub(crate) struct SyncRequest {
 }
 
 impl SyncRequest {
-    pub(crate) fn new(reply: oneshot::Sender<Result<(), SdkError>>, sync_type: SyncType) -> Self {
-        Self {
-            sync_type,
-            reply: Arc::new(Mutex::new(Some(reply))),
-            force: true,
-        }
-    }
-
     pub(crate) fn full(reply: Option<oneshot::Sender<Result<(), SdkError>>>) -> Self {
         Self {
             sync_type: SyncType::Full,
