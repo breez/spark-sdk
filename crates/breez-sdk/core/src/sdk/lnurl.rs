@@ -27,6 +27,12 @@ impl BreezSdk {
         let fee_policy = request.fee_policy.unwrap_or_default();
         let amount_sats = request.amount_sats;
 
+        if fee_policy == FeePolicy::FeesIncluded && request.conversion_options.is_some() {
+            return Err(SdkError::InvalidInput(
+                "FeesIncluded cannot be combined with token conversion".to_string(),
+            ));
+        }
+
         // FeesIncluded uses the double-query approach
         if fee_policy == FeePolicy::FeesIncluded {
             return self
