@@ -257,3 +257,67 @@ pub fn default_external_signer(
 
     Ok(Arc::new(signer))
 }
+
+/// Fetches the current status of Spark network services relevant to the SDK.
+///
+/// This function queries the Spark status API and returns the worst status
+/// across the Spark Operators and SSP services.
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
+    use breez_sdk_common::rest::ReqwestRestClient;
+    use chrono::DateTime;
+
+    #[derive(serde::Deserialize)]
+    struct StatusApiResponse {
+        services: Vec<StatusApiService>,
+        #[serde(rename = "lastUpdated")]
+        last_updated: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct StatusApiService {
+        name: String,
+        status: String,
+    }
+
+    fn parse_service_status(s: &str) -> crate::ServiceStatus {
+        match s {
+            "operational" => crate::ServiceStatus::Operational,
+            "degraded" => crate::ServiceStatus::Degraded,
+            "partial" => crate::ServiceStatus::Partial,
+            "major" => crate::ServiceStatus::Major,
+            _ => {
+                tracing::warn!("Unknown service status: {s}");
+                crate::ServiceStatus::Unknown
+            }
+        }
+    }
+
+    let rest_client =
+        ReqwestRestClient::new().map_err(|e| SdkError::NetworkError(e.to_string()))?;
+
+    let response = rest_client
+        .get_request("https://spark.money/api/v1/status".to_string(), None)
+        .await
+        .map_err(|e| SdkError::NetworkError(e.to_string()))?;
+
+    let api_response: StatusApiResponse = serde_json::from_str(&response.body)
+        .map_err(|e| SdkError::Generic(format!("Failed to parse status response: {e}")))?;
+
+    let status = api_response
+        .services
+        .iter()
+        .filter(|s| s.name == "Spark Operators" || s.name == "SSP")
+        .map(|s| parse_service_status(&s.status))
+        .max()
+        .unwrap_or(crate::ServiceStatus::Unknown);
+
+    let last_updated = DateTime::parse_from_rfc3339(&api_response.last_updated)
+        .map(|dt| dt.timestamp().cast_unsigned())
+        .map_err(|e| SdkError::Generic(format!("Failed to parse lastUpdated timestamp: {e}")))?;
+
+    Ok(crate::SparkStatus {
+        status,
+        last_updated,
+    })
+}

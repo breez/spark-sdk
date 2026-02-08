@@ -63,6 +63,11 @@ pub fn default_config(network: Network) -> Config {
 /// Creates a default external signer from a mnemonic phrase.
 ///
 /// This creates a signer that can be used with `connectWithSigner` or `SdkBuilder.newWithSigner`.
+#[wasm_bindgen(js_name = "getSparkStatus")]
+pub async fn get_spark_status() -> WasmResult<SparkStatus> {
+    Ok(breez_sdk_spark::get_spark_status().await?.into())
+}
+
 #[wasm_bindgen(js_name = "defaultExternalSigner")]
 pub fn default_external_signer(
     mnemonic: String,

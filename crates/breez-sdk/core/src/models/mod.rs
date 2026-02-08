@@ -1356,6 +1356,32 @@ pub struct ListFiatRatesResponse {
     pub rates: Vec<Rate>,
 }
 
+/// The operational status of a Spark service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ServiceStatus {
+    /// Service is fully operational.
+    Operational,
+    /// Service is experiencing degraded performance.
+    Degraded,
+    /// Service is partially unavailable.
+    Partial,
+    /// Service status is unknown.
+    Unknown,
+    /// Service is experiencing a major outage.
+    Major,
+}
+
+/// The status of the Spark network services relevant to the SDK.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkStatus {
+    /// The worst status across all relevant services.
+    pub status: ServiceStatus,
+    /// The last time the status was updated, as a unix timestamp in seconds.
+    pub last_updated: u64,
+}
+
 pub(crate) enum WaitForPaymentIdentifier {
     PaymentId(String),
     PaymentRequest(String),

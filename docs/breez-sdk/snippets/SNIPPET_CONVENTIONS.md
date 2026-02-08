@@ -133,7 +133,95 @@ import { type BreezSdk, SpecificType } from '@breeztech/breez-sdk-spark'
 import { type BreezSdk, SpecificType, SpecificType_Tags } from '@breeztech/breez-sdk-spark-react-native'
 ```
 
-## Enum/Type Discrimination
+## Simple Enum Matching (no associated data)
+
+For enums without associated data (e.g., `ServiceStatus`, `Network`), use direct comparison or switch:
+
+### Rust
+```rust
+match status {
+    ServiceStatus::Operational => { /* ... */ }
+    ServiceStatus::Degraded => { /* ... */ }
+}
+```
+
+### Go
+```go
+switch status {
+case breez_sdk_spark.ServiceStatusOperational:
+    log.Printf("Operational")
+case breez_sdk_spark.ServiceStatusDegraded:
+    log.Printf("Degraded")
+}
+```
+
+### Python
+```python
+if status == ServiceStatus.OPERATIONAL:
+    logging.debug("Operational")
+elif status == ServiceStatus.DEGRADED:
+    logging.debug("Degraded")
+```
+
+### Kotlin
+```kotlin
+when (status) {
+    ServiceStatus.OPERATIONAL -> { /* ... */ }
+    ServiceStatus.DEGRADED -> { /* ... */ }
+}
+```
+
+### Swift
+```swift
+switch status {
+case .operational:
+    print("Operational")
+case .degraded:
+    print("Degraded")
+}
+```
+
+### C#
+```csharp
+switch (status) {
+    case ServiceStatus.Operational:
+        Console.WriteLine("Operational");
+        break;
+    case ServiceStatus.Degraded:
+        Console.WriteLine("Degraded");
+        break;
+}
+```
+
+### Flutter
+```dart
+switch (status) {
+    case ServiceStatus.operational:
+        print("Operational");
+        break;
+    case ServiceStatus.degraded:
+        print("Degraded");
+        break;
+}
+```
+
+### WASM
+```typescript
+switch (status) {
+    case 'operational': { /* ... */ break }
+    case 'degraded': { /* ... */ break }
+}
+```
+
+### React Native
+```typescript
+switch (status) {
+    case ServiceStatus.Operational: { /* ... */ break }
+    case ServiceStatus.Degraded: { /* ... */ break }
+}
+```
+
+## Enum/Type Discrimination (with associated data)
 
 ### Rust - if let / match
 ```rust
@@ -212,6 +300,16 @@ if (response.paymentMethod?.tag === PaymentMethod_Tags.Bolt11Invoice) {
 | Flutter | `print("Message: $variable");` |
 | WASM | `console.log(\`Message: ${variable}\`)` |
 | React Native | `console.log(\`Message: ${variable}\`)` |
+
+**TypeScript linting (WASM & React Native):** ESLint enforces single quotes. Only use backtick template literals when there is string interpolation (`${...}`). For static strings, use single quotes:
+```typescript
+// CORRECT:
+console.log('Spark is fully operational')
+console.log(`Balance: ${balanceSats} sats`)
+
+// WRONG (lint error - no interpolation, must use single quotes):
+console.log(`Spark is fully operational`)
+```
 
 ## Error Handling
 

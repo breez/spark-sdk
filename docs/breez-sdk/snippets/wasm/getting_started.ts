@@ -2,6 +2,7 @@ import {
   type BreezSdk,
   connect,
   defaultConfig,
+  getSparkStatus,
   initLogging,
   type LogEntry,
   type SdkEvent,
@@ -120,6 +121,37 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
   // ANCHOR: remove-event-listener
   await sdk.removeEventListener(listenerId)
   // ANCHOR_END: remove-event-listener
+}
+
+const exampleGetSparkStatus = async () => {
+  // ANCHOR: spark-status
+  const sparkStatus = await getSparkStatus()
+
+  switch (sparkStatus.status) {
+    case 'operational': {
+      console.log('Spark is fully operational')
+      break
+    }
+    case 'degraded': {
+      console.log('Spark is experiencing degraded performance')
+      break
+    }
+    case 'partial': {
+      console.log('Spark is partially unavailable')
+      break
+    }
+    case 'major': {
+      console.log('Spark is experiencing a major outage')
+      break
+    }
+    case 'unknown': {
+      console.log('Spark status is unknown')
+      break
+    }
+  }
+
+  console.log(`Last updated: ${sparkStatus.lastUpdated}`)
+  // ANCHOR_END: spark-status
 }
 
 const exampleDisconnect = async (sdk: BreezSdk) => {

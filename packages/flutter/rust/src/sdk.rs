@@ -7,6 +7,10 @@ use crate::events::BindingEventListener;
 use crate::frb_generated::StreamSink;
 use crate::logger::BindingLogger;
 
+pub async fn get_spark_status() -> Result<SparkStatus, SdkError> {
+    breez_sdk_spark::get_spark_status().await
+}
+
 pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
     let sdk = breez_sdk_spark::connect(request).await?;
     Ok(BreezSdk {
