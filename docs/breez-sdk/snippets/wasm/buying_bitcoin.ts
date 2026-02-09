@@ -40,4 +40,3 @@ const buyBitcoinWithRedirect = async (sdk: BreezSdk) => {
   console.log(response.url)
   // ANCHOR_END: buy-bitcoin-with-redirect
 }
-

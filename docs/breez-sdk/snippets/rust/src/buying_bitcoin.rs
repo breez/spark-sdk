@@ -35,7 +35,6 @@ async fn buy_bitcoin_with_redirect(sdk: &BreezSdk) -> Result<()> {
     let request = BuyBitcoinRequest {
         locked_amount_sat: Some(100_000),
         redirect_url: Some("https://example.com/purchase-complete".to_string()),
-        ..Default::default()
     };
 
     let response = sdk.buy_bitcoin(request).await?;

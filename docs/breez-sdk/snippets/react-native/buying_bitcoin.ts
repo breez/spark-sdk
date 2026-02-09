@@ -1,4 +1,7 @@
-import { BreezSdk, BuyBitcoinRequest } from "@breez/react-native-breez-sdk-spark"
+import {
+    type BreezSdk,
+    type BuyBitcoinRequest
+} from "@breeztech/breez-sdk-spark-react-native"
 
 const buyBitcoinBasic = async (sdk: BreezSdk) => {
     // ANCHOR: buy-bitcoin-basic
@@ -37,4 +40,3 @@ const buyBitcoinWithRedirect = async (sdk: BreezSdk) => {
     console.log(response.url)
     // ANCHOR_END: buy-bitcoin-with-redirect
 }
-

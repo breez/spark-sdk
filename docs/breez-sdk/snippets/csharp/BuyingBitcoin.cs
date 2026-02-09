@@ -1,4 +1,4 @@
-using BreezSdkSpark;
+using Breez.Sdk.Spark;
 
 namespace BreezSdkSnippets
 {

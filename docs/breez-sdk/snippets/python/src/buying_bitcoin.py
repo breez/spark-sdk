@@ -54,5 +54,3 @@ async def buy_bitcoin_with_redirect(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: buy-bitcoin-with-redirect
-
-

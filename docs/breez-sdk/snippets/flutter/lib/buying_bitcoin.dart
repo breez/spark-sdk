@@ -1,4 +1,4 @@
-import 'package:breez_sdk_spark/breez_sdk_spark.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> buyBitcoinBasic(BreezSdk sdk) async {
   // ANCHOR: buy-bitcoin-basic
