@@ -154,6 +154,7 @@ See working examples in `docs/breez-sdk/snippets/` - these are compiled/tested a
 | List payments | `wasm/list_payments.ts` | `rust/src/list_payments.rs` |
 | Parse input | `wasm/parsing_inputs.ts` | `rust/src/parsing_inputs.rs` |
 | LNURL-Pay | `wasm/lnurl_pay.ts` | `rust/src/lnurl_pay.rs` |
+| Buy Bitcoin | `wasm/buying_bitcoin.ts` | `rust/src/buying_bitcoin.rs` |
 | Events | `wasm/getting_started.ts` (search `addEventListener`) | `rust/src/getting_started.rs` (search `EventListener`) |
 
 **Minimal TypeScript example:**
@@ -214,6 +215,7 @@ sdk.disconnect().await?;
 | `parse(input)` | Parse any input (invoice, address, LNURL) |
 | `listPayments(filter)` | Get transaction history |
 | `addEventListener(listener)` | Subscribe to events |
+| `buyBitcoin(request)` | Get MoonPay URL to buy Bitcoin |
 
 ### SDK Events
 
