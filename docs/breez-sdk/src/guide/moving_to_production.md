@@ -10,3 +10,5 @@ Before moving to production, we strongly recommend verifying that these use case
 - **Display pending payments**: Payments always contain a status field that can be used to determine whether the payment was completed or not. Make sure you handle the case where the payment is still pending by showing the correct status to the user.
 
 - **Claiming on-chain deposits**: Make sure you handle the case where an on-chain deposit is unclaimed. For more information see [Claiming on-chain deposits](onchain_claims.md).
+
+- **Check Spark status**: Use the Spark status check to monitor the operational status of the Spark network and display a warning to users when services are degraded or experiencing issues. For more information see [Spark status](spark_status.md).
