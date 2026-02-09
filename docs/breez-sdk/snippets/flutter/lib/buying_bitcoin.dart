@@ -2,7 +2,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> buyBitcoinBasic(BreezSdk sdk) async {
   // ANCHOR: buy-bitcoin-basic
-  // Buy Bitcoin using the SDK's auto-generated deposit address
+  // Buy Bitcoin with funds deposited directly into the user's wallet
   final request = BuyBitcoinRequest();
 
   final response = await sdk.buyBitcoin(request: request);

@@ -5,7 +5,7 @@ import {
 
 const buyBitcoinBasic = async (sdk: BreezSdk) => {
   // ANCHOR: buy-bitcoin-basic
-  // Buy Bitcoin using the SDK's auto-generated deposit address
+  // Buy Bitcoin with funds deposited directly into the user's wallet
   const request: BuyBitcoinRequest = {}
 
   const response = await sdk.buyBitcoin(request)

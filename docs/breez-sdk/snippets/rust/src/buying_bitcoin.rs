@@ -4,7 +4,7 @@ use log::info;
 
 async fn buy_bitcoin_basic(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: buy-bitcoin-basic
-    // Buy Bitcoin using the SDK's auto-generated deposit address
+    // Buy Bitcoin with funds deposited directly into the user's wallet
     let request = BuyBitcoinRequest::default();
 
     let response = sdk.buy_bitcoin(request).await?;

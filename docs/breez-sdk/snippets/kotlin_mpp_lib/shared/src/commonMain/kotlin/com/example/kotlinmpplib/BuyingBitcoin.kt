@@ -5,7 +5,7 @@ import breez_sdk_spark.*
 class BuyingBitcoin {
     suspend fun buyBitcoinBasic(sdk: BreezSdk) {
         // ANCHOR: buy-bitcoin-basic
-        // Buy Bitcoin using the SDK's auto-generated deposit address
+        // Buy Bitcoin with funds deposited directly into the user's wallet
         val request = BuyBitcoinRequest()
 
         val response = sdk.buyBitcoin(request)

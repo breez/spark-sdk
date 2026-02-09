@@ -9,7 +9,7 @@ from breez_sdk_spark import (
 async def buy_bitcoin_basic(sdk: BreezSdk):
     # ANCHOR: buy-bitcoin-basic
     try:
-        # Buy Bitcoin using the SDK's auto-generated deposit address
+        # Buy Bitcoin with funds deposited directly into the user's wallet
         request = BuyBitcoinRequest()
 
         response = await sdk.buy_bitcoin(request=request)

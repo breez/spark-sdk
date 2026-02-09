@@ -2,7 +2,7 @@ import BreezSdkSpark
 
 func buyBitcoinBasic(sdk: BreezSdk) async throws {
     // ANCHOR: buy-bitcoin-basic
-    // Buy Bitcoin using the SDK's auto-generated deposit address
+    // Buy Bitcoin with funds deposited directly into the user's wallet
     let request = BuyBitcoinRequest()
 
     let response = try await sdk.buyBitcoin(request: request)

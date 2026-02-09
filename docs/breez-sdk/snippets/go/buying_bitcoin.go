@@ -8,7 +8,7 @@ import (
 
 func BuyBitcoinBasic(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: buy-bitcoin-basic
-	// Buy Bitcoin using the SDK's auto-generated deposit address
+	// Buy Bitcoin with funds deposited directly into the user's wallet
 	request := breez_sdk_spark.BuyBitcoinRequest{}
 
 	response, err := sdk.BuyBitcoin(request)

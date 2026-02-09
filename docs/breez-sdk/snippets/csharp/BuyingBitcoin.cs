@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         async Task BuyBitcoinBasic(BreezSdk sdk)
         {
             // ANCHOR: buy-bitcoin-basic
-            // Buy Bitcoin using the SDK's auto-generated deposit address
+            // Buy Bitcoin with funds deposited directly into the user's wallet
             var request = new BuyBitcoinRequest();
 
             var response = await sdk.BuyBitcoin(request: request);
