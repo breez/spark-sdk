@@ -841,7 +841,7 @@ class SqliteStorage {
     }
   }
 
-  syncCompleteOutgoingSync(record) {
+  syncCompleteOutgoingSync(record, localRevision) {
     try {
       const transaction = this.db.transaction(() => {
         // Delete records that have been synced
@@ -853,7 +853,7 @@ class SqliteStorage {
         deleteStmt.run(
           record.id.type,
           record.id.dataId,
-          record.revision.toString()
+          localRevision.toString()
         );
 
         // Update or insert the sync state

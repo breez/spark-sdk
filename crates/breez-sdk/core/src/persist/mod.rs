@@ -250,7 +250,11 @@ pub trait Storage: Send + Sync {
         &self,
         record: UnversionedRecordChange,
     ) -> Result<u64, StorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError>;
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError>;
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,

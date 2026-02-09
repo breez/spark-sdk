@@ -878,13 +878,17 @@ impl Storage for SqliteStorage {
         Ok(revision)
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
         tx.execute(
             "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
-            params![record.id.r#type, record.id.data_id, record.revision],
+            params![record.id.r#type, record.id.data_id, local_revision],
         )
         .map_err(map_sqlite_error)?;
 

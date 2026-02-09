@@ -1391,7 +1391,11 @@ impl Storage for PostgresStorage {
         Ok(u64::try_from(revision)?)
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError> {
         let mut client = self.pool.get().await.map_err(map_pool_error)?;
 
         let tx = client
@@ -1404,7 +1408,7 @@ impl Storage for PostgresStorage {
             &[
                 &record.id.r#type,
                 &record.id.data_id,
-                &i64::try_from(record.revision)?,
+                &i64::try_from(local_revision)?,
             ],
         )
         .await

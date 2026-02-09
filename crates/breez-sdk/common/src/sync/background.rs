@@ -426,6 +426,7 @@ impl SyncProcessor {
 
         // Merges the updated fields with the existing record data in the local sync state to form the new record.
         let mut record = change.merge();
+        let local_revision = record.revision;
         debug!(
             "Pushing outgoing record {:?}, revision {} to remote",
             record.id, record.revision
@@ -466,7 +467,7 @@ impl SyncProcessor {
 
         // Removes the pending outgoing record and updates the existing record with the new one.
         self.storage
-            .complete_outgoing_sync((&record).try_into()?)
+            .complete_outgoing_sync((&record).try_into()?, local_revision)
             .await?;
         Ok(())
     }
@@ -801,7 +802,7 @@ mod tests {
         mock_storage
             .expect_complete_outgoing_sync()
             .times(1)
-            .returning(|_| Ok(()));
+            .returning(|_, _| Ok(()));
 
         let (_tx, rx) = broadcast::channel(10);
         let mock_handler = Arc::new(MockNewRecordHandler::new());

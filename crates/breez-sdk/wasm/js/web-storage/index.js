@@ -1395,7 +1395,7 @@ class IndexedDBStorage {
     });
   }
 
-  async syncCompleteOutgoingSync(record) {
+  async syncCompleteOutgoingSync(record, localRevision) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1412,7 +1412,7 @@ class IndexedDBStorage {
       const deleteRequest = outgoingStore.delete([
         record.id.type,
         record.id.dataId,
-        Number(record.revision),
+        Number(localRevision),
       ]);
 
       deleteRequest.onsuccess = () => {

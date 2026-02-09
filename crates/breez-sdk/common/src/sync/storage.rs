@@ -37,7 +37,11 @@ pub trait SyncStorage: Send + Sync {
         &self,
         record: UnversionedRecordChange,
     ) -> Result<u64, SyncStorageError>;
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), SyncStorageError>;
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), SyncStorageError>;
     async fn get_pending_outgoing_changes(
         &self,
         limit: u32,
