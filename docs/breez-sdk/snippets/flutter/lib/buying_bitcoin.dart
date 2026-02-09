@@ -14,7 +14,7 @@ Future<void> buyBitcoinBasic(BreezSdk sdk) async {
 Future<void> buyBitcoinWithAmount(BreezSdk sdk) async {
   // ANCHOR: buy-bitcoin-with-amount
   // Lock the purchase to a specific amount (e.g., 0.001 BTC = 100,000 sats)
-  final request = BuyBitcoinRequest(lockedAmountSat: 100000);
+  final request = BuyBitcoinRequest(lockedAmountSat: BigInt.from(100000));
 
   final response = await sdk.buyBitcoin(request: request);
   print("Open this URL in a browser to complete the purchase:");
@@ -26,7 +26,7 @@ Future<void> buyBitcoinWithRedirect(BreezSdk sdk) async {
   // ANCHOR: buy-bitcoin-with-redirect
   // Provide a custom redirect URL for after the purchase
   final request = BuyBitcoinRequest(
-      lockedAmountSat: 100000,
+      lockedAmountSat: BigInt.from(100000),
       redirectUrl: "https://example.com/purchase-complete");
 
   final response = await sdk.buyBitcoin(request: request);
