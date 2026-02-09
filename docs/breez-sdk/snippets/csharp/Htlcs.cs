@@ -9,10 +9,13 @@ namespace BreezSdkSnippets
             // ANCHOR: send-htlc-payment
             var paymentRequest = "<spark address>";
             // Set the amount you wish the pay the receiver
-            var payAmount = new PayAmount.Bitcoin(amountSats: 50_000UL);
+            ulong? amountSats = 50_000UL;
             var prepareRequest = new PrepareSendPaymentRequest(
                 paymentRequest: paymentRequest,
-                payAmount: payAmount
+                amount: amountSats,
+                tokenIdentifier: null,
+                conversionOptions: null,
+                feePolicy: null
             );
             var prepareResponse = await sdk.PrepareSendPayment(request: prepareRequest);
 

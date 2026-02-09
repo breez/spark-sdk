@@ -2,8 +2,8 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    FeePolicy,
     OnchainConfirmationSpeed,
-    PayAmount,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
     SendPaymentRequest,
@@ -17,12 +17,14 @@ from breez_sdk_spark import (
 async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-lightning-bolt11
     payment_request = "<bolt11 invoice>"
-    # Optionally set the amount you wish to pay the receiver
-    optional_pay_amount = PayAmount.BITCOIN(amount_sats=5_000)
+    optional_amount_sats = 5_000
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            pay_amount=optional_pay_amount,
+            amount=optional_amount_sats,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=None,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -47,12 +49,14 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
 async def prepare_send_payment_onchain(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-onchain
     payment_request = "<bitcoin address>"
-    # Set the amount you wish to pay the receiver
-    pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
+    amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            pay_amount=pay_amount,
+            amount=amount_sats,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=None,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -85,12 +89,14 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
 async def prepare_send_payment_spark_address(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-address
     payment_request = "<spark address>"
-    # Set the amount you wish to pay the receiver
-    pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
+    amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            pay_amount=pay_amount,
+            amount=amount_sats,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=None,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -107,12 +113,14 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
 async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-spark-invoice
     payment_request = "<spark invoice>"
-    # Optionally set the amount you wish to pay the receiver
-    optional_pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
+    optional_amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            pay_amount=optional_pay_amount,
+            amount=optional_amount_sats,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=None,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -142,7 +150,10 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
+            amount=None,
+            token_identifier=None,
             conversion_options=conversion_options,
+            fee_policy=None,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
@@ -223,21 +234,28 @@ async def send_payment_spark(
     # ANCHOR_END: send-payment-spark
 
 
-async def prepare_send_payment_drain(sdk: BreezSdk):
-    # ANCHOR: prepare-send-payment-drain
-    # Use PayAmount.DRAIN to send all available funds
+async def prepare_send_payment_fees_included(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-fees-included
+    # By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
+    # Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
+    # The receiver gets amount minus fees.
     payment_request = "<payment request>"
-    pay_amount = PayAmount.DRAIN()
+    amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
             payment_request=payment_request,
-            pay_amount=pay_amount,
+            amount=amount_sats,
+            token_identifier=None,
+            conversion_options=None,
+            fee_policy=FeePolicy.FEES_INCLUDED,
         )
         prepare_response = await sdk.prepare_send_payment(request=request)
 
-        # The response contains PayAmount.DRAIN to indicate this is a drain operation
-        logging.debug(f"Pay amount: {prepare_response.pay_amount}")
+        # The response shows the fee policy used
+        logging.debug(f"Fee policy: {prepare_response.fee_policy}")
+        logging.debug(f"Amount: {prepare_response.amount}")
+        # The receiver gets amount - fees (fees are available in prepare_response.payment_method)
     except Exception as error:
         logging.error(error)
         raise
-    # ANCHOR_END: prepare-send-payment-drain
+    # ANCHOR_END: prepare-send-payment-fees-included

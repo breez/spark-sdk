@@ -5,12 +5,14 @@ use log::info;
 async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: send-htlc-payment
     let payment_request = "<spark address>".to_string();
-    // Set the amount you wish the pay the receiver
-    let pay_amount = PayAmount::Bitcoin { amount_sats: 50_000 };
+    // Set the amount you wish to pay the receiver
+    let amount_sats = Some(50_000);
     let prepare_request = PrepareSendPaymentRequest {
         payment_request,
-        pay_amount: Some(pay_amount),
+        amount: amount_sats,
+        token_identifier: None,
         conversion_options: None,
+        fee_policy: None,
     };
     let prepare_response = sdk.prepare_send_payment(prepare_request).await?;
 

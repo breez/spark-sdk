@@ -1,10 +1,10 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
+    FeePolicy,
     InputType,
     LnurlPayRequest,
     LnurlPayRequestDetails,
-    BitcoinPayAmount,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
     ConversionOptions,
@@ -40,11 +40,12 @@ async def prepare_pay(sdk: BreezSdk):
             )
 
             request = PrepareLnurlPayRequest(
-                pay_amount = BitcoinPayAmount.BITCOIN(amount_sats=amount_sats),
+                amount_sats=amount_sats,
                 pay_request=pay_request,
                 comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url,
                 conversion_options=optional_conversion_options,
+                fee_policy=None,
             )
             prepare_response = await sdk.prepare_lnurl_pay(request=request)
 
@@ -86,22 +87,27 @@ async def pay(sdk: BreezSdk, prepare_response: PrepareLnurlPayResponse):
 # ANCHOR_END: lnurl-pay
 
 
-async def prepare_pay_drain(sdk: BreezSdk, pay_request: LnurlPayRequestDetails):
-    # ANCHOR: prepare-lnurl-pay-drain
+async def prepare_pay_fees_included(sdk: BreezSdk, pay_request: LnurlPayRequestDetails):
+    # ANCHOR: prepare-lnurl-pay-fees-included
+    # By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
+    # Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
+    # The receiver gets amount minus fees.
+    amount_sats = 5_000
     optional_comment = "<comment>"
     optional_validate_success_action_url = True
-    pay_amount = BitcoinPayAmount.DRAIN()
 
     request = PrepareLnurlPayRequest(
-        pay_amount=pay_amount,
+        amount_sats=amount_sats,
         pay_request=pay_request,
         comment=optional_comment,
         validate_success_action_url=optional_validate_success_action_url,
         conversion_options=None,
+        fee_policy=FeePolicy.FEES_INCLUDED,
     )
     prepare_response = await sdk.prepare_lnurl_pay(request=request)
 
     # If the fees are acceptable, continue to create the LNURL Pay
     fee_sats = prepare_response.fee_sats
     logging.debug(f"Fees: {fee_sats} sats")
-    # ANCHOR_END: prepare-lnurl-pay-drain
+    # The receiver gets amount_sats - fee_sats
+    # ANCHOR_END: prepare-lnurl-pay-fees-included

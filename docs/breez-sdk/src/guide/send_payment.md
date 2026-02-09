@@ -57,11 +57,13 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 
 {{#tabs send_payment:prepare-send-payment-spark-invoice}}
 
-## Draining
+## Fee Policy
 
-To send the entire available balance minus fees, specify the drain option for the payment amount. Draining is supported for Bitcoin addresses, Spark addresses, and amountless Spark invoices. Lightning invoices and Spark invoices with an amount do not support draining.
+By default, fees are added on top of the amount (`FeesExcluded`). Use `FeesIncluded` to deduct fees from the amount instead—the receiver gets the amount minus fees.
 
-{{#tabs send_payment:prepare-send-payment-drain}}
+This is particularly useful when you want to spend your entire balance in a single payment—simply provide your full balance as the amount. Note: `FeesIncluded` is not compatible with payment requests that specify an amount (e.g., BOLT11 invoices and Spark invoices with amount).
+
+{{#tabs send_payment:prepare-send-payment-fees-included}}
 
 <h2 id="sending-payments">
     <a class="header" href="#sending-payments">Sending Payments</a>

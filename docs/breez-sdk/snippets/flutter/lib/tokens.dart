@@ -72,13 +72,16 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   final paymentRequest = '<spark address or invoice>';
   // Token identifier must match the invoice in case it specifies one.
   final tokenIdentifier = '<token identifier>';
-  // Set the amount of tokens you wish to send.
-  final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
+  // Set the amount of tokens you wish to send (in token base units).
+  final amount = BigInt.from(1000);
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: optionalPayAmount,
+      amount: amount,
+      tokenIdentifier: tokenIdentifier,
+      conversionOptions: null,
+      feePolicy: null,
     ),
   );
   
@@ -147,8 +150,8 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   final paymentRequest = '<spark address or invoice>';
   // Token identifier must match the invoice in case it specifies one.
   final tokenIdentifier = '<token identifier>';
-  // Set the amount of tokens you wish to send.
-  final optionalPayAmount = PayAmount.token(amount: BigInt.from(1000), tokenIdentifier: tokenIdentifier);
+  // Set the amount of tokens you wish to send (in token base units).
+  final amount = BigInt.from(1000);
   // Set to use Bitcoin funds to pay via conversion
   int optionalMaxSlippageBps = 50;
   int optionalCompletionTimeoutSecs = 30;
@@ -161,8 +164,10 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
-      payAmount: optionalPayAmount,
+      amount: amount,
+      tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,
+      feePolicy: null,
     ),
   );
   

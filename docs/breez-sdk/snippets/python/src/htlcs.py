@@ -6,7 +6,6 @@ from breez_sdk_spark import (
     BreezSdk,
     ClaimHtlcPaymentRequest,
     ListPaymentsRequest,
-    PayAmount,
     PaymentDetailsFilter,
     PaymentStatus,
     PaymentType,
@@ -21,11 +20,13 @@ from breez_sdk_spark import (
 async def send_htlc_payment(sdk: BreezSdk):
     # ANCHOR: send-htlc-payment
     payment_request = "<spark address>"
-    # Set the amount you wish the pay the receiver
-    pay_amount = PayAmount.BITCOIN(amount_sats=50_000)
+    amount_sats = 50_000
     prepare_request = PrepareSendPaymentRequest(
         payment_request=payment_request,
-        pay_amount=pay_amount,
+        amount=amount_sats,
+        token_identifier=None,
+        conversion_options=None,
+        fee_policy=None,
     )
     prepare_response = await sdk.prepare_send_payment(request=prepare_request)
 

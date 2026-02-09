@@ -887,8 +887,8 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    /// The amount to send. Use `BitcoinPayAmount::Drain` to drain all funds.
-    pub pay_amount: BitcoinPayAmount,
+    /// The amount to send in satoshis.
+    pub amount_sats: u64,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub comment: Option<String>,
@@ -897,21 +897,27 @@ pub struct PrepareLnurlPayRequest {
     /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
+    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
-    pub pay_amount: BitcoinPayAmount,
+    /// The amount to send in satoshis.
+    pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
-    /// The fee in satoshis. For drain operations, this represents the total drain fee
-    /// (including potential overpayment to fully drain the balance).
+    /// The fee in satoshis. For `FeesIncluded` operations, this represents the total fee
+    /// (including potential overpayment).
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
+    /// How fees are handled for this payment.
+    pub fee_policy: FeePolicy,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -996,48 +1002,17 @@ impl LnurlPayInfo {
     }
 }
 
-/// Specifies the amount to send in a payment
-#[derive(Debug, Clone, Serialize)]
+/// Specifies how fees are handled in a payment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum PayAmount {
-    /// A specific Bitcoin amount in satoshis (must be > 0)
-    Bitcoin { amount_sats: u64 },
-    /// A specific token amount (amount must be > 0)
-    Token {
-        amount: u128,
-        token_identifier: String,
-    },
-    /// Drain all Bitcoin funds (only supported for Bitcoin Address and LNURL)
-    Drain,
-}
-
-/// Specifies a Bitcoin-only amount for LNURL payments (no token support)
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum BitcoinPayAmount {
-    /// A specific Bitcoin amount in satoshis (must be > 0)
-    Bitcoin { amount_sats: u64 },
-    /// Drain all Bitcoin funds
-    Drain,
-}
-
-impl PayAmount {
-    /// Create a `PayAmount` from an amount and optional token identifier
-    pub fn from_amount_and_token(
-        amount: u128,
-        token_identifier: Option<String>,
-    ) -> Result<Self, SdkError> {
-        if let Some(token_id) = token_identifier {
-            Ok(PayAmount::Token {
-                amount,
-                token_identifier: token_id,
-            })
-        } else {
-            Ok(PayAmount::Bitcoin {
-                amount_sats: amount.try_into()?,
-            })
-        }
-    }
+pub enum FeePolicy {
+    /// Fees are added on top of the specified amount (default behavior).
+    /// The receiver gets the exact amount specified.
+    #[default]
+    FeesExcluded,
+    /// Fees are deducted from the specified amount.
+    /// The receiver gets the amount minus fees.
+    FeesIncluded,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1054,22 +1029,35 @@ pub struct PrepareSendPaymentRequest {
     /// The amount to send.
     /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
     /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.
-    /// Use `PayAmount::Drain` to send all funds (when amount payment requests without an amount).
+    /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub pay_amount: Option<PayAmount>,
+    pub amount: Option<u128>,
+    /// Optional token identifier for token payments.
+    /// Absence indicates that the payment is a Bitcoin payment.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
     /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
+    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    /// Amount to send.
-    pub pay_amount: PayAmount,
+    /// The amount for the payment.
+    /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
+    pub amount: u128,
+    /// Optional token identifier for token payments.
+    /// Absence indicates that the payment is a Bitcoin payment.
+    pub token_identifier: Option<String>,
     /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
+    /// How fees are handled for this payment.
+    pub fee_policy: FeePolicy,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

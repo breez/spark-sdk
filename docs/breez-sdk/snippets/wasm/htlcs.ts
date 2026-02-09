@@ -1,19 +1,19 @@
 import { createHash } from 'crypto'
-import type { Payment, BreezSdk, PrepareSendPaymentResponse, PayAmount } from '@breeztech/breez-sdk-spark'
+import type { Payment, BreezSdk, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
 
 const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // ANCHOR: send-htlc-payment
   const paymentRequest = '<spark address>'
-  // Set the amount you wish the pay the receiver
-  const payAmount: PayAmount = {
-    type: 'bitcoin',
-    amountSats: 50_000
-  }
-  const prepareRequest = {
+  // Set the amount you wish to pay the receiver
+  const amountSats = BigInt(50_000)
+
+  const prepareResponse = await sdk.prepareSendPayment({
     paymentRequest,
-    payAmount
-  }
-  const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
+    amount: amountSats,
+    tokenIdentifier: undefined,
+    conversionOptions: undefined,
+    feePolicy: undefined
+  })
 
   // If the fees are acceptable, continue to create the HTLC Payment
   if (prepareResponse.paymentMethod.type === 'sparkAddress') {

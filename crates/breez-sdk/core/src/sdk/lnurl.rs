@@ -2,10 +2,10 @@ use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
 use tracing::info;
 
 use crate::{
-    BitcoinPayAmount, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
+    FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
-    LnurlWithdrawResponse, PayAmount, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
-    SendPaymentMethod, WaitForPaymentIdentifier,
+    LnurlWithdrawResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
+    WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -24,12 +24,21 @@ impl BreezSdk {
         &self,
         request: PrepareLnurlPayRequest,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        let amount_sats: u64 = match &request.pay_amount {
-            BitcoinPayAmount::Bitcoin { amount_sats } => *amount_sats,
-            BitcoinPayAmount::Drain => {
-                return self.prepare_lnurl_pay_drain(request).await;
-            }
-        };
+        let fee_policy = request.fee_policy.unwrap_or_default();
+        let amount_sats = request.amount_sats;
+
+        if fee_policy == FeePolicy::FeesIncluded && request.conversion_options.is_some() {
+            return Err(SdkError::InvalidInput(
+                "FeesIncluded cannot be combined with token conversion".to_string(),
+            ));
+        }
+
+        // FeesIncluded uses the double-query approach
+        if fee_policy == FeePolicy::FeesIncluded {
+            return self
+                .prepare_lnurl_pay_fees_included(request, amount_sats)
+                .await;
+        }
 
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
@@ -50,8 +59,10 @@ impl BreezSdk {
         let prepare_response = self
             .prepare_send_payment(crate::PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
-                pay_amount: Some(PayAmount::Bitcoin { amount_sats }),
+                amount: Some(u128::from(amount_sats)),
+                token_identifier: None,
                 conversion_options: request.conversion_options.clone(),
+                fee_policy: None,
             })
             .await?;
 
@@ -67,13 +78,14 @@ impl BreezSdk {
         };
 
         Ok(PrepareLnurlPayResponse {
-            pay_amount: BitcoinPayAmount::Bitcoin { amount_sats },
+            amount_sats,
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
             conversion_estimate: prepare_response.conversion_estimate,
+            fee_policy,
         })
     }
 
@@ -81,25 +93,22 @@ impl BreezSdk {
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
 
-        // Extract amount from pay_amount
-        let amount_sats = match &request.prepare_response.pay_amount {
-            BitcoinPayAmount::Bitcoin { amount_sats } => *amount_sats,
-            BitcoinPayAmount::Drain => {
-                // For drain, extract amount from the invoice (set during prepare)
-                request
-                    .prepare_response
-                    .invoice_details
-                    .amount_msat
-                    .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
-                    / 1000
-            }
+        let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
+
+        // For FeesIncluded, extract amount from the invoice (set during prepare)
+        let receiver_amount_sats: u64 = if is_fees_included {
+            request
+                .prepare_response
+                .invoice_details
+                .amount_msat
+                .ok_or_else(|| SdkError::Generic("Missing invoice amount".to_string()))?
+                / 1000
+        } else {
+            request.prepare_response.amount_sats
         };
 
-        // Calculate amount override for drain operations
-        let amount_override = if matches!(
-            request.prepare_response.pay_amount,
-            BitcoinPayAmount::Drain
-        ) {
+        // Calculate amount override for FeesIncluded operations
+        let amount_override = if is_fees_included {
             // Re-estimate current fee for the invoice
             let current_fee = self
                 .spark_wallet
@@ -109,17 +118,17 @@ impl BreezSdk {
                 )
                 .await?;
 
-            // drain_fee = first_fee (from prepare), which is the total we need to pay in fees
-            let drain_fee = request.prepare_response.fee_sats;
+            // fees_included_fee = first_fee (from prepare), which is the total we need to pay in fees
+            let fees_included_fee = request.prepare_response.fee_sats;
 
-            if current_fee > drain_fee {
+            if current_fee > fees_included_fee {
                 return Err(SdkError::Generic(
                     "Fee increased since prepare. Please retry.".to_string(),
                 ));
             }
 
-            // Overpay by the difference to fully drain the balance
-            let overpayment = drain_fee.saturating_sub(current_fee);
+            // Overpay by the difference to respect prepared amount
+            let overpayment = fees_included_fee.saturating_sub(current_fee);
 
             // Protect against excessive fee overpayment.
             // Allow overpayment up to 100% of actual fee, with a minimum of 1 sat.
@@ -133,12 +142,12 @@ impl BreezSdk {
             if overpayment > 0 {
                 tracing::info!(
                     overpayment_sats = overpayment,
-                    drain_fee_sats = drain_fee,
+                    fees_included_fee_sats = fees_included_fee,
                     current_fee_sats = current_fee,
-                    "Drain fee overpayment applied"
+                    "FeesIncluded fee overpayment applied"
                 );
             }
-            Some(amount_sats.saturating_add(overpayment))
+            Some(receiver_amount_sats.saturating_add(overpayment))
         } else {
             None
         };
@@ -151,8 +160,10 @@ impl BreezSdk {
                         spark_transfer_fee_sats: None,
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    pay_amount: PayAmount::Bitcoin { amount_sats },
+                    amount: u128::from(receiver_amount_sats),
+                    token_identifier: None,
                     conversion_estimate: request.prepare_response.conversion_estimate,
+                    fee_policy: FeePolicy::FeesExcluded, // Always FeesExcluded for internal handling
                 },
                 options: None,
                 idempotency_key: request.idempotency_key,
@@ -350,48 +361,46 @@ impl BreezSdk {
 
 // Private LNURL methods
 impl BreezSdk {
-    /// Prepares an LNURL pay drain operation using a double-query approach.
+    /// Prepares an LNURL pay `FeesIncluded` operation using a double-query approach.
     ///
     /// This method:
-    /// 1. Gets the current available balance
-    /// 2. Validates balance doesn't exceed LNURL `max_sendable`
-    /// 3. First query: gets invoice for full balance to estimate fees
-    /// 4. Calculates actual send amount (balance - estimated fee)
-    /// 5. Second query: gets invoice for actual amount
-    /// 6. Returns the prepare response with the second invoice
-    pub(super) async fn prepare_lnurl_pay_drain(
+    /// 1. Validates amount doesn't exceed LNURL `max_sendable`
+    /// 2. First query: gets invoice for full amount to estimate fees
+    /// 3. Calculates actual send amount (amount - estimated fee)
+    /// 4. Second query: gets invoice for actual amount
+    /// 5. Returns the prepare response with the second invoice
+    pub(super) async fn prepare_lnurl_pay_fees_included(
         &self,
         request: PrepareLnurlPayRequest,
+        amount_sats: u64,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        // 1. Get current available balance (always fresh)
-        let balance_sats = self.spark_wallet.get_balance().await?;
-
-        if balance_sats == 0 {
-            return Err(SdkError::InsufficientFunds);
+        if amount_sats == 0 {
+            return Err(SdkError::InvalidInput(
+                "Amount must be greater than 0".to_string(),
+            ));
         }
 
-        // 2. Validate balance is within LNURL limits
+        // 1. Validate amount is within LNURL limits
         let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
         let max_sendable_sats = request.pay_request.max_sendable / 1000;
 
-        if balance_sats < min_sendable_sats {
+        if amount_sats < min_sendable_sats {
             return Err(SdkError::InvalidInput(format!(
-                "Balance ({balance_sats} sats) is below LNURL minimum ({min_sendable_sats} sats)"
+                "Amount ({amount_sats} sats) is below LNURL minimum ({min_sendable_sats} sats)"
             )));
         }
 
-        if balance_sats > max_sendable_sats {
-            return Err(SdkError::DrainExceedsLnurlMax {
-                balance_sats,
-                max_sendable_sats,
-            });
+        if amount_sats > max_sendable_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount ({amount_sats} sats) exceeds LNURL maximum ({max_sendable_sats} sats)"
+            )));
         }
 
-        // 3. First query: get invoice for full balance to estimate fees
+        // 2. First query: get invoice for full amount to estimate fees
         // Note: We don't intend to pay this invoice. It's only for fee estimation.
         let first_invoice = validate_lnurl_pay(
             self.lnurl_client.as_ref(),
-            balance_sats.saturating_mul(1_000), // convert to msats
+            amount_sats.saturating_mul(1_000), // convert to msats
             &request.comment,
             &request.pay_request.clone().into(),
             self.config.network.into(),
@@ -406,14 +415,14 @@ impl BreezSdk {
             lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
         };
 
-        // 4. Get fee estimate for first invoice
+        // 3. Get fee estimate for first invoice
         let first_fee = self
             .spark_wallet
             .fetch_lightning_send_fee_estimate(&first_data.pr, None)
             .await?;
 
-        // 5. Calculate actual send amount (balance - fee)
-        let actual_amount = balance_sats.saturating_sub(first_fee);
+        // 4. Calculate actual send amount (amount - fee)
+        let actual_amount = amount_sats.saturating_sub(first_fee);
 
         // Validate against LNURL minimum
         if actual_amount < min_sendable_sats {
@@ -422,7 +431,7 @@ impl BreezSdk {
             )));
         }
 
-        // 6. Second query: get invoice for actual amount (back-to-back, no delay)
+        // 5. Second query: get invoice for actual amount (back-to-back, no delay)
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
             actual_amount.saturating_mul(1_000),
@@ -439,7 +448,7 @@ impl BreezSdk {
             lnurl::pay::ValidatedCallbackResponse::EndpointSuccess { data } => data,
         };
 
-        // 7. Get actual fee for the smaller invoice
+        // 6. Get actual fee for the smaller invoice
         let actual_fee = self
             .spark_wallet
             .fetch_lightning_send_fee_estimate(&success_data.pr, None)
@@ -461,17 +470,18 @@ impl BreezSdk {
         };
 
         info!(
-            "LNURL drain prepared: balance={balance_sats}, amount={actual_amount}, fee={first_fee}"
+            "LNURL FeesIncluded prepared: amount={amount_sats}, receiver_amount={actual_amount}, fee={first_fee}"
         );
 
         Ok(PrepareLnurlPayResponse {
-            pay_amount: BitcoinPayAmount::Drain,
+            amount_sats,
             comment: request.comment,
             pay_request: request.pay_request,
             invoice_details,
             fee_sats: first_fee,
             success_action: success_data.success_action.map(From::from),
             conversion_estimate: None,
+            fee_policy: FeePolicy::FeesIncluded,
         })
     }
 }

@@ -290,56 +290,52 @@ pub enum _OnchainConfirmationSpeed {
     Slow,
 }
 
-#[frb(mirror(PayAmount))]
-pub enum _PayAmount {
-    Bitcoin {
-        amount_sats: u64,
-    },
-    Token {
-        amount: u128,
-        token_identifier: String,
-    },
-    Drain,
-}
-
-#[frb(mirror(BitcoinPayAmount))]
-pub enum _BitcoinPayAmount {
-    Bitcoin { amount_sats: u64 },
-    Drain,
+#[frb(mirror(FeePolicy))]
+pub enum _FeePolicy {
+    /// Fees are added on top of the specified amount (default behavior).
+    FeesExcluded,
+    /// Fees are deducted from the specified amount.
+    FeesIncluded,
 }
 
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
-    pub pay_amount: BitcoinPayAmount,
+    pub amount_sats: u64,
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
     pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[frb(mirror(PrepareLnurlPayResponse))]
 pub struct _PrepareLnurlPayResponse {
-    pub pay_amount: BitcoinPayAmount,
+    pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub fee_sats: u64,
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
     pub conversion_estimate: Option<ConversionEstimate>,
+    pub fee_policy: FeePolicy,
 }
 
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
     pub payment_request: String,
-    pub pay_amount: Option<PayAmount>,
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
 pub struct _PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    pub pay_amount: PayAmount,
+    pub amount: u128,
+    pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
+    pub fee_policy: FeePolicy,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]

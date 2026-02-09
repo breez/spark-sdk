@@ -222,18 +222,11 @@ impl BreezSdk {
             return;
         }
 
-        // Just sync all lnurl metadata here, no need to be picky.
-        let (tx, rx) = oneshot::channel();
-        if let Err(e) = self
-            .sync_trigger
-            .send(SyncRequest::new(tx, SyncType::LnurlMetadata))
-        {
-            error!("Failed to trigger lnurl metadata sync: {e}");
-            return;
-        }
-
-        if let Err(e) = rx.await {
-            error!("Failed to sync lnurl metadata for invoice {}: {e}", invoice);
+        // Sync lnurl metadata directly instead of going through the sync trigger,
+        // because this function is called from the sync loop's event handler,
+        // which would deadlock waiting for itself to process the trigger.
+        if let Err(e) = self.sync_lnurl_metadata().await {
+            error!("Failed to sync lnurl metadata for invoice {invoice}: {e}");
             return;
         }
 

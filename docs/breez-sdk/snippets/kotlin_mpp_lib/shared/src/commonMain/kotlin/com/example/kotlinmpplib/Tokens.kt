@@ -92,19 +92,20 @@ class Tokens {
             val paymentRequest = "<spark address or invoice>"
             // Token identifier must match the invoice in case it specifies one.
             val tokenIdentifier = "<token identifier>"
-            // Set the amount of tokens you wish to send.
-            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
-            // package)
+            // Set the amount of tokens you wish to send (in token base units).
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
             val amount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
             // val amount = BigInteger.valueOf(1_000L)
-            val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
 
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
-                        payAmount = optionalPayAmount,
+                        amount = amount,
+                        tokenIdentifier = tokenIdentifier,
+                        conversionOptions = null,
+                        feePolicy = null,
                     )
                 )
 
@@ -180,14 +181,12 @@ class Tokens {
             val paymentRequest = "<spark address or invoice>"
             // Token identifier must match the invoice in case it specifies one.
             val tokenIdentifier = "<token identifier>"
-            // Set the amount of tokens you wish to send.
-            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer, which is included in
-            // package)
+            // Set the amount of tokens you wish to send (in token base units).
+            // Kotlin MPP (BigInteger from com.ionspin.kotlin.bignum.integer)
             val amount = BigInteger.fromLong(1_000L)
             // Android (BigInteger from java.math)
             // val amount = BigInteger.valueOf(1_000L)
-            val optionalPayAmount = PayAmount.Token(amount = amount, tokenIdentifier = tokenIdentifier)
-            // set to use Bitcoin funds to pay via conversion
+            // Set to use Bitcoin funds to pay via conversion
             val optionalMaxSlippageBps = 50u
             val optionalCompletionTimeoutSecs = 30u
             val conversionOptions = ConversionOptions(
@@ -200,8 +199,10 @@ class Tokens {
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
-                        payAmount = optionalPayAmount,
+                        amount = amount,
+                        tokenIdentifier = tokenIdentifier,
                         conversionOptions = conversionOptions,
+                        feePolicy = null,
                     )
                 )
 

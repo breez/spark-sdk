@@ -1,6 +1,6 @@
 use crate::{
-    ConversionOptions, ConversionType, InputType, PayAmount, SparkInvoiceDetails, error::SdkError,
-    models::PrepareSendPaymentRequest,
+    Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, InputType,
+    SparkInvoiceDetails, error::SdkError, models::PrepareSendPaymentRequest,
 };
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,14 +10,13 @@ pub(crate) fn validate_prepare_send_payment_request(
     request: &PrepareSendPaymentRequest,
     identity_public_key: &str,
 ) -> Result<(), SdkError> {
-    // Validate pay_amount has valid amounts (> 0 for Bitcoin/Token variants)
-    validate_pay_amount(request.pay_amount.as_ref())?;
+    // Validate amount is > 0 if provided
+    validate_amount(request.amount)?;
 
-    // Validate drain is not combined with token conversion
-    if matches!(request.pay_amount, Some(PayAmount::Drain)) && request.conversion_options.is_some()
-    {
+    // Validate FeesIncluded is not combined with token conversion
+    if request.fee_policy == Some(FeePolicy::FeesIncluded) && request.conversion_options.is_some() {
         return Err(SdkError::InvalidInput(
-            "Drain cannot be combined with token conversion".to_string(),
+            "FeesIncluded cannot be combined with token conversion".to_string(),
         ));
     }
 
@@ -26,7 +25,9 @@ pub(crate) fn validate_prepare_send_payment_request(
             validate_spark_invoice_request(spark_invoice_details, request, identity_public_key)
         }
         InputType::SparkAddress(_) => validate_spark_address_request(request),
-        InputType::Bolt11Invoice(_) => validate_bolt11_invoice_request(request),
+        InputType::Bolt11Invoice(bolt11_invoice_details) => {
+            validate_bolt11_invoice_request(bolt11_invoice_details, request)
+        }
         InputType::BitcoinAddress(_) => validate_bitcoin_address_request(request),
         _ => Err(SdkError::InvalidInput(
             "Unsupported payment method".to_string(),
@@ -34,17 +35,14 @@ pub(crate) fn validate_prepare_send_payment_request(
     }
 }
 
-/// Validates that `pay_amount` has valid amounts (> 0 for Bitcoin/Token variants)
-fn validate_pay_amount(pay_amount: Option<&PayAmount>) -> Result<(), SdkError> {
-    match pay_amount {
-        Some(PayAmount::Bitcoin { amount_sats }) if *amount_sats == 0 => Err(
-            SdkError::InvalidInput("Amount must be greater than 0".to_string()),
-        ),
-        Some(PayAmount::Token { amount, .. }) if *amount == 0 => Err(SdkError::InvalidInput(
+/// Validates that amount is > 0 if provided
+fn validate_amount(amount: Option<u128>) -> Result<(), SdkError> {
+    if let Some(0) = amount {
+        return Err(SdkError::InvalidInput(
             "Amount must be greater than 0".to_string(),
-        )),
-        _ => Ok(()),
+        ));
     }
+    Ok(())
 }
 
 /// Validates a spark invoice request against the provided request parameters.
@@ -53,42 +51,19 @@ fn validate_spark_invoice_request(
     request: &PrepareSendPaymentRequest,
     identity_public_key: &str,
 ) -> Result<(), SdkError> {
-    // Drain is only supported for amountless Spark invoices
-    if matches!(request.pay_amount, Some(PayAmount::Drain)) {
-        if spark_invoice_details.amount.is_some() {
-            return Err(SdkError::InvalidInput(
-                "Drain is not supported for invoices with a fixed amount".to_string(),
-            ));
-        }
-        // Token invoices with drain are not supported
-        if spark_invoice_details.token_identifier.is_some() {
-            return Err(SdkError::DrainNotSupported);
-        }
+    // FeesIncluded is only supported for amountless Spark invoices
+    if request.fee_policy == Some(FeePolicy::FeesIncluded) && spark_invoice_details.amount.is_some()
+    {
+        return Err(SdkError::InvalidInput(
+            "FeesIncluded is not supported for invoices with a fixed amount".to_string(),
+        ));
     }
 
-    // Extract token identifier from pay_amount if it's a Token variant
-    let requested_token_identifier = match &request.pay_amount {
-        Some(PayAmount::Token {
-            token_identifier, ..
-        }) => Some(token_identifier.clone()),
-        _ => None,
-    };
-
-    // Extract amount from pay_amount
-    let request_amount = match &request.pay_amount {
-        Some(PayAmount::Bitcoin { amount_sats }) => Some(u128::from(*amount_sats)),
-        Some(PayAmount::Token { amount, .. }) => Some(*amount),
-        _ => None,
-    };
+    let requested_token_identifier = request.token_identifier.clone();
+    let request_amount = request.amount;
 
     // Validate token identifier
     if let Some(token_identifier) = &spark_invoice_details.token_identifier {
-        // Error if explicitly requesting Bitcoin payment for a token invoice
-        if matches!(request.pay_amount, Some(PayAmount::Bitcoin { .. })) {
-            return Err(SdkError::InvalidInput(
-                "PayAmount::Bitcoin is not allowed for tokens invoice".to_string(),
-            ));
-        }
         // Error if token identifier doesn't match (when explicitly provided)
         if let Some(ref req_token_id) = requested_token_identifier
             && req_token_id != token_identifier
@@ -157,9 +132,8 @@ fn validate_spark_invoice_request(
         ));
     }
 
-    // Validate amount is provided when invoice has no amount (unless drain)
-    let is_drain = matches!(request.pay_amount, Some(PayAmount::Drain));
-    if spark_invoice_details.amount.is_none() && request_amount.is_none() && !is_drain {
+    // Validate amount is provided when invoice has no amount
+    if spark_invoice_details.amount.is_none() && request_amount.is_none() {
         return Err(SdkError::InvalidInput(
             "Amount is required when invoice has no amount".to_string(),
         ));
@@ -170,13 +144,13 @@ fn validate_spark_invoice_request(
 
 /// Validates a spark address request.
 fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
-    // Amount is required for spark addresses (Drain is allowed)
-    if request.pay_amount.is_none() {
+    // Amount is required for spark addresses
+    if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
 
-    // Extract token identifier from pay_amount if it's a Token variant
-    let has_token_identifier = matches!(&request.pay_amount, Some(PayAmount::Token { .. }));
+    // Check if token identifier is provided
+    let has_token_identifier = request.token_identifier.is_some();
 
     // Validate conversion depending on whether token identifier is provided
     if let Some(conversion_options) = &request.conversion_options {
@@ -202,14 +176,20 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
 }
 
 /// Validates a Bolt11 invoice request.
-fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
-    // Drain is not supported for Bolt11 invoices
-    if matches!(request.pay_amount, Some(PayAmount::Drain)) {
-        return Err(SdkError::DrainNotSupported);
+fn validate_bolt11_invoice_request(
+    invoice_details: &Bolt11InvoiceDetails,
+    request: &PrepareSendPaymentRequest,
+) -> Result<(), SdkError> {
+    // FeesIncluded is only supported for amountless Bolt11 invoices
+    if request.fee_policy == Some(FeePolicy::FeesIncluded) && invoice_details.amount_msat.is_some()
+    {
+        return Err(SdkError::InvalidInput(
+            "FeesIncluded is not supported for invoices with a fixed amount".to_string(),
+        ));
     }
 
     // Token identifier cannot be provided for Bolt11 invoices
-    if matches!(request.pay_amount, Some(PayAmount::Token { .. })) {
+    if request.token_identifier.is_some() {
         return Err(SdkError::InvalidInput(
             "Token identifier can't be provided for this payment request: non-spark address"
                 .to_string(),
@@ -234,15 +214,15 @@ fn validate_bolt11_invoice_request(request: &PrepareSendPaymentRequest) -> Resul
 /// Validates a Bitcoin address request.
 fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
     // Token identifier cannot be provided for Bitcoin addresses
-    if matches!(request.pay_amount, Some(PayAmount::Token { .. })) {
+    if request.token_identifier.is_some() {
         return Err(SdkError::InvalidInput(
             "Token identifier can't be provided for this payment request: non-spark address"
                 .to_string(),
         ));
     }
 
-    // Amount is required for Bitcoin addresses (Drain is allowed)
-    if request.pay_amount.is_none() {
+    // Amount is required for Bitcoin addresses
+    if request.amount.is_none() {
         return Err(SdkError::InvalidInput("Amount is required".to_string()));
     }
 
@@ -278,16 +258,20 @@ mod tests {
     fn create_test_request() -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
-            pay_amount: None,
+            amount: None,
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         }
     }
 
     fn create_bitcoin_amount_request(amount_sats: u64) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
-            pay_amount: Some(PayAmount::Bitcoin { amount_sats }),
+            amount: Some(u128::from(amount_sats)),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: None,
         }
     }
 
@@ -297,19 +281,20 @@ mod tests {
     ) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
-            pay_amount: Some(PayAmount::Token {
-                amount,
-                token_identifier: token_identifier.to_string(),
-            }),
+            amount: Some(amount),
+            token_identifier: Some(token_identifier.to_string()),
             conversion_options: None,
+            fee_policy: None,
         }
     }
 
-    fn create_drain_request() -> PrepareSendPaymentRequest {
+    fn create_fees_included_request(amount: u128) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
             payment_request: "test_request".to_string(),
-            pay_amount: Some(PayAmount::Drain),
+            amount: Some(amount),
+            token_identifier: None,
             conversion_options: None,
+            fee_policy: Some(FeePolicy::FeesIncluded),
         }
     }
 
@@ -323,6 +308,27 @@ mod tests {
             expiry_time: None,
             description: None,
             sender_public_key: None,
+        }
+    }
+
+    fn create_test_bolt11_invoice() -> Bolt11InvoiceDetails {
+        use crate::{Bolt11Invoice, PaymentRequestSource};
+        Bolt11InvoiceDetails {
+            amount_msat: None,
+            description: None,
+            description_hash: None,
+            expiry: 3600,
+            invoice: Bolt11Invoice {
+                bolt11: "lnbc1...".to_string(),
+                source: PaymentRequestSource::default(),
+            },
+            min_final_cltv_expiry_delta: 144,
+            network: BitcoinNetwork::Regtest,
+            payee_pubkey: "test_pubkey".to_string(),
+            payment_hash: "test_hash".to_string(),
+            payment_secret: "test_secret".to_string(),
+            routing_hints: vec![],
+            timestamp: 0,
         }
     }
 
@@ -382,29 +388,6 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_bitcoin_not_allowed_for_token_invoice() {
-        let mut invoice = create_test_invoice();
-        invoice.token_identifier = Some("token123".to_string());
-
-        let request = create_bitcoin_amount_request(1000); // PayAmount::Bitcoin
-
-        let identity_key = "test_identity".to_string();
-        let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
-        assert!(
-            result.is_err(),
-            "Should fail when Bitcoin payment is used for token invoice"
-        );
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("PayAmount::Bitcoin is not allowed for tokens invoice"),
-                "Error message should mention PayAmount::Bitcoin is not allowed for tokens invoice"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
-    }
-
-    #[test_all]
     fn test_validate_spark_invoice_token_identifier_not_allowed() {
         let invoice = create_test_invoice(); // No token identifier
 
@@ -427,29 +410,29 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_drain_with_amountless_invoice() {
+    fn test_validate_spark_invoice_fees_included_with_amountless_invoice() {
         let invoice = create_test_invoice(); // No amount
-        let request = create_drain_request();
+        let request = create_fees_included_request(1000);
 
         let identity_key = "test_identity".to_string();
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_ok(),
-            "Should succeed when drain is used for amountless Spark invoice"
+            "Should succeed when FeesIncluded is used for amountless Spark invoice"
         );
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_drain_with_amount_invoice() {
+    fn test_validate_spark_invoice_fees_included_with_amount_invoice() {
         let mut invoice = create_test_invoice();
         invoice.amount = Some(1000); // Invoice has fixed amount
-        let request = create_drain_request();
+        let request = create_fees_included_request(1000);
 
         let identity_key = "test_identity".to_string();
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail when drain is used for Spark invoice with fixed amount"
+            "Should fail when FeesIncluded is used for Spark invoice with fixed amount"
         );
         if let Err(SdkError::InvalidInput(msg)) = result {
             assert!(
@@ -462,20 +445,17 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_invoice_drain_with_token_invoice() {
+    fn test_validate_spark_invoice_fees_included_with_token_invoice() {
         let mut invoice = create_test_invoice();
-        invoice.token_identifier = Some("token123".to_string()); // Token invoice
-        let request = create_drain_request();
+        invoice.token_identifier = Some("token123".to_string()); // Token invoice (amountless)
+        let mut request = create_fees_included_request(1000);
+        request.token_identifier = Some("token123".to_string());
 
         let identity_key = "test_identity".to_string();
         let result = validate_spark_invoice_request(&invoice, &request, &identity_key);
         assert!(
-            result.is_err(),
-            "Should fail when drain is used for token Spark invoice"
-        );
-        assert!(
-            matches!(result, Err(SdkError::DrainNotSupported)),
-            "Expected DrainNotSupported error"
+            result.is_ok(),
+            "Should succeed when FeesIncluded is used for token Spark invoice"
         );
     }
 
@@ -789,12 +769,12 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_spark_address_with_drain() {
-        let request = create_drain_request();
+    fn test_validate_spark_address_with_fees_included() {
+        let request = create_fees_included_request(1000);
         let result = validate_spark_address_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when drain is used for Spark address"
+            "Should succeed when FeesIncluded is used for Spark address"
         );
     }
 
@@ -865,8 +845,9 @@ mod tests {
     // Bolt11Invoice tests
     #[test_all]
     fn test_validate_bolt11_invoice_without_token_identifier() {
+        let invoice = create_test_bolt11_invoice();
         let request = create_test_request();
-        let result = validate_bolt11_invoice_request(&request);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
         assert!(
             result.is_ok(),
             "Should succeed when token identifier is not provided"
@@ -875,8 +856,9 @@ mod tests {
 
     #[test_all]
     fn test_validate_bolt11_invoice_with_token_identifier() {
+        let invoice = create_test_bolt11_invoice();
         let request = create_token_amount_request(1000, "token123");
-        let result = validate_bolt11_invoice_request(&request);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
         assert!(
             result.is_err(),
             "Should fail when token identifier is provided"
@@ -892,21 +874,39 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_bolt11_invoice_drain_not_supported() {
-        let request = create_drain_request();
-        let result = validate_bolt11_invoice_request(&request);
+    fn test_validate_bolt11_invoice_fees_included_with_amountless_invoice() {
+        let invoice = create_test_bolt11_invoice(); // No amount
+        let request = create_fees_included_request(1000);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
         assert!(
-            result.is_err(),
-            "Should fail when drain is used for Bolt11 invoice"
-        );
-        assert!(
-            matches!(result, Err(SdkError::DrainNotSupported)),
-            "Expected DrainNotSupported error"
+            result.is_ok(),
+            "Should succeed when FeesIncluded is used for amountless Bolt11 invoice"
         );
     }
 
     #[test_all]
+    fn test_validate_bolt11_invoice_fees_included_with_amount_invoice() {
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000); // Invoice has fixed amount
+        let request = create_fees_included_request(1000);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
+        assert!(
+            result.is_err(),
+            "Should fail when FeesIncluded is used for Bolt11 invoice with fixed amount"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("not supported for invoices with a fixed amount"),
+                "Error message should mention fixed amount"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
     fn test_validate_bolt11_invoice_with_valid_conversion() {
+        let invoice = create_test_bolt11_invoice();
         let mut request = create_test_request();
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
@@ -915,7 +915,7 @@ mod tests {
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
-        let result = validate_bolt11_invoice_request(&request);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
         assert!(
             result.is_ok(),
             "Should succeed when conversion to Bitcoin is provided"
@@ -924,13 +924,14 @@ mod tests {
 
     #[test_all]
     fn test_validate_bolt11_invoice_with_invalid_conversion() {
+        let invoice = create_test_bolt11_invoice();
         let mut request = create_test_request();
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
             completion_timeout_secs: None,
         });
-        let result = validate_bolt11_invoice_request(&request);
+        let result = validate_bolt11_invoice_request(&invoice, &request);
         assert!(
             result.is_err(),
             "Should fail when conversion from Bitcoin is provided"
@@ -979,12 +980,12 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_bitcoin_address_with_drain() {
-        let request = create_drain_request();
+    fn test_validate_bitcoin_address_with_fees_included() {
+        let request = create_fees_included_request(1000);
         let result = validate_bitcoin_address_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when drain is used for Bitcoin address"
+            "Should succeed when FeesIncluded is used for Bitcoin address"
         );
     }
 
@@ -1099,7 +1100,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_send_payment_bitcoin_address_with_drain() {
+    fn test_validate_send_payment_bitcoin_address_with_fees_included() {
         use crate::PaymentRequestSource;
         let address_details = BitcoinAddressDetails {
             address: "bc1...".to_string(),
@@ -1107,14 +1108,14 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
-        let request = create_drain_request();
+        let request = create_fees_included_request(1000);
 
         let input_type = InputType::BitcoinAddress(address_details);
         let identity_key = "test_identity".to_string();
         let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
         assert!(
             result.is_ok(),
-            "Should succeed for bitcoin address with drain"
+            "Should succeed for bitcoin address with FeesIncluded"
         );
     }
 
@@ -1139,9 +1140,9 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_pay_amount_zero_bitcoin() {
-        let result = validate_pay_amount(Some(&PayAmount::Bitcoin { amount_sats: 0 }));
-        assert!(result.is_err(), "Should fail for zero Bitcoin amount");
+    fn test_validate_amount_zero() {
+        let result = validate_amount(Some(0));
+        assert!(result.is_err(), "Should fail for zero amount");
         if let Err(SdkError::InvalidInput(msg)) = result {
             assert!(
                 msg.contains("must be greater than 0"),
@@ -1153,24 +1154,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_pay_amount_zero_token() {
-        let result = validate_pay_amount(Some(&PayAmount::Token {
-            amount: 0,
-            token_identifier: "token123".to_string(),
-        }));
-        assert!(result.is_err(), "Should fail for zero Token amount");
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("must be greater than 0"),
-                "Error message should mention requirement"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
-    }
-
-    #[test_all]
-    fn test_validate_drain_with_token_conversion_fails() {
+    fn test_validate_fees_included_with_token_conversion_fails() {
         use crate::PaymentRequestSource;
         let address_details = BitcoinAddressDetails {
             address: "bc1...".to_string(),
@@ -1178,7 +1162,7 @@ mod tests {
             source: PaymentRequestSource::default(),
         };
 
-        let mut request = create_drain_request();
+        let mut request = create_fees_included_request(1000);
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
@@ -1192,12 +1176,12 @@ mod tests {
         let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
         assert!(
             result.is_err(),
-            "Should fail for drain with token conversion"
+            "Should fail for FeesIncluded with token conversion"
         );
         if let Err(SdkError::InvalidInput(msg)) = result {
             assert!(
-                msg.contains("Drain cannot be combined with token conversion"),
-                "Error message should mention drain and token conversion"
+                msg.contains("FeesIncluded cannot be combined with token conversion"),
+                "Error message should mention FeesIncluded and token conversion"
             );
         } else {
             panic!("Expected InvalidInput error");
