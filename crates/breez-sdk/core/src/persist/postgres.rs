@@ -690,11 +690,7 @@ impl PostgresStorage {
             &[
                 "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'",
             ],
-            // Migration 5: Backfill sync_revision from sync_state
-            &[
-                "UPDATE sync_revision SET revision = GREATEST(revision, COALESCE((SELECT MAX(revision) FROM sync_state), 0))",
-            ],
-            // Migration 6: Clear sync tables to force re-sync
+            // Migration 5: Clear sync tables to force re-sync
             &[
                 "DELETE FROM sync_outgoing",
                 "DELETE FROM sync_incoming",

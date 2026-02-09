@@ -334,10 +334,6 @@ class MigrationManager {
         ],
       },
       {
-        name: "Backfill sync_revision from sync_state",
-        sql: `UPDATE sync_revision SET revision = COALESCE((SELECT MAX(revision) FROM sync_state), revision)`
-      },
-      {
         name: "Clear sync tables to force re-sync",
         sql: [
           `DELETE FROM sync_outgoing`,

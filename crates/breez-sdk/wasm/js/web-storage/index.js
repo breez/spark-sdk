@@ -309,52 +309,6 @@ class MigrationManager {
         },
       },
       {
-        name: "Backfill sync_revision from sync_state",
-        upgrade: (db, transaction) => {
-          if (!db.objectStoreNames.contains("sync_state") || !db.objectStoreNames.contains("sync_revision")) {
-            return;
-          }
-
-          const stateStore = transaction.objectStore("sync_state");
-          const revisionStore = transaction.objectStore("sync_revision");
-
-          // Find the maximum revision across all sync_state records
-          const cursorRequest = stateStore.openCursor();
-          let maxRevision = BigInt(0);
-
-          cursorRequest.onsuccess = (event) => {
-            const cursor = event.target.result;
-            if (cursor) {
-              const record = cursor.value.record;
-              if (record && record.revision !== undefined) {
-                const rev = BigInt(record.revision);
-                if (rev > maxRevision) {
-                  maxRevision = rev;
-                }
-              }
-              cursor.continue();
-            } else {
-              // Cursor exhausted — update sync_revision if needed
-              const getRequest = revisionStore.get(1);
-              getRequest.onsuccess = () => {
-                const current = getRequest.result || { id: 1, revision: "0" };
-                const currentRevision = BigInt(current.revision);
-                if (maxRevision > currentRevision) {
-                  revisionStore.put({ id: 1, revision: maxRevision.toString() });
-                }
-              };
-            }
-          };
-
-          cursorRequest.onerror = (event) => {
-            console.warn(
-              "Migration 9: Failed to scan sync_state for revision backfill:",
-              event.target.error
-            );
-          };
-        }
-      },
-      {
         name: "Clear sync tables to force re-sync",
         upgrade: (db, transaction) => {
           if (db.objectStoreNames.contains("sync_outgoing")) {
@@ -399,7 +353,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 11; // Current schema version
+    this.dbVersion = 10; // Current schema version
   }
 
   /**
