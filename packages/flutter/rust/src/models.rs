@@ -1111,6 +1111,17 @@ pub struct _FetchConversionLimitsResponse {
     pub min_to_amount: Option<u128>,
 }
 
+#[frb(mirror(BuyBitcoinRequest))]
+pub struct _BuyBitcoinRequest {
+    pub locked_amount_sat: Option<u64>,
+    pub redirect_url: Option<String>,
+}
+
+#[frb(mirror(BuyBitcoinResponse))]
+pub struct _BuyBitcoinResponse {
+    pub url: String,
+}
+
 #[frb(mirror(ServiceStatus))]
 pub enum _ServiceStatus {
     Operational,
