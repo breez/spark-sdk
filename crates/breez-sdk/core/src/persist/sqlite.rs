@@ -20,6 +20,8 @@ use crate::{
 
 use std::collections::HashMap;
 
+use tracing::warn;
+
 use super::{Payment, Storage, StorageError};
 
 const DEFAULT_DB_FILENAME: &str = "storage.sql";
@@ -886,11 +888,20 @@ impl Storage for SqliteStorage {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        tx.execute(
-            "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
-            params![record.id.r#type, record.id.data_id, local_revision],
-        )
-        .map_err(map_sqlite_error)?;
+        let rows_deleted = tx
+            .execute(
+                "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
+                params![record.id.r#type, record.id.data_id, local_revision],
+            )
+            .map_err(map_sqlite_error)?;
+
+        if rows_deleted == 0 {
+            warn!(
+                "complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows \
+                 (type={}, data_id={}, revision={})",
+                record.id.r#type, record.id.data_id, local_revision
+            );
+        }
 
         tx.execute(
             "INSERT OR REPLACE INTO sync_state (
@@ -1053,6 +1064,13 @@ impl Storage for SqliteStorage {
             "UPDATE sync_outgoing
              SET revision = revision + ?",
             params![diff],
+        )
+        .map_err(map_sqlite_error)?;
+
+        // Update sync_revision within the same transaction so retries are idempotent
+        tx.execute(
+            "UPDATE sync_revision SET revision = MAX(revision, ?)",
+            params![revision],
         )
         .map_err(map_sqlite_error)?;
 

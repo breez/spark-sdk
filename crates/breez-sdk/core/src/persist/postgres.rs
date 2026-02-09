@@ -25,6 +25,8 @@ use crate::{
     },
 };
 
+use tracing::warn;
+
 use super::{Payment, Storage, StorageError};
 
 /// Advisory lock ID for migrations.
@@ -1403,16 +1405,25 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        tx.execute(
-            "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
-            &[
-                &record.id.r#type,
-                &record.id.data_id,
-                &i64::try_from(local_revision)?,
-            ],
-        )
-        .await
-        .map_err(|e| StorageError::Connection(e.to_string()))?;
+        let rows_deleted = tx
+            .execute(
+                "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
+                &[
+                    &record.id.r#type,
+                    &record.id.data_id,
+                    &i64::try_from(local_revision)?,
+                ],
+            )
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        if rows_deleted == 0 {
+            warn!(
+                "complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows \
+                 (type={}, data_id={}, revision={})",
+                record.id.r#type, record.id.data_id, local_revision
+            );
+        }
 
         let data_json = serde_json::to_value(&record.data)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
@@ -1581,6 +1592,14 @@ impl Storage for PostgresStorage {
         tx.execute(
             "UPDATE sync_outgoing SET revision = revision + $1",
             &[&diff],
+        )
+        .await
+        .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        // Update sync_revision within the same transaction so retries are idempotent
+        tx.execute(
+            "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
+            &[&i64::try_from(revision)?],
         )
         .await
         .map_err(|e| StorageError::Connection(e.to_string()))?;

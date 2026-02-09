@@ -345,6 +345,13 @@ class MigrationManager {
               };
             }
           };
+
+          cursorRequest.onerror = (event) => {
+            console.warn(
+              "Migration 9: Failed to scan sync_state for revision backfill:",
+              event.target.error
+            );
+          };
         }
       },
       {
@@ -1643,8 +1650,21 @@ class IndexedDBStorage {
         // Calculate the difference
         const diff = revision - lastRevision;
 
+        // Helper to update sync_revision within the same transaction
+        const updateSyncRevision = () => {
+          const currentData = getRevisionRequest.result || {
+            id: 1,
+            revision: "0",
+          };
+          const currentRev = BigInt(currentData.revision);
+          if (revision > currentRev) {
+            revisionStore.put({ id: 1, revision: revision.toString() });
+          }
+        };
+
         if (diff <= BigInt(0)) {
-          // No rebase needed
+          // No rebase needed, but still update sync_revision for retry idempotency
+          updateSyncRevision();
           resolve();
           return;
         }
@@ -1657,6 +1677,7 @@ class IndexedDBStorage {
           let updatesCompleted = 0;
 
           if (records.length === 0) {
+            updateSyncRevision();
             resolve();
             return;
           }
@@ -1688,6 +1709,8 @@ class IndexedDBStorage {
             putRequest.onsuccess = () => {
               updatesCompleted++;
               if (updatesCompleted === records.length) {
+                // Update sync_revision within the same transaction so retries are idempotent
+                updateSyncRevision();
                 resolve();
               }
             };

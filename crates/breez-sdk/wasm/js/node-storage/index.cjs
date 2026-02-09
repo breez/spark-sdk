@@ -1061,11 +1061,17 @@ class SqliteStorage {
 
         // Update all pending outgoing records
         const updateRecordsStmt = this.db.prepare(`
-          UPDATE sync_outgoing 
+          UPDATE sync_outgoing
           SET revision = revision + CAST(? AS INTEGER)
         `);
 
         updateRecordsStmt.run(diff.toString());
+
+        // Update sync_revision within the same transaction so retries are idempotent
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
+        `);
+        updateRevisionStmt.run(revision.toString());
       });
 
       transaction();
