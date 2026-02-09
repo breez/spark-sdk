@@ -306,9 +306,6 @@ impl DepositService {
             0, // temporary value for calculating the vsize. We set the real value bellow.
             &refund_address,
         );
-        let mut witness = Witness::new();
-        witness.push([0; 64]);
-        refund_tx.input[0].witness = witness;
 
         let fee_sats = fee.to_sats(refund_tx.vsize() as u64);
         if fee_sats <= 300 {
