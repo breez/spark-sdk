@@ -102,8 +102,15 @@ This section is for developers integrating the Breez SDK into their apps.
 
 ### API Key (Required)
 
-A Breez API key is required for the SDK to work. Request one for free at:
-**https://breez.technology/request-api-key/#contact-us-form-sdk**
+A Breez API key is required for the SDK to work. Request one for free:
+
+**Web form:** https://breez.technology/request-api-key/#contact-us-form-sdk
+
+**Programmatic:**
+```bash
+curl -d "fullname=<name>" -d "company=<company>" -d "email=<email>" -d "message=<message>" \
+  https://breez.technology/contact/apikey
+```
 
 ### Installation
 
