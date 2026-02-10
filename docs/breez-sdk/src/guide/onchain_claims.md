@@ -10,7 +10,7 @@ To increase the likelihood of automatically claiming deposits, you may set the m
 
 {{#tabs refunding_payments:set-max-fee-to-recommended-fees}}
 
-However, even when setting a high fee, the SDK might still fail to automatically claim deposits. In these cases, it's recommended to manually claim them by letting the end user accept the required fees. When [manual intervention](#manually-claiming-deposits) is required, the SDK emits an `UnclaimedDeposits` event containing information about the deposit. See [Listening to events](events.md) for how to subscribe to events.
+However, even when setting a high fee, the SDK might still fail to automatically claim deposits. In these cases, it's recommended to manually claim them by letting the end user accept the required fees. When [manual intervention](#manually-claiming-deposits) is required, the SDK emits an {{#enum SdkEvent::UnclaimedDeposits}} event containing information about the deposit. See [Listening to events](events.md) for how to subscribe to events.
 
 ## Manually claiming deposits
 
