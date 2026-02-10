@@ -1,32 +1,9 @@
 import BreezSdkSpark
 
-func buyBitcoinBasic(sdk: BreezSdk) async throws {
-    // ANCHOR: buy-bitcoin-basic
-    // Buy Bitcoin with funds deposited directly into the user's wallet
-    let request = BuyBitcoinRequest()
-
-    let response = try await sdk.buyBitcoin(request: request)
-    print("Open this URL in a browser to complete the purchase:")
-    print("\(response.url)")
-    // ANCHOR_END: buy-bitcoin-basic
-}
-
-func buyBitcoinWithAmount(sdk: BreezSdk) async throws {
-    // ANCHOR: buy-bitcoin-with-amount
-    // Lock the purchase to a specific amount (e.g., 0.001 BTC = 100,000 sats)
-    let request = BuyBitcoinRequest(
-        lockedAmountSat: 100_000
-    )
-
-    let response = try await sdk.buyBitcoin(request: request)
-    print("Open this URL in a browser to complete the purchase:")
-    print("\(response.url)")
-    // ANCHOR_END: buy-bitcoin-with-amount
-}
-
-func buyBitcoinWithRedirect(sdk: BreezSdk) async throws {
-    // ANCHOR: buy-bitcoin-with-redirect
-    // Provide a custom redirect URL for after the purchase
+func buyBitcoin(sdk: BreezSdk) async throws {
+    // ANCHOR: buy-bitcoin
+    // Buy Bitcoin with funds deposited directly into the user's wallet.
+    // Optionally lock the purchase to a specific amount and provide a redirect URL.
     let request = BuyBitcoinRequest(
         lockedAmountSat: 100_000,
         redirectUrl: "https://example.com/purchase-complete"
@@ -35,6 +12,5 @@ func buyBitcoinWithRedirect(sdk: BreezSdk) async throws {
     let response = try await sdk.buyBitcoin(request: request)
     print("Open this URL in a browser to complete the purchase:")
     print("\(response.url)")
-    // ANCHOR_END: buy-bitcoin-with-redirect
+    // ANCHOR_END: buy-bitcoin
 }
-

@@ -3,33 +3,10 @@ import {
   type BuyBitcoinRequest
 } from '@breeztech/breez-sdk-spark'
 
-const buyBitcoinBasic = async (sdk: BreezSdk) => {
-  // ANCHOR: buy-bitcoin-basic
-  // Buy Bitcoin with funds deposited directly into the user's wallet
-  const request: BuyBitcoinRequest = {}
-
-  const response = await sdk.buyBitcoin(request)
-  console.log('Open this URL in a browser to complete the purchase:')
-  console.log(response.url)
-  // ANCHOR_END: buy-bitcoin-basic
-}
-
-const buyBitcoinWithAmount = async (sdk: BreezSdk) => {
-  // ANCHOR: buy-bitcoin-with-amount
-  // Lock the purchase to a specific amount (e.g., 0.001 BTC = 100,000 sats)
-  const request: BuyBitcoinRequest = {
-    lockedAmountSat: 100_000
-  }
-
-  const response = await sdk.buyBitcoin(request)
-  console.log('Open this URL in a browser to complete the purchase:')
-  console.log(response.url)
-  // ANCHOR_END: buy-bitcoin-with-amount
-}
-
-const buyBitcoinWithRedirect = async (sdk: BreezSdk) => {
-  // ANCHOR: buy-bitcoin-with-redirect
-  // Provide a custom redirect URL for after the purchase
+const buyBitcoin = async (sdk: BreezSdk) => {
+  // ANCHOR: buy-bitcoin
+  // Buy Bitcoin with funds deposited directly into the user's wallet.
+  // Optionally lock the purchase to a specific amount and provide a redirect URL.
   const request: BuyBitcoinRequest = {
     lockedAmountSat: 100_000,
     redirectUrl: 'https://example.com/purchase-complete'
@@ -38,5 +15,5 @@ const buyBitcoinWithRedirect = async (sdk: BreezSdk) => {
   const response = await sdk.buyBitcoin(request)
   console.log('Open this URL in a browser to complete the purchase:')
   console.log(response.url)
-  // ANCHOR_END: buy-bitcoin-with-redirect
+  // ANCHOR_END: buy-bitcoin
 }

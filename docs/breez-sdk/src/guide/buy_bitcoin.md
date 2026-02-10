@@ -2,25 +2,13 @@
 
 The Breez SDK provides a simple way to enable users to purchase Bitcoin through external providers like MoonPay. Users are directed to a provider URL in their browser, where they can complete the purchase and have the funds deposited directly into their wallet.
 
-## Basic usage
+## Usage
 
-To initiate a Bitcoin purchase, call the `buy_bitcoin` method:
+To initiate a Bitcoin purchase, call the `buy_bitcoin` method with an optional `locked_amount_sat` to pre-fill the amount and an optional `redirect_url` to direct the user after the purchase:
 
-{{#tabs buying_bitcoin:buy-bitcoin-basic}}
+{{#tabs buying_bitcoin:buy-bitcoin}}
 
 The method returns a URL that the user should open in a browser to complete the purchase with the provider.
-
-## Locking an amount
-
-You can pre-fill the purchase amount by specifying a `locked_amount_sat` parameter. This locks the user to a specific amount during the purchase process:
-
-{{#tabs buying_bitcoin:buy-bitcoin-with-amount}}
-
-## Custom redirect URL
-
-Provide a custom redirect URL to direct the user to a specific page after completing the purchase:
-
-{{#tabs buying_bitcoin:buy-bitcoin-with-redirect}}
 
 ## Integration with your app
 
