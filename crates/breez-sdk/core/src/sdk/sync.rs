@@ -132,9 +132,13 @@ impl BreezSdk {
                         .await
                         .is_ok_and(|p| p.status == PaymentStatus::Completed);
 
-                    // Insert the payment into storage to make it immediately available for listing
-                    if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                        error!("Failed to insert succeeded payment: {e:?}");
+                    if !already_completed {
+                        // Insert the payment into storage to make it immediately available
+                        // for listing. Skipped when already completed since the sync
+                        // already stored it.
+                        if let Err(e) = self.storage.insert_payment(payment.clone()).await {
+                            error!("Failed to insert succeeded payment: {e:?}");
+                        }
                     }
 
                     // Ensure potential lnurl metadata is synced before emitting the event.
