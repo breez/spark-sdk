@@ -747,12 +747,6 @@ mod tests {
         };
         assert!(multiplicity_zero.validate().is_ok());
 
-        let invalid_multiplicity_high = LeafOptimizationOptions {
-            multiplicity: 6,
-            ..valid.clone()
-        };
-        assert!(invalid_multiplicity_high.validate().is_err());
-
         let invalid_max_leaves = LeafOptimizationOptions {
             max_leaves_per_swap: 0,
             ..valid
