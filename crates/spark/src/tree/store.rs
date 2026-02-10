@@ -14,7 +14,7 @@ use crate::tree::{
 };
 
 /// Default maximum number of concurrent reservations allowed.
-pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 10;
+pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
