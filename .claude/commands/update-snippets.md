@@ -173,6 +173,53 @@ cargo xtask check-doc-snippets --package {language}
 
 **Do NOT** modify snippets to remove "missing" fields until you've rebuilt bindings first. If the field exists in Rust core (`crates/breez-sdk/core/src/models.rs`), the bindings just need regeneration.
 
+## Inline Syntax Preprocessors
+
+The mdbook documentation supports special syntax for language-aware inline code that changes based on the selected language tab.
+
+### `{{#name identifier}}` - For identifiers (functions, parameters, properties)
+
+Transforms snake_case identifiers to the appropriate naming convention:
+
+| Languages | Convention | Example |
+|-----------|------------|---------|
+| Rust, Python | snake_case | `get_info` |
+| Swift, Kotlin, Javascript, React Native, Flutter | camelCase | `getInfo` |
+| Go, C# | PascalCase | `GetInfo` |
+
+**Usage in markdown:**
+```markdown
+Call {{#name get_info}} with {{#name ensure_synced}} set to **true**.
+```
+
+Supports `Type.method` syntax (type name preserved, method transformed):
+```markdown
+Use {{#name BreezSdk.get_info}} to retrieve the balance.
+```
+
+### `{{#enum Type::Variant}}` - For enum variants
+
+Transforms Rust enum syntax to language-appropriate format:
+
+| Language | Example Output |
+|----------|---------------|
+| Rust | `SdkEvent::Synced` |
+| Python | `SdkEvent.SYNCED` |
+| Swift | `SdkEvent.synced` |
+| Kotlin, C#, Flutter, JS | `SdkEvent.Synced` |
+| Go | `SdkEventSynced` |
+
+**Usage in markdown:**
+```markdown
+Listen for the {{#enum SdkEvent::Synced}} event.
+```
+
+### When to Use
+
+- Use `{{#name ...}}` for function names, method names, parameter names, property names
+- Use `{{#enum ...}}` for enum variants with `Type::Variant` Rust syntax
+- Use regular backticks for code that shouldn't change (constants, literal values, etc.)
+
 ## Important Notes
 
 - **ANCHOR names must be identical** across all languages

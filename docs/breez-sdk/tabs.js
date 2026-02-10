@@ -158,4 +158,20 @@
         }
     });
 
+    // Sync function names with language tab selection
+    function updateLangAttribute() {
+        try {
+            const lang = localStorage.getItem('mdbook-tabs-lang');
+            if (lang) document.body.setAttribute('data-lang', lang);
+        } catch (e) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', updateLangAttribute);
+    document.addEventListener('mdbook-category-changed', function(e) {
+        if (e.detail.category === 'lang') {
+            // Get selected language name from localStorage (already set by _selectTab)
+            updateLangAttribute();
+        }
+    });
+
 })();

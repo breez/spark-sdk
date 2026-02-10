@@ -72,6 +72,113 @@ fn check_mdbook_version(version: &str) {
 
 struct SnippetsProcessor;
 impl SnippetsProcessor {
+    /// Convert snake_case to camelCase
+    fn to_camel_case(s: &str) -> String {
+        let mut result = String::new();
+        let mut capitalize_next = false;
+        for ch in s.chars() {
+            if ch == '_' {
+                capitalize_next = true;
+            } else if capitalize_next {
+                result.extend(ch.to_uppercase());
+                capitalize_next = false;
+            } else {
+                result.push(ch);
+            }
+        }
+        result
+    }
+
+    /// Convert PascalCase to SCREAMING_SNAKE_CASE (for Python enums)
+    fn to_screaming_snake(s: &str) -> String {
+        let mut result = String::new();
+        for (i, ch) in s.chars().enumerate() {
+            if ch.is_uppercase() && i > 0 {
+                result.push('_');
+            }
+            result.extend(ch.to_uppercase());
+        }
+        result
+    }
+
+    /// Convert PascalCase to camelCase (for Swift enum cases)
+    fn to_lower_camel(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        }
+    }
+
+    /// Expand {{#name identifier}} to language-aware HTML
+    fn expand_name(identifier: &str) -> String {
+        // Handle Type.method syntax
+        let (type_prefix, method) = identifier
+            .split_once('.')
+            .map(|(t, m)| (Some(t), m))
+            .unwrap_or((None, identifier));
+
+        let snake = method.to_string();
+        let camel = Self::to_camel_case(method);
+        let pascal = capitalize_first(method);
+
+        // Generate spans for each language group
+        let variants = [
+            ("rust", &snake),
+            ("python", &snake),
+            ("swift", &camel),
+            ("kotlin", &camel),
+            ("javascript", &camel),
+            ("react-native", &camel),
+            ("flutter", &camel),
+            ("go", &pascal),
+            ("csharp", &pascal),
+        ];
+
+        let spans: String = variants
+            .iter()
+            .map(|(lang, variant_name)| {
+                let display =
+                    type_prefix.map_or_else(|| (*variant_name).to_string(), |t| format!("{}.{}", t, variant_name));
+                format!("<span class=\"fn-{}\">{}</span>", lang, display)
+            })
+            .collect();
+
+        format!("<code class=\"lang-fn\">{}</code>", spans)
+    }
+
+    /// Expand {{#enum Type::Variant}} to language-aware HTML
+    fn expand_enum(enum_str: &str) -> String {
+        // Parse Type::Variant
+        let (type_name, variant) = enum_str
+            .split_once("::")
+            .unwrap_or((enum_str, ""));
+
+        if variant.is_empty() {
+            // No variant found, just return as-is
+            return format!("<code class=\"lang-fn\">{}</code>", enum_str);
+        }
+
+        let variants = [
+            ("rust", format!("{}::{}", type_name, variant)),
+            ("python", format!("{}.{}", type_name, Self::to_screaming_snake(variant))),
+            ("swift", format!("{}.{}", type_name, Self::to_lower_camel(variant))),
+            ("kotlin", format!("{}.{}", type_name, variant)),
+            ("javascript", format!("{}.{}", type_name, variant)),
+            ("react-native", format!("{}.{}", type_name, variant)),
+            ("flutter", format!("{}.{}", type_name, variant)),
+            ("go", format!("{}{}", type_name, variant)),
+            ("csharp", format!("{}.{}", type_name, variant)),
+        ];
+
+        let spans: String = variants
+            .iter()
+            .map(|(lang, display)| format!("<span class=\"fn-{}\">{}</span>", lang, display))
+            .collect();
+
+        format!("<code class=\"lang-fn\">{}</code>", spans)
+    }
+
     fn get_language_paths(file_base: &str) -> Vec<(&'static str, &'static str, String)> {
         vec![
             ("Rust", "rust", format!("snippets/rust/src/{}.rs", file_base)),
@@ -219,6 +326,10 @@ impl Preprocessor for SnippetsProcessor {
                 let mut block_lines: Vec<String> = vec![];
                 let mut min_indentation: usize = 0;
 
+                // Compile regexes once outside the loop
+                let name_regex = regex::Regex::new(r"\{\{#name\s+([\w.]+)\}\}").unwrap();
+                let enum_regex = regex::Regex::new(r"\{\{#enum\s+([\w:]+)\}\}").unwrap();
+
                 for line in chapter.content.lines() {
                     // Check for tab expansion syntax: {{#tabs file:snippet-name}}
                     if let Some(captures) = regex::Regex::new(r"\{\{#tabs\s+([^:]+):([\w-]+)\}\}")
@@ -241,6 +352,34 @@ impl Preprocessor for SnippetsProcessor {
                             }
                             continue;
                         }
+                    }
+
+                    // Check for {{#name}} and {{#enum}} patterns
+                    // Handle multiple occurrences in a single line
+                    let has_name = name_regex.is_match(line);
+                    let has_enum = enum_regex.is_match(line);
+
+                    if has_name || has_enum {
+                        let mut new_line = line.to_string();
+
+                        if has_name {
+                            new_line = name_regex
+                                .replace_all(&new_line, |caps: &regex::Captures| {
+                                    Self::expand_name(&caps[1])
+                                })
+                                .to_string();
+                        }
+
+                        if has_enum {
+                            new_line = enum_regex
+                                .replace_all(&new_line, |caps: &regex::Captures| {
+                                    Self::expand_enum(&caps[1])
+                                })
+                                .to_string();
+                        }
+
+                        resulting_lines.push(new_line);
+                        continue;
                     }
 
                     if line.starts_with("```") {

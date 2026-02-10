@@ -29,7 +29,7 @@ After [parsing](parse.md) an LNURL-auth URL, you'll receive an `LnurlAuthRequest
 
 ## Performing Authentication
 
-Once you have the authentication request details, you can perform the authentication by passing the request to the `lnurl_auth` method. The SDK will:
+Once you have the authentication request details, you can perform the authentication by passing the request to the {{#name lnurl_auth}} method. The SDK will:
 1. Derive a domain-specific key pair
 2. Sign the challenge with the derived key
 3. Send the signature and public key to the service
