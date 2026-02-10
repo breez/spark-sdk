@@ -105,6 +105,7 @@ where
         Extension(state): Extension<State<DB>>,
     ) -> Result<Json<CheckUsernameAvailableResponse>, (StatusCode, Json<Value>)> {
         let username = sanitize_username(&identifier);
+        validate_username(&username)?;
         let user = state
             .db
             .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
