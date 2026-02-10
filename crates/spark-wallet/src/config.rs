@@ -100,7 +100,7 @@ impl SparkWalletConfig {
             Self::create_operator_config(
                 1,
                 "0000000000000000000000000000000000000000000000000000000000000002",
-                "https://1.spark.lightspark.com",
+                "https://spark-operator.breez.technology",
                 None,
                 "03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77",
             )

@@ -37,7 +37,7 @@ spark_config:
       -
         id: 1
         identifier: 0000000000000000000000000000000000000000000000000000000000000002
-        address: https://1.spark.lightspark.com/
+        address: https://spark-operator.breez.technology/
         identity_public_key: 03e625e9768651c9be268e287245cc33f96a68ce9141b0b4769205db027ee8ed77
       -
         id: 2
