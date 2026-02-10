@@ -606,11 +606,6 @@ async fn run_pre_optimization(sdk: &BreezSdk) -> Result<()> {
     run_optimization(sdk, "Pre-optimization").await
 }
 
-/// Run leaf optimization after test and wait for completion
-async fn run_post_optimization(sdk: &BreezSdk) -> Result<()> {
-    run_optimization(sdk, "Post-optimization").await
-}
-
 /// Run leaf optimization with a label and wait for completion
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
     info!("Starting {}...", label.to_lowercase());
