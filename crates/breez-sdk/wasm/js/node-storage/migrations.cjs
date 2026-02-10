@@ -229,6 +229,8 @@ class MigrationManager {
       {
         name: "Create sync tables",
         sql: [
+          // sync_revision: tracks the last committed revision (from server-acknowledged
+          // or server-received records). Does NOT include pending outgoing revisions.
           `CREATE TABLE sync_revision (
             revision INTEGER NOT NULL DEFAULT 0
           )`,
@@ -332,6 +334,16 @@ class MigrationManager {
            SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
            WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL`,
         ],
+      },
+      {
+        name: "Clear sync tables to force re-sync",
+        sql: [
+          `DELETE FROM sync_outgoing`,
+          `DELETE FROM sync_incoming`,
+          `DELETE FROM sync_state`,
+          `UPDATE sync_revision SET revision = 0`,
+          `DELETE FROM settings WHERE key = 'sync_initial_complete'`
+        ]
       },
     ];
   }

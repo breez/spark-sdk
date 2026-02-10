@@ -297,10 +297,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
     async fn complete_outgoing_sync(
         &self,
         record: breez_sdk_spark::sync_storage::Record,
+        local_revision: u64,
     ) -> Result<(), StorageError> {
         let promise = self
             .storage
-            .sync_complete_outgoing_sync(record.into())
+            .sync_complete_outgoing_sync(record.into(), local_revision)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -524,7 +525,11 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncCompleteOutgoingSync, catch)]
-    pub fn sync_complete_outgoing_sync(this: &Storage, record: Record) -> Result<Promise, JsValue>;
+    pub fn sync_complete_outgoing_sync(
+        this: &Storage,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncGetPendingOutgoingChanges, catch)]
     pub fn sync_get_pending_outgoing_changes(

@@ -798,11 +798,14 @@ class SqliteStorage {
   syncAddOutgoingChange(record) {
     try {
       const transaction = this.db.transaction(() => {
-        // Get the next revision
+        // Compute next revision as max(committed, max outgoing) + 1, without updating sync_revision
         const revisionQuery = this.db.prepare(`
-          UPDATE sync_revision
-          SET revision = revision + 1
-          RETURNING CAST(revision AS TEXT) AS revision
+          SELECT CAST(
+            MAX(
+              (SELECT revision FROM sync_revision),
+              COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
+            ) + 1
+          AS TEXT) AS revision
         `);
         const revision = BigInt(revisionQuery.get().revision);
 
@@ -841,7 +844,7 @@ class SqliteStorage {
     }
   }
 
-  syncCompleteOutgoingSync(record) {
+  syncCompleteOutgoingSync(record, localRevision) {
     try {
       const transaction = this.db.transaction(() => {
         // Delete records that have been synced
@@ -853,7 +856,7 @@ class SqliteStorage {
         deleteStmt.run(
           record.id.type,
           record.id.dataId,
-          record.revision.toString()
+          localRevision.toString()
         );
 
         // Update or insert the sync state
@@ -876,6 +879,12 @@ class SqliteStorage {
           Math.floor(Date.now() / 1000),
           JSON.stringify(record.data)
         );
+
+        // Update sync_revision to track the highest known revision
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
+        `);
+        updateRevisionStmt.run(record.revision.toString());
       });
 
       transaction();
@@ -958,7 +967,7 @@ class SqliteStorage {
   syncGetLastRevision() {
     try {
       const stmt = this.db.prepare(
-        `SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as revision FROM sync_state`
+        `SELECT CAST(revision AS TEXT) as revision FROM sync_revision`
       );
       const row = stmt.get();
 
@@ -1036,9 +1045,9 @@ class SqliteStorage {
   syncRebasePendingOutgoingRecords(revision) {
     try {
       const transaction = this.db.transaction(() => {
-        // Get current revision
+        // Get current committed revision from sync_revision table
         const getLastRevisionStmt = this.db.prepare(`
-          SELECT CAST(COALESCE(MAX(revision), 0) AS TEXT) as last_revision FROM sync_state
+          SELECT CAST(revision AS TEXT) as last_revision FROM sync_revision
         `);
         const revisionRow = getLastRevisionStmt.get();
         const lastRevision = revisionRow
@@ -1049,17 +1058,20 @@ class SqliteStorage {
         const diff =
           revision > lastRevision ? revision - lastRevision : BigInt(0);
 
-        if (diff === BigInt(0)) {
-          return; // No rebasing needed
+        if (diff > BigInt(0)) {
+          // Update all pending outgoing records
+          const updateRecordsStmt = this.db.prepare(`
+            UPDATE sync_outgoing
+            SET revision = revision + CAST(? AS INTEGER)
+          `);
+          updateRecordsStmt.run(diff.toString());
         }
 
-        // Update all pending outgoing records
-        const updateRecordsStmt = this.db.prepare(`
-          UPDATE sync_outgoing 
-          SET revision = revision + CAST(? AS INTEGER)
+        // Update sync_revision within the same transaction so retries are idempotent
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
         `);
-
-        updateRecordsStmt.run(diff.toString());
+        updateRevisionStmt.run(revision.toString());
       });
 
       transaction();
@@ -1211,26 +1223,35 @@ class SqliteStorage {
 
   syncUpdateRecordFromIncoming(record) {
     try {
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO sync_state (
-          record_type, 
-          data_id, 
-          revision,
-          schema_version,
-          commit_time,
-          data
-        ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
-      `);
+      const transaction = this.db.transaction(() => {
+        const stmt = this.db.prepare(`
+          INSERT OR REPLACE INTO sync_state (
+            record_type,
+            data_id,
+            revision,
+            schema_version,
+            commit_time,
+            data
+          ) VALUES (?, ?, CAST(? AS INTEGER), ?, ?, ?)
+        `);
 
-      stmt.run(
-        record.id.type,
-        record.id.dataId,
-        record.revision.toString(),
-        record.schemaVersion,
-        Math.floor(Date.now() / 1000),
-        JSON.stringify(record.data)
-      );
+        stmt.run(
+          record.id.type,
+          record.id.dataId,
+          record.revision.toString(),
+          record.schemaVersion,
+          Math.floor(Date.now() / 1000),
+          JSON.stringify(record.data)
+        );
 
+        // Update sync_revision to track the highest known revision
+        const updateRevisionStmt = this.db.prepare(`
+          UPDATE sync_revision SET revision = MAX(revision, CAST(? AS INTEGER))
+        `);
+        updateRevisionStmt.run(record.revision.toString());
+      });
+
+      transaction();
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(

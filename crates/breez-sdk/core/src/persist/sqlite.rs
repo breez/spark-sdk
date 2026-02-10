@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, Transaction, params,
+    Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -19,6 +19,8 @@ use crate::{
 };
 
 use std::collections::HashMap;
+
+use tracing::warn;
 
 use super::{Payment, Storage, StorageError};
 
@@ -202,6 +204,8 @@ impl SqliteStorage {
             );
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
             "ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT;",
+            // sync_revision: tracks the last committed revision (from server-acknowledged
+            // or server-received records). Does NOT include pending outgoing revisions.
             "CREATE TABLE sync_revision (
                 revision INTEGER NOT NULL DEFAULT 0
             );
@@ -276,6 +280,11 @@ impl SqliteStorage {
             UPDATE settings
             SET value = json_set(value, '$.last_synced_final_token_payment_id', NULL)
             WHERE key = 'sync_offset' AND json_valid(value) AND json_type(value, '$.last_synced_final_token_payment_id') IS NOT NULL;",
+            "DELETE FROM sync_outgoing;
+             DELETE FROM sync_incoming;
+             DELETE FROM sync_state;
+             UPDATE sync_revision SET revision = 0;
+             DELETE FROM settings WHERE key = 'sync_initial_complete';",
         ]
     }
 }
@@ -846,7 +855,17 @@ impl Storage for SqliteStorage {
     ) -> Result<u64, StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
-        let revision = get_next_revision(&tx)?;
+
+        let revision: u64 = tx
+            .query_row(
+                "SELECT MAX(
+                    (SELECT revision FROM sync_revision),
+                    COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
+                ) + 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(map_sqlite_error)?;
 
         tx.execute(
             "INSERT INTO sync_outgoing (
@@ -872,15 +891,28 @@ impl Storage for SqliteStorage {
         Ok(revision)
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        tx.execute(
-            "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
-            params![record.id.r#type, record.id.data_id, record.revision],
-        )
-        .map_err(map_sqlite_error)?;
+        let rows_deleted = tx
+            .execute(
+                "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
+                params![record.id.r#type, record.id.data_id, local_revision],
+            )
+            .map_err(map_sqlite_error)?;
+
+        if rows_deleted == 0 {
+            warn!(
+                "complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows \
+                 (type={}, data_id={}, revision={})",
+                record.id.r#type, record.id.data_id, local_revision
+            );
+        }
 
         tx.execute(
             "INSERT OR REPLACE INTO sync_state (
@@ -899,6 +931,12 @@ impl Storage for SqliteStorage {
                 serde_json::to_string(&record.data)?,
                 record.revision,
             ],
+        )
+        .map_err(map_sqlite_error)?;
+
+        tx.execute(
+            "UPDATE sync_revision SET revision = MAX(revision, ?)",
+            params![record.revision],
         )
         .map_err(map_sqlite_error)?;
 
@@ -968,13 +1006,8 @@ impl Storage for SqliteStorage {
     async fn get_last_revision(&self) -> Result<u64, StorageError> {
         let connection = self.get_connection()?;
 
-        // Get the maximum revision from sync_state table
-        let mut stmt = connection
-            .prepare("SELECT COALESCE(MAX(revision), 0) FROM sync_state")
-            .map_err(map_sqlite_error)?;
-
-        let revision: u64 = stmt
-            .query_row([], |row| row.get(0))
+        let revision: u64 = connection
+            .query_row("SELECT revision FROM sync_revision", [], |row| row.get(0))
             .map_err(map_sqlite_error)?;
 
         Ok(revision)
@@ -1031,21 +1064,25 @@ impl Storage for SqliteStorage {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        let last_revision = tx
-            .query_row(
-                "SELECT COALESCE(MAX(revision), 0) FROM sync_state",
-                [],
-                |row| row.get(0),
-            )
+        let last_revision: u64 = tx
+            .query_row("SELECT revision FROM sync_revision", [], |row| row.get(0))
             .map_err(map_sqlite_error)?;
 
         let diff = revision.saturating_sub(last_revision);
 
-        // Update all pending outgoing records to have revision numbers higher than the incoming record
+        if diff > 0 {
+            tx.execute(
+                "UPDATE sync_outgoing
+                 SET revision = revision + ?",
+                params![diff],
+            )
+            .map_err(map_sqlite_error)?;
+        }
+
+        // Update sync_revision within the same transaction so retries are idempotent
         tx.execute(
-            "UPDATE sync_outgoing
-             SET revision = revision + ?",
-            params![diff],
+            "UPDATE sync_revision SET revision = MAX(revision, ?)",
+            params![revision],
         )
         .map_err(map_sqlite_error)?;
 
@@ -1170,11 +1207,11 @@ impl Storage for SqliteStorage {
     }
 
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
-        let connection = self.get_connection()?;
+        let mut connection = self.get_connection()?;
+        let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        connection
-            .execute(
-                "INSERT OR REPLACE INTO sync_state (
+        tx.execute(
+            "INSERT OR REPLACE INTO sync_state (
                 record_type
             ,   data_id
             ,   schema_version
@@ -1183,32 +1220,25 @@ impl Storage for SqliteStorage {
             ,   revision
             )
              VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-                params![
-                    record.id.r#type,
-                    record.id.data_id,
-                    record.schema_version.clone(),
-                    serde_json::to_string(&record.data)?,
-                    record.revision,
-                ],
-            )
-            .map_err(map_sqlite_error)?;
-
-        Ok(())
-    }
-}
-
-/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
-    let revision = tx
-        .query_row(
-            "UPDATE sync_revision
-            SET revision = revision + 1
-            RETURNING revision",
-            [],
-            |row| row.get(0),
+            params![
+                record.id.r#type,
+                record.id.data_id,
+                record.schema_version.clone(),
+                serde_json::to_string(&record.data)?,
+                record.revision,
+            ],
         )
         .map_err(map_sqlite_error)?;
-    Ok(revision)
+
+        tx.execute(
+            "UPDATE sync_revision SET revision = MAX(revision, ?)",
+            params![record.revision],
+        )
+        .map_err(map_sqlite_error)?;
+
+        tx.commit().map_err(map_sqlite_error)?;
+        Ok(())
+    }
 }
 
 /// Base query for payment lookups.

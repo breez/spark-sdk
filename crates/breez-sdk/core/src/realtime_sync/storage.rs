@@ -329,8 +329,14 @@ impl Storage for SyncedStorage {
         self.inner.add_outgoing_change(record).await
     }
 
-    async fn complete_outgoing_sync(&self, record: Record) -> Result<(), StorageError> {
-        self.inner.complete_outgoing_sync(record).await
+    async fn complete_outgoing_sync(
+        &self,
+        record: Record,
+        local_revision: u64,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .complete_outgoing_sync(record, local_revision)
+            .await
     }
 
     async fn get_pending_outgoing_changes(
