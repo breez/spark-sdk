@@ -6,4 +6,5 @@ mod models;
 mod persist;
 mod sdk;
 mod sdk_builder;
+mod seedless_restore;
 mod signer;

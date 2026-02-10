@@ -3,16 +3,23 @@ name = "cli"
 edition = "2024"
 version.workspace = true
 
+[features]
+default = []
+fido2 = ["dep:ctap-hid-fido2", "dep:rpassword"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
 bip39 = { workspace = true, features = ["rand"] }
 bitcoin.workspace = true
 breez-sdk-spark = { workspace = true, features = ["postgres"] }
+challenge_response = "0.5"
 clap = { workspace = true, features = ["derive"] }
+ctap-hid-fido2 = { version = "3.5", optional = true }
 dirs.workspace = true
 hex.workspace = true
 rand.workspace = true
+rpassword = { version = "7.3", optional = true }
 rustyline = { workspace = true, features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true
