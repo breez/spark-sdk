@@ -17,13 +17,14 @@ use web_time::Duration;
 
 use crate::{
     ListPaymentsRequest, Network, Payment, PaymentDetails, PaymentDetailsFilter, PaymentMetadata,
-    Storage, persist::ObjectCacheRepository, utils::token::token_transaction_to_payments,
+    Storage, persist::ObjectCacheRepository, token_conversion::DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS,
+    utils::token::token_transaction_to_payments,
 };
 
 use super::{
     ConversionError, ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose,
-    ConversionStatus, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, TokenConversionPool, TokenConversionResponse, TokenConverter,
+    ConversionStatus, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+    TokenConversionPool, TokenConversionResponse, TokenConverter,
 };
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
@@ -33,6 +34,7 @@ pub(crate) struct FlashnetTokenConverter {
     spark_wallet: Arc<SparkWallet>,
     network: Network,
     refund_trigger: broadcast::Sender<()>,
+    integrator_fee_bps: u32,
 }
 
 impl FlashnetTokenConverter {
@@ -46,13 +48,19 @@ impl FlashnetTokenConverter {
     /// * `network` - The network configuration
     /// * `shutdown_receiver` - Watch receiver to signal shutdown of the refunder task
     pub fn new(
+        flashnet_config: FlashnetConfig,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
         network: Network,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
+        let integrator_fee_bps = flashnet_config
+            .integrator_config
+            .as_ref()
+            .map_or(0, |c| c.fee_bps);
+
         let flashnet_client = Arc::new(FlashnetClient::new(
-            FlashnetConfig::default_config(network.into()),
+            flashnet_config,
             spark_wallet.clone(),
             Arc::new(CacheStore::default()),
         ));
@@ -65,6 +73,7 @@ impl FlashnetTokenConverter {
             spark_wallet,
             network,
             refund_trigger: refund_trigger.clone(),
+            integrator_fee_bps,
         };
 
         // Spawn the background refunder task
@@ -293,6 +302,7 @@ impl FlashnetTokenConverter {
             &asset_in_address,
             amount_out,
             max_slippage_bps,
+            self.integrator_fee_bps,
             self.network.into(),
         )?;
 
@@ -323,6 +333,7 @@ impl FlashnetTokenConverter {
             conversion_options
                 .max_slippage_bps
                 .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
+            self.integrator_fee_bps,
             self.network.into(),
         )?;
 
@@ -334,7 +345,11 @@ impl FlashnetTokenConverter {
                 asset_out_address: asset_out_address.clone(),
                 pool_id: pool.lp_public_key,
                 amount_in,
-                integrator_bps: None,
+                integrator_bps: if self.integrator_fee_bps > 0 {
+                    Some(self.integrator_fee_bps)
+                } else {
+                    None
+                },
             })
             .await?;
 

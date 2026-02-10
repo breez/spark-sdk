@@ -1,3 +1,4 @@
+use flashnet::{FlashnetConfig, IntegratorConfig};
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
 use tokio_with_wasm::alias as tokio;
@@ -9,7 +10,10 @@ use crate::{
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
     persist::ObjectCacheRepository,
-    token_conversion::{FlashnetTokenConverter, TokenConverter},
+    token_conversion::{
+        DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
+        TokenConverter,
+    },
 };
 
 use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
@@ -29,7 +33,18 @@ impl BreezSdk {
         let external_input_parsers = params.config.get_all_external_input_parsers();
 
         // Create the FlashnetTokenConverter (spawns its own refunder background task)
+        let flashnet_config = FlashnetConfig::default_config(
+            params.config.network.into(),
+            DEFAULT_INTEGRATOR_PUBKEY
+                .parse()
+                .ok()
+                .map(|pubkey| IntegratorConfig {
+                    pubkey,
+                    fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
+                }),
+        );
         let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
+            flashnet_config,
             Arc::clone(&params.storage),
             Arc::clone(&params.spark_wallet),
             params.config.network,
