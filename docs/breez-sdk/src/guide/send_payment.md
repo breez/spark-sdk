@@ -59,9 +59,9 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 
 ## Fee Policy
 
-By default, fees are added on top of the amount (`FeesExcluded`). Use `FeesIncluded` to deduct fees from the amount instead—the receiver gets the amount minus fees.
+By default, fees are added on top of the amount ({{#enum FeePolicy::FeesExcluded}}). Use {{#enum FeePolicy::FeesIncluded}} to deduct fees from the amount instead—the receiver gets the amount minus fees.
 
-This is particularly useful when you want to spend your entire balance in a single payment—simply provide your full balance as the amount. Note: `FeesIncluded` is not compatible with payment requests that specify an amount (e.g., BOLT11 invoices and Spark invoices with amount).
+This is particularly useful when you want to spend your entire balance in a single payment—simply provide your full balance as the amount. Note: {{#enum FeePolicy::FeesIncluded}} is not compatible with payment requests that specify an amount (e.g., BOLT11 invoices and Spark invoices with amount).
 
 {{#tabs send_payment:prepare-send-payment-fees-included}}
 

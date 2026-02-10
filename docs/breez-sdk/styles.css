@@ -47,3 +47,7 @@ a.tag:hover {
   left: -10000px;
 }
 
+/* Language-aware function names - visibility controlled by tabs.js */
+.lang-fn span { display: none; }
+.lang-fn span.fn-rust { display: inline; } /* Default before JS runs */
+

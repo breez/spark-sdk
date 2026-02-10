@@ -5,7 +5,7 @@
 
 ## Basic Initialization
 
-The easiest way to initialize the SDK is with the `connect` method. This method requires:
+The easiest way to initialize the SDK is with the {{#name connect}} method. This method requires:
 
 - The network, mnemonic, and Breez API key you intend to use
 - A storage directory path where the SDK can manage its data

@@ -20,7 +20,7 @@ When you want the payment recipient to receive a specific amount.
 
 ### Setting the fee policy
 
-By default, fees are added on top of the amount (`FeesExcluded`). Use `FeesIncluded` to deduct fees from the amount instead—the receiver gets the amount minus fees.
+By default, fees are added on top of the amount ({{#enum FeePolicy::FeesExcluded}}). Use {{#enum FeePolicy::FeesIncluded}} to deduct fees from the amount instead—the receiver gets the amount minus fees.
 
 This is particularly useful when you want to spend your entire balance in a single payment—simply provide your full balance as the amount.
 

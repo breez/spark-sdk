@@ -8,11 +8,11 @@ The External Signer feature allows you to provide custom signing logic for the S
 
 ## Using the Default External Signer
 
-The SDK provides a convenient factory function `default_external_signer` that creates a signer from a mnemonic. This is the easiest way to get started:
+The SDK provides a convenient factory function {{#name default_external_signer}} that creates a signer from a mnemonic. This is the easiest way to get started:
 
 {{#tabs external_signer:default-external-signer}}
 
-Once you have a signer, you can use it when connecting to the SDK with the `connect_with_signer` method instead of the regular `connect` method:
+Once you have a signer, you can use it when connecting to the SDK with the {{#name connect_with_signer}} method instead of the regular {{#name connect}} method:
 
 {{#tabs external_signer:connect-with-signer}}
 
