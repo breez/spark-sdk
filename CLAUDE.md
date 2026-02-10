@@ -87,6 +87,29 @@ When changing the SDK's public interface, update these files:
 4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
 5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
 
+## Documentation Inline Syntax
+
+When writing mdbook documentation in `docs/breez-sdk/src/`, use these preprocessor macros for language-aware inline code that adapts to the selected language tab:
+
+- `{{#name identifier}}` - For functions, methods, parameters, properties
+  - Rust/Python: `get_info` (snake_case)
+  - Swift/Kotlin/JS/Flutter: `getInfo` (camelCase)
+  - Go/C#: `GetInfo` (PascalCase)
+
+- `{{#enum Type::Variant}}` - For enum variants
+  - Rust: `SdkEvent::Synced`
+  - Python: `SdkEvent.SYNCED`
+  - Swift: `SdkEvent.synced`
+  - Go: `SdkEventSynced`
+  - Others: `SdkEvent.Synced`
+
+Example:
+```markdown
+Call {{#name get_info}} after each {{#enum SdkEvent::Synced}} event.
+```
+
+See [snippets-processor/src/main.rs](docs/breez-sdk/snippets-processor/src/main.rs) for transformation rules.
+
 ## Workspace Configuration
 
 - Rust edition 2024, MSRV 1.88
