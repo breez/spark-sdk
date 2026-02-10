@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +37,8 @@ struct LeavesState {
     leaves: HashMap<TreeNodeId, TreeNode>,
     missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
+    /// Leaf IDs that have been finalized (spent). Prevents re-adding during refresh.
+    spent_leaf_ids: HashSet<TreeNodeId>,
 }
 
 impl LeavesState {
@@ -331,9 +333,26 @@ impl InMemoryTreeStore {
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        state.leaves = leaves.iter().map(|l| (l.id.clone(), l.clone())).collect();
+        // Collect IDs from the new refresh to clean up stale spent entries
+        let refreshed_ids: HashSet<TreeNodeId> = leaves
+            .iter()
+            .chain(missing_operators_leaves.iter())
+            .map(|l| l.id.clone())
+            .collect();
+
+        // Remove spent IDs that are no longer in the refresh (already gone from operators)
+        state.spent_leaf_ids.retain(|id| refreshed_ids.contains(id));
+
+        // Filter out leaves that were spent since refresh started
+        state.leaves = leaves
+            .iter()
+            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
+            .map(|l| (l.id.clone(), l.clone()))
+            .collect();
+
         state.missing_operators_leaves = missing_operators_leaves
             .iter()
+            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
             .map(|l| (l.id.clone(), l.clone()))
             .collect();
 
@@ -360,7 +379,11 @@ impl InMemoryTreeStore {
                 entry.leaves.len()
             );
         }
-        trace!("Updated {:?} leaves in the local state", leaves.len());
+        trace!(
+            "Updated {:?} leaves in the local state (filtered {} spent)",
+            state.leaves.len(),
+            refreshed_ids.len().saturating_sub(state.leaves.len() + state.missing_operators_leaves.len())
+        );
         Ok(())
     }
 
@@ -473,8 +496,13 @@ impl InMemoryTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) {
-        // Remove reservation (leaves are consumed) - permit and pending change are dropped with the entry
-        if state.leaves_reservations.remove(id).is_none() {
+        // Remove reservation and record spent leaf IDs
+        if let Some(entry) = state.leaves_reservations.remove(id) {
+            // Mark all leaves from this reservation as spent to prevent re-adding during refresh
+            for leaf in &entry.leaves {
+                state.spent_leaf_ids.insert(leaf.id.clone());
+            }
+        } else {
             warn!("Tried to finalize a non existing reservation");
         }
 
@@ -1617,5 +1645,108 @@ mod tests {
             notification_result.is_ok(),
             "Expected notification when pending balance changes"
         );
+    }
+
+    #[async_test_all]
+    async fn test_spent_leaves_not_restored_by_set_leaves() {
+        // Test that finalized (spent) leaves are not restored when set_leaves is called
+        // with stale data from operators. This prevents the TOCTOU race condition where
+        // a refresh started before a payment completes would re-add spent leaves.
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve node1 for payment
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Finalize the reservation (node1 is now spent)
+        state
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
+
+        // Verify node1 is not in the pool
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 1);
+        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
+        assert!(!all_leaves.available.iter().any(|l| l.id.to_string() == "node1"));
+
+        // Now simulate a refresh that returns stale data including the spent leaf
+        // (this is the race condition scenario - refresh started before finalize completed)
+        let stale_leaves = vec![
+            create_test_tree_node("node1", 100), // This was spent!
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300), // New leaf
+        ];
+        state.set_leaves(&stale_leaves, &[]).await.unwrap();
+
+        // Verify node1 was NOT restored (it's in spent_leaf_ids)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 2); // node2 and node3 only
+        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
+        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node3"));
+        assert!(
+            !all_leaves.available.iter().any(|l| l.id.to_string() == "node1"),
+            "Spent leaf node1 should not be restored by set_leaves"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
+        // Test that spent_leaf_ids are cleaned up when the operators no longer
+        // return those leaves (they've been fully processed on the operator side)
+        let state = InMemoryTreeStore::new();
+        let leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve and finalize node1
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        state
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
+
+        // First refresh still includes node1 (stale) - should be filtered
+        let stale_leaves = vec![create_test_tree_node("node1", 100)];
+        state.set_leaves(&stale_leaves, &[]).await.unwrap();
+        assert!(state.get_leaves().await.unwrap().available.is_empty());
+
+        // Second refresh no longer includes node1 (operators caught up)
+        // The spent_leaf_ids entry should be cleaned up
+        let fresh_leaves = vec![create_test_tree_node("node2", 200)];
+        state.set_leaves(&fresh_leaves, &[]).await.unwrap();
+
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 1);
+        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
+
+        // Now if a new node1 appears (different transaction, same ID pattern is unlikely
+        // but tests the cleanup), it should be accepted since it's no longer in spent_leaf_ids
+        let new_node1_leaves = vec![
+            create_test_tree_node("node1", 150), // New node1, different value
+            create_test_tree_node("node2", 200),
+        ];
+        state.set_leaves(&new_node1_leaves, &[]).await.unwrap();
+
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 2);
+        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node1" && l.value == 150));
     }
 }
