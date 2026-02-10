@@ -6,7 +6,7 @@ use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, Instant, SystemTime};
 
 use crate::{
-    DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, InputType, MaxFee, PaymentDetails, PaymentStatus, PaymentType,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -120,6 +120,18 @@ impl BreezSdk {
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
                 if let Ok(mut payment) = Payment::try_from(transfer) {
+                    // Check if a concurrent sync already transitioned this payment
+                    // to Completed and emitted PaymentSucceeded. This can happen when
+                    // a WalletState sync (triggered by TransferClaimStarting) runs
+                    // before this handler: the sync sees the Completed status from the
+                    // wallet, updates storage, and emits. Without this guard we would
+                    // emit a duplicate PaymentSucceeded event.
+                    let already_completed = self
+                        .storage
+                        .get_payment_by_id(payment.id.clone())
+                        .await
+                        .is_ok_and(|p| p.status == PaymentStatus::Completed);
+
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                         error!("Failed to insert succeeded payment: {e:?}");
@@ -129,9 +141,11 @@ impl BreezSdk {
                     // Note this is already synced at TransferClaimStarting, but it might not have completed yet, so that could race.
                     self.sync_single_lnurl_metadata(&mut payment).await;
 
-                    self.event_emitter
-                        .emit(&SdkEvent::PaymentSucceeded { payment })
-                        .await;
+                    if !already_completed {
+                        self.event_emitter
+                            .emit(&SdkEvent::PaymentSucceeded { payment })
+                            .await;
+                    }
                 }
                 if let Err(e) = self
                     .sync_trigger
