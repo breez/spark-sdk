@@ -1239,6 +1239,34 @@ impl Storage for SqliteStorage {
         tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
+
+    async fn get_sync_state_records(&self) -> Result<Vec<Record>, StorageError> {
+        let connection = self.get_connection()?;
+
+        let mut stmt = connection
+            .prepare(
+                "SELECT record_type, data_id, schema_version, revision, data
+                 FROM sync_state",
+            )
+            .map_err(map_sqlite_error)?;
+
+        let mut rows = stmt.query([]).map_err(map_sqlite_error)?;
+        let mut results = Vec::new();
+
+        while let Some(row) = rows.next().map_err(map_sqlite_error)? {
+            results.push(Record {
+                id: RecordId::new(
+                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
+                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                ),
+                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                revision: row.get(3).map_err(map_sqlite_error)?,
+                data: serde_json::from_str(&row.get::<_, String>(4).map_err(map_sqlite_error)?)?,
+            });
+        }
+
+        Ok(results)
+    }
 }
 
 /// Base query for payment lookups.

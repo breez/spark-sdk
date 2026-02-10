@@ -286,6 +286,9 @@ pub trait Storage: Send + Sync {
 
     /// Update the sync state record from an incoming record
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError>;
+
+    /// Get all records from `sync_state`
+    async fn get_sync_state_records(&self) -> Result<Vec<Record>, StorageError>;
 }
 
 pub(crate) struct ObjectCacheRepository {

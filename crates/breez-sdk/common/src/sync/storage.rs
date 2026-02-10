@@ -70,6 +70,9 @@ pub trait SyncStorage: Send + Sync {
 
     /// Update the sync state record from an incoming record
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), SyncStorageError>;
+
+    /// Get all records from `sync_state`
+    async fn get_sync_state_records(&self) -> Result<Vec<Record>, SyncStorageError>;
 }
 
 #[derive(Clone, Debug)]

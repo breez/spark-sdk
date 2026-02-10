@@ -68,6 +68,16 @@ const SELECT_PAYMENT_SQL = `
       LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
       LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash`;
 
+// serde-wasm-bindgen serializes Rust HashMap as a JS Map.
+// JSON.stringify(Map) gives "{}", losing all data.
+// This helper converts Maps to plain objects for JSON serialization.
+function mapToObject(value) {
+  if (value instanceof Map) {
+    return Object.fromEntries(value);
+  }
+  return value;
+}
+
 class SqliteStorage {
   constructor(dbPath, logger = null) {
     this.dbPath = dbPath;
@@ -826,7 +836,7 @@ class SqliteStorage {
           record.id.dataId,
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.updatedFields),
+          JSON.stringify(mapToObject(record.updatedFields)),
           revision.toString()
         );
 
@@ -877,7 +887,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          JSON.stringify(mapToObject(record.data))
         );
 
         // Update sync_revision to track the highest known revision
@@ -1003,7 +1013,7 @@ class SqliteStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            JSON.stringify(mapToObject(record.data)),
             record.revision.toString()
           );
         }
@@ -1221,6 +1231,41 @@ class SqliteStorage {
     }
   }
 
+  syncGetSyncStateRecords() {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT
+          record_type,
+          data_id,
+          CAST(revision AS TEXT) AS revision,
+          schema_version,
+          data
+        FROM sync_state
+      `);
+
+      const rows = stmt.all();
+
+      const records = rows.map((row) => ({
+        id: {
+          type: row.record_type,
+          dataId: row.data_id,
+        },
+        revision: BigInt(row.revision),
+        schemaVersion: row.schema_version,
+        data: JSON.parse(row.data),
+      }));
+
+      return Promise.resolve(records);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get sync state records: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   syncUpdateRecordFromIncoming(record) {
     try {
       const transaction = this.db.transaction(() => {
@@ -1241,7 +1286,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          JSON.stringify(mapToObject(record.data))
         );
 
         // Update sync_revision to track the highest known revision

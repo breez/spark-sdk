@@ -1746,6 +1746,32 @@ impl Storage for PostgresStorage {
 
         Ok(())
     }
+
+    async fn get_sync_state_records(&self) -> Result<Vec<Record>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+
+        let rows = client
+            .query(
+                "SELECT record_type, data_id, schema_version, revision, data
+                 FROM sync_state",
+                &[],
+            )
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(Record {
+                id: RecordId::new(row.get(0), row.get(1)),
+                schema_version: row.get(2),
+                revision: u64::try_from(row.get::<_, i64>(3))?,
+                data: serde_json::from_value(row.get::<_, serde_json::Value>(4))
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            });
+        }
+
+        Ok(results)
+    }
 }
 
 /// Base query for payment lookups.

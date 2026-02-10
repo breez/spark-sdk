@@ -30,6 +30,14 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     let latest = storage.get_latest_outgoing_change().await.unwrap();
     assert!(latest.is_none(), "Should have no latest outgoing change");
 
+    // Test 4b: No sync state records initially
+    let sync_state = storage.get_sync_state_records().await.unwrap();
+    assert_eq!(
+        sync_state.len(),
+        0,
+        "Should have no sync state records initially"
+    );
+
     // Test 5: Add outgoing change (create new record)
     let mut updated_fields = HashMap::new();
     updated_fields.insert("name".to_string(), "\"Alice\"".to_string());
@@ -79,6 +87,22 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
         .complete_outgoing_sync(completed_record.clone(), revision1)
         .await
         .unwrap();
+
+    // Test 8b: Verify completed record appears in sync_state
+    let sync_state = storage.get_sync_state_records().await.unwrap();
+    assert_eq!(
+        sync_state.len(),
+        1,
+        "Should have 1 sync state record after completion"
+    );
+    assert_eq!(sync_state[0].id.r#type, "user");
+    assert_eq!(sync_state[0].id.data_id, "user1");
+    assert_eq!(sync_state[0].schema_version, "1.0.0");
+    assert_eq!(
+        sync_state[0].data.get("name"),
+        Some(&"\"Alice\"".to_string())
+    );
+    assert_eq!(sync_state[0].data.get("age"), Some(&"30".to_string()));
 
     // Test 9: Pending changes should now be empty
     let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
@@ -164,6 +188,26 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
         .update_record_from_incoming(incoming_record1.clone())
         .await
         .unwrap();
+
+    // Test 15b: Verify incoming record appears in sync_state
+    let sync_state = storage.get_sync_state_records().await.unwrap();
+    let post1_state = sync_state
+        .iter()
+        .find(|r| r.id.r#type == "post" && r.id.data_id == "post1");
+    assert!(
+        post1_state.is_some(),
+        "post1 should appear in sync_state after update_record_from_incoming"
+    );
+    let post1_state = post1_state.unwrap();
+    assert_eq!(post1_state.schema_version, "1.0.0");
+    assert_eq!(
+        post1_state.data.get("title"),
+        Some(&"\"Post 1\"".to_string())
+    );
+    assert_eq!(
+        post1_state.data.get("content"),
+        Some(&"\"Hello World\"".to_string())
+    );
 
     // Test 16: Delete incoming record
     storage

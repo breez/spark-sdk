@@ -7,10 +7,13 @@ use std::{
 
 use breez_sdk_common::sync::{
     IncomingChange as CommonIncomingChange, NewRecordHandler,
-    OutgoingChange as CommonOutgoingChange, RecordChangeRequest, RecordId, SyncService,
+    OutgoingChange as CommonOutgoingChange, RecordChangeRequest, RecordId, SchemaVersion,
+    SyncService,
 };
+
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
@@ -21,6 +24,7 @@ use crate::{
 use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
+const RECOVERY_APPLIED_SCHEMA_VERSION_KEY: &str = "recovery_applied_schema_version";
 
 enum RecordType {
     PaymentMetadata,
@@ -106,6 +110,7 @@ impl SyncedStorage {
             if let Err(e) = clone.feed_existing_payment_metadata().await {
                 error!("Failed to feed existing payment metadata for sync: {}", e);
             }
+            clone.try_apply_new_sync_state_records().await;
         });
     }
 
@@ -162,6 +167,7 @@ impl SyncedStorage {
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {
                 id: record_id,
+                schema_version: CURRENT_SCHEMA_VERSION,
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -179,32 +185,50 @@ impl SyncedStorage {
     }
 
     async fn handle_incoming_change(&self, change: CommonIncomingChange) -> anyhow::Result<()> {
-        let record_type =
-            RecordType::from_str(&change.new_state.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
-        match record_type {
-            RecordType::PaymentMetadata => {
-                self.handle_payment_metadata_update(
-                    change.new_state.data,
-                    change.new_state.id.data_id,
-                )
-                .await
-            }
+        if change.new_state.schema_version.major > CURRENT_SCHEMA_VERSION.major {
+            warn!(
+                "Skipping incoming record '{}:{}': newer schema version {}",
+                change.new_state.id.r#type,
+                change.new_state.id.data_id,
+                change.new_state.schema_version
+            );
+            return Ok(());
         }
+
+        let Ok(record_type) = RecordType::from_str(&change.new_state.id.r#type) else {
+            error!(
+                "Unknown record type '{}' with compatible schema version {}",
+                change.new_state.id.r#type, change.new_state.schema_version
+            );
+            return Ok(());
+        };
+
+        let RecordType::PaymentMetadata = record_type;
+        self.handle_payment_metadata_update(change.new_state.data, change.new_state.id.data_id)
+            .await
     }
 
     /// Hook when an outgoing change is replayed, to ensure data consistency.
     async fn handle_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
-        let record_type =
-            RecordType::from_str(&change.change.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
-        match record_type {
-            RecordType::PaymentMetadata => {
-                self.handle_payment_metadata_update(
-                    change.change.updated_fields,
-                    change.change.id.data_id,
-                )
-                .await
-            }
+        if change.change.schema_version.major > CURRENT_SCHEMA_VERSION.major {
+            warn!(
+                "Skipping outgoing record '{}:{}': newer schema version {}",
+                change.change.id.r#type, change.change.id.data_id, change.change.schema_version
+            );
+            return Ok(());
         }
+
+        let Ok(record_type) = RecordType::from_str(&change.change.id.r#type) else {
+            error!(
+                "Unknown record type '{}' with compatible schema version {}",
+                change.change.id.r#type, change.change.schema_version
+            );
+            return Ok(());
+        };
+
+        let RecordType::PaymentMetadata = record_type;
+        self.handle_payment_metadata_update(change.change.updated_fields, change.change.id.data_id)
+            .await
     }
 
     async fn handle_payment_metadata_update(
@@ -222,6 +246,111 @@ impl SyncedStorage {
             .insert_payment_metadata(data_id, metadata)
             .await?;
         Ok(())
+    }
+
+    /// Best-effort recovery: apply `sync_state` records to the relational DB that
+    /// have a schema version newer than what the last recovery pass handled.
+    /// This covers the case where a previous SDK version stored records in `sync_state`
+    /// but couldn't apply them (e.g. unknown type at the time, now known after upgrade).
+    async fn try_apply_new_sync_state_records(&self) {
+        let current_version = CURRENT_SCHEMA_VERSION.to_string();
+        let last_applied_version = match self
+            .get_cached_item(RECOVERY_APPLIED_SCHEMA_VERSION_KEY.to_string())
+            .await
+        {
+            Ok(Some(v)) if v == current_version => return,
+            Ok(Some(v)) => match v.parse::<SchemaVersion>() {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    error!("Failed to parse last applied schema version '{v}': {e}");
+                    return;
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                error!("Failed to check recovery cache key: {e}");
+                return;
+            }
+        };
+
+        let mut records = match self.inner.get_sync_state_records().await {
+            Ok(records) => records,
+            Err(e) => {
+                error!("Failed to get sync state records for recovery: {e}");
+                return;
+            }
+        };
+
+        // Sort by revision so records are replayed in the order the server received
+        // them. This ensures correct behavior for record types that interact (e.g. a
+        // contact creation at revision N is applied before its deletion at revision M>N).
+        records.sort_by_key(|r| r.revision);
+
+        for record in records {
+            let schema_version = match record.schema_version.parse::<SchemaVersion>() {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(
+                        "Failed to parse schema version '{}': {e}",
+                        record.schema_version
+                    );
+                    continue;
+                }
+            };
+
+            // Skip records with a newer major version (incompatible)
+            if schema_version.major > CURRENT_SCHEMA_VERSION.major {
+                continue;
+            }
+
+            // Skip records already processed in a previous recovery pass
+            if let Some(ref last) = last_applied_version
+                && schema_version <= *last
+            {
+                continue;
+            }
+
+            let Ok(record_type) = RecordType::from_str(&record.id.r#type) else {
+                continue;
+            };
+
+            let data: HashMap<String, Value> = match record
+                .data
+                .into_iter()
+                .map(|(k, v)| serde_json::from_str(&v).map(|parsed| (k, parsed)))
+                .collect::<Result<_, _>>()
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    error!(
+                        "Failed to parse record data for '{}:{}': {e}",
+                        record.id.r#type, record.id.data_id
+                    );
+                    continue;
+                }
+            };
+
+            match record_type {
+                RecordType::PaymentMetadata => {
+                    if let Err(e) = self
+                        .handle_payment_metadata_update(data, record.id.data_id)
+                        .await
+                    {
+                        error!("Failed to apply sync state record: {e}");
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = self
+            .set_cached_item(
+                RECOVERY_APPLIED_SCHEMA_VERSION_KEY.to_string(),
+                current_version,
+            )
+            .await
+        {
+            error!("Failed to set recovery cache key: {e}");
+        }
     }
 }
 
@@ -256,6 +385,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
+                schema_version: CURRENT_SCHEMA_VERSION,
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -372,5 +502,365 @@ impl Storage for SyncedStorage {
 
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
         self.inner.update_record_from_incoming(record).await
+    }
+
+    async fn get_sync_state_records(&self) -> Result<Vec<Record>, StorageError> {
+        self.inner.get_sync_state_records().await
+    }
+}
+
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
+mod tests {
+    use super::*;
+    use crate::persist::sqlite::SqliteStorage;
+    use breez_sdk_common::sync::{
+        Record as ModelRecord, RecordChange as ModelRecordChange, RecordId as ModelRecordId,
+    };
+    use std::path::PathBuf;
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn create_test_synced_storage(storage: Arc<dyn Storage>) -> SyncedStorage {
+        let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> = Arc::new(
+            crate::sync_storage::SyncStorageWrapper::new(Arc::clone(&storage)),
+        );
+        let sync_service = Arc::new(SyncService::new(sync_storage));
+        let event_emitter = Arc::new(EventEmitter::new(true));
+        SyncedStorage::new(storage, sync_service, event_emitter)
+    }
+
+    fn make_incoming_change(
+        record_type: &str,
+        data_id: &str,
+        schema_version: SchemaVersion,
+        data: HashMap<String, Value>,
+    ) -> CommonIncomingChange {
+        CommonIncomingChange {
+            new_state: ModelRecord {
+                id: ModelRecordId::new(record_type, data_id),
+                revision: 1,
+                schema_version,
+                data,
+            },
+            old_state: None,
+        }
+    }
+
+    fn make_outgoing_change(
+        record_type: &str,
+        data_id: &str,
+        schema_version: SchemaVersion,
+        updated_fields: HashMap<String, Value>,
+    ) -> CommonOutgoingChange {
+        CommonOutgoingChange {
+            change: ModelRecordChange {
+                id: ModelRecordId::new(record_type, data_id),
+                schema_version,
+                updated_fields,
+                revision: 1,
+            },
+            parent: None,
+        }
+    }
+
+    fn make_test_lightning_payment(id: &str) -> crate::Payment {
+        crate::Payment {
+            id: id.to_string(),
+            payment_type: crate::PaymentType::Send,
+            status: crate::PaymentStatus::Completed,
+            amount: 100,
+            fees: 0,
+            timestamp: 1000,
+            method: crate::PaymentMethod::Lightning,
+            details: Some(crate::PaymentDetails::Lightning {
+                invoice: "lnbc1test".to_string(),
+                payment_hash: "abc123".to_string(),
+                destination_pubkey: "02def456".to_string(),
+                description: None,
+                preimage: None,
+                lnurl_pay_info: None,
+                lnurl_withdraw_info: None,
+                lnurl_receive_metadata: None,
+            }),
+            conversion_details: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_incoming_unknown_type_newer_schema() {
+        let temp_dir = create_temp_dir("incoming_unknown_newer");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_incoming_change(
+            "FutureType",
+            "id1",
+            SchemaVersion::new(2, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment was created as a side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_incoming_unknown_type_compatible_schema() {
+        let temp_dir = create_temp_dir("incoming_unknown_compat");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_incoming_change(
+            "UnknownType",
+            "id1",
+            SchemaVersion::new(1, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata was written
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_incoming_known_type_newer_major_version() {
+        let temp_dir = create_temp_dir("incoming_known_newer_major");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        // Insert a payment so we can verify metadata was NOT written
+        storage
+            .insert_payment(make_test_lightning_payment("id1"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::json!({"ln_address": "test@example.com"}),
+        );
+        let change =
+            make_incoming_change("PaymentMetadata", "id1", SchemaVersion::new(2, 0, 0), data);
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify metadata was NOT applied despite known type (newer major version)
+        let payment = storage.get_payment_by_id("id1".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment.details {
+            assert!(
+                lnurl_pay_info.is_none(),
+                "lnurl_pay_info should not be set for newer major version"
+            );
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_incoming_known_type_newer_minor_version_applied() {
+        let temp_dir = create_temp_dir("incoming_known_newer_minor");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        storage
+            .insert_payment(make_test_lightning_payment("pay1"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::json!({"ln_address": "test@example.com"}),
+        );
+        let change =
+            make_incoming_change("PaymentMetadata", "pay1", SchemaVersion::new(1, 1, 0), data);
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify metadata WAS applied (compatible minor version bump)
+        let payment = storage.get_payment_by_id("pay1".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment.details {
+            let info = lnurl_pay_info
+                .as_ref()
+                .expect("lnurl_pay_info should be set");
+            assert_eq!(info.ln_address.as_deref(), Some("test@example.com"));
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_unknown_type_newer_schema() {
+        let temp_dir = create_temp_dir("outgoing_unknown_newer");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_outgoing_change(
+            "FutureType",
+            "id1",
+            SchemaVersion::new(2, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_unknown_type_compatible_schema() {
+        let temp_dir = create_temp_dir("outgoing_unknown_compat");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let change = make_outgoing_change(
+            "UnknownType",
+            "id1",
+            SchemaVersion::new(1, 0, 0),
+            HashMap::new(),
+        );
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        // Verify no payment metadata side effect
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_recovery_applies_new_records_only() {
+        let temp_dir = create_temp_dir("recovery_new_only");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        storage
+            .insert_payment(make_test_lightning_payment("pay1"))
+            .await
+            .unwrap();
+        storage
+            .insert_payment(make_test_lightning_payment("pay2"))
+            .await
+            .unwrap();
+
+        // Simulate a previous recovery pass at version 0.9.0
+        synced
+            .set_cached_item(
+                RECOVERY_APPLIED_SCHEMA_VERSION_KEY.to_string(),
+                "0.9.0".to_string(),
+            )
+            .await
+            .unwrap();
+
+        // Insert a record at 0.9.0 (should be skipped — already handled)
+        let mut old_data = HashMap::new();
+        old_data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::to_string(&serde_json::json!({"ln_address": "old@example.com"})).unwrap(),
+        );
+        let old_record = crate::sync_storage::Record {
+            id: crate::sync_storage::RecordId::new(
+                "PaymentMetadata".to_string(),
+                "pay1".to_string(),
+            ),
+            revision: 1,
+            schema_version: "0.9.0".to_string(),
+            data: old_data,
+        };
+        storage
+            .update_record_from_incoming(old_record)
+            .await
+            .unwrap();
+
+        // Insert a record at 1.0.0 (newer than last applied — should be processed)
+        let mut new_data = HashMap::new();
+        new_data.insert(
+            "lnurl_pay_info".to_string(),
+            serde_json::to_string(&serde_json::json!({"ln_address": "new@example.com"})).unwrap(),
+        );
+        let new_record = crate::sync_storage::Record {
+            id: crate::sync_storage::RecordId::new(
+                "PaymentMetadata".to_string(),
+                "pay2".to_string(),
+            ),
+            revision: 2,
+            schema_version: "1.0.0".to_string(),
+            data: new_data,
+        };
+        storage
+            .update_record_from_incoming(new_record)
+            .await
+            .unwrap();
+
+        synced.try_apply_new_sync_state_records().await;
+
+        // pay1 (version 0.9.0) should NOT have been applied
+        let payment1 = storage.get_payment_by_id("pay1".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment1.details {
+            assert!(
+                lnurl_pay_info.is_none(),
+                "pay1 metadata should not be applied (old schema version)"
+            );
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+
+        // pay2 (version 1.0.0) SHOULD have been applied
+        let payment2 = storage.get_payment_by_id("pay2".to_string()).await.unwrap();
+        if let Some(crate::PaymentDetails::Lightning { lnurl_pay_info, .. }) = &payment2.details {
+            let info = lnurl_pay_info
+                .as_ref()
+                .expect("lnurl_pay_info should be set after recovery");
+            assert_eq!(info.ln_address.as_deref(), Some("new@example.com"));
+        } else {
+            panic!("Expected Lightning payment details");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recovery_skips_unknown_and_newer_records() {
+        let temp_dir = create_temp_dir("recovery_skip");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        // Insert an unknown type record into sync_state
+        let record_unknown = crate::sync_storage::Record {
+            id: crate::sync_storage::RecordId::new("FutureType".to_string(), "id1".to_string()),
+            revision: 1,
+            schema_version: "1.0.0".to_string(),
+            data: HashMap::new(),
+        };
+        storage
+            .update_record_from_incoming(record_unknown)
+            .await
+            .unwrap();
+
+        // Insert a record with newer major schema version
+        let record_newer = crate::sync_storage::Record {
+            id: crate::sync_storage::RecordId::new(
+                "PaymentMetadata".to_string(),
+                "id2".to_string(),
+            ),
+            revision: 2,
+            schema_version: "2.0.0".to_string(),
+            data: HashMap::new(),
+        };
+        storage
+            .update_record_from_incoming(record_newer)
+            .await
+            .unwrap();
+
+        // Recovery should not panic or error
+        synced.try_apply_new_sync_state_records().await;
+
+        // Verify no payment metadata was applied for either record
+        assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+        assert!(storage.get_payment_by_id("id2".to_string()).await.is_err());
     }
 }

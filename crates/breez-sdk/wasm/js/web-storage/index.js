@@ -1891,6 +1891,32 @@ class IndexedDBStorage {
     });
   }
 
+  async syncGetSyncStateRecords() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(["sync_state"], "readonly");
+      const stateStore = transaction.objectStore("sync_state");
+
+      const request = stateStore.getAll();
+
+      request.onsuccess = () => {
+        const records = request.result.map((storeRecord) => storeRecord.record);
+        resolve(records);
+      };
+
+      request.onerror = (event) => {
+        reject(
+          new StorageError(
+            `Failed to get sync state records: ${event.target.error.message}`
+          )
+        );
+      };
+    });
+  }
+
   // ===== Private Helper Methods =====
 
   _matchesFilters(payment, request) {

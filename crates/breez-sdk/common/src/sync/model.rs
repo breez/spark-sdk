@@ -6,7 +6,7 @@ use serde_json::Value;
 
 /// Simple semantic version for schema versioning
 /// Supports only major.minor.patch format without pre-release or build metadata
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SchemaVersion {
     pub major: u64,
     pub minor: u64,
@@ -59,7 +59,6 @@ impl std::str::FromStr for SchemaVersion {
     }
 }
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,
@@ -84,6 +83,7 @@ impl RecordId {
 #[derive(Debug)]
 pub struct RecordChangeRequest {
     pub id: RecordId,
+    pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
 }
 
@@ -91,7 +91,7 @@ impl From<&RecordChangeRequest> for UnversionedRecordChange {
     fn from(value: &RecordChangeRequest) -> Self {
         UnversionedRecordChange {
             id: value.id.clone(),
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: value.schema_version.clone(),
             updated_fields: value.updated_fields.clone(),
         }
     }
@@ -220,7 +220,7 @@ mod test {
 
     use crate::sync::{
         OutgoingChange, Record, RecordChange, RecordChangeRequest, RecordId, SchemaVersion,
-        UnversionedRecordChange, model::CURRENT_SCHEMA_VERSION,
+        UnversionedRecordChange,
     };
 
     #[test]
@@ -264,8 +264,10 @@ mod test {
         updated_fields.insert("amount".to_string(), json!(1000));
         updated_fields.insert("status".to_string(), json!("pending"));
 
+        let version = SchemaVersion::new(1, 0, 0);
         let request = RecordChangeRequest {
             id: id.clone(),
+            schema_version: version.clone(),
             updated_fields: updated_fields.clone(),
         };
 
@@ -275,7 +277,7 @@ mod test {
         // Verify conversion
         assert_eq!(unversioned.id.r#type, id.r#type);
         assert_eq!(unversioned.id.data_id, id.data_id);
-        assert_eq!(unversioned.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(unversioned.schema_version, version);
         assert_eq!(unversioned.updated_fields.get("amount"), Some(&json!(1000)));
         assert_eq!(
             unversioned.updated_fields.get("status"),

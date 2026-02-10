@@ -421,6 +421,21 @@ impl breez_sdk_spark::Storage for WasmStorage {
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
+
+    async fn get_sync_state_records(
+        &self,
+    ) -> Result<Vec<breez_sdk_spark::sync_storage::Record>, StorageError> {
+        let promise = self
+            .storage
+            .sync_get_sync_state_records()
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let records: Vec<Record> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(records.into_iter().map(|r| r.into()).collect())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -449,6 +464,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     syncGetIncomingRecords: (limit: number) => Promise<IncomingChange[]>;
     syncGetLatestOutgoingChange: () => Promise<OutgoingChange | null>;
     syncUpdateRecordFromIncoming: (record: Record) => Promise<void>;
+    syncGetSyncStateRecords: () => Promise<Record[]>;
 }"#;
 
 #[wasm_bindgen]
@@ -566,4 +582,7 @@ extern "C" {
         this: &Storage,
         record: Record,
     ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = syncGetSyncStateRecords, catch)]
+    pub fn sync_get_sync_state_records(this: &Storage) -> Result<Promise, JsValue>;
 }

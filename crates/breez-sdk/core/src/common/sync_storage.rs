@@ -144,6 +144,20 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
             .await
             .map_err(storage_to_sync_error)
     }
+
+    async fn get_sync_state_records(
+        &self,
+    ) -> Result<
+        Vec<breez_sdk_common::sync::storage::Record>,
+        breez_sdk_common::sync::storage::SyncStorageError,
+    > {
+        let records = self
+            .inner
+            .get_sync_state_records()
+            .await
+            .map_err(storage_to_sync_error)?;
+        Ok(records.into_iter().map(From::from).collect())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
