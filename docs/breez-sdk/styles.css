@@ -47,31 +47,7 @@ a.tag:hover {
   left: -10000px;
 }
 
-/* Language-aware function names - inherits styling from <code> element */
-.lang-fn {
-  /* No additional styling needed - inherits from code element */
-}
-
+/* Language-aware function names - visibility controlled by tabs.js */
 .lang-fn span { display: none; }
-.lang-fn span.fn-rust { display: inline; } /* Default */
-
-/* Show correct variant based on body data-lang attribute */
-body[data-lang="Rust"] .lang-fn span { display: none; }
-body[data-lang="Rust"] .lang-fn span.fn-rust { display: inline; }
-body[data-lang="Python"] .lang-fn span { display: none; }
-body[data-lang="Python"] .lang-fn span.fn-python { display: inline; }
-body[data-lang="Swift"] .lang-fn span { display: none; }
-body[data-lang="Swift"] .lang-fn span.fn-swift { display: inline; }
-body[data-lang="Kotlin"] .lang-fn span { display: none; }
-body[data-lang="Kotlin"] .lang-fn span.fn-kotlin { display: inline; }
-body[data-lang="Javascript"] .lang-fn span { display: none; }
-body[data-lang="Javascript"] .lang-fn span.fn-javascript { display: inline; }
-body[data-lang="React Native"] .lang-fn span { display: none; }
-body[data-lang="React Native"] .lang-fn span.fn-react-native { display: inline; }
-body[data-lang="Flutter"] .lang-fn span { display: none; }
-body[data-lang="Flutter"] .lang-fn span.fn-flutter { display: inline; }
-body[data-lang="Go"] .lang-fn span { display: none; }
-body[data-lang="Go"] .lang-fn span.fn-go { display: inline; }
-body[data-lang="C#"] .lang-fn span { display: none; }
-body[data-lang="C#"] .lang-fn span.fn-csharp { display: inline; }
+.lang-fn span.fn-rust { display: inline; } /* Default before JS runs */
 
