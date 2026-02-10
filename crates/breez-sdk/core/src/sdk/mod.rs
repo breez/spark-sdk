@@ -1,4 +1,5 @@
 mod api;
+mod contacts;
 mod deposits;
 mod helpers;
 mod init;

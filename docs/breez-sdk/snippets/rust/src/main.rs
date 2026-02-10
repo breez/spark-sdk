@@ -1,4 +1,5 @@
 mod config;
+mod contacts;
 mod fiat_currencies;
 mod getting_started;
 mod htlcs;

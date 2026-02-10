@@ -345,6 +345,17 @@ class MigrationManager {
           `DELETE FROM settings WHERE key = 'sync_initial_complete'`
         ]
       },
+      {
+        name: "Create contacts table",
+        sql: `CREATE TABLE contacts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          payment_identifier TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(name, payment_identifier)
+        )`
+      },
     ];
   }
 }

@@ -10,8 +10,9 @@ use wasm_bindgen_futures::js_sys::Promise;
 use std::collections::HashMap;
 
 use crate::models::{
-    DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
-    Record, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
+    Contact, DepositInfo, IncomingChange, ListContactsRequest, ListPaymentsRequest, OutgoingChange,
+    Payment, PaymentMetadata, Record, SetLnurlMetadataItem, UnversionedRecordChange,
+    UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -21,6 +22,27 @@ pub struct WasmStorage {
 /// Helper function to convert JS exceptions to StorageError with detailed error logging
 fn js_error_to_storage_error(js_error: JsValue) -> StorageError {
     let error_message = get_detailed_js_error(&js_error);
+    StorageError::Implementation(error_message)
+}
+
+/// Helper function to map JS constraint errors to appropriate StorageError variants
+fn map_js_constraint_error(js_error: JsValue, operation: &str) -> StorageError {
+    let error_message = get_detailed_js_error(&js_error);
+    let error_lower = error_message.to_lowercase();
+
+    // Check for unique constraint violation
+    if error_lower.contains("unique")
+        || error_lower.contains("duplicate")
+        || error_lower.contains("constraint")
+    {
+        return StorageError::Duplicate;
+    }
+
+    // Check for not found (for update operations)
+    if operation == "update" && error_lower.contains("not found") {
+        return StorageError::NotFound;
+    }
+
     StorageError::Implementation(error_message)
 }
 
@@ -278,6 +300,88 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(result_map)
     }
 
+    async fn list_contacts(
+        &self,
+        request: breez_sdk_spark::ListContactsRequest,
+    ) -> Result<Vec<breez_sdk_spark::Contact>, StorageError> {
+        let request: ListContactsRequest = request.into();
+        let promise = self
+            .storage
+            .list_contacts(request)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let contacts: Vec<Contact> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(contacts.into_iter().map(|c| c.into()).collect())
+    }
+
+    async fn get_contact(&self, id: String) -> Result<breez_sdk_spark::Contact, StorageError> {
+        let promise = self
+            .storage
+            .get_contact(id)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        if result.is_null() || result.is_undefined() {
+            return Err(StorageError::NotFound);
+        }
+
+        let contact: Contact = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(contact.into())
+    }
+
+    async fn insert_contact(&self, contact: breez_sdk_spark::Contact) -> Result<(), StorageError> {
+        let contact: Contact = contact.into();
+        let promise = self
+            .storage
+            .insert_contact(contact)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future
+            .await
+            .map_err(|e| map_js_constraint_error(e, "insert"))?;
+        Ok(())
+    }
+
+    async fn update_contact(
+        &self,
+        contact: breez_sdk_spark::Contact,
+    ) -> Result<breez_sdk_spark::Contact, StorageError> {
+        let original_contact = contact.clone();
+        let wasm_contact: Contact = contact.into();
+        let promise = self
+            .storage
+            .update_contact(wasm_contact)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| map_js_constraint_error(e, "update"))?;
+
+        // If JS returns the updated contact, use it; otherwise return the input
+        if result.is_null() || result.is_undefined() {
+            Ok(original_contact)
+        } else {
+            let updated: Contact = serde_wasm_bindgen::from_value(result)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?;
+            Ok(updated.into())
+        }
+    }
+
+    async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
+        let promise = self
+            .storage
+            .delete_contact(id)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_storage_error)?;
+        Ok(())
+    }
+
     async fn add_outgoing_change(
         &self,
         record: breez_sdk_spark::sync_storage::UnversionedRecordChange,
@@ -454,6 +558,10 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
     getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
+    listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
+    insertContact: (contact: Contact) => Promise<void>;
+    updateContact: (contact: Contact) => Promise<Contact>;
+    deleteContact: (id: string) => Promise<void>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
     syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
@@ -533,6 +641,21 @@ extern "C" {
         this: &Storage,
         parent_payment_ids: Vec<String>,
     ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = listContacts, catch)]
+    pub fn list_contacts(this: &Storage, request: ListContactsRequest) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getContact, catch)]
+    pub fn get_contact(this: &Storage, id: String) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = insertContact, catch)]
+    pub fn insert_contact(this: &Storage, contact: Contact) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = updateContact, catch)]
+    pub fn update_contact(this: &Storage, contact: Contact) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = deleteContact, catch)]
+    pub fn delete_contact(this: &Storage, id: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncAddOutgoingChange, catch)]
     pub fn sync_add_outgoing_change(

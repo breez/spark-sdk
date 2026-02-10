@@ -1450,3 +1450,45 @@ pub struct OptimizationProgress {
     pub current_round: u32,
     pub total_rounds: u32,
 }
+
+/// A contact entry containing a name and payment identifier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Contact {
+    pub id: String,
+    pub name: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Request to add a new contact.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct AddContactRequest {
+    pub name: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
+}
+
+/// Request to update an existing contact.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UpdateContactRequest {
+    pub id: String,
+    pub name: String,
+    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    pub payment_identifier: String,
+}
+
+/// Request to list contacts with optional pagination.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListContactsRequest {
+    /// Filter by exact name match
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub name: Option<String>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub offset: Option<u32>,
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub limit: Option<u32>,
+}

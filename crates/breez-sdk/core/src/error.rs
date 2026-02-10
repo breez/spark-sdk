@@ -123,7 +123,13 @@ impl From<crate::token_conversion::ConversionError> for SdkError {
 
 impl From<persist::StorageError> for SdkError {
     fn from(e: persist::StorageError) -> Self {
-        SdkError::StorageError(e.to_string())
+        match e {
+            persist::StorageError::Duplicate => {
+                SdkError::InvalidInput("Duplicate entry".to_string())
+            }
+            persist::StorageError::NotFound => SdkError::InvalidInput("Not found".to_string()),
+            _ => SdkError::StorageError(e.to_string()),
+        }
     }
 }
 

@@ -331,6 +331,17 @@ class MigrationManager {
             transaction.objectStore("settings").delete("sync_initial_complete");
           }
         }
+      },
+      {
+        name: "Create contacts store",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("contacts")) {
+            const contactsStore = db.createObjectStore("contacts", { keyPath: "id" });
+            // Create unique index on (name, paymentIdentifier) combination
+            contactsStore.createIndex("name_identifier", ["name", "paymentIdentifier"], { unique: true });
+            contactsStore.createIndex("name", "name", { unique: false });
+          }
+        }
       }
     ];
   }
@@ -355,7 +366,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 10; // Current schema version
+    this.dbVersion = 11; // Current schema version
   }
 
   /**
@@ -1911,6 +1922,182 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to get sync state records: ${event.target.error.message}`
+          )
+        );
+      };
+    });
+  }
+
+  // ===== Contact Operations =====
+
+  async listContacts(request) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    const actualOffset = request.offset !== null && request.offset !== undefined ? request.offset : 0;
+    const actualLimit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
+    const nameFilter = request.name !== null && request.name !== undefined ? request.name : null;
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readonly");
+      const store = transaction.objectStore("contacts");
+      const nameIndex = store.index("name");
+
+      const contacts = [];
+      let count = 0;
+      let skipped = 0;
+
+      // If name filter is specified, use IDBKeyRange to filter by exact name
+      const keyRange = nameFilter !== null ? IDBKeyRange.only(nameFilter) : null;
+      const cursorRequest = nameIndex.openCursor(keyRange);
+
+      cursorRequest.onsuccess = (event) => {
+        const cursor = event.target.result;
+
+        if (!cursor || count >= actualLimit) {
+          resolve(contacts);
+          return;
+        }
+
+        if (skipped < actualOffset) {
+          skipped++;
+          cursor.continue();
+          return;
+        }
+
+        contacts.push(cursor.value);
+        count++;
+        cursor.continue();
+      };
+
+      cursorRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to list contacts: ${cursorRequest.error?.message || "Unknown error"}`,
+            cursorRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  async getContact(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readonly");
+      const store = transaction.objectStore("contacts");
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        resolve(request.result || null);
+      };
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async insertContact(contact) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readwrite");
+      const store = transaction.objectStore("contacts");
+
+      const request = store.add(contact);
+
+      request.onsuccess = () => resolve();
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Inserting contact failed: ${request.error?.name || "Unknown error"} - ${request.error?.message || ""}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async updateContact(contact) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readwrite");
+      const store = transaction.objectStore("contacts");
+
+      // First check if the contact exists
+      const getRequest = store.get(contact.id);
+
+      getRequest.onsuccess = () => {
+        const existingContact = getRequest.result;
+        if (!existingContact) {
+          reject(new StorageError("Contact not found"));
+          return;
+        }
+
+        // Preserve created_at from the existing record
+        const updatedContact = {
+          ...contact,
+          createdAt: existingContact.createdAt,
+        };
+
+        const putRequest = store.put(updatedContact);
+
+        putRequest.onsuccess = () => resolve(updatedContact);
+
+        putRequest.onerror = () => {
+          reject(
+            new StorageError(
+              `Updating contact failed: ${putRequest.error?.name || "Unknown error"} - ${putRequest.error?.message || ""}`,
+              putRequest.error
+            )
+          );
+        };
+      };
+
+      getRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get contact for update: ${getRequest.error?.message || "Unknown error"}`,
+            getRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  async deleteContact(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readwrite");
+      const store = transaction.objectStore("contacts");
+      const request = store.delete(id);
+
+      request.onsuccess = () => resolve();
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to delete contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
           )
         );
       };

@@ -34,6 +34,7 @@
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [LNURL Authentication](guide/lnurl_auth.md)
 - [User settings](guide/user_settings.md)
+- [Managing contacts](guide/contacts.md)
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
 - [End-user fees](guide/end-user_fees.md)
