@@ -643,6 +643,8 @@ impl PostgresStorage {
             ],
             // Migration 2: Sync tables
             &[
+                // sync_revision: tracks the last committed revision (from server-acknowledged
+                // or server-received records). Does NOT include pending outgoing revisions.
                 "CREATE TABLE IF NOT EXISTS sync_revision (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     revision BIGINT NOT NULL DEFAULT 0,
@@ -1353,10 +1355,13 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        // Bump the revision atomically
+        // Compute next revision as max(committed, max outgoing) + 1, without updating sync_revision
         let revision: i64 = tx
             .query_one(
-                "UPDATE sync_revision SET revision = revision + 1 RETURNING revision",
+                "SELECT GREATEST(
+                    (SELECT revision FROM sync_revision),
+                    COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
+                ) + 1",
                 &[],
             )
             .await
@@ -1585,12 +1590,14 @@ impl Storage for PostgresStorage {
 
         let diff = i64::try_from(revision)?.saturating_sub(last_revision);
 
-        tx.execute(
-            "UPDATE sync_outgoing SET revision = revision + $1",
-            &[&diff],
-        )
-        .await
-        .map_err(|e| StorageError::Connection(e.to_string()))?;
+        if diff > 0 {
+            tx.execute(
+                "UPDATE sync_outgoing SET revision = revision + $1",
+                &[&diff],
+            )
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+        }
 
         // Update sync_revision within the same transaction so retries are idempotent
         tx.execute(

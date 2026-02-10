@@ -260,7 +260,13 @@ pub trait Storage: Send + Sync {
         limit: u32,
     ) -> Result<Vec<OutgoingChange>, StorageError>;
 
-    /// Get the revision number of the last synchronized record
+    /// Get the last committed sync revision.
+    ///
+    /// The `sync_revision` table tracks the highest revision that has been committed
+    /// (i.e. acknowledged by the server or received from it). It does NOT include
+    /// pending outgoing revisions. This value is used by the sync protocol to
+    /// request changes from the server, and by rebase to compute how much to shift
+    /// pending outgoing records.
     async fn get_last_revision(&self) -> Result<u64, StorageError>;
 
     /// Insert incoming records from remote sync

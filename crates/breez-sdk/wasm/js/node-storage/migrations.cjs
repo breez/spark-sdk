@@ -229,6 +229,8 @@ class MigrationManager {
       {
         name: "Create sync tables",
         sql: [
+          // sync_revision: tracks the last committed revision (from server-acknowledged
+          // or server-received records). Does NOT include pending outgoing revisions.
           `CREATE TABLE sync_revision (
             revision INTEGER NOT NULL DEFAULT 0
           )`,

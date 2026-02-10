@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, Transaction, params,
+    Connection, Row, ToSql, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -204,6 +204,8 @@ impl SqliteStorage {
             );
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
             "ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT;",
+            // sync_revision: tracks the last committed revision (from server-acknowledged
+            // or server-received records). Does NOT include pending outgoing revisions.
             "CREATE TABLE sync_revision (
                 revision INTEGER NOT NULL DEFAULT 0
             );
@@ -853,7 +855,17 @@ impl Storage for SqliteStorage {
     ) -> Result<u64, StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
-        let revision = get_next_revision(&tx)?;
+
+        let revision: u64 = tx
+            .query_row(
+                "SELECT MAX(
+                    (SELECT revision FROM sync_revision),
+                    COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
+                ) + 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(map_sqlite_error)?;
 
         tx.execute(
             "INSERT INTO sync_outgoing (
@@ -1058,13 +1070,14 @@ impl Storage for SqliteStorage {
 
         let diff = revision.saturating_sub(last_revision);
 
-        // Update all pending outgoing records to have revision numbers higher than the incoming record
-        tx.execute(
-            "UPDATE sync_outgoing
-             SET revision = revision + ?",
-            params![diff],
-        )
-        .map_err(map_sqlite_error)?;
+        if diff > 0 {
+            tx.execute(
+                "UPDATE sync_outgoing
+                 SET revision = revision + ?",
+                params![diff],
+            )
+            .map_err(map_sqlite_error)?;
+        }
 
         // Update sync_revision within the same transaction so retries are idempotent
         tx.execute(
@@ -1226,20 +1239,6 @@ impl Storage for SqliteStorage {
         tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
-}
-
-/// Bumps the revision number, locking the revision number for updates for the duration of the transaction.
-fn get_next_revision(tx: &Transaction<'_>) -> Result<u64, StorageError> {
-    let revision = tx
-        .query_row(
-            "UPDATE sync_revision
-            SET revision = revision + 1
-            RETURNING revision",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(map_sqlite_error)?;
-    Ok(revision)
 }
 
 /// Base query for payment lookups.
