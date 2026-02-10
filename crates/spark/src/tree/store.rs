@@ -382,7 +382,9 @@ impl InMemoryTreeStore {
         trace!(
             "Updated {:?} leaves in the local state (filtered {} spent)",
             state.leaves.len(),
-            refreshed_ids.len().saturating_sub(state.leaves.len() + state.missing_operators_leaves.len())
+            refreshed_ids
+                .len()
+                .saturating_sub(state.leaves.len() + state.missing_operators_leaves.len())
         );
         Ok(())
     }
@@ -1678,8 +1680,18 @@ mod tests {
         // Verify node1 is not in the pool
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 1);
-        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
-        assert!(!all_leaves.available.iter().any(|l| l.id.to_string() == "node1"));
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node2")
+        );
+        assert!(
+            !all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1")
+        );
 
         // Now simulate a refresh that returns stale data including the spent leaf
         // (this is the race condition scenario - refresh started before finalize completed)
@@ -1693,10 +1705,23 @@ mod tests {
         // Verify node1 was NOT restored (it's in spent_leaf_ids)
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 2); // node2 and node3 only
-        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
-        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node3"));
         assert!(
-            !all_leaves.available.iter().any(|l| l.id.to_string() == "node1"),
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node2")
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node3")
+        );
+        assert!(
+            !all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1"),
             "Spent leaf node1 should not be restored by set_leaves"
         );
     }
@@ -1735,7 +1760,12 @@ mod tests {
 
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 1);
-        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node2"));
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node2")
+        );
 
         // Now if a new node1 appears (different transaction, same ID pattern is unlikely
         // but tests the cleanup), it should be accepted since it's no longer in spent_leaf_ids
@@ -1747,6 +1777,11 @@ mod tests {
 
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 2);
-        assert!(all_leaves.available.iter().any(|l| l.id.to_string() == "node1" && l.value == 150));
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1" && l.value == 150)
+        );
     }
 }
