@@ -14,7 +14,6 @@ struct MoonPayConfig {
     pub color_code: String,
     pub theme: String,
     pub redirect_url: String,
-    pub enabled_payment_methods: String,
 }
 
 fn moonpay_config() -> MoonPayConfig {
@@ -26,9 +25,6 @@ fn moonpay_config() -> MoonPayConfig {
         color_code: String::from("#055DEB"),
         theme: String::from("light"),
         redirect_url: String::from("https://buy.moonpay.io/transaction_receipt?addFunds=true"),
-        enabled_payment_methods: String::from(
-            "credit_debit_card,sepa_bank_transfer,gbp_bank_transfer",
-        ),
     }
 }
 
@@ -44,7 +40,6 @@ fn create_moonpay_url(
         ("colorCode", config.color_code),
         ("theme", config.theme),
         ("redirectURL", redirect_url.unwrap_or(config.redirect_url)),
-        ("enabledPaymentMethods", config.enabled_payment_methods),
         ("walletAddress", wallet_address),
     ];
 
@@ -124,10 +119,6 @@ pub(crate) mod tests {
         assert_eq!(query_pairs.get("theme"), Some(&config.theme));
         assert_eq!(query_pairs.get("redirectURL"), Some(&config.redirect_url));
         assert_eq!(query_pairs.get("lockAmount"), Some(&config.lock_amount));
-        assert_eq!(
-            query_pairs.get("enabledPaymentMethods"),
-            Some(&config.enabled_payment_methods),
-        );
         assert_eq!(query_pairs.get("walletAddress"), Some(&wallet_address));
         assert_eq!(query_pairs.get("quoteCurrencyAmount"), Some(&quote_amount),);
         Ok(())
@@ -155,10 +146,6 @@ pub(crate) mod tests {
         assert_eq!(query_pairs.get("theme"), Some(&config.theme));
         assert_eq!(query_pairs.get("redirectURL"), Some(&redirect_url));
         assert_eq!(query_pairs.get("lockAmount"), Some(&config.lock_amount));
-        assert_eq!(
-            query_pairs.get("enabledPaymentMethods"),
-            Some(&config.enabled_payment_methods),
-        );
         assert_eq!(query_pairs.get("walletAddress"), Some(&wallet_address));
         assert_eq!(query_pairs.get("quoteCurrencyAmount"), Some(&quote_amount),);
         Ok(())
