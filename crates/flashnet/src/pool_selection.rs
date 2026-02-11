@@ -29,15 +29,22 @@ pub fn select_best_pool(
     asset_in_address: &str,
     amount_out: u128,
     max_slippage_bps: u32,
+    integrator_fee_bps: u32,
     network: Network,
 ) -> Result<Pool, FlashnetError> {
     // Calculate amount_in for each pool, filter out those that error
     let viable_pools: Vec<(Pool, u128)> = pools
         .iter()
         .filter_map(|pool| {
-            pool.calculate_amount_in(asset_in_address, amount_out, max_slippage_bps, network)
-                .ok()
-                .map(|amount_in| (pool.clone(), amount_in))
+            pool.calculate_amount_in(
+                asset_in_address,
+                amount_out,
+                max_slippage_bps,
+                integrator_fee_bps,
+                network,
+            )
+            .ok()
+            .map(|amount_in| (pool.clone(), amount_in))
         })
         .collect();
 
@@ -380,6 +387,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -411,6 +419,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -450,6 +459,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -489,6 +499,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -541,6 +552,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             10_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -583,6 +595,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             50_000_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -623,6 +636,7 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000_000_000,
             50,
+            0,
             Network::Mainnet,
         );
 
@@ -667,11 +681,100 @@ mod tests {
             crate::BTC_ASSET_ADDRESS,
             1_000,
             50,
+            0,
             Network::Mainnet,
         );
 
         assert!(result.is_ok());
         // Pool 1 should win due to better price stability (20% weight)
         assert_eq!(result.unwrap().lp_public_key, pool1.lp_public_key);
+    }
+
+    #[test]
+    fn test_select_best_pool_with_integrator_fee() {
+        // Pool with lower base fees should still win when integrator fee is applied uniformly
+        let pool1 = create_test_pool_with_reserves(
+            "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+            50,  // 0.5% host fee
+            100, // 1% LP fee
+            1_000_000_000,
+            1_000_000_000,
+            Some(1_000_000_000),
+            Some(5_000),
+            None,
+        );
+
+        let pool2 = create_test_pool_with_reserves(
+            "0315299b3f9f4e2beb8576ea2bf72ea1bc741eb255bfc3f6387de4d47b5c05972d",
+            200, // 2% host fee
+            300, // 3% LP fee
+            2_000_000_000,
+            2_000_000_000,
+            Some(2_000_000_000),
+            Some(20_000),
+            None,
+        );
+
+        let all_pools = vec![pool1.clone(), pool2];
+        let integrator_fee_bps = 50; // 0.5% integrator fee
+
+        let result = select_best_pool(
+            &all_pools,
+            crate::BTC_ASSET_ADDRESS,
+            1_000,
+            50,
+            integrator_fee_bps,
+            Network::Mainnet,
+        );
+
+        assert!(result.is_ok());
+        // Pool 1 should still win due to lower total fees
+        assert_eq!(result.unwrap().lp_public_key, pool1.lp_public_key);
+    }
+
+    #[test]
+    fn test_select_best_pool_integrator_fee_affects_amount_in() {
+        // With integrator fee, the required amount_in should increase
+        let pool = create_test_pool_with_reserves(
+            "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+            50,
+            100,
+            1_000_000_000,
+            1_000_000_000,
+            Some(1_000_000_000),
+            Some(5_000),
+            None,
+        );
+
+        let all_pools = vec![pool.clone()];
+
+        // Without integrator fee
+        let result_without = select_best_pool(
+            &all_pools,
+            crate::BTC_ASSET_ADDRESS,
+            10_000,
+            50,
+            0,
+            Network::Mainnet,
+        );
+
+        // With integrator fee
+        let result_with = select_best_pool(
+            &all_pools,
+            crate::BTC_ASSET_ADDRESS,
+            10_000,
+            50,
+            100, // 1% integrator fee
+            Network::Mainnet,
+        );
+
+        assert!(result_without.is_ok());
+        assert!(result_with.is_ok());
+
+        // Both should return the same pool (only one pool available)
+        assert_eq!(
+            result_without.unwrap().lp_public_key,
+            result_with.unwrap().lp_public_key
+        );
     }
 }

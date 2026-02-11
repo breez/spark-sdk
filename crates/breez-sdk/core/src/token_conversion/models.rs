@@ -3,10 +3,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::SdkError;
 
-/// Default maximum slippage for conversions in basis points (0.5%)
-pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 50;
+/// Default maximum slippage for conversions in basis points (0.1%)
+pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 10;
 /// Default timeout for conversion operations in seconds
 pub const DEFAULT_CONVERSION_TIMEOUT_SECS: u32 = 30;
+/// Default integrator pubkey used when executing conversions
+pub const DEFAULT_INTEGRATOR_PUBKEY: &str =
+    "037e26d9d62e0b3df2d3e66805f61de2a33914465297abf76817296a92ac3f2379";
+/// Default integrator fee BPS used when simulating/executing conversions
+pub const DEFAULT_INTEGRATOR_FEE_BPS: u32 = 5;
 
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -87,7 +92,7 @@ pub struct ConversionOptions {
     /// The type of conversion to perform when fulfilling the payment
     pub conversion_type: ConversionType,
     /// The optional maximum slippage in basis points (1/100 of a percent) allowed when
-    /// a conversion is needed to fulfill the payment. Defaults to 50 bps (0.5%) if not set.
+    /// a conversion is needed to fulfill the payment. Defaults to 10 bps (0.1%) if not set.
     /// The conversion will fail if the actual amount received is less than
     /// `estimated_amount * (1 - max_slippage_bps / 10_000)`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]

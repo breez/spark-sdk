@@ -358,7 +358,22 @@ impl FlashnetClient {
         asset_in_spark_transfer_id: &str,
     ) -> Result<SignedExecuteSwapResponse, FlashnetError> {
         let nonce = hex::encode(generate_nonce());
-        let total_integrator_fee_rate_bps = request.integrator_fee_rate_bps.unwrap_or(0);
+
+        // Auto-populate integrator config from FlashnetConfig if not specified in request
+        let (total_integrator_fee_rate_bps, integrator_public_key) = match (
+            request.integrator_fee_rate_bps,
+            request.integrator_public_key,
+        ) {
+            (Some(fee), pk) => (fee, pk),
+            (None, Some(pk)) => (0, Some(pk)),
+            (None, None) => {
+                if let Some(config) = &self.config.integrator_config {
+                    (config.fee_bps, Some(config.pubkey))
+                } else {
+                    (0, None)
+                }
+            }
+        };
 
         // Construct and sign the intent
         let intent = ExecuteSwapIntent {
@@ -379,7 +394,7 @@ impl FlashnetClient {
         let signature = self.spark_wallet.sign_message(&intent_json).await?;
 
         // Construct the signed request
-        let request = SignedExecuteSwapRequest {
+        let signed_request = SignedExecuteSwapRequest {
             user_public_key: self.spark_wallet.get_identity_public_key(),
             pool_id: request.pool_id,
             asset_in_address: request.asset_in_address,
@@ -390,14 +405,13 @@ impl FlashnetClient {
             asset_in_spark_transfer_id: asset_in_spark_transfer_id.to_string(),
             nonce: nonce.clone(),
             total_integrator_fee_rate_bps,
-            integrator_public_key: request
-                .integrator_public_key
+            integrator_public_key: integrator_public_key
                 .map(|pk| pk.to_string())
                 .unwrap_or_default(),
             signature: hex::encode(signature.serialize_compact()),
         };
 
-        self.post_request("v1/swap", request).await
+        self.post_request("v1/swap", signed_request).await
     }
 
     async fn transfer_asset(

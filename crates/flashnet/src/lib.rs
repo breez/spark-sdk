@@ -9,7 +9,7 @@ mod utils;
 
 pub use api::{BTC_ASSET_ADDRESS, FlashnetClient};
 pub use cache::CacheStore;
-pub use config::FlashnetConfig;
+pub use config::*;
 pub use error::FlashnetError;
 pub use models::*;
 pub use pool_selection::select_best_pool;
