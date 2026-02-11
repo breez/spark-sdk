@@ -155,7 +155,6 @@ impl FlashnetClient {
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let client = reqwest::Client::new();
         let query = match query {
             Some(q) => {
                 let qs_config =
@@ -168,7 +167,7 @@ impl FlashnetClient {
             None => String::new(),
         };
         let url = format!("{}/{}{}", self.config.base_url, endpoint, query);
-        let builder = client.get(&url).headers(headers);
+        let builder = self.http_client.get(&url).headers(headers);
 
         self.request_inner(builder).await
     }
@@ -183,9 +182,8 @@ impl FlashnetClient {
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let client = reqwest::Client::new();
         let url = format!("{}/{}", self.config.base_url, endpoint);
-        let builder = client.post(&url).headers(headers).json(&body);
+        let builder = self.http_client.post(&url).headers(headers).json(&body);
         self.request_inner(builder).await
     }
 
