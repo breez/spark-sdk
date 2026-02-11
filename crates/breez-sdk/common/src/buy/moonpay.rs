@@ -53,7 +53,7 @@ fn create_moonpay_url(
         ]);
     }
 
-    // redirectURL is always last to keep the URL readable when signed
+    // redirectURL comes after the conditional lockAmount params
     params.push(("redirectURL", redirect_url.unwrap_or(config.redirect_url)));
 
     let url = Url::parse_with_params(&config.base_url, params)?;
