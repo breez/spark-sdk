@@ -221,7 +221,7 @@ async fn test_deposit_fee_manual_claim(
     Ok(())
 }
 
-/// Verify deposit no fee blocks auto-claim then refund
+/// Verify deposit no fee blocks auto-claim, refund below MIN_REFUND_FEE_SATS is rejected, then refund succeeds with valid fee
 #[rstest]
 #[ignore]
 #[test_log::test(tokio::test)]
@@ -260,8 +260,36 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
         .cloned()
         .expect("unclaimed deposit not found");
 
-    // Refund to the same static address (acceptable for test)
+    // Refund to the same static address (acceptable for test), with fee below MIN_REFUND_FEE_SATS (194 sats)
     let refund_dest = addr.clone();
+    let result_below_min = bob
+        .sdk
+        .refund_deposit(RefundDepositRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+            destination_address: refund_dest.clone(),
+            fee: Fee::Fixed { amount: 193 }, // Below minimum threshold
+        })
+        .await;
+
+    // Assert the refund was rejected with minimum fee threshold error
+    assert!(
+        result_below_min.is_err(),
+        "Expected refund to fail with fee below minimum"
+    );
+    let err = result_below_min.unwrap_err();
+    let err_msg = format!("{:?}", err);
+    assert!(
+        err_msg.contains("fee must be at least 194 sats"),
+        "Expected error message about minimum fee, got: {}",
+        err_msg
+    );
+    info!(
+        "Refund correctly rejected with fee below minimum: {}",
+        err_msg
+    );
+
+    // Refund to the same static address (acceptable for test), with valid fee
     let refund = bob
         .sdk
         .refund_deposit(RefundDepositRequest {

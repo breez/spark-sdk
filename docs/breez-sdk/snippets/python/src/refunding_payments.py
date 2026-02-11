@@ -82,6 +82,7 @@ async def refund_deposit(sdk: BreezSdk):
         fee = Fee.RATE(sat_per_vbyte=recommended_fees.half_hour_fee)
         # or using a fixed amount
         #fee = Fee.FIXED(amount=500)
+        #
 
         request = RefundDepositRequest(
             txid=txid, vout=vout, destination_address=destination_address, fee=fee

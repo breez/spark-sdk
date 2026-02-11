@@ -66,6 +66,7 @@ func refundDeposit(sdk: BreezSdk) async throws {
     let fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee)
     // or using a fixed amount
     //let fee = Fee.fixed(amount: 500) // 500 sats
+    //
 
     let request = RefundDepositRequest(
         txid: txid,

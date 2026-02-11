@@ -39,6 +39,10 @@ use super::ServiceError;
 
 const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 
+// Conservative minimum fee threshold for refund transactions
+// Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
+const MIN_REFUND_FEE_SATS: u64 = 194;
+
 #[derive(Debug)]
 pub struct DepositAddress {
     pub address: Address,
@@ -308,10 +312,11 @@ impl DepositService {
         );
 
         let fee_sats = fee.to_sats(refund_tx.vsize() as u64);
-        if fee_sats <= 300 {
-            return Err(ServiceError::Generic(
-                "fee must be more than 300 sats".to_string(),
-            ));
+        if fee_sats < MIN_REFUND_FEE_SATS {
+            return Err(ServiceError::Generic(format!(
+                "fee must be at least {} sats",
+                MIN_REFUND_FEE_SATS
+            )));
         }
 
         let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);

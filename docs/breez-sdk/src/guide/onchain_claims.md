@@ -32,6 +32,11 @@ The [recommended fees](#recommended-fees) API is useful for determining appropri
 
 {{#tabs refunding_payments:refund-deposit}}
 
+<div class="warning">
+<h4>Developer note</h4>
+The total fee must be at least 194 sats to ensure the transaction can be relayed by the Bitcoin network. If the fee is lower, the refund request will be rejected.
+</div>
+
 ## Implementing a custom claim logic
 
 For advanced use cases, you may want to implement a custom claim logic instead of relying on the SDK's automatic process. This gives you complete control over when and how deposits are claimed.

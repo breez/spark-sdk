@@ -85,6 +85,7 @@ func RefundDeposit(sdk *breez_sdk_spark.BreezSdk) error {
 	fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeRate{SatPerVbyte: recommendedFees.HalfHourFee})
 	// or using a fixed amount
 	//fee := breez_sdk_spark.Fee(breez_sdk_spark.FeeFixed{Amount: 500})
+	//
 
 	request := breez_sdk_spark.RefundDepositRequest{
 		Txid:               txid,
