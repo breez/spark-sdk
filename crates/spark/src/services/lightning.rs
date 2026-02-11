@@ -233,6 +233,55 @@ impl LightningService {
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
     ) -> Result<LightningReceivePayment, ServiceError> {
+        self.create_lightning_invoice_inner(
+            amount_sats,
+            description,
+            preimage,
+            None,
+            expiry_secs,
+            include_spark_address,
+            identity_pubkey,
+        )
+        .await
+    }
+
+    /// Creates a HODL lightning invoice using an externally-provided payment hash.
+    /// No preimage shares are stored with operators, so the SSP will hold the HTLC
+    /// until `provide_preimage` is called with the matching preimage, or the HTLC expires.
+    ///
+    /// Spark addresses are never included in HODL invoices because a direct Spark
+    /// transfer would bypass the Lightning HTLC hold mechanism entirely.
+    pub async fn create_hodl_lightning_invoice(
+        &self,
+        amount_sats: u64,
+        description: Option<InvoiceDescription>,
+        payment_hash: sha256::Hash,
+        expiry_secs: Option<u32>,
+        identity_pubkey: Option<PublicKey>,
+    ) -> Result<LightningReceivePayment, ServiceError> {
+        self.create_lightning_invoice_inner(
+            amount_sats,
+            description,
+            None,
+            Some(payment_hash),
+            expiry_secs,
+            false,
+            identity_pubkey,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_lightning_invoice_inner(
+        &self,
+        amount_sats: u64,
+        description: Option<InvoiceDescription>,
+        preimage: Option<Vec<u8>>,
+        external_payment_hash: Option<sha256::Hash>,
+        expiry_secs: Option<u32>,
+        include_spark_address: bool,
+        identity_pubkey: Option<PublicKey>,
+    ) -> Result<LightningReceivePayment, ServiceError> {
         // Validate expiry_secs does not exceed i32::MAX (server limitation)
         if let Some(expiry) = expiry_secs
             && expiry > i32::MAX as u32
@@ -248,13 +297,22 @@ impl LightningService {
             Some(pk) => pk,
             None => self.signer.get_identity_public_key().await?,
         };
-        let preimage = preimage.unwrap_or_else(|| {
-            bitcoin::secp256k1::SecretKey::new(&mut OsRng)
-                .secret_bytes()
-                .to_vec()
-        });
+
+        let is_hodl = external_payment_hash.is_some();
+
+        let (preimage, payment_hash) = if let Some(hash) = external_payment_hash {
+            (None, hash)
+        } else {
+            let preimage = preimage.unwrap_or_else(|| {
+                bitcoin::secp256k1::SecretKey::new(&mut OsRng)
+                    .secret_bytes()
+                    .to_vec()
+            });
+            let hash = sha256::Hash::hash(&preimage);
+            (Some(preimage), hash)
+        };
+
         let expiry = expiry_secs.unwrap_or(DEFAULT_RECEIVE_EXPIRY_SECS);
-        let payment_hash = sha256::Hash::hash(&preimage);
 
         let (memo, description_hash) = match description {
             Some(desc) => desc.into_memo_and_description_hash(),
@@ -293,41 +351,46 @@ impl LightningService {
             }
         }
 
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                &SecretToSplit::Preimage(preimage),
-                self.split_secret_threshold,
-                self.operator_pool.len(),
-            )
-            .await?;
+        if !is_hodl {
+            let preimage = preimage.ok_or_else(|| {
+                ServiceError::Generic("preimage must be set for non-HODL invoices".to_string())
+            })?;
+            let shares = self
+                .signer
+                .split_secret_with_proofs(
+                    &SecretToSplit::Preimage(preimage),
+                    self.split_secret_threshold,
+                    self.operator_pool.len(),
+                )
+                .await?;
 
-        let requests =
-            self.operator_pool
-                .get_all_operators()
-                .zip(shares)
-                .map(|(operator, share)| {
-                    operator
-                        .client
-                        .store_preimage_share(StorePreimageShareRequest {
-                            payment_hash: payment_hash.to_byte_array().to_vec(),
-                            preimage_share: Some(SecretShare {
-                                secret_share: share.secret_share.share.to_bytes().to_vec(),
-                                proofs: share
-                                    .proofs
-                                    .iter()
-                                    .map(|p| p.to_sec1_bytes().to_vec())
-                                    .collect(),
-                            }),
-                            threshold: share.secret_share.threshold as u32,
-                            invoice_string: invoice.invoice.encoded_invoice.clone(),
-                            user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                        })
-                });
+            let requests =
+                self.operator_pool
+                    .get_all_operators()
+                    .zip(shares)
+                    .map(|(operator, share)| {
+                        operator
+                            .client
+                            .store_preimage_share(StorePreimageShareRequest {
+                                payment_hash: payment_hash.to_byte_array().to_vec(),
+                                preimage_share: Some(SecretShare {
+                                    secret_share: share.secret_share.share.to_bytes().to_vec(),
+                                    proofs: share
+                                        .proofs
+                                        .iter()
+                                        .map(|p| p.to_sec1_bytes().to_vec())
+                                        .collect(),
+                                }),
+                                threshold: share.secret_share.threshold as u32,
+                                invoice_string: invoice.invoice.encoded_invoice.clone(),
+                                user_identity_public_key: identity_pubkey.serialize().to_vec(),
+                            })
+                    });
 
-        futures::future::try_join_all(requests)
-            .await
-            .map_err(|e| ServiceError::PreimageShareStoreFailed(e.to_string()))?;
+            futures::future::try_join_all(requests)
+                .await
+                .map_err(|e| ServiceError::PreimageShareStoreFailed(e.to_string()))?;
+        }
 
         invoice.try_into()
     }

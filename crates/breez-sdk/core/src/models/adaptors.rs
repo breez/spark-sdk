@@ -78,12 +78,18 @@ impl PaymentDetails {
                     .ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
+                let htlc_details = transfer
+                    .htlc_preimage_request
+                    .as_ref()
+                    .map(|pr| pr.clone().try_into())
+                    .transpose()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
                     preimage: request.lightning_receive_payment_preimage.clone(),
                     invoice: request.invoice.encoded_invoice.clone(),
                     payment_hash: request.invoice.payment_hash.clone(),
                     destination_pubkey: invoice_details.payee_pubkey,
+                    htlc_details,
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
@@ -94,12 +100,18 @@ impl PaymentDetails {
                     input::parse_invoice(&request.encoded_invoice).ok_or(SdkError::Generic(
                         "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
                     ))?;
+                let htlc_details = transfer
+                    .htlc_preimage_request
+                    .as_ref()
+                    .map(|pr| pr.clone().try_into())
+                    .transpose()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
                     preimage: request.lightning_send_payment_preimage.clone(),
                     invoice: request.encoded_invoice.clone(),
                     payment_hash: invoice_details.payment_hash,
                     destination_pubkey: invoice_details.payee_pubkey,
+                    htlc_details,
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
@@ -232,6 +244,7 @@ impl Payment {
         payment: LightningSendPayment,
         amount_sat: u128,
         transfer_id: String,
+        htlc_details: Option<SparkHtlcDetails>,
     ) -> Result<Self, SdkError> {
         let mut status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
@@ -255,6 +268,7 @@ impl Payment {
             invoice: payment.encoded_invoice,
             payment_hash: invoice_details.payment_hash,
             destination_pubkey: invoice_details.payee_pubkey,
+            htlc_details,
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,

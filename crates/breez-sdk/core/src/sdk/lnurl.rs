@@ -277,6 +277,7 @@ impl BreezSdk {
                     description: withdraw_request.default_description.clone(),
                     amount_sats: Some(amount_sats),
                     expiry_secs: None,
+                    payment_hash: None,
                 },
             })
             .await?

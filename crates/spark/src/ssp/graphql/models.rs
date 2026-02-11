@@ -194,7 +194,9 @@ pub enum LightningReceiveRequestStatus {
     HtlcReceived,
     TransferCreated,
     TransferCreationFailed,
+    PaymentPreimagePending,
     PaymentPreimageRecovered,
+    PaymentPreimageQueryingFailed,
     PaymentPreimageRecoveringFailed,
     TransferCanceled,
     HtlcFailed,
@@ -203,7 +205,7 @@ pub enum LightningReceiveRequestStatus {
     TransferCompleted,
     RefundSigningCommitmentsQueryingFailed,
     RefundSigningFailed,
-    #[serde(other, skip_serializing)]
+    #[serde(other)]
     Unknown,
 }
 
@@ -421,6 +423,7 @@ pub enum ClaimStaticDepositStatus {
     UtxoSwappingFailed,
     SpendTxCreated,
     SpendTxBroadcast,
+    SpendTxConfirmed,
     #[serde(other, skip_serializing)]
     Unknown,
 }
@@ -446,6 +449,9 @@ impl From<TransfersClaimStaticDepositStatus> for ClaimStaticDepositStatus {
             }
             TransfersClaimStaticDepositStatus::SPEND_TX_BROADCAST => {
                 ClaimStaticDepositStatus::SpendTxBroadcast
+            }
+            TransfersClaimStaticDepositStatus::SPEND_TX_CONFIRMED => {
+                ClaimStaticDepositStatus::SpendTxConfirmed
             }
             TransfersClaimStaticDepositStatus::Other(_) => ClaimStaticDepositStatus::Unknown,
         }

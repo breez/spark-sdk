@@ -217,6 +217,7 @@ async fn main() -> Result<()> {
                     description: "parallel-perf test".to_string(),
                     amount_sats: Some(amount),
                     expiry_secs: Some(3600),
+                    payment_hash: None,
                 },
             })
             .await?

@@ -498,6 +498,28 @@ impl SparkWallet {
             .await?)
     }
 
+    /// Creates a HODL Lightning invoice. The SSP will hold the HTLC until
+    /// `claim_htlc` is called with the preimage matching the payment_hash.
+    pub async fn create_hodl_lightning_invoice(
+        &self,
+        amount_sat: u64,
+        description: Option<InvoiceDescription>,
+        payment_hash: Hash,
+        public_key: Option<PublicKey>,
+        expiry_secs: Option<u32>,
+    ) -> Result<LightningReceivePayment, SparkWalletError> {
+        Ok(self
+            .lightning_service
+            .create_hodl_lightning_invoice(
+                amount_sat,
+                description,
+                payment_hash,
+                expiry_secs,
+                public_key,
+            )
+            .await?)
+    }
+
     pub async fn fetch_coop_exit_fee_quote(
         &self,
         withdrawal_address: &str,
@@ -838,6 +860,8 @@ impl SparkWallet {
         preimage: &Preimage,
     ) -> Result<WalletTransfer, SparkWalletError> {
         let transfer = self.htlc_service.provide_preimage(preimage).await?;
+
+        // Fetch HTLC preimage request data
         let preimage_request = self
             .htlc_service
             .query_htlc(
@@ -855,9 +879,18 @@ impl SparkWallet {
             .first()
             .cloned()
             .ok_or(SparkWalletError::Generic("HTLC not found".to_string()))?;
+
+        // Also fetch SSP transfer data so Lightning payments get user_request
+        let ssp_transfer = self
+            .ssp_client
+            .get_transfers(vec![transfer.id.to_string()])
+            .await?
+            .into_iter()
+            .next();
+
         Ok(WalletTransfer::from_transfer(
             transfer,
-            None,
+            ssp_transfer,
             Some(preimage_request.into()),
             self.identity_public_key,
             self.config.service_provider_config.identity_public_key,
@@ -1984,10 +2017,7 @@ impl BackgroundProcessor {
                 .next()
         };
 
-        // If there is an SSP transfer, we can avoid looking for the HTLC as it will not be present
-        let htlc = if transfer.transfer_type == spark::services::TransferType::PreimageSwap
-            && ssp_transfer.is_none()
-        {
+        let htlc = if transfer.transfer_type == spark::services::TransferType::PreimageSwap {
             self.htlc_service
                 .query_htlc(
                     QueryHtlcFilter {

@@ -345,6 +345,12 @@ class MigrationManager {
           `DELETE FROM settings WHERE key = 'sync_initial_complete'`
         ]
       },
+      {
+        name: "Add htlc_details to lightning payments",
+        sql: [
+          `ALTER TABLE payment_details_lightning ADD COLUMN htlc_details TEXT`,
+        ]
+      },
     ];
   }
 }

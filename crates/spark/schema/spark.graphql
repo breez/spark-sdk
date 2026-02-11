@@ -145,9 +145,14 @@ enum ClaimStaticDepositStatus {
   SPEND_TX_CREATED
 
   """
-  The L1 spend transaction has been broadcast to the Bitcoin network. This is the final successful state - the UTXO has been spent to the SSP.
+  The L1 spend transaction has been broadcast to the Bitcoin network. Awaiting on-chain confirmation.
   """
   SPEND_TX_BROADCAST
+
+  """
+  The L1 spend transaction has been confirmed on-chain. This is the final successful state - the UTXO is now part of the SSP's confirmed balance.
+  """
+  SPEND_TX_CONFIRMED
 }
 
 input CompleteCoopExitInput {
@@ -338,6 +343,41 @@ type CoopExitRequest implements UserRequest & Entity {
   transfer: Transfer
 }
 
+input CreateClaimInstantStaticDepositInput {
+  """The ID of the static deposit quote to claim."""
+  static_deposit_quote_id: ID!
+
+  """
+  The user's private key share for the static deposit address. This key share is used in combination with Spark operator key shares to create the final signature for the spend transaction.
+  """
+  static_deposit_address_private_key_share: String!
+
+  """
+  The user's signature authorizing the static deposit claim. This is a hex-encoded ECDSA signature that proves the user's authorization to claim the deposit. The signature should be created by signing a message containing the claim details (transaction ID, output index, network, and credit amount) with the user's identity private key. This signature is used to authenticate the claim request and prevent unauthorized access to the deposit funds.
+  """
+  signature: String!
+}
+
+type CreateClaimInstantStaticDepositOutput {
+  stub: Int!
+}
+
+input CreateInstantStaticDepositQuoteInput {
+  """The transaction id of the deposit."""
+  transaction_id: String!
+
+  """The output index of the deposit."""
+  output_index: Int!
+
+  """The bitcoin network of the deposit."""
+  network: BitcoinNetwork!
+}
+
+type CreateInstantStaticDepositQuoteOutput {
+  """A stub field."""
+  stub: Int!
+}
+
 """This object represents the value and unit for an amount of currency."""
 type CurrencyAmount {
   """The original numeric value for this CurrencyAmount."""
@@ -459,6 +499,9 @@ enum CurrencyUnit {
 
   """United Arab Emirates Dirham."""
   AED
+
+  """Guatemalan Quetzal."""
+  GTQ
 
   """Tether"""
   USDT
@@ -628,7 +671,9 @@ enum LightningReceiveRequestStatus {
   HTLC_RECEIVED
   TRANSFER_CREATED
   TRANSFER_CREATION_FAILED
+  PAYMENT_PREIMAGE_PENDING
   PAYMENT_PREIMAGE_RECOVERED
+  PAYMENT_PREIMAGE_QUERYING_FAILED
   PAYMENT_PREIMAGE_RECOVERING_FAILED
   TRANSFER_CANCELED
   HTLC_FAILED
@@ -726,6 +771,14 @@ type Mutation {
 
   """Complete the process to request releasing seed."""
   complete_seed_release(input: CompleteSeedReleaseInput!): CompleteSeedReleaseOutput!
+
+  """
+  Create an instant static deposit quote from this SSP to claim a deposit to a static deposit address.
+  """
+  create_instant_static_deposit_quote(input: CreateInstantStaticDepositQuoteInput!): CreateInstantStaticDepositQuoteOutput!
+
+  """Create an instant claim for a static deposit using a quote."""
+  create_claim_instant_static_deposit(input: CreateClaimInstantStaticDepositInput!): CreateClaimInstantStaticDepositOutput!
 
   """Get a new SSP authentication challenge."""
   get_challenge(input: GetChallengeInput!): GetChallengeOutput!
