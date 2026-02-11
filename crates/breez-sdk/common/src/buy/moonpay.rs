@@ -9,10 +9,10 @@ use reqwest::Url;
 struct MoonPayConfig {
     pub base_url: String,
     pub api_key: String,
-    pub lock_amount: String,
     pub currency_code: String,
     pub color_code: String,
     pub theme: String,
+    pub lock_amount: String,
     pub redirect_url: String,
 }
 
@@ -20,10 +20,10 @@ fn moonpay_config() -> MoonPayConfig {
     MoonPayConfig {
         base_url: String::from("https://buy.moonpay.io"),
         api_key: String::from("pk_live_Mx5g6bpD6Etd7T0bupthv7smoTNn2Vr"),
-        lock_amount: String::from("true"),
         currency_code: String::from("btc"),
         color_code: String::from("#055DEB"),
         theme: String::from("light"),
+        lock_amount: String::from("true"),
         redirect_url: String::from("https://buy.moonpay.io/transaction_receipt?addFunds=true"),
     }
 }
@@ -34,21 +34,27 @@ fn create_moonpay_url(
     redirect_url: Option<String>,
 ) -> Result<Url> {
     let config = moonpay_config();
+
+    // Build query params in the order defined by MoonPay's docs:
+    // https://dev.moonpay.com/docs/ramps-sdk-buy-params
     let mut params = vec![
         ("apiKey", config.api_key),
         ("currencyCode", config.currency_code),
+        ("walletAddress", wallet_address),
         ("colorCode", config.color_code),
         ("theme", config.theme),
-        ("redirectURL", redirect_url.unwrap_or(config.redirect_url)),
-        ("walletAddress", wallet_address),
     ];
 
+    // Only lock the amount when a specific amount is requested
     if let Some(quote_currency_amount) = quote_currency_amount {
         params.extend(vec![
             ("quoteCurrencyAmount", quote_currency_amount),
             ("lockAmount", config.lock_amount),
         ]);
     }
+
+    // redirectURL is always last to keep the URL readable when signed
+    params.push(("redirectURL", redirect_url.unwrap_or(config.redirect_url)));
 
     let url = Url::parse_with_params(&config.base_url, params)?;
     Ok(url)
