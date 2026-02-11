@@ -290,6 +290,7 @@ async fn test_03_lightning_invoice_payment(
                 description: format!("Test payment ({})", test_type),
                 amount_sats: invoice_amount_sats,
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?
@@ -553,6 +554,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 description: "Prefer spark test".to_string(),
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?
@@ -648,6 +650,7 @@ async fn test_06_lightning_timeout_and_wait(
                 description: "Timeout test".to_string(),
                 amount_sats: None,
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?
@@ -891,6 +894,7 @@ async fn test_08_lightning_invoice_expiry_secs(
                 description: "Test invoice with custom expiry".to_string(),
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: Some(custom_expiry_secs),
+                payment_hash: None,
             },
         })
         .await?;
@@ -1045,6 +1049,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 description: "Bolt11 FeesIncluded overpayment test".to_string(),
                 amount_sats: None,
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?

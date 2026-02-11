@@ -116,6 +116,10 @@ pub enum Command {
         /// Optional sender public key. Only used if the payment method is a spark invoice.
         #[arg(short = 's', long)]
         sender_public_key: Option<String>,
+
+        /// Create a HODL invoice (bolt11 only). Generates a preimage locally and prints it.
+        #[arg(long)]
+        hodl: bool,
     },
 
     /// Pay the given payment request
@@ -505,6 +509,7 @@ pub(crate) async fn execute_command(
             token_identifier,
             expiry_secs,
             sender_public_key,
+            hodl,
         } => {
             let payment_method = match payment_method.as_str() {
                 "sparkaddress" => ReceivePaymentMethod::SparkAddress,
@@ -524,11 +529,29 @@ pub(crate) async fn execute_command(
                     sender_public_key,
                 },
                 "bitcoin" => ReceivePaymentMethod::BitcoinAddress,
-                "bolt11" => ReceivePaymentMethod::Bolt11Invoice {
-                    description: description.unwrap_or_default(),
-                    amount_sats: amount.map(TryInto::try_into).transpose()?,
-                    expiry_secs,
-                },
+                "bolt11" => {
+                    let payment_hash = if hodl {
+                        let mut preimage_bytes = [0u8; 32];
+                        rand::thread_rng().fill_bytes(&mut preimage_bytes);
+                        let preimage = hex::encode(preimage_bytes);
+                        let hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+                        println!("HODL invoice preimage: {preimage}");
+                        println!("Payment hash: {hash}");
+                        println!("Save the preimage! Use `claim-htlc-payment` with it to settle.");
+
+                        Some(hash)
+                    } else {
+                        None
+                    };
+
+                    ReceivePaymentMethod::Bolt11Invoice {
+                        description: description.unwrap_or_default(),
+                        amount_sats: amount.map(TryInto::try_into).transpose()?,
+                        expiry_secs,
+                        payment_hash,
+                    }
+                }
                 _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
 

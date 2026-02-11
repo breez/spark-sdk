@@ -2008,6 +2008,23 @@ class IndexedDBStorage {
           }
         }
 
+        // Filter by Lightning HTLC status
+        if (
+          paymentDetailsFilter.type === "lightning" &&
+          paymentDetailsFilter.htlcStatus != null &&
+          paymentDetailsFilter.htlcStatus.length > 0
+        ) {
+          if (
+            details.type !== "lightning" ||
+            !details.htlcDetails ||
+            !paymentDetailsFilter.htlcStatus.includes(
+              details.htlcDetails.status
+            )
+          ) {
+            continue;
+          }
+        }
+
         paymentDetailsFilterMatches = true;
         break;
       }

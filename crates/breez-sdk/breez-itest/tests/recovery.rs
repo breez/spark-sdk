@@ -392,6 +392,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 description: "Recovery test lightning payment".to_string(),
                 amount_sats: Some(1_000),
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?
@@ -431,6 +432,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 description: "Recovery test lightning receive".to_string(),
                 amount_sats: Some(800),
                 expiry_secs: None,
+                payment_hash: None,
             },
         })
         .await?

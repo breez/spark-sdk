@@ -285,6 +285,7 @@ impl SqliteStorage {
              DELETE FROM sync_state;
              UPDATE sync_revision SET revision = 0;
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
+            "ALTER TABLE payment_details_lightning ADD COLUMN htlc_details TEXT;",
         ]
     }
 }
@@ -414,19 +415,18 @@ impl Storage for SqliteStorage {
                     }
                 }
                 // Filter by conversion info presence
-                if let PaymentDetailsFilter::Spark {
-                    conversion_refund_needed: Some(conversion_refund_needed),
-                    ..
-                }
-                | PaymentDetailsFilter::Token {
-                    conversion_refund_needed: Some(conversion_refund_needed),
-                    ..
-                } = payment_details_filter
-                {
-                    let type_check = match payment_details_filter {
-                        PaymentDetailsFilter::Spark { .. } => "p.spark = 1",
-                        PaymentDetailsFilter::Token { .. } => "p.spark IS NULL",
-                    };
+                let conversion_filter = match payment_details_filter {
+                    PaymentDetailsFilter::Spark {
+                        conversion_refund_needed: Some(v),
+                        ..
+                    } => Some((v, "p.spark = 1")),
+                    PaymentDetailsFilter::Token {
+                        conversion_refund_needed: Some(v),
+                        ..
+                    } => Some((v, "p.spark IS NULL")),
+                    _ => None,
+                };
+                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
                     let refund_needed = if *conversion_refund_needed {
                         "= 'RefundNeeded'"
                     } else {
@@ -455,6 +455,25 @@ impl Storage for SqliteStorage {
                 {
                     payment_details_clauses.push("t.tx_type = ?".to_string());
                     params.push(Box::new(tx_type.to_string()));
+                }
+
+                // Filter by Lightning HTLC status
+                if let PaymentDetailsFilter::Lightning {
+                    htlc_status: Some(htlc_statuses),
+                } = payment_details_filter
+                    && !htlc_statuses.is_empty()
+                {
+                    let placeholders = htlc_statuses
+                        .iter()
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    payment_details_clauses.push(format!(
+                        "json_extract(l.htlc_details, '$.status') IN ({placeholders})"
+                    ));
+                    for htlc_status in htlc_statuses {
+                        params.push(Box::new(htlc_status.to_string()));
+                    }
                 }
 
                 if !payment_details_clauses.is_empty() {
@@ -593,17 +612,19 @@ impl Storage for SqliteStorage {
                 destination_pubkey,
                 description,
                 preimage,
+                htlc_details,
                 ..
             }) => {
                 tx.execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
-                     VALUES (?, ?, ?, ?, ?, ?)
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_details)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(payment_id) DO UPDATE SET
                         invoice=excluded.invoice,
                         payment_hash=excluded.payment_hash,
                         destination_pubkey=excluded.destination_pubkey,
                         description=excluded.description,
-                        preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage)",
+                        preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
+                        htlc_details=COALESCE(excluded.htlc_details, payment_details_lightning.htlc_details)",
                     params![
                         payment.id,
                         invoice,
@@ -611,6 +632,7 @@ impl Storage for SqliteStorage {
                         destination_pubkey,
                         description,
                         preimage,
+                        htlc_details.as_ref().map(serde_json::to_string).transpose()?,
                     ],
                 )?;
             }
@@ -744,7 +766,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(27)?;
+            let parent_payment_id: String = row.get(28)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1259,6 +1281,7 @@ const SELECT_PAYMENT_SQL: &str = "
            l.destination_pubkey AS lightning_destination_pubkey,
            COALESCE(l.description, pm.lnurl_description) AS lightning_description,
            l.preimage AS lightning_preimage,
+           l.htlc_details AS lightning_htlc_details,
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
@@ -1285,7 +1308,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
     let lightning_invoice: Option<String> = row.get(10)?;
-    let token_metadata: Option<String> = row.get(18)?;
+    let token_metadata: Option<String> = row.get(19)?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
@@ -1298,11 +1321,15 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             let destination_pubkey: String = row.get(12)?;
             let description: Option<String> = row.get(13)?;
             let preimage: Option<String> = row.get(14)?;
-            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(15)?;
-            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(16)?;
-            let lnurl_nostr_zap_request: Option<String> = row.get(24)?;
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(25)?;
-            let lnurl_sender_comment: Option<String> = row.get(26)?;
+            let htlc_details_str: Option<String> = row.get(15)?;
+            let htlc_details = htlc_details_str
+                .map(|s| serde_json_from_str(&s, 15))
+                .transpose()?;
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(16)?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(17)?;
+            let lnurl_nostr_zap_request: Option<String> = row.get(25)?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(26)?;
+            let lnurl_sender_comment: Option<String> = row.get(27)?;
             let lnurl_receive_metadata =
                 if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
                     Some(LnurlReceiveMetadata {
@@ -1319,6 +1346,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 destination_pubkey,
                 description,
                 preimage,
+                htlc_details,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
@@ -1327,17 +1355,17 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(22)?;
+            let invoice_details_str: Option<String> = row.get(23)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 22))
-                .transpose()?;
-            let htlc_details_str: Option<String> = row.get(23)?;
-            let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 23))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(17)?;
+            let htlc_details_str: Option<String> = row.get(24)?;
+            let htlc_details = htlc_details_str
+                .map(|s| serde_json_from_str(&s, 24))
+                .transpose()?;
+            let conversion_info_str: Option<String> = row.get(18)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 17))
+                .map(|s: String| serde_json_from_str(&s, 18))
                 .transpose()?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1346,18 +1374,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type: TokenTransactionType = row.get(20)?;
-            let invoice_details_str: Option<String> = row.get(21)?;
+            let tx_type: TokenTransactionType = row.get(21)?;
+            let invoice_details_str: Option<String> = row.get(22)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 21))
+                .map(|s| serde_json_from_str(&s, 22))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(17)?;
+            let conversion_info_str: Option<String> = row.get(18)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 17))
+                .map(|s: String| serde_json_from_str(&s, 18))
                 .transpose()?;
             Some(PaymentDetails::Token {
-                metadata: serde_json_from_str(&metadata, 18)?,
-                tx_hash: row.get(19)?,
+                metadata: serde_json_from_str(&metadata, 19)?,
+                tx_hash: row.get(20)?,
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1606,6 +1634,15 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_spark_htlc_status_filtering(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_lightning_htlc_details_and_status_filtering() {
+        let temp_dir = create_temp_dir("sqlite_storage_htlc_details");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_lightning_htlc_details_and_status_filtering(Box::new(storage))
+            .await;
     }
 
     #[tokio::test]

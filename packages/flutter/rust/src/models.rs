@@ -191,6 +191,9 @@ pub enum _PaymentDetailsFilter {
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
+    Lightning {
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
+    },
 }
 
 #[frb(mirror(ListPaymentsRequest))]
@@ -353,6 +356,7 @@ pub enum _ReceivePaymentMethod {
         description: String,
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
+        payment_hash: Option<String>,
     },
 }
 
@@ -568,6 +572,7 @@ pub enum _PaymentDetails {
         invoice: String,
         payment_hash: String,
         destination_pubkey: String,
+        htlc_details: Option<SparkHtlcDetails>,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
