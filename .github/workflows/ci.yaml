@@ -134,7 +134,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.38.5
+          flutter-version: 3.38.9
       - run: flutter --version
 
       - name: Set up just
@@ -218,7 +218,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.38.5
+          flutter-version: 3.38.9
 
       - name: Run Check doc snippets
         run: |
