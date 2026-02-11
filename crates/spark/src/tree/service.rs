@@ -7,10 +7,6 @@ use bitcoin::secp256k1::PublicKey;
 use tokio_with_wasm::alias as tokio;
 use tracing::{error, info, trace, warn};
 
-/// Maximum time to wait for pending balance before giving up.
-/// This prevents infinite hangs if the system gets into a bad state.
-const MAX_WAIT_FOR_PENDING_DURATION: Duration = Duration::from_secs(60);
-
 use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
 use crate::{
     Network,
@@ -86,7 +82,7 @@ impl TreeService for SynchronousTreeService {
     ///
     /// Uses notification-based waiting: if balance is insufficient but pending
     /// balance from in-flight swaps would help, waits for balance changes
-    /// instead of failing immediately (unless `options.max_wait_for_pending` is `Some(Duration::ZERO)`).
+    /// instead of failing immediately (unless `options.max_wait_for_pending` is `Duration::ZERO`).
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
@@ -97,9 +93,7 @@ impl TreeService for SynchronousTreeService {
             "Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}, options: {options:?}"
         );
 
-        let max_wait = options
-            .max_wait_for_pending
-            .unwrap_or(MAX_WAIT_FOR_PENDING_DURATION);
+        let max_wait = options.max_wait_for_pending;
 
         let mut balance_rx = self.state.subscribe_balance_changes();
         let wait_start = web_time::Instant::now();

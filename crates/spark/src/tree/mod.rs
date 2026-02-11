@@ -273,22 +273,34 @@ impl LeavesReservation {
     }
 }
 
+/// Default maximum time to wait for pending balance before giving up.
+pub const DEFAULT_MAX_WAIT_FOR_PENDING: Duration = Duration::from_secs(60);
+
 /// Options for leaf selection behavior.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SelectLeavesOptions {
     /// Maximum time to wait for pending balance to become available.
     ///
-    /// - `None` (default): Use the system default (60 seconds)
-    /// - `Some(Duration::ZERO)`: Return immediately without waiting
-    /// - `Some(duration)`: Wait up to the specified duration
-    pub max_wait_for_pending: Option<Duration>,
+    /// - `Duration::ZERO`: Return immediately without waiting
+    /// - Other duration: Wait up to the specified duration
+    ///
+    /// Default: 60 seconds
+    pub max_wait_for_pending: Duration,
+}
+
+impl Default for SelectLeavesOptions {
+    fn default() -> Self {
+        Self {
+            max_wait_for_pending: DEFAULT_MAX_WAIT_FOR_PENDING,
+        }
+    }
 }
 
 impl SelectLeavesOptions {
     /// Create options for immediate return without waiting.
     pub fn no_wait() -> Self {
         Self {
-            max_wait_for_pending: Some(Duration::ZERO),
+            max_wait_for_pending: Duration::ZERO,
         }
     }
 }
