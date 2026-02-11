@@ -154,12 +154,13 @@ fn check_doc_snippets_flutter_cmd(skip_binding_gen: bool) -> Result<()> {
         println!("Generating Flutter bindings");
 
         let flutter_package_dir = workspace_root.join("packages/flutter");
-        let status = Command::new("make")
-            .arg("generate-bindings")
+        let status = Command::new("just")
+            .arg("codegen")
             .current_dir(&flutter_package_dir)
-            .status()?;
+            .status()
+            .with_context(|| "failed to run `just codegen`. Make sure just is installed: cargo install just (or brew install just)")?;
         if !status.success() {
-            anyhow::bail!("Failed to generate Flutter bindings: `make generate-bindings` failed");
+            anyhow::bail!("Failed to generate Flutter bindings: `just codegen` failed");
         }
     }
 

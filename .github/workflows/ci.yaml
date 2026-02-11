@@ -220,6 +220,9 @@ jobs:
           channel: stable
           flutter-version: 3.38.9
 
+      - name: Set up just
+        uses: extractions/setup-just@v3
+
       - name: Run Check doc snippets
         run: |
           cargo xtask check-doc-snippets -p flutter

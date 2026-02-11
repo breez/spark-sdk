@@ -660,13 +660,13 @@ fn flutter_check_cmd() -> Result<()> {
     let flutter_dir = workspace_root.join("packages/flutter");
 
     println!("Checking Flutter package...");
-    let status = Command::new("make")
-        .arg("generate-bindings-build-release")
+    let status = Command::new("just")
+        .arg("build")
         .current_dir(&flutter_dir)
         .status()
-        .with_context(|| "failed to run make generate-bindings-build-release")?;
+        .with_context(|| "failed to run `just build`. Make sure just is installed: cargo install just (or brew install just)")?;
     if !status.success() {
-        bail!("Flutter check failed: make generate-bindings-build-release failed");
+        bail!("Flutter check failed: just build failed");
     }
 
     println!("Flutter check completed successfully");
