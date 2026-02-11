@@ -1246,3 +1246,14 @@ pub struct SparkStatus {
     pub status: ServiceStatus,
     pub last_updated: u64,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
+pub struct BuyBitcoinRequest {
+    pub locked_amount_sat: Option<u64>,
+    pub redirect_url: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinResponse)]
+pub struct BuyBitcoinResponse {
+    pub url: String,
+}

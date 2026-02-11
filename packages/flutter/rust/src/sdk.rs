@@ -249,4 +249,11 @@ impl BreezSdk {
     ) -> Result<FetchConversionLimitsResponse, SdkError> {
         self.inner.fetch_conversion_limits(request).await
     }
+
+    pub async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        self.inner.buy_bitcoin(request).await
+    }
 }

@@ -36,6 +36,7 @@
 - [User settings](guide/user_settings.md)
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
+- [Buying Bitcoin](guide/buy_bitcoin.md)
 - [End-user fees](guide/end-user_fees.md)
 - [Handling tokens](guide/tokens.md)
   - [Token payments](guide/token_payments.md)

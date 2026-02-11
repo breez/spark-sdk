@@ -3,9 +3,10 @@ use std::str::FromStr;
 use tracing::{error, info};
 
 use crate::{
-    CheckMessageRequest, CheckMessageResponse, GetTokensMetadataRequest, GetTokensMetadataResponse,
-    InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse, OptimizationProgress,
-    SignMessageRequest, SignMessageResponse, UpdateUserSettingsRequest, UserSettings,
+    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
+    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
+    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
+    UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -15,7 +16,7 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
-use super::{BreezSdk, parse_input};
+use super::{BreezSdk, helpers::get_or_create_deposit_address, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -278,5 +279,34 @@ impl BreezSdk {
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.spark_wallet.get_leaf_optimization_progress().into()
+    }
+
+    /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).
+    ///
+    /// This method generates a URL that the user can open in a browser to complete
+    /// the Bitcoin purchase. The purchased Bitcoin will be sent to an automatically
+    /// generated deposit address.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The purchase request containing optional amount and redirect URL
+    ///
+    /// # Returns
+    ///
+    /// A response containing the URL to open in a browser to complete the purchase
+    pub async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        let address =
+            get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?;
+
+        let url = self
+            .buy_bitcoin_provider
+            .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
+            .await
+            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
+
+        Ok(BuyBitcoinResponse { url })
     }
 }

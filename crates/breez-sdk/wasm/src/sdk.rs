@@ -341,4 +341,9 @@ impl BreezSdk {
             .await?
             .into())
     }
+
+    #[wasm_bindgen(js_name = "buyBitcoin")]
+    pub async fn buy_bitcoin(&self, request: BuyBitcoinRequest) -> WasmResult<BuyBitcoinResponse> {
+        Ok(self.sdk.buy_bitcoin(request.into()).await?.into())
+    }
 }

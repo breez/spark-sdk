@@ -721,6 +721,27 @@ pub struct ListUnclaimedDepositsResponse {
     pub deposits: Vec<DepositInfo>,
 }
 
+/// Request to buy Bitcoin using an external provider (`MoonPay`)
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuyBitcoinRequest {
+    /// Optional: Lock the purchase to a specific amount in satoshis.
+    /// When provided, the user cannot change the amount in the purchase flow.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub locked_amount_sat: Option<u64>,
+    /// Optional: Custom redirect URL after purchase completion
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub redirect_url: Option<String>,
+}
+
+/// Response containing a URL to complete the Bitcoin purchase
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BuyBitcoinResponse {
+    /// The URL to open in a browser to complete the purchase
+    pub url: String,
+}
+
 impl std::fmt::Display for MaxFee {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

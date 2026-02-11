@@ -2,7 +2,7 @@ mod issuer;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, CheckLightningAddressRequest, ClaimDepositRequest,
+    AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
@@ -252,6 +252,16 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
+    /// Buy Bitcoin using an external provider (`MoonPay`)
+    BuyBitcoin {
+        /// Lock the purchase to a specific amount in satoshis. When provided, the user cannot change the amount in the purchase flow.
+        #[arg(long)]
+        locked_amount_sat: Option<u64>,
+
+        /// Custom redirect URL after purchase completion
+        #[arg(long)]
+        redirect_url: Option<String>,
+    },
     CheckLightningAddressAvailable {
         /// The username to check
         username: String,
@@ -472,6 +482,20 @@ pub(crate) async fn execute_command(
                 })
                 .await?;
             print_value(&value)?;
+            Ok(true)
+        }
+        Command::BuyBitcoin {
+            locked_amount_sat,
+            redirect_url,
+        } => {
+            let value = sdk
+                .buy_bitcoin(BuyBitcoinRequest {
+                    locked_amount_sat,
+                    redirect_url,
+                })
+                .await?;
+            println!("Open this URL in a browser to complete the purchase:");
+            println!("{}", value.url);
             Ok(true)
         }
         Command::Receive {
