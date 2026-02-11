@@ -4,11 +4,14 @@ use log::info;
 
 async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: buy-bitcoin
-    // Buy Bitcoin with funds deposited directly into the user's wallet.
-    // Optionally lock the purchase to a specific amount and provide a redirect URL.
+    // Optionally, lock the purchase to a specific amount
+    let optional_locked_amount_sat = Some(100_000);
+    // Optionally, set a redirect URL for after the purchase is completed
+    let optional_redirect_url = Some("https://example.com/purchase-complete".to_string());
+
     let request = BuyBitcoinRequest {
-        locked_amount_sat: Some(100_000),
-        redirect_url: Some("https://example.com/purchase-complete".to_string()),
+        locked_amount_sat: optional_locked_amount_sat,
+        redirect_url: optional_redirect_url,
     };
 
     let response = sdk.buy_bitcoin(request).await?;

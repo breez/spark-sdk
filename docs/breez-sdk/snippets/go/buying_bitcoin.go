@@ -8,13 +8,14 @@ import (
 
 func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: buy-bitcoin
-	// Buy Bitcoin with funds deposited directly into the user's wallet.
-	// Optionally lock the purchase to a specific amount and provide a redirect URL.
-	lockedAmountSat := uint64(100_000)
-	redirectUrl := "https://example.com/purchase-complete"
+	// Optionally, lock the purchase to a specific amount
+	optionalLockedAmountSat := uint64(100_000)
+	// Optionally, set a redirect URL for after the purchase is completed
+	optionalRedirectUrl := "https://example.com/purchase-complete"
+
 	request := breez_sdk_spark.BuyBitcoinRequest{
-		LockedAmountSat: &lockedAmountSat,
-		RedirectUrl:     &redirectUrl,
+		LockedAmountSat: &optionalLockedAmountSat,
+		RedirectUrl:     &optionalRedirectUrl,
 	}
 
 	response, err := sdk.BuyBitcoin(request)

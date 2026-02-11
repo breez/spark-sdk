@@ -7,11 +7,14 @@ namespace BreezSdkSnippets
         async Task BuyBitcoin(BreezSdk sdk)
         {
             // ANCHOR: buy-bitcoin
-            // Buy Bitcoin with funds deposited directly into the user's wallet.
-            // Optionally lock the purchase to a specific amount and provide a redirect URL.
+            // Optionally, lock the purchase to a specific amount
+            var optionalLockedAmountSat = (ulong)100000;
+            // Optionally, set a redirect URL for after the purchase is completed
+            var optionalRedirectUrl = "https://example.com/purchase-complete";
+
             var request = new BuyBitcoinRequest(
-                lockedAmountSat: 100000,
-                redirectUrl: "https://example.com/purchase-complete"
+                lockedAmountSat: optionalLockedAmountSat,
+                redirectUrl: optionalRedirectUrl
             );
 
             var response = await sdk.BuyBitcoin(request: request);

@@ -5,11 +5,14 @@ import {
 
 const buyBitcoin = async (sdk: BreezSdk) => {
   // ANCHOR: buy-bitcoin
-  // Buy Bitcoin with funds deposited directly into the user's wallet.
-  // Optionally lock the purchase to a specific amount and provide a redirect URL.
+  // Optionally, lock the purchase to a specific amount
+  const optionalLockedAmountSat = BigInt(100_000)
+  // Optionally, set a redirect URL for after the purchase is completed
+  const optionalRedirectUrl = 'https://example.com/purchase-complete'
+
   const request: BuyBitcoinRequest = {
-    lockedAmountSat: BigInt(100_000),
-    redirectUrl: 'https://example.com/purchase-complete'
+    lockedAmountSat: optionalLockedAmountSat,
+    redirectUrl: optionalRedirectUrl
   }
 
   const response = await sdk.buyBitcoin(request)

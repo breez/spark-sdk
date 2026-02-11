@@ -5,11 +5,14 @@ import breez_sdk_spark.*
 class BuyingBitcoin {
     suspend fun buyBitcoin(sdk: BreezSdk) {
         // ANCHOR: buy-bitcoin
-        // Buy Bitcoin with funds deposited directly into the user's wallet.
-        // Optionally lock the purchase to a specific amount and provide a redirect URL.
+        // Optionally, lock the purchase to a specific amount
+        val optionalLockedAmountSat: ULong = 100_000u
+        // Optionally, set a redirect URL for after the purchase is completed
+        val optionalRedirectUrl = "https://example.com/purchase-complete"
+
         val request = BuyBitcoinRequest(
-            lockedAmountSat = 100_000u,
-            redirectUrl = "https://example.com/purchase-complete"
+            lockedAmountSat = optionalLockedAmountSat,
+            redirectUrl = optionalRedirectUrl
         )
 
         val response = sdk.buyBitcoin(request)
