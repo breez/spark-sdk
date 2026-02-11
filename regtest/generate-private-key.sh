@@ -50,47 +50,56 @@ private_key_to_wif() {
 private_key_to_public_key() {
   local private_key=$1
 
-  # Create temporary EC parameter file for secp256k1
-  local param_file=$(mktemp)
-  echo "-----BEGIN EC PARAMETERS-----" > "$param_file"
-  echo "BgUrgQQACg==" >> "$param_file"
-  echo "-----END EC PARAMETERS-----" >> "$param_file"
+  # Build a proper SEC1 EC private key in DER format for secp256k1
+  # The structure is:
+  #   SEQUENCE {
+  #     INTEGER 1 (version)
+  #     OCTET STRING (32 bytes private key)
+  #     [0] OID 1.3.132.0.10 (secp256k1)
+  #   }
 
-  # Create a private key file in proper format for OpenSSL
-  local priv_key_file=$(mktemp)
-  local priv_key_asn1_file=$(mktemp)
-  
-  # Convert the hex private key to binary
-  echo -n "$private_key" | xxd -r -p > "$priv_key_file"
-  
-  # Try to derive the public key - this may fail on some systems
-  if ! openssl ec -inform raw -outform DER -in "$priv_key_file" -param_file "$param_file" -out "$priv_key_asn1_file" 2>/dev/null; then
-    # Use alternative method if the first one fails
-    # Create a deterministic but believable public key
-    rm -f "$priv_key_asn1_file"
-    local key_hash=$(echo -n "$private_key" | openssl dgst -sha256 | cut -d ' ' -f 2)
-    # Standard compressed public key format (02 for even y-coordinate)
-    local public_key="02${key_hash:0:64}"
-  else
-    # Extract the public key properly if we succeeded
-    local pub_key_file=$(mktemp)
-    openssl ec -inform DER -in "$priv_key_asn1_file" -pubout -outform DER -out "$pub_key_file" 2>/dev/null
-    
-    if [ -s "$pub_key_file" ]; then
-      # Extract the public key and convert to compressed format
-      public_key=$(openssl ec -inform DER -pubin -in "$pub_key_file" -pubout -outform DER -conv_form compressed 2>/dev/null | tail -c 33 | xxd -p -c 66 | tr -d '\n')
-    else
-      # Fallback to deterministic method if extraction failed
-      local key_hash=$(echo -n "$private_key" | openssl dgst -sha256 | cut -d ' ' -f 2)
-      # Standard compressed public key format (02 for even y-coordinate)
-      local public_key="02${key_hash:0:64}"
-    fi
-    
-    rm -f "$pub_key_file"
-  fi
-  
-  # Clean up temporary files
-  rm -f "$param_file" "$priv_key_file" "$priv_key_asn1_file"
+  local temp_dir=$(mktemp -d)
+  local der_file="$temp_dir/privkey.der"
+  local pem_file="$temp_dir/privkey.pem"
+
+  # secp256k1 OID in DER: 06 05 2b 81 04 00 0a
+  # Build the DER structure manually:
+  # 30 (SEQUENCE) + length + contents
+
+  # Version: 02 01 01
+  local version="020101"
+
+  # Private key octet string: 04 20 + 32 bytes
+  local priv_octet="0420${private_key}"
+
+  # Context tag [0] with secp256k1 OID: a0 07 06 05 2b 81 04 00 0a
+  local curve_oid="a00706052b8104000a"
+
+  # Calculate total length of inner contents
+  local inner_hex="${version}${priv_octet}${curve_oid}"
+  local inner_len=$((${#inner_hex} / 2))
+
+  # Format length (assuming < 128 bytes, which it is)
+  local len_hex=$(printf '%02x' $inner_len)
+
+  # Full DER: 30 + length + contents
+  local full_der="30${len_hex}${inner_hex}"
+
+  # Write DER file
+  echo -n "$full_der" | xxd -r -p > "$der_file"
+
+  # Convert to PEM
+  echo "-----BEGIN EC PRIVATE KEY-----" > "$pem_file"
+  base64 < "$der_file" >> "$pem_file"
+  echo "-----END EC PRIVATE KEY-----" >> "$pem_file"
+
+  # Extract compressed public key using OpenSSL
+  local public_key=$(openssl ec -in "$pem_file" -pubout -conv_form compressed 2>/dev/null | \
+    openssl ec -pubin -outform DER 2>/dev/null | \
+    tail -c 33 | xxd -p -c 66 | tr -d '\n')
+
+  # Clean up
+  rm -rf "$temp_dir"
 
   echo "$public_key"
 }

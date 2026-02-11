@@ -1,7 +1,7 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use clap::Parser;
 use rustyline::{Editor, history::DefaultHistory};
-use spark_wallet::SparkWallet;
+use spark_wallet::{Network, SparkWallet};
 
 use crate::{
     CliHelper,
@@ -11,7 +11,7 @@ use crate::{
         transfer::TransferCommand, wallet_settings::WalletSettingsCommand,
         withdraw::WithdrawCommand,
     },
-    config::Config,
+    config::MempoolConfig,
 };
 
 pub mod deposit;
@@ -70,7 +70,8 @@ pub enum Command {
 
 pub(crate) async fn handle_command(
     rl: &mut Editor<CliHelper, DefaultHistory>,
-    config: &Config,
+    network: Network,
+    mempool_config: &MempoolConfig,
     wallet: &SparkWallet,
     command: Command,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -80,21 +81,17 @@ pub(crate) async fn handle_command(
             println!("Balance: {balance} sats");
         }
         Command::Deposit(deposit_command) => {
-            deposit::handle_command(config, wallet, deposit_command).await?
+            deposit::handle_command(mempool_config, wallet, deposit_command).await?
         }
         Command::Info => {
             let info = wallet.get_info();
             println!("{}", serde_json::to_string_pretty(&info)?)
         }
-        Command::Leaves(leaves_command) => {
-            leaves::handle_command(config, wallet, leaves_command).await?
-        }
+        Command::Leaves(leaves_command) => leaves::handle_command(wallet, leaves_command).await?,
         Command::Lightning(lightning_command) => {
-            lightning::handle_command(config, wallet, lightning_command).await?
+            lightning::handle_command(wallet, lightning_command).await?
         }
-        Command::Tokens(tokens_command) => {
-            tokens::handle_command(config, wallet, tokens_command).await?
-        }
+        Command::Tokens(tokens_command) => tokens::handle_command(wallet, tokens_command).await?,
         Command::Sign => {
             let message = rl.readline("Enter message to sign: ")?;
             let signature = wallet.sign_message(&message).await?;
@@ -110,7 +107,7 @@ pub(crate) async fn handle_command(
             println!("Wallet synced successfully.")
         }
         Command::Transfer(transfer_command) => {
-            transfer::handle_command(config, wallet, transfer_command).await?
+            transfer::handle_command(wallet, transfer_command).await?
         }
         Command::Verify => {
             let message = rl.readline("Enter message to verify: ")?;
@@ -124,15 +121,15 @@ pub(crate) async fn handle_command(
             println!("Signature verified successfully.");
         }
         Command::Withdraw(withdraw_command) => {
-            withdraw::handle_command(config, wallet, withdraw_command).await?
+            withdraw::handle_command(network, wallet, withdraw_command).await?
         }
         Command::Invoices(invoices_command) => {
-            invoices::handle_command(config, wallet, invoices_command).await?
+            invoices::handle_command(wallet, invoices_command).await?
         }
         Command::WalletSettings(wallet_settings_command) => {
-            wallet_settings::handle_command(config, wallet, wallet_settings_command).await?
+            wallet_settings::handle_command(wallet, wallet_settings_command).await?
         }
-        Command::Htlc(htlc_command) => htlc::handle_command(config, wallet, htlc_command).await?,
+        Command::Htlc(htlc_command) => htlc::handle_command(wallet, htlc_command).await?,
     }
 
     Ok(())

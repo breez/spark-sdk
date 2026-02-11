@@ -5,8 +5,6 @@ use spark_wallet::{
     ListTokenTransactionsRequest, PagingFilter, SparkAddress, SparkWallet, TransferTokenOutput,
 };
 
-use crate::config::Config;
-
 /// A transfer output that can be parsed from a string in the format "token_id:amount:receiver_address"
 #[derive(Debug, Clone)]
 pub struct TransferTokenOutputArg {
@@ -76,7 +74,6 @@ pub enum TokensCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: TokensCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {

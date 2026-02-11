@@ -1,23 +1,47 @@
 use clap::Subcommand;
-use spark_wallet::SparkWallet;
-
-use crate::config::Config;
+use serde::Serialize;
+use spark_wallet::{SparkWallet, TreeNodeId};
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum LeavesCommand {
     /// List all leaves in the wallet.
-    List,
+    List {
+        /// Show compact output (id, tree_id, value, parent_node_id only)
+        #[clap(short, long)]
+        compact: bool,
+    },
+}
+
+#[derive(Serialize)]
+struct CompactLeaf {
+    id: TreeNodeId,
+    tree_id: String,
+    value: u64,
+    parent_node_id: Option<TreeNodeId>,
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: LeavesCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        LeavesCommand::List => {
+        LeavesCommand::List { compact } => {
             let leaves = wallet.list_leaves().await?;
-            println!("{}", serde_json::to_string_pretty(&leaves)?);
+            if compact {
+                let compact_leaves: Vec<CompactLeaf> = leaves
+                    .available
+                    .into_iter()
+                    .map(|leaf| CompactLeaf {
+                        id: leaf.id,
+                        tree_id: leaf.tree_id,
+                        value: leaf.value,
+                        parent_node_id: leaf.parent_node_id,
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&compact_leaves)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&leaves)?);
+            }
         }
     }
 

@@ -1,8 +1,6 @@
 use clap::Subcommand;
 use spark_wallet::{ListTransfersRequest, PagingFilter, SparkAddress, SparkWallet};
 
-use crate::config::Config;
-
 #[derive(Clone, Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum TransferCommand {
@@ -39,7 +37,6 @@ pub enum TransferCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: TransferCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {

@@ -4,8 +4,6 @@ use clap::Subcommand;
 use rand::RngCore;
 use spark_wallet::{PagingFilter, Preimage, SparkAddress, SparkWallet};
 
-use crate::config::Config;
-
 #[derive(Clone, Debug, Subcommand)]
 pub enum HtlcCommand {
     /// List HTLCs.
@@ -38,7 +36,6 @@ pub enum HtlcCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: HtlcCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
