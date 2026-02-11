@@ -1,6 +1,6 @@
 # Buying Bitcoin
 
-The Breez SDK provides users to purchase Bitcoin through external providers, such as Moonpay. The user is directed to a provider URL in their browser to complete the purchase, and the funds are deposited directly into their wallet.
+The Breez SDK allows users to purchase Bitcoin through external providers, such as Moonpay. The user is directed to a provider URL in their browser to complete the purchase, and the funds are deposited directly into their wallet.
 
 To initiate a Bitcoin purchase:
 
