@@ -51,7 +51,7 @@ else
 fi
 
 # URL for the GraphQL endpoint
-URL="https://api.loadtest.dev.sparkinfra.net/graphql/spark/rc"
+URL="https://api.lightspark.com/graphql/spark/rc"
 
 # GraphQL query
 QUERY='mutation RequestRegtestFunds($address: String!, $amount_sats: Long!) {

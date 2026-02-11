@@ -1,8 +1,6 @@
 use clap::Subcommand;
 use spark_wallet::SparkWallet;
 
-use crate::config::Config;
-
 #[derive(Debug, Subcommand)]
 pub enum WalletSettingsCommand {
     /// Query the wallet settings.
@@ -16,7 +14,6 @@ pub enum WalletSettingsCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: WalletSettingsCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {

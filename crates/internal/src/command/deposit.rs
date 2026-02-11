@@ -8,7 +8,7 @@ use clap::Subcommand;
 use reqwest::header::CONTENT_TYPE;
 use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
-use crate::config::Config;
+use crate::config::MempoolConfig;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum DepositCommand {
@@ -69,7 +69,7 @@ pub enum DepositCommand {
 }
 
 pub async fn handle_command(
-    config: &Config,
+    mempool_config: &MempoolConfig,
     wallet: &SparkWallet,
     command: DepositCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -79,7 +79,7 @@ pub async fn handle_command(
             println!("{address}");
         }
         DepositCommand::FetchStaticClaimQuote { txid, output_index } => {
-            let tx = get_transaction(config, txid.clone()).await?;
+            let tx = get_transaction(mempool_config, txid.clone()).await?;
             let quote = wallet
                 .fetch_static_deposit_claim_quote(tx, output_index)
                 .await?;
@@ -90,7 +90,7 @@ pub async fn handle_command(
             output_index,
             is_static,
         } => {
-            let tx = get_transaction(config, txid.clone()).await?;
+            let tx = get_transaction(mempool_config, txid.clone()).await?;
             if is_static {
                 let quote = wallet
                     .fetch_static_deposit_claim_quote(tx.clone(), output_index)
@@ -154,11 +154,11 @@ pub async fn handle_command(
                 }
             };
 
-            let tx = get_transaction(config, txid.clone()).await?;
+            let tx = get_transaction(mempool_config, txid.clone()).await?;
             let refund_tx = wallet
                 .refund_static_deposit(tx, output_index, &refund_address, fee)
                 .await?;
-            let txid = broadcast_transaction(config, refund_tx).await?;
+            let txid = broadcast_transaction(mempool_config, refund_tx).await?;
             println!("Refund txid: {txid}");
         }
     }
@@ -167,41 +167,36 @@ pub async fn handle_command(
 }
 
 async fn get_transaction(
-    config: &Config,
+    mempool_config: &MempoolConfig,
     txid: String,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
-    let url = format!("{}/tx/{}/hex", config.mempool_url, txid);
+    let url = format!("{}/tx/{}/hex", mempool_config.url, txid);
     let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .basic_auth(
-            config.mempool_username.clone(),
-            Some(config.mempool_password.clone()),
-        )
-        .send()
-        .await?;
+    let mut request = client.get(&url);
+    if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
+        request = request.basic_auth(username, Some(password));
+    }
+    let response = request.send().await?;
     let hex = response.text().await?;
     let tx = deserialize_hex(&hex)?;
     Ok(tx)
 }
 
 async fn broadcast_transaction(
-    config: &Config,
+    mempool_config: &MempoolConfig,
     tx: Transaction,
 ) -> Result<Txid, Box<dyn std::error::Error>> {
     let tx_hex = serialize_hex(&tx);
-    let url = format!("{}/tx", config.mempool_url);
+    let url = format!("{}/tx", mempool_config.url);
     let client = reqwest::Client::new();
-    let response = client
+    let mut request = client
         .post(&url)
-        .basic_auth(
-            config.mempool_username.clone(),
-            Some(config.mempool_password.clone()),
-        )
         .header(CONTENT_TYPE, "text/plain")
-        .body(tx_hex.clone())
-        .send()
-        .await?;
+        .body(tx_hex.clone());
+    if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
+        request = request.basic_auth(username, Some(password));
+    }
+    let response = request.send().await?;
     let text = response.text().await?;
     let txid = Txid::from_str(&text).map_err(|_| {
         println!("Refund tx hex: {tx_hex}");

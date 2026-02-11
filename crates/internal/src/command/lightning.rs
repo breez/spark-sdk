@@ -2,8 +2,6 @@ use clap::Subcommand;
 use qrcode_rs::{EcLevel, QrCode, render::unicode};
 use spark_wallet::{InvoiceDescription, SparkWallet};
 
-use crate::config::Config;
-
 #[derive(Clone, Debug, Subcommand)]
 pub enum LightningCommand {
     /// Create a lightning invoice.
@@ -39,7 +37,6 @@ pub enum LightningCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: LightningCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {

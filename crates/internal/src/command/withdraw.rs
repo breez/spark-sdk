@@ -9,9 +9,9 @@ use bitcoin::{
     sighash::SighashCache,
 };
 use clap::Subcommand;
-use spark_wallet::{SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output};
-
-use crate::config::Config;
+use spark_wallet::{
+    Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+};
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ExitSpeed {
@@ -86,7 +86,7 @@ pub enum WithdrawCommand {
 }
 
 pub async fn handle_command(
-    config: &Config,
+    network: Network,
     wallet: &SparkWallet,
     command: WithdrawCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -129,7 +129,7 @@ pub async fn handle_command(
             let signing_key = signing_key
                 .map(|pk| SecretKey::from_str(&pk))
                 .transpose()?
-                .map(|pk| PrivateKey::new(pk, config.spark_config.network));
+                .map(|pk| PrivateKey::new(pk, network));
 
             let utxos = utxos
                 .into_iter()
@@ -142,10 +142,18 @@ pub async fn handle_command(
                 println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
                 println!();
 
+                let total_txs = leaf_tx_cpfp_psbts.tx_cpfp_psbts.len();
                 for (index, tx_cpfp_psbt) in leaf_tx_cpfp_psbts.tx_cpfp_psbts.iter().enumerate() {
                     let index_str = format!("{}. ", index + 1);
                     let index_spaces = " ".repeat(index_str.len());
-                    let node_type = if index == leaf_tx_cpfp_psbts.tx_cpfp_psbts.len() - 1 {
+
+                    // Order: Node TX(s), Leaf TX, Refund TX
+                    // The last item is always the Refund TX, second-to-last is Leaf TX
+                    let is_refund_tx = index == total_txs - 1;
+                    let is_leaf_tx = index == total_txs - 2;
+                    let tx_type = if is_refund_tx {
+                        "Refund TX"
+                    } else if is_leaf_tx {
                         "Leaf TX"
                     } else {
                         "Node TX"
@@ -153,8 +161,8 @@ pub async fn handle_command(
 
                     let txid = tx_cpfp_psbt.parent_tx.compute_txid();
                     let tx_hex = serialize_hex(&tx_cpfp_psbt.parent_tx);
-                    println!("{index_str}{node_type} ID: {txid}");
-                    println!("{index_spaces}{node_type}: {tx_hex}");
+                    println!("{index_str}{tx_type} ID: {txid}");
+                    println!("{index_spaces}{tx_type}: {tx_hex}");
 
                     let mut psbt = tx_cpfp_psbt.child_psbt.clone();
                     let psbt_hex = psbt.serialize_hex();
@@ -169,13 +177,31 @@ pub async fn handle_command(
                         println!("{index_spaces}PSBT signed TX ID: {signed_txid}");
                         println!("{index_spaces}PSBT signed TX: {signed_tx_hex}");
                     }
+
+                    // Display CSV timelock for refund transaction
+                    if is_refund_tx && let Some(input) = tx_cpfp_psbt.parent_tx.input.first() {
+                        let sequence = input.sequence.to_consensus_u32();
+                        // CSV uses the lower 16 bits for the relative lock value
+                        // Bit 22 (0x00400000) indicates blocks vs time
+                        if sequence & 0x00400000 == 0 {
+                            let csv_blocks = sequence & 0xFFFF;
+                            println!(
+                                "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
+                                csv_blocks
+                            );
+                        }
+                    }
+
                     println!();
                 }
                 println!();
             }
             println!("For each leaf, broadcast one-by-one each TX and signed PSBT.");
             println!(
-                "TXs and signed PSBTs should be broadcasted in the order they appear: Node(s) > Leaf"
+                "TXs and signed PSBTs should be broadcasted in the order they appear: Node TX(s) > Leaf TX > Refund TX"
+            );
+            println!(
+                "The Refund TX can only be broadcast after its timelock expires (blocks after Leaf TX confirms)."
             );
         }
     }

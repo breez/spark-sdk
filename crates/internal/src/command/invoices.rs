@@ -6,8 +6,6 @@ use std::{
 use clap::Subcommand;
 use spark_wallet::{PublicKey, SparkWallet};
 
-use crate::config::Config;
-
 #[derive(Clone, Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum InvoicesCommand {
@@ -49,7 +47,6 @@ pub enum InvoicesCommand {
 }
 
 pub async fn handle_command(
-    _config: &Config,
     wallet: &SparkWallet,
     command: InvoicesCommand,
 ) -> Result<(), Box<dyn std::error::Error>> {
