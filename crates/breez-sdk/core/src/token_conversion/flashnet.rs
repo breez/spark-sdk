@@ -462,17 +462,15 @@ impl FlashnetTokenConverter {
         let pool_id_str = pool_id.to_string();
         let conversion_id = uuid::Uuid::now_v7().to_string();
 
-        // Save the sent payment metadata to cache so it's picked up during sync.
-        // We don't insert the payment directly to storage here - sync will do that
-        // and emit the appropriate PaymentSucceeded event.
+        // Insert the sent payment metadata directly to storage.
         let sent_payment_id = self
             .fetch_payment_by_identifier(&outbound_identifier, true)
             .await?
             .id;
-        cache
-            .save_payment_metadata(
-                &sent_payment_id,
-                &PaymentMetadata {
+        self.storage
+            .insert_payment_metadata(
+                sent_payment_id.clone(),
+                PaymentMetadata {
                     conversion_info: Some(ConversionInfo {
                         pool_id: pool_id_str.clone(),
                         conversion_id: conversion_id.clone(),

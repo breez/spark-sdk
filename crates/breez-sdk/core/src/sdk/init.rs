@@ -59,6 +59,7 @@ impl BreezSdk {
                 Arc::clone(&token_converter),
                 Arc::clone(&params.spark_wallet),
                 params.shutdown_sender.subscribe(),
+                params.sync_lock_client.clone(),
             ))
         });
 

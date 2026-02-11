@@ -10,8 +10,8 @@ use crate::{
         client::SyncerClient,
         model::{Record, RecordId},
         proto::{
-            ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply,
-            SetRecordRequest,
+            GetLockRequest, ListChangesRequest, ListenChangesRequest, Notification, SetLockRequest,
+            SetRecordReply, SetRecordRequest,
         },
         signer::SyncSigner,
     },
@@ -35,6 +35,7 @@ impl SyncData {
     }
 }
 
+#[derive(Clone)]
 pub struct SigningClient {
     inner: Arc<dyn SyncerClient>,
     signer: Arc<dyn SyncSigner>,
@@ -110,6 +111,36 @@ impl SigningClient {
 
         let stream = self.inner.listen_changes(request).await?;
         Ok(stream)
+    }
+
+    pub async fn set_lock(&self, lock_name: &str, acquire: bool) -> anyhow::Result<()> {
+        let request_time: u32 = now();
+        let instance_id = &self.client_id;
+        let msg = format!("{lock_name}-{instance_id}-{acquire}-{request_time}");
+        let signature = self.sign_message(msg.as_bytes()).await?;
+        let req = SetLockRequest {
+            lock_name: lock_name.to_string(),
+            instance_id: self.client_id.clone(),
+            acquire,
+            ttl_seconds: None,
+            request_time,
+            signature,
+        };
+        self.inner.set_lock(req).await?;
+        Ok(())
+    }
+
+    pub async fn get_lock(&self, lock_name: &str) -> anyhow::Result<bool> {
+        let request_time: u32 = now();
+        let msg = format!("{lock_name}-{request_time}");
+        let signature = self.sign_message(msg.as_bytes()).await?;
+        let req = GetLockRequest {
+            lock_name: lock_name.to_string(),
+            request_time,
+            signature,
+        };
+        let reply = self.inner.get_lock(req).await?;
+        Ok(reply.locked)
     }
 
     async fn sign_message(&self, msg: &[u8]) -> anyhow::Result<String> {

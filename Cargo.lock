@@ -667,6 +667,7 @@ dependencies = [
  "bech32",
  "bip39",
  "bitcoin",
+ "breez-sdk-common",
  "breez-sdk-spark",
  "dotenvy",
  "futures",

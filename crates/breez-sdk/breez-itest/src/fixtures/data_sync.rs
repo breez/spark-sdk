@@ -30,10 +30,22 @@ pub struct DataSyncFixture {
 }
 
 impl DataSyncFixture {
-    /// Create a new DataSyncFixture using the default configuration
-    /// This builds the image from the GitHub repository
+    /// Create a new DataSyncFixture using the default configuration.
+    ///
+    /// If `DATA_SYNC_PATH` is set, builds the Docker image from that local path.
+    /// Otherwise, builds from the GitHub repository.
     pub async fn new() -> Result<Self> {
-        Self::with_config(DataSyncImageConfig::default()).await
+        let config = match std::env::var("DATA_SYNC_PATH") {
+            Ok(path) => {
+                info!("Using local data-sync source: {path}");
+                DataSyncImageConfig {
+                    context_path: path,
+                    ..DataSyncImageConfig::default()
+                }
+            }
+            Err(_) => DataSyncImageConfig::default(),
+        };
+        Self::with_config(config).await
     }
 
     /// Create a new DataSyncFixture with a custom configuration
@@ -44,7 +56,7 @@ impl DataSyncFixture {
         // Create container from the built image
         let container = GenericImage::new(&config.image_name, &config.image_tag)
             .with_exposed_port(ContainerPort::Tcp(GRPC_PORT))
-            .with_wait_for(WaitFor::Nothing)
+            .with_wait_for(WaitFor::message_on_stderr("Server listening at"))
             .with_log_consumer(crate::log::TracingConsumer::new("data-sync"))
             .start()
             .await?;

@@ -6,6 +6,8 @@ use tokio::sync::{Notify, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info, warn};
 
+use breez_sdk_common::sync::SyncLockClient;
+
 use crate::{
     models::StableBalanceConfig,
     token_conversion::{
@@ -14,6 +16,9 @@ use crate::{
     },
     utils::expiring_cell::ExpiringCell,
 };
+
+/// The name used when setting/getting a lock using the distributed lock client.
+const LOCK_NAME: &str = "auto_conversion";
 
 /// TTL for cached effective values (1 hour)
 const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
@@ -25,61 +30,70 @@ struct EffectiveValues {
     reserved: u64,
 }
 
-/// Tracks the total reserved sats across all in-flight payment conversions.
-#[derive(Default)]
-struct ReservationTracker {
-    total_reserved: AtomicU64,
+/// Tracks the number of in-flight payment conversions.
+struct OngoingPaymentCounter {
+    count: AtomicU64,
 }
 
-impl ReservationTracker {
+impl OngoingPaymentCounter {
     fn new() -> Self {
         Self {
-            total_reserved: AtomicU64::new(0),
+            count: AtomicU64::new(0),
         }
     }
 
-    fn add(&self, amount: u64) {
-        self.total_reserved.fetch_add(amount, Ordering::Release);
+    fn increment(&self) -> u64 {
+        self.count.fetch_add(1, Ordering::Release).saturating_add(1)
     }
 
-    fn remove(&self, amount: u64) {
-        self.total_reserved.fetch_sub(amount, Ordering::Release);
+    fn decrement(&self) -> u64 {
+        self.count.fetch_sub(1, Ordering::Release).saturating_sub(1)
     }
 
-    fn total(&self) -> u64 {
-        self.total_reserved.load(Ordering::Acquire)
+    fn get(&self) -> u64 {
+        self.count.load(Ordering::Acquire)
     }
 }
 
-/// RAII guard that reserves sats for a payment conversion.
+/// RAII guard for an in-flight payment conversion.
 ///
-/// Prevents auto-convert from converting reserved sats back to tokens
-/// while a payment conversion is in progress. The reservation is
-/// automatically released when the guard is dropped.
-pub(crate) struct ReservationGuard {
-    amount: u64,
-    tracker: Arc<ReservationTracker>,
+/// Prevents auto-convert from running while any payment conversion is
+/// in progress. When the last guard is dropped and no payments remain
+/// in-flight, the distributed lock is released (if configured).
+pub(crate) struct PaymentGuard {
+    counter: Arc<OngoingPaymentCounter>,
+    sync_lock_client: Option<Arc<dyn SyncLockClient>>,
 }
 
-impl ReservationGuard {
-    fn new(amount: u64, tracker: Arc<ReservationTracker>) -> Self {
-        tracker.add(amount);
-        debug!(
-            "Created reservation for {amount} sats (total: {})",
-            tracker.total()
-        );
-        Self { amount, tracker }
+impl PaymentGuard {
+    fn new(
+        counter: Arc<OngoingPaymentCounter>,
+        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+    ) -> Self {
+        let count = counter.increment();
+        debug!("Payment started (ongoing: {count})");
+        Self {
+            counter,
+            sync_lock_client,
+        }
     }
 }
 
-impl Drop for ReservationGuard {
+impl Drop for PaymentGuard {
     fn drop(&mut self) {
-        self.tracker.remove(self.amount);
-        debug!(
-            "Released reservation for {} sats (total: {})",
-            self.amount,
-            self.tracker.total()
-        );
+        let remaining = self.counter.decrement();
+        debug!("Payment ended (ongoing: {remaining})");
+
+        // Best-effort release of the distributed lock when no payments remain
+        if remaining == 0
+            && let Some(sync_lock_client) = self.sync_lock_client.take()
+        {
+            tokio::spawn(async move {
+                if let Err(e) = sync_lock_client.set_lock(LOCK_NAME, false).await {
+                    warn!("Failed to release distributed lock: {e:?}");
+                }
+            });
+        }
     }
 }
 
@@ -102,12 +116,16 @@ pub(crate) struct StableBalance {
     /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
     effective_values: Arc<ExpiringCell<EffectiveValues>>,
 
-    /// Tracks dynamic reservations from in-flight payment conversions.
-    /// Auto-convert respects these reservations and won't convert reserved sats.
-    reservation_tracker: Arc<ReservationTracker>,
+    /// Tracks the number of in-flight payment conversions.
+    /// Auto-convert is skipped while any payments are ongoing.
+    ongoing_payments: Arc<OngoingPaymentCounter>,
 
     /// Notify to trigger auto-conversion
     auto_convert_trigger: Arc<Notify>,
+
+    /// Optional distributed lock client for coordinating across SDK instances.
+    /// `None` when real-time sync is not configured.
+    sync_lock_client: Option<Arc<dyn SyncLockClient>>,
 }
 
 impl StableBalance {
@@ -117,6 +135,7 @@ impl StableBalance {
         token_converter: Arc<dyn TokenConverter>,
         spark_wallet: Arc<SparkWallet>,
         shutdown_receiver: watch::Receiver<()>,
+        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
     ) -> Self {
         let auto_convert_trigger = Arc::new(Notify::new());
 
@@ -125,8 +144,9 @@ impl StableBalance {
             token_converter,
             spark_wallet,
             effective_values: Arc::new(ExpiringCell::new()),
-            reservation_tracker: Arc::new(ReservationTracker::new()),
+            ongoing_payments: Arc::new(OngoingPaymentCounter::new()),
             auto_convert_trigger,
+            sync_lock_client,
         };
 
         // Spawn the background auto-convert task
@@ -165,36 +185,45 @@ impl StableBalance {
 
     /// Executes auto-conversion if the balance exceeds the threshold.
     async fn auto_convert(&self) -> Result<bool, ConversionError> {
-        // Get or initialize effective threshold and reserved values
-        let (threshold, config_reserved) = self.get_or_init_effective_values().await?;
+        // 1. Check no payments are ongoing
+        let ongoing = self.ongoing_payments.get();
+        if ongoing > 0 {
+            debug!("Auto-conversion skipped: {ongoing} payment(s) in progress");
+            return Ok(false);
+        }
 
-        // Get current balance
+        // 2. Check if balance exceeds the trigger amount
+        let (threshold, reserved) = self.get_or_init_effective_values().await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
-
-        // Calculate total reserved: config reserved + dynamic payment reservations
-        let dynamic_reserved = self.reservation_tracker.total();
-        let total_reserved = config_reserved.saturating_add(dynamic_reserved);
-
-        // Skip if balance is less than total reserved + threshold
-        let trigger_amount = total_reserved.saturating_add(threshold);
+        let trigger_amount = reserved.saturating_add(threshold);
         if balance_sats < trigger_amount {
             debug!(
-                "Auto-conversion skipped: balance {} < reserved (config: {} + dynamic: {}) + threshold {}",
-                balance_sats, config_reserved, dynamic_reserved, threshold
+                "Auto-conversion skipped: balance {balance_sats} < reserved {reserved} + threshold {threshold}"
             );
             return Ok(false);
         }
 
-        // Convert only the amount above the total reserve
-        let amount_to_convert = balance_sats.saturating_sub(total_reserved);
+        // 3. Check distributed lock — skip if any instance holds it or if the check fails
+        if let Some(sync_lock_client) = &self.sync_lock_client {
+            match sync_lock_client.is_locked(LOCK_NAME).await {
+                Ok(true) => {
+                    debug!("Auto-conversion skipped: distributed lock is held by another instance");
+                    return Ok(false);
+                }
+                Err(e) => {
+                    debug!("Auto-conversion skipped: failed to check distributed lock: {e:?}");
+                    return Ok(false);
+                }
+                Ok(false) => {}
+            }
+        }
+
+        // 4. Convert the amount above the reserve
+        let amount_to_convert = balance_sats.saturating_sub(reserved);
 
         info!(
-            "Auto-conversion triggered: converting {} sats to {} (keeping {} sats reserved: config: {}, dynamic: {})",
-            amount_to_convert,
+            "Auto-conversion triggered: converting {amount_to_convert} sats to {} (keeping {reserved} sats reserved)",
             self.config.token_identifier,
-            total_reserved,
-            config_reserved,
-            dynamic_reserved
         );
 
         let options = ConversionOptions {
@@ -281,13 +310,25 @@ impl StableBalance {
         self.auto_convert_trigger.notify_one();
     }
 
-    /// Creates a reservation guard for the specified amount of sats.
+    /// Creates a payment guard that prevents auto-conversion while held.
     ///
-    /// This reserves sats so auto-convert won't convert them back to tokens
-    /// while a payment conversion is in progress. The reservation is automatically
-    /// released when the guard is dropped.
-    pub fn create_reservation(&self, amount_sats: u64) -> ReservationGuard {
-        ReservationGuard::new(amount_sats, Arc::clone(&self.reservation_tracker))
+    /// Auto-convert is skipped while any payment guard is active. When the
+    /// last guard is dropped, the distributed lock is released (if configured).
+    pub fn create_payment_guard(&self) -> PaymentGuard {
+        // Best-effort acquire the distributed lock (fire-and-forget)
+        if let Some(sync_lock_client) = &self.sync_lock_client {
+            let sync_lock_client = Arc::clone(sync_lock_client);
+            tokio::spawn(async move {
+                if let Err(e) = sync_lock_client.set_lock(LOCK_NAME, true).await {
+                    warn!("Failed to acquire distributed lock: {e:?}");
+                }
+            });
+        }
+
+        PaymentGuard::new(
+            Arc::clone(&self.ongoing_payments),
+            self.sync_lock_client.clone(),
+        )
     }
 
     /// Gets conversion options for a payment if auto-population is needed.
@@ -314,15 +355,21 @@ impl StableBalance {
             return Ok(None);
         }
 
+        let (_, reserved) = self.get_or_init_effective_values().await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
+        let effective_balance = balance_sats.min(reserved);
 
-        // Only auto-populate if there's not enough sats balance
-        if u128::from(balance_sats) >= payment_amount {
+        // Only auto-populate if the effective sats balance (capped at reserve) is insufficient.
+        // Sats above the reserve are expected to be used for payments or eventually
+        // auto-converted to tokens, so they shouldn't be counted as available for
+        // direct sats payments.
+        if u128::from(effective_balance) >= payment_amount {
             return Ok(None);
         }
 
         info!(
-            "Auto-populating conversion options: balance {balance_sats} sats < payment amount {payment_amount} sats"
+            "Auto-populating conversion options: effective balance {effective_balance} sats \
+             (balance={balance_sats}, reserve={reserved}) < payment amount {payment_amount} sats"
         );
         Ok(Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {

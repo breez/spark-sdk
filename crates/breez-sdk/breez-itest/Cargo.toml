@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
 breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
+breez-sdk-common = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 
 # Async/test stack

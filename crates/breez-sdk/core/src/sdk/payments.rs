@@ -528,14 +528,17 @@ impl BreezSdk {
             ));
         }
 
-        let amount = request.prepare_response.amount;
-        let token_identifier = request.prepare_response.token_identifier.clone();
-        // Create a reservation for the expected sats from conversion.
-        // This prevents auto-convert from converting these sats back to tokens.
-        let _reservation_guard = match (&token_identifier, &self.stable_balance) {
-            (None, Some(sb)) => Some(sb.create_reservation(u64::try_from(amount)?)),
+        // Prevent auto-convert from running while this payment is in progress.
+        let _payment_guard = match (
+            &request.prepare_response.token_identifier,
+            &self.stable_balance,
+        ) {
+            (None, Some(sb)) => Some(sb.create_payment_guard()),
             _ => None,
         };
+
+        let amount = request.prepare_response.amount;
+        let token_identifier = request.prepare_response.token_identifier.clone();
 
         // Perform a conversion before sending the payment
         let (conversion_response, conversion_purpose) =
@@ -689,7 +692,7 @@ impl BreezSdk {
         .map(|res| SendPaymentResponse {
             payment: res.payment,
         })
-        // _reservation_guard drops here, releasing reserved sats for auto-convert
+        // _payment_guard drops here, releasing the distributed lock if no other payments are in-flight
     }
 
     pub(super) async fn send_payment_internal(
