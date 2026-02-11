@@ -14,6 +14,7 @@ use tokio_with_wasm::alias::sync::watch;
 use tracing::trace;
 
 use std::str::FromStr;
+use std::time::Duration;
 
 use bitcoin::{Sequence, Transaction, secp256k1::PublicKey};
 use frost_secp256k1_tr::Identifier;
@@ -269,6 +270,38 @@ impl LeavesReservation {
 
     pub fn sum(&self) -> u64 {
         self.leaves.iter().map(|leaf| leaf.value).sum()
+    }
+}
+
+/// Default maximum time to wait for pending balance before giving up.
+pub const DEFAULT_MAX_WAIT_FOR_PENDING: Duration = Duration::from_secs(60);
+
+/// Options for leaf selection behavior.
+#[derive(Clone, Debug)]
+pub struct SelectLeavesOptions {
+    /// Maximum time to wait for pending balance to become available.
+    ///
+    /// - `Duration::ZERO`: Return immediately without waiting
+    /// - Other duration: Wait up to the specified duration
+    ///
+    /// Default: 60 seconds
+    pub max_wait_for_pending: Duration,
+}
+
+impl Default for SelectLeavesOptions {
+    fn default() -> Self {
+        Self {
+            max_wait_for_pending: DEFAULT_MAX_WAIT_FOR_PENDING,
+        }
+    }
+}
+
+impl SelectLeavesOptions {
+    /// Create options for immediate return without waiting.
+    pub fn no_wait() -> Self {
+        Self {
+            max_wait_for_pending: Duration::ZERO,
+        }
     }
 }
 
@@ -720,6 +753,8 @@ pub trait TreeService: Send + Sync {
     /// * `purpose` - The purpose of the reservation, which determines how reserved
     ///   leaves affect balance calculations. Use `Payment` for spending operations
     ///   and `Swap` for leaf reorganization.
+    /// * `options` - Options controlling selection behavior, such as how long to wait
+    ///   for pending balance to become available.
     ///
     /// # Returns
     ///
@@ -731,20 +766,20 @@ pub trait TreeService: Send + Sync {
     ///
     /// Returns a `TreeServiceError` if:
     /// * No combination of leaves can satisfy the target amounts
-    /// * Insufficient funds are available
+    /// * Insufficient funds are available (or pending balance would be needed in no-wait mode)
     /// * The target amounts are invalid (e.g., zero or negative)
     ///
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, SelectLeavesOptions, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Select leaves for a specific amount with fee
     /// let target = TargetAmounts::new_amount_and_fee(100_000, Some(1_000)); // 100k sats + 1k fee
-    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment, SelectLeavesOptions::default()).await?;
     /// println!("Reserved {} leaves with ID: {}", reservation.leaves.len(), reservation.id);
-    ///   
+    ///
     /// # Ok(())
     /// # }
     /// ```
@@ -752,6 +787,7 @@ pub trait TreeService: Send + Sync {
         &self,
         target_amounts: Option<&TargetAmounts>,
         purpose: ReservationPurpose,
+        options: SelectLeavesOptions,
     ) -> Result<LeavesReservation, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.
@@ -774,12 +810,12 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, SelectLeavesOptions, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
     /// let target = TargetAmounts::new_amount_and_fee(50_000, None);
-    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment, SelectLeavesOptions::default()).await?;
     ///
     /// // Later, if the transaction fails, cancel the reservation
     /// tree_service.cancel_reservation(reservation.id).await;
@@ -811,12 +847,12 @@ pub trait TreeService: Send + Sync {
     /// # Examples
     ///
     /// ```
-    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, TreeServiceError};
+    /// use spark::tree::{TreeService, TargetAmounts, ReservationPurpose, SelectLeavesOptions, TreeServiceError};
     ///
     /// # async fn example(tree_service: Box<dyn TreeService>) -> Result<(), TreeServiceError> {
     /// // Create a reservation
     /// let target = TargetAmounts::new_amount_and_fee(75_000, Some(2_000));
-    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment).await?;
+    /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment, SelectLeavesOptions::default()).await?;
     ///
     /// // After successfully using the leaves in a transaction, finalize the reservation
     /// tree_service.finalize_reservation(reservation.id, None).await;

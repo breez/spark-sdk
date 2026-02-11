@@ -7,11 +7,7 @@ use bitcoin::secp256k1::PublicKey;
 use tokio_with_wasm::alias as tokio;
 use tracing::{error, info, trace, warn};
 
-/// Maximum time to wait for pending balance before giving up.
-/// This prevents infinite hangs if the system gets into a bad state.
-const MAX_WAIT_FOR_PENDING_DURATION: Duration = Duration::from_secs(60);
-
-use crate::tree::{Leaves, ReservationPurpose, ReserveResult, TreeNodeStatus};
+use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
 use crate::{
     Network,
     operator::{
@@ -86,13 +82,18 @@ impl TreeService for SynchronousTreeService {
     ///
     /// Uses notification-based waiting: if balance is insufficient but pending
     /// balance from in-flight swaps would help, waits for balance changes
-    /// instead of failing immediately.
+    /// instead of failing immediately (unless `options.max_wait_for_pending` is `Duration::ZERO`).
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,
         purpose: ReservationPurpose,
+        options: SelectLeavesOptions,
     ) -> Result<LeavesReservation, TreeServiceError> {
-        trace!("Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}");
+        trace!(
+            "Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}, options: {options:?}"
+        );
+
+        let max_wait = options.max_wait_for_pending;
 
         let mut balance_rx = self.state.subscribe_balance_changes();
         let wait_start = web_time::Instant::now();
@@ -114,11 +115,18 @@ impl TreeService for SynchronousTreeService {
                     available,
                     pending,
                 } => {
+                    // If configured for no waiting, return InsufficientFunds immediately
+                    if max_wait.is_zero() {
+                        return Err(TreeServiceError::InsufficientFunds);
+                    }
+                    info!(
+                        "Waiting for pending balance: available={available}, needed={needed}, pending={pending}",
+                    );
                     self.wait_for_pending_balance(
                         &mut balance_rx,
                         &wait_start,
                         &mut wait_count,
-                        needed,
+                        max_wait,
                         available,
                         pending,
                     )
@@ -314,16 +322,16 @@ impl SynchronousTreeService {
         balance_rx: &mut tokio::sync::watch::Receiver<u64>,
         wait_start: &web_time::Instant,
         wait_count: &mut u32,
-        needed: u64,
+        max_wait: Duration,
         available: u64,
         pending: u64,
     ) -> Result<(), TreeServiceError> {
         *wait_count += 1;
         let elapsed = wait_start.elapsed();
 
-        if elapsed > MAX_WAIT_FOR_PENDING_DURATION {
+        if elapsed > max_wait {
             warn!(
-                "Timeout waiting for pending balance after {:?} ({} attempts): need={needed}, available={available}, pending={pending}",
+                "Timeout waiting for pending balance after {:?} ({} attempts): available={available}, pending={pending}",
                 elapsed, wait_count
             );
             return Err(TreeServiceError::Generic(format!(
@@ -333,7 +341,7 @@ impl SynchronousTreeService {
         }
 
         trace!(
-            "Waiting for pending balance (attempt {}, elapsed {:?}): need={needed}, available={available}, pending={pending}",
+            "Waiting for pending balance (attempt {}, elapsed {:?}): available={available}, pending={pending}",
             wait_count, elapsed
         );
 

@@ -39,8 +39,8 @@ use spark::{
         TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
-        InMemoryTreeStore, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
-        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        InMemoryTreeStore, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
+        TreeNodeId, TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -59,6 +59,9 @@ use crate::{
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
+const MAX_RATE_LIMIT_RETRIES: u32 = 5;
+const RATE_LIMIT_BASE_DELAY_MS: u64 = 100;
+const RATE_LIMIT_MAX_DELAY_MS: u64 = 3000;
 
 use super::{SparkWalletConfig, SparkWalletError, TokenOutputsOptimizationOptions};
 
@@ -79,6 +82,12 @@ fn is_leafs_spent_error(error: &OperatorRpcError) -> bool {
     is_transfer_locked_error(error) || is_permission_denied_error(error)
 }
 
+/// Checks if an error is a gRPC ResourceExhausted status, which occurs
+/// when the operator rate limits or concurrency limits requests.
+fn is_resource_exhausted_error(error: &OperatorRpcError) -> bool {
+    matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::ResourceExhausted)
+}
+
 /// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
 /// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
 macro_rules! with_leafs_spent_retry {
@@ -89,6 +98,7 @@ macro_rules! with_leafs_spent_retry {
         |$leaves_reservation:ident| $operation:expr
     ) => {{
         let mut attempt = 0;
+        let mut rate_limit_attempt: u32 = 0;
         loop {
             if attempt > 0 {
                 if attempt >= MAX_LEAF_SPENT_RETRIES {
@@ -116,6 +126,24 @@ macro_rules! with_leafs_spent_retry {
 
             match result {
                 Ok(v) => break Ok(v),
+                Err(ServiceError::ServiceConnectionError(e))
+                    if is_resource_exhausted_error(&e) =>
+                {
+                    rate_limit_attempt += 1;
+                    if rate_limit_attempt > MAX_RATE_LIMIT_RETRIES {
+                        break Err(ServiceError::ServiceConnectionError(e).into());
+                    }
+                    let delay_ms = (RATE_LIMIT_BASE_DELAY_MS
+                        * 2u64.pow(rate_limit_attempt - 1))
+                    .min(RATE_LIMIT_MAX_DELAY_MS);
+                    info!(
+                        "{} rate limited (attempt {}/{}), backing off {}ms",
+                        $operation_name, rate_limit_attempt,
+                        MAX_RATE_LIMIT_RETRIES, delay_ms,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
+                }
                 Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
                     attempt += 1;
                     continue;
@@ -1564,7 +1592,11 @@ impl SparkWallet {
 
         match self
             .tree_service
-            .select_leaves(target_amounts, ReservationPurpose::Payment)
+            .select_leaves(
+                target_amounts,
+                ReservationPurpose::Payment,
+                SelectLeavesOptions::default(),
+            )
             .await
         {
             Ok(reservation) => Ok(reservation),
@@ -1583,7 +1615,11 @@ impl SparkWallet {
                     // Retry select_leaves
                     let reservation = self
                         .tree_service
-                        .select_leaves(target_amounts, ReservationPurpose::Payment)
+                        .select_leaves(
+                            target_amounts,
+                            ReservationPurpose::Payment,
+                            SelectLeavesOptions::default(),
+                        )
                         .await?;
                     Ok(reservation)
                 } else {

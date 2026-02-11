@@ -3,11 +3,14 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, watch};
 use tokio_with_wasm::alias as tokio;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     services::{ServiceError, Swap},
-    tree::{ReservationPurpose, TargetAmounts, TreeNode, TreeService},
+    tree::{
+        ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode, TreeService,
+        TreeServiceError,
+    },
 };
 
 /// Default maximum number of leaves per swap round
@@ -35,9 +38,9 @@ impl Default for LeafOptimizationOptions {
 impl LeafOptimizationOptions {
     pub fn validate(&self) -> Result<(), ServiceError> {
         if self.multiplicity > 5 {
-            return Err(ServiceError::Generic(
-                "Multiplicity cannot be greater than 5".to_string(),
-            ));
+            warn!(
+                "Multiplicity is greater than 5, you should only use this for high concurrency scenarios"
+            );
         }
         if self.max_leaves_per_swap == 0 {
             return Err(ServiceError::Generic(
@@ -356,7 +359,7 @@ impl LeafOptimizer {
                 return Ok(false);
             }
 
-            // Reserve leaves for the swap
+            // Reserve leaves for the swap using no-wait mode to avoid blocking
             let swap_reservation = match self
                 .tree_service
                 .select_leaves(
@@ -364,21 +367,31 @@ impl LeafOptimizer {
                         swap.leaves_to_give.clone(),
                     )),
                     ReservationPurpose::Swap,
+                    SelectLeavesOptions::no_wait(),
                 )
                 .await
             {
                 Ok(reservation) => reservation,
+                Err(TreeServiceError::InsufficientFunds) => {
+                    // Not enough funds for this round - skip it
+                    debug!("Optimization round {} skipped: insufficient funds", round);
+                    continue;
+                }
                 Err(e) => {
-                    return Err(ServiceError::Generic(format!(
-                        "Failed to select leaves for optimization round {}: {:?}",
-                        round, e
-                    )));
+                    // Other errors (e.g., ResourceBusy) - skip round and continue
+                    debug!("Optimization round {} skipped due to error: {:?}", round, e);
+                    continue;
                 }
             };
 
-            trace!(
-                "Executing optimization round {round}/{total_rounds}: give {:?}, receive {:?}",
-                swap.leaves_to_give, swap.leaves_to_receive,
+            debug!(
+                "Executing optimization round {round}/{total_rounds}: give {} leaves {:?} ({} sats), receive {} leaves {:?} ({} sats)",
+                swap.leaves_to_give.len(),
+                swap.leaves_to_give,
+                swap.leaves_to_give.iter().sum::<u64>(),
+                swap.leaves_to_receive.len(),
+                swap.leaves_to_receive,
+                swap.leaves_to_receive.iter().sum::<u64>(),
             );
 
             // Update progress with current round
@@ -398,6 +411,10 @@ impl LeafOptimizer {
                 .await
             {
                 Ok(new_leaves) => {
+                    let gave_values: Vec<u64> =
+                        swap_reservation.leaves.iter().map(|l| l.value).collect();
+                    let received_values: Vec<u64> = new_leaves.iter().map(|l| l.value).collect();
+
                     if let Err(e) = self
                         .tree_service
                         .finalize_reservation(swap_reservation.id, Some(&new_leaves))
@@ -414,7 +431,17 @@ impl LeafOptimizer {
                         total_rounds,
                     });
 
-                    debug!("Completed optimization round {}/{}", round, total_rounds);
+                    debug!(
+                        "Completed optimization round {}/{}: gave {} leaves {:?} ({} sats), received {} leaves {:?} ({} sats)",
+                        round,
+                        total_rounds,
+                        gave_values.len(),
+                        gave_values,
+                        gave_values.iter().sum::<u64>(),
+                        received_values.len(),
+                        received_values,
+                        received_values.iter().sum::<u64>(),
+                    );
                 }
                 Err(e) => {
                     if let Err(e) = self
@@ -719,12 +746,6 @@ mod tests {
             ..valid.clone()
         };
         assert!(multiplicity_zero.validate().is_ok());
-
-        let invalid_multiplicity_high = LeafOptimizationOptions {
-            multiplicity: 6,
-            ..valid.clone()
-        };
-        assert!(invalid_multiplicity_high.validate().is_err());
 
         let invalid_max_leaves = LeafOptimizationOptions {
             max_leaves_per_swap: 0,

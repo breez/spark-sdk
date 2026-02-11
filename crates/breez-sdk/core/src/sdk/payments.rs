@@ -959,9 +959,8 @@ impl BreezSdk {
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
 
-        let payment_response = self
-            .spark_wallet
-            .pay_lightning_invoice(
+        let payment_response = Box::pin(
+            self.spark_wallet.pay_lightning_invoice(
                 &invoice_details.invoice.bolt11,
                 amount_to_send
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
@@ -969,8 +968,9 @@ impl BreezSdk {
                 Some(fee_sats),
                 prefer_spark,
                 transfer_id,
-            )
-            .await?;
+            ),
+        )
+        .await?;
         let payment = match payment_response.lightning_payment {
             Some(lightning_payment) => {
                 let ssp_id = lightning_payment.id.clone();

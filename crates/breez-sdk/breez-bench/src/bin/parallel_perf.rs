@@ -50,6 +50,14 @@ struct Args {
     /// Random seed for reproducibility
     #[arg(long)]
     seed: Option<u64>,
+
+    /// Disable automatic leaf optimization
+    #[arg(long)]
+    no_auto_optimize: bool,
+
+    /// Run leaf optimization before test starts with specified multiplicity (0-5)
+    #[arg(long, value_name = "MULTIPLICITY")]
+    pre_optimize: Option<u8>,
 }
 
 /// Type of payment to execute
@@ -142,6 +150,17 @@ async fn main() -> Result<()> {
         args.min_amount, args.max_amount
     );
     info!("Seed: {}", seed);
+    info!(
+        "Auto-optimize: {}",
+        if args.no_auto_optimize {
+            "disabled"
+        } else {
+            "enabled"
+        }
+    );
+    if let Some(mult) = args.pre_optimize {
+        info!("Pre-optimize: multiplicity {}", mult);
+    }
     info!("");
 
     let total_payments = args.transfers + args.lightning;
@@ -155,7 +174,8 @@ async fn main() -> Result<()> {
 
     // Initialize SDKs
     info!("Initializing sender and receiver SDKs...");
-    let (mut sender, mut receiver) = initialize_sdk_pair().await?;
+    let (mut sender, mut receiver) =
+        initialize_sdk_pair(args.no_auto_optimize, args.pre_optimize).await?;
 
     // Wait for initial sync
     info!("Waiting for sender sync...");
@@ -166,6 +186,11 @@ async fn main() -> Result<()> {
     // Fund sender
     info!("Funding sender with {} sats...", funding_amount);
     fund_via_faucet(&mut sender, funding_amount).await?;
+
+    // Run pre-optimization if requested
+    if args.pre_optimize.is_some() {
+        run_pre_optimization(&sender.sdk).await?;
+    }
 
     // Get receiver's Spark address for transfers
     let receiver_address = receiver
@@ -523,7 +548,10 @@ fn print_summary(
 }
 
 /// Initialize SDK pair for regtest
-async fn initialize_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInstance)> {
+async fn initialize_sdk_pair(
+    no_auto_optimize: bool,
+    pre_optimize: Option<u8>,
+) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     use rand::RngCore;
     use tempdir::TempDir;
 
@@ -533,7 +561,16 @@ async fn initialize_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
 
-    let sender_config = default_config(Network::Regtest);
+    let mut sender_config = default_config(Network::Regtest);
+    // Disable auto-optimization if requested, or if we're doing pre-optimization
+    // (to avoid auto-opt triggering after funding)
+    if no_auto_optimize || pre_optimize.is_some() {
+        sender_config.optimization_config.auto_enabled = false;
+    }
+    // Set multiplicity if pre-optimization is requested
+    if let Some(multiplicity) = pre_optimize {
+        sender_config.optimization_config.multiplicity = multiplicity;
+    }
     let itest_sender =
         build_sdk_with_custom_config(sender_path, sender_seed, sender_config, None, true).await?;
 
@@ -543,7 +580,9 @@ async fn initialize_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
-    let receiver_config = default_config(Network::Regtest);
+    let mut receiver_config = default_config(Network::Regtest);
+    // Disable auto-optimization for receiver if requested
+    receiver_config.optimization_config.auto_enabled = false;
     let itest_receiver =
         build_sdk_with_custom_config(receiver_path, receiver_seed, receiver_config, None, true)
             .await?;
@@ -560,6 +599,45 @@ async fn initialize_sdk_pair() -> Result<(BenchSdkInstance, BenchSdkInstance)> {
             temp_dir: Some(receiver_dir),
         },
     ))
+}
+
+/// Run leaf optimization and wait for completion
+async fn run_pre_optimization(sdk: &BreezSdk) -> Result<()> {
+    run_optimization(sdk, "Pre-optimization").await
+}
+
+/// Run leaf optimization with a label and wait for completion
+async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
+    info!("Starting {}...", label.to_lowercase());
+    sdk.start_leaf_optimization();
+
+    // Poll until optimization completes
+    let start = Instant::now();
+    let timeout = Duration::from_secs(300); // 5 minute timeout
+    let poll_interval = Duration::from_millis(500);
+
+    loop {
+        let progress = sdk.get_leaf_optimization_progress();
+
+        if !progress.is_running {
+            let elapsed = start.elapsed();
+            info!("{} complete in {:.2}s", label, elapsed.as_secs_f64());
+            break;
+        }
+
+        info!(
+            "Optimization progress: round {}/{}",
+            progress.current_round, progress.total_rounds
+        );
+
+        if start.elapsed() >= timeout {
+            bail!("Timeout waiting for optimization to complete");
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+
+    Ok(())
 }
 
 /// Fund wallet via regtest faucet
