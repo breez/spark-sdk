@@ -43,6 +43,10 @@ const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
 const MIN_REFUND_FEE_SATS: u64 = 194;
 
+/// Witness vbytes for a single Schnorr signature: ceil(66 witness bytes / 4)
+/// Witness structure: 1 (stack items) + 1 (sig length varint) + 64 (signature) = 66 bytes
+const SCHNORR_SIG_WITNESS_VBYTES: u64 = 17;
+
 #[derive(Debug)]
 pub struct DepositAddress {
     pub address: Address,
@@ -299,19 +303,20 @@ impl DepositService {
             .get(output_index as usize)
             .ok_or(ServiceError::InvalidOutputIndex)?;
 
-        // Create the refund transaction.
-        // We populate dummy values for output amount and input witness so
-        // we can calculate the vsize.
+        // Create the refund transaction with a dummy output amount.
+        // The witness vsize is accounted for separately via SCHNORR_SIG_WITNESS_VBYTES.
         let mut refund_tx = create_static_deposit_refund_tx(
             OutPoint {
                 txid,
                 vout: output_index,
             },
-            0, // temporary value for calculating the vsize. We set the real value bellow.
+            0, // Temporary value for calculating the vsize. We set the real value below.
             &refund_address,
         );
 
-        let fee_sats = fee.to_sats(refund_tx.vsize() as u64);
+        // Account for witness data that will be added after signing
+        let signed_vsize = refund_tx.vsize() as u64 + SCHNORR_SIG_WITNESS_VBYTES;
+        let fee_sats = fee.to_sats(signed_vsize);
         if fee_sats < MIN_REFUND_FEE_SATS {
             return Err(ServiceError::Generic(format!(
                 "fee must be at least {} sats",
