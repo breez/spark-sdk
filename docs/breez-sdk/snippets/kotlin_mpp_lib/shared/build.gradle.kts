@@ -33,7 +33,7 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
         }
         androidMain.dependencies {
-            implementation("androidx.core:core-ktx:+")
+            implementation("androidx.core:core-ktx:1.15.0")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
