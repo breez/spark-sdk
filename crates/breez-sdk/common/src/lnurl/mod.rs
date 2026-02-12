@@ -41,13 +41,11 @@ const LNURL_SCHEME_PREFIXES: [&str; 4] = ["lnurlp://", "lnurlw://", "lnurlc://",
 /// its corresponding http(s) URL. Uses `http://` for `.onion` domains, `https://` otherwise.
 fn normalize_lnurl_scheme(url: &str) -> String {
     for prefix in LNURL_SCHEME_PREFIXES {
-        if url.starts_with(prefix) {
-            let rest = &url[prefix.len()..];
+        if let Some(rest) = url.strip_prefix(prefix) {
             let is_onion = rest
                 .split(['/', ':', '?'])
                 .next()
-                .map(|host| host.ends_with(".onion"))
-                .unwrap_or(false);
+                .is_some_and(|host| host.to_ascii_lowercase().ends_with(".onion"));
             let scheme = if is_onion { "http://" } else { "https://" };
             return format!("{scheme}{rest}");
         }
