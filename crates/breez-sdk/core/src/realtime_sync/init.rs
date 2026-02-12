@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use breez_sdk_common::sync::{
-    BreezSyncerClient, SigningClient, SyncLockClient, SyncProcessor, SyncService,
+    BreezSyncerClient, SetLockParams, SigningClient, SyncLockClient, SyncProcessor, SyncService,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -32,8 +32,8 @@ struct SigningLockClient {
 
 #[macros::async_trait]
 impl SyncLockClient for SigningLockClient {
-    async fn set_lock(&self, lock_name: &str, acquire: bool) -> anyhow::Result<()> {
-        self.signing_client.set_lock(lock_name, acquire).await
+    async fn set_lock(&self, params: SetLockParams) -> anyhow::Result<()> {
+        self.signing_client.set_lock(params).await
     }
 
     async fn is_locked(&self, lock_name: &str) -> anyhow::Result<bool> {

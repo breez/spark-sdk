@@ -1,12 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use spark_wallet::SparkWallet;
 use tokio::sync::{Notify, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info, warn};
 
-use breez_sdk_common::sync::SyncLockClient;
+use breez_sdk_common::sync::{LockCounter, SyncLockClient, SyncLockGuard};
 
 use crate::{
     models::StableBalanceConfig,
@@ -30,73 +29,6 @@ struct EffectiveValues {
     reserved: u64,
 }
 
-/// Tracks the number of in-flight payment conversions.
-struct OngoingPaymentCounter {
-    count: AtomicU64,
-}
-
-impl OngoingPaymentCounter {
-    fn new() -> Self {
-        Self {
-            count: AtomicU64::new(0),
-        }
-    }
-
-    fn increment(&self) -> u64 {
-        self.count.fetch_add(1, Ordering::Release).saturating_add(1)
-    }
-
-    fn decrement(&self) -> u64 {
-        self.count.fetch_sub(1, Ordering::Release).saturating_sub(1)
-    }
-
-    fn get(&self) -> u64 {
-        self.count.load(Ordering::Acquire)
-    }
-}
-
-/// RAII guard for an in-flight payment conversion.
-///
-/// Prevents auto-convert from running while any payment conversion is
-/// in progress. When the last guard is dropped and no payments remain
-/// in-flight, the distributed lock is released (if configured).
-pub(crate) struct PaymentGuard {
-    counter: Arc<OngoingPaymentCounter>,
-    sync_lock_client: Option<Arc<dyn SyncLockClient>>,
-}
-
-impl PaymentGuard {
-    fn new(
-        counter: Arc<OngoingPaymentCounter>,
-        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
-    ) -> Self {
-        let count = counter.increment();
-        debug!("Payment started (ongoing: {count})");
-        Self {
-            counter,
-            sync_lock_client,
-        }
-    }
-}
-
-impl Drop for PaymentGuard {
-    fn drop(&mut self) {
-        let remaining = self.counter.decrement();
-        debug!("Payment ended (ongoing: {remaining})");
-
-        // Best-effort release of the distributed lock when no payments remain
-        if remaining == 0
-            && let Some(sync_lock_client) = self.sync_lock_client.take()
-        {
-            tokio::spawn(async move {
-                if let Err(e) = sync_lock_client.set_lock(LOCK_NAME, false).await {
-                    warn!("Failed to release distributed lock: {e:?}");
-                }
-            });
-        }
-    }
-}
-
 /// Manages stable balance auto-conversion behavior.
 ///
 /// This struct handles the business logic of when and how much to convert,
@@ -118,7 +50,7 @@ pub(crate) struct StableBalance {
 
     /// Tracks the number of in-flight payment conversions.
     /// Auto-convert is skipped while any payments are ongoing.
-    ongoing_payments: Arc<OngoingPaymentCounter>,
+    ongoing_payments: Arc<LockCounter>,
 
     /// Notify to trigger auto-conversion
     auto_convert_trigger: Arc<Notify>,
@@ -144,7 +76,7 @@ impl StableBalance {
             token_converter,
             spark_wallet,
             effective_values: Arc::new(ExpiringCell::new()),
-            ongoing_payments: Arc::new(OngoingPaymentCounter::new()),
+            ongoing_payments: Arc::new(LockCounter::new()),
             auto_convert_trigger,
             sync_lock_client,
         };
@@ -203,20 +135,19 @@ impl StableBalance {
             return Ok(false);
         }
 
-        // 3. Check distributed lock — skip if any instance holds it or if the check fails
-        if let Some(sync_lock_client) = &self.sync_lock_client {
-            match sync_lock_client.is_locked(LOCK_NAME).await {
-                Ok(true) => {
-                    debug!("Auto-conversion skipped: distributed lock is held by another instance");
-                    return Ok(false);
-                }
-                Err(e) => {
-                    debug!("Auto-conversion skipped: failed to check distributed lock: {e:?}");
-                    return Ok(false);
-                }
-                Ok(false) => {}
+        // 3. Acquire exclusive distributed lock — skip if another instance holds it
+        let _lock_guard = match SyncLockGuard::new_exclusive(
+            LOCK_NAME.to_string(),
+            self.sync_lock_client.clone(),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(e) => {
+                debug!("Auto-conversion skipped: failed to acquire exclusive lock: {e:?}");
+                return Ok(false);
             }
-        }
+        };
 
         // 4. Convert the amount above the reserve
         let amount_to_convert = balance_sats.saturating_sub(reserved);
@@ -245,6 +176,8 @@ impl StableBalance {
             "Auto-conversion completed: converted {} sats (sent_payment_id={}, received_payment_id={})",
             amount_to_convert, response.sent_payment_id, response.received_payment_id
         );
+
+        // _lock_guard drops here, releasing the distributed lock
 
         Ok(true)
     }
@@ -310,22 +243,13 @@ impl StableBalance {
         self.auto_convert_trigger.notify_one();
     }
 
-    /// Creates a payment guard that prevents auto-conversion while held.
+    /// Creates a lock guard that prevents auto-conversion while held.
     ///
-    /// Auto-convert is skipped while any payment guard is active. When the
+    /// Auto-convert is skipped while any guard is active. When the
     /// last guard is dropped, the distributed lock is released (if configured).
-    pub fn create_payment_guard(&self) -> PaymentGuard {
-        // Best-effort acquire the distributed lock (fire-and-forget)
-        if let Some(sync_lock_client) = &self.sync_lock_client {
-            let sync_lock_client = Arc::clone(sync_lock_client);
-            tokio::spawn(async move {
-                if let Err(e) = sync_lock_client.set_lock(LOCK_NAME, true).await {
-                    warn!("Failed to acquire distributed lock: {e:?}");
-                }
-            });
-        }
-
-        PaymentGuard::new(
+    pub fn create_sync_lock_guard(&self) -> SyncLockGuard {
+        SyncLockGuard::new(
+            LOCK_NAME.to_string(),
             Arc::clone(&self.ongoing_payments),
             self.sync_lock_client.clone(),
         )

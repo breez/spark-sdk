@@ -54,6 +54,7 @@ message SetLockRequest {
   optional uint32 ttl_seconds = 4;
   uint32 request_time = 5;
   string signature = 6;
+  optional bool exclusive = 7;
 }
 message SetLockReply {}
 

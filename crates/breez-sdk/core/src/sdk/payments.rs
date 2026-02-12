@@ -529,11 +529,11 @@ impl BreezSdk {
         }
 
         // Prevent auto-convert from running while this payment is in progress.
-        let _payment_guard = match (
+        let _lock_guard = match (
             &request.prepare_response.token_identifier,
             &self.stable_balance,
         ) {
-            (None, Some(sb)) => Some(sb.create_payment_guard()),
+            (None, Some(sb)) => Some(sb.create_sync_lock_guard()),
             _ => None,
         };
 
@@ -692,7 +692,7 @@ impl BreezSdk {
         .map(|res| SendPaymentResponse {
             payment: res.payment,
         })
-        // _payment_guard drops here, releasing the distributed lock if no other payments are in-flight
+        // _lock_guard drops here, releasing the distributed lock if no other payments are in-flight
     }
 
     pub(super) async fn send_payment_internal(
