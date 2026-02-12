@@ -978,6 +978,7 @@ pub struct RegisterLightningAddressRequest {
 pub struct LnurlInfo {
     pub url: String,
     pub bech32: String,
+    pub bech32_pubkey: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressInfo)]

@@ -12,7 +12,6 @@ pub use crate::token_conversion::{
 pub(crate) use crate::token_conversion::TokenConversionResponse;
 
 use core::fmt;
-use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Display, str::FromStr};
@@ -1260,13 +1259,23 @@ pub struct RegisterLightningAddressRequest {
 pub struct LnurlInfo {
     pub url: String,
     pub bech32: String,
+    /// Bech32-encoded LNURL using the pubkey-based path (`/lnurlp/{pubkey}`).
+    /// This produces a longer bech32 string compatible with wallets that resolve
+    /// by public key rather than username.
+    pub bech32_pubkey: Option<String>,
 }
 
 impl LnurlInfo {
-    pub fn new(url: String) -> Self {
+    pub fn with_pubkey(url: String, domain: &str, pubkey: &str) -> Self {
         let bech32 =
             breez_sdk_common::lnurl::encode_lnurl_to_bech32(&url).unwrap_or_else(|_| url.clone());
-        Self { url, bech32 }
+        let pubkey_url = format!("lnurlp://{domain}/lnurlp/{pubkey}");
+        let bech32_pubkey = breez_sdk_common::lnurl::encode_lnurl_to_bech32(&pubkey_url).ok();
+        Self {
+            url,
+            bech32,
+            bech32_pubkey,
+        }
     }
 }
 
@@ -1277,17 +1286,6 @@ pub struct LightningAddressInfo {
     pub lightning_address: String,
     pub lnurl: LnurlInfo,
     pub username: String,
-}
-
-impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
-    fn from(resp: RecoverLnurlPayResponse) -> Self {
-        Self {
-            description: resp.description,
-            lightning_address: resp.lightning_address,
-            lnurl: LnurlInfo::new(resp.lnurl),
-            username: resp.username,
-        }
-    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

@@ -78,7 +78,13 @@ impl BreezSdk {
         let resp = client.recover_lightning_address().await?;
 
         let result = if let Some(resp) = resp {
-            let address_info = resp.into();
+            let pubkey_hex = self.spark_wallet.get_identity_public_key().to_string();
+            let address_info = LightningAddressInfo {
+                description: resp.description,
+                lightning_address: resp.lightning_address,
+                lnurl: LnurlInfo::with_pubkey(resp.lnurl, client.domain(), &pubkey_hex),
+                username: resp.username,
+            };
             cache.save_lightning_address(&address_info).await?;
             Some(address_info)
         } else {
@@ -122,10 +128,11 @@ impl BreezSdk {
         };
 
         let response = client.register_lightning_address(&params).await?;
+        let pubkey_hex = self.spark_wallet.get_identity_public_key().to_string();
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description,
-            lnurl: LnurlInfo::new(response.lnurl),
+            lnurl: LnurlInfo::with_pubkey(response.lnurl, client.domain(), &pubkey_hex),
             username,
         };
         cache.save_lightning_address(&address_info).await?;
