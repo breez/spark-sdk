@@ -34,11 +34,35 @@ pub struct LnurlErrorDetails {
     pub reason: String,
 }
 
+/// LUD-17 scheme prefixes that need to be converted to http(s) for bech32 encoding.
+const LNURL_SCHEME_PREFIXES: [&str; 4] = ["lnurlp://", "lnurlw://", "lnurlc://", "keyauth://"];
+
+/// Converts a LUD-17 scheme URL (e.g. `lnurlp://`, `lnurlw://`, `keyauth://`) to
+/// its corresponding http(s) URL. Uses `http://` for `.onion` domains, `https://` otherwise.
+fn normalize_lnurl_scheme(url: &str) -> String {
+    for prefix in LNURL_SCHEME_PREFIXES {
+        if url.starts_with(prefix) {
+            let rest = &url[prefix.len()..];
+            let is_onion = rest
+                .split(['/', ':', '?'])
+                .next()
+                .map(|host| host.ends_with(".onion"))
+                .unwrap_or(false);
+            let scheme = if is_onion { "http://" } else { "https://" };
+            return format!("{scheme}{rest}");
+        }
+    }
+    url.to_string()
+}
+
 /// Encodes an lnurl as a bech32 string.
+/// Handles LUD-17 scheme prefixes (lnurlp://, lnurlw://, lnurlc://, keyauth://)
+/// by converting them to their corresponding http(s) URL before encoding.
 pub fn encode_lnurl_to_bech32(lnurl: &str) -> Result<String, String> {
+    let normalized = normalize_lnurl_scheme(lnurl);
     let hrp = bech32::Hrp::parse("lnurl").map_err(|e| e.to_string())?;
     let bech32_encoded =
-        bech32::encode::<bech32::Bech32>(hrp, lnurl.as_bytes()).map_err(|e| e.to_string())?;
+        bech32::encode::<bech32::Bech32>(hrp, normalized.as_bytes()).map_err(|e| e.to_string())?;
     Ok(bech32_encoded.to_lowercase())
 }
 
@@ -47,7 +71,63 @@ mod tests {
     use rand;
     use rand::distributions::{Alphanumeric, DistString};
 
+    use super::{encode_lnurl_to_bech32, normalize_lnurl_scheme};
+
     pub fn rand_string(len: usize) -> String {
         Alphanumeric.sample_string(&mut rand::thread_rng(), len)
+    }
+
+    #[test]
+    fn test_normalize_lnurl_scheme_lnurlp() {
+        assert_eq!(
+            normalize_lnurl_scheme("lnurlp://domain.com/lnurlp/user"),
+            "https://domain.com/lnurlp/user"
+        );
+    }
+
+    #[test]
+    fn test_normalize_lnurl_scheme_lnurlw() {
+        assert_eq!(
+            normalize_lnurl_scheme("lnurlw://domain.com/lnurl-withdraw?k1=abc"),
+            "https://domain.com/lnurl-withdraw?k1=abc"
+        );
+    }
+
+    #[test]
+    fn test_normalize_lnurl_scheme_keyauth() {
+        assert_eq!(
+            normalize_lnurl_scheme("keyauth://domain.com/lnurl-login?tag=login&k1=abc"),
+            "https://domain.com/lnurl-login?tag=login&k1=abc"
+        );
+    }
+
+    #[test]
+    fn test_normalize_lnurl_scheme_onion() {
+        assert_eq!(
+            normalize_lnurl_scheme("lnurlp://example.onion/lnurlp/user"),
+            "http://example.onion/lnurlp/user"
+        );
+    }
+
+    #[test]
+    fn test_normalize_lnurl_scheme_https_passthrough() {
+        assert_eq!(
+            normalize_lnurl_scheme("https://domain.com/lnurlp/user"),
+            "https://domain.com/lnurlp/user"
+        );
+    }
+
+    #[test]
+    fn test_encode_lnurl_to_bech32_normalizes_lnurlp() {
+        let from_lnurlp = encode_lnurl_to_bech32("lnurlp://domain.com/path").unwrap();
+        let from_https = encode_lnurl_to_bech32("https://domain.com/path").unwrap();
+        assert_eq!(from_lnurlp, from_https);
+    }
+
+    #[test]
+    fn test_encode_lnurl_to_bech32_onion_uses_http() {
+        let from_lnurlp = encode_lnurl_to_bech32("lnurlp://example.onion/path").unwrap();
+        let from_http = encode_lnurl_to_bech32("http://example.onion/path").unwrap();
+        assert_eq!(from_lnurlp, from_http);
     }
 }
