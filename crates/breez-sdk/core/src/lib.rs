@@ -28,8 +28,8 @@ pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
-    PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
-    path::default_storage_path,
+    PaymentMetadata, PendingLnurlPreimage, SetLnurlMetadataItem, Storage, StorageError,
+    UpdateDepositPayload, path::default_storage_path,
 };
 pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;

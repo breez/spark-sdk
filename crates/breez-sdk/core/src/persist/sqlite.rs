@@ -12,7 +12,7 @@ use crate::{
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
     TokenTransactionType,
     error::DepositClaimError,
-    persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
+    persist::{PaymentMetadata, PendingLnurlPreimage, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
     },
@@ -855,6 +855,44 @@ impl Storage for SqliteStorage {
         Ok(())
     }
 
+    async fn get_pending_lnurl_preimages(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<PendingLnurlPreimage>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection
+            .prepare(
+                "SELECT l.payment_hash, l.preimage, lrm.sender_comment, lrm.nostr_zap_request, lrm.nostr_zap_receipt
+                 FROM payment_details_lightning l
+                 INNER JOIN payments p ON p.id = l.payment_id
+                 INNER JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
+                 WHERE p.payment_type = 'receive'
+                   AND p.status = 'completed'
+                   AND l.preimage IS NOT NULL
+                   AND lrm.preimage IS NULL
+                 LIMIT ?",
+            )
+            .map_err(map_sqlite_error)?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                Ok(PendingLnurlPreimage {
+                    payment_hash: row.get(0)?,
+                    preimage: row.get(1)?,
+                    sender_comment: row.get(2)?,
+                    nostr_zap_request: row.get(3)?,
+                    nostr_zap_receipt: row.get(4)?,
+                })
+            })
+            .map_err(map_sqlite_error)?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(map_sqlite_error)?);
+        }
+        Ok(results)
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -1665,6 +1703,14 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_payment_details_update_persistence(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_pending_lnurl_preimages() {
+        let temp_dir = create_temp_dir("sqlite_storage_pending_lnurl_preimages");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_pending_lnurl_preimages(Box::new(storage)).await;
     }
 
     #[tokio::test]

@@ -11,7 +11,8 @@ use std::collections::HashMap;
 
 use crate::models::{
     DepositInfo, IncomingChange, ListPaymentsRequest, OutgoingChange, Payment, PaymentMetadata,
-    Record, SetLnurlMetadataItem, UnversionedRecordChange, UpdateDepositPayload,
+    PendingLnurlPreimage, Record, SetLnurlMetadataItem, UnversionedRecordChange,
+    UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -250,6 +251,22 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
         Ok(())
+    }
+
+    async fn get_pending_lnurl_preimages(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<breez_sdk_spark::PendingLnurlPreimage>, StorageError> {
+        let promise = self
+            .storage
+            .get_pending_lnurl_preimages(limit)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_storage_error)?;
+
+        let preimages: Vec<PendingLnurlPreimage> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        Ok(preimages.into_iter().map(|p| p.into()).collect())
     }
 
     async fn get_payments_by_parent_ids(
@@ -511,6 +528,9 @@ extern "C" {
         this: &Storage,
         metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getPendingLnurlPreimages, catch)]
+    pub fn get_pending_lnurl_preimages(this: &Storage, limit: u32) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getPaymentsByParentIds, catch)]
     pub fn get_payments_by_parent_ids(

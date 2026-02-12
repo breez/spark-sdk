@@ -954,6 +954,15 @@ pub struct SetLnurlMetadataItem {
     pub preimage: Option<String>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PendingLnurlPreimage)]
+pub struct PendingLnurlPreimage {
+    pub payment_hash: String,
+    pub preimage: String,
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
 pub enum UpdateDepositPayload {
     ClaimError {

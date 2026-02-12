@@ -690,6 +690,51 @@ class SqliteStorage {
     }
   }
 
+  /**
+   * Get pending LNURL preimages - payments that:
+   * - Are completed receive Lightning payments
+   * - Have a preimage in the payment details
+   * - Have LNURL metadata without a preimage (not yet sent to server)
+   */
+  getPendingLnurlPreimages(limit) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT
+          lm.payment_hash,
+          l.preimage,
+          lm.sender_comment,
+          lm.nostr_zap_request,
+          lm.nostr_zap_receipt
+        FROM lnurl_receive_metadata lm
+        INNER JOIN payment_details_lightning l ON l.payment_hash = lm.payment_hash
+        INNER JOIN payments p ON p.id = l.payment_id
+        WHERE lm.preimage IS NULL
+          AND p.payment_type = 'receive'
+          AND p.status = 'completed'
+          AND l.preimage IS NOT NULL
+        LIMIT ?
+      `);
+
+      const rows = stmt.all(limit);
+      return Promise.resolve(
+        rows.map((row) => ({
+          paymentHash: row.payment_hash,
+          preimage: row.preimage,
+          senderComment: row.sender_comment || null,
+          nostrZapRequest: row.nostr_zap_request || null,
+          nostrZapReceipt: row.nostr_zap_receipt || null,
+        }))
+      );
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get pending lnurl preimages: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
   // ===== Private Helper Methods =====
 
   _rowToPayment(row) {
