@@ -27,15 +27,45 @@ pub enum HttpError {
     Other(String),
 }
 
+impl HttpError {
+    /// Returns the HTTP status code if this error contains one.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Status { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
 // Native: bitreq error conversion
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 impl From<bitreq::Error> for HttpError {
     fn from(err: bitreq::Error) -> Self {
         let err_str = format!("{err:?}");
-        match err {
-            bitreq::Error::IoError(_) => Self::Connect(err_str),
-            bitreq::Error::InvalidUtf8InBody(_) => Self::Decode(err_str),
-            bitreq::Error::Other(msg) => Self::Other(msg.to_string()),
+        match &err {
+            bitreq::Error::IoError(io_err) => {
+                // Check if it's a timeout error
+                if io_err.kind() == std::io::ErrorKind::TimedOut {
+                    Self::Timeout(err_str)
+                } else {
+                    Self::Connect(err_str)
+                }
+            }
+            bitreq::Error::InvalidUtf8InBody(_) | bitreq::Error::InvalidUtf8InResponse => {
+                Self::Decode(err_str)
+            }
+            // Redirect-related errors
+            bitreq::Error::TooManyRedirections
+            | bitreq::Error::InfiniteRedirectionLoop
+            | bitreq::Error::RedirectLocationMissing => Self::Redirect(err_str),
+            // Connection errors
+            bitreq::Error::AddressNotFound => Self::Connect(err_str),
+            // Request/URL errors
+            bitreq::Error::InvalidUrl(_) => Self::Request(err_str),
+            // Body errors
+            bitreq::Error::BodyOverflow => Self::Body(err_str),
+            // Other errors
+            bitreq::Error::Other(msg) => Self::Other((*msg).to_string()),
             _ => Self::Other(err_str),
         }
     }

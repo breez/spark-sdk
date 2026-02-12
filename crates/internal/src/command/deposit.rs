@@ -6,7 +6,7 @@ use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
 };
 use clap::Subcommand;
-use platform_utils::{DefaultHttpClient, HttpClient};
+use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
 use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
 use crate::config::MempoolConfig;
@@ -165,15 +165,6 @@ pub async fn handle_command(
     }
 
     Ok(())
-}
-
-fn make_basic_auth_header(username: &str, password: &str) -> String {
-    use std::io::Write;
-    let credentials = format!("{username}:{password}");
-    let mut encoder =
-        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
-    encoder.write_all(credentials.as_bytes()).unwrap();
-    format!("Basic {}", encoder.into_inner())
 }
 
 async fn get_transaction(

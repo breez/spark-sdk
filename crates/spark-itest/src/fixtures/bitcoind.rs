@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
-use platform_utils::{DefaultHttpClient, HttpClient};
+use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use testcontainers::{
@@ -42,15 +42,6 @@ struct RpcResponse<T> {
     result: Option<T>,
     error: Option<Value>,
     // id: Value,
-}
-
-fn make_basic_auth_header(username: &str, password: &str) -> String {
-    use std::io::Write;
-    let credentials = format!("{username}:{password}");
-    let mut encoder =
-        base64::write::EncoderStringWriter::new(&base64::engine::general_purpose::STANDARD);
-    encoder.write_all(credentials.as_bytes()).unwrap();
-    format!("Basic {}", encoder.into_inner())
 }
 
 impl BitcoindFixture {

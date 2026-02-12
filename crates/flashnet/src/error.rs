@@ -39,8 +39,8 @@ impl FlashnetError {
 impl From<platform_utils::HttpError> for FlashnetError {
     fn from(err: platform_utils::HttpError) -> Self {
         Self::Network {
+            code: err.status(),
             reason: err.to_string(),
-            code: None,
         }
     }
 }

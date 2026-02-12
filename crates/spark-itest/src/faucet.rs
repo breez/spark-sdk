@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
-use platform_utils::{DefaultHttpClient, HttpClient};
+use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -68,13 +68,6 @@ struct RequestRegtestFunds {
 #[derive(Debug, Deserialize)]
 struct GraphQLError {
     message: String,
-}
-
-fn make_basic_auth_header(username: &str, password: &str) -> String {
-    use base64::Engine;
-    let credentials = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes());
-    format!("Basic {encoded}")
 }
 
 impl RegtestFaucet {

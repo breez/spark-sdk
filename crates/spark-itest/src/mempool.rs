@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use bitcoin::{Transaction, consensus::encode::deserialize_hex};
-use platform_utils::{DefaultHttpClient, HttpClient};
+use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
 use tracing::info;
 
 /// Configuration for the mempool/esplora API client
@@ -33,13 +33,6 @@ impl Default for MempoolConfig {
 /// Client for fetching transactions from a mempool/esplora API
 pub struct MempoolClient {
     config: MempoolConfig,
-}
-
-fn make_basic_auth_header(username: &str, password: &str) -> String {
-    use base64::Engine;
-    let credentials = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes());
-    format!("Basic {encoded}")
 }
 
 impl MempoolClient {

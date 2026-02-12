@@ -45,8 +45,8 @@ impl GraphQLError {
 impl From<platform_utils::HttpError> for GraphQLError {
     fn from(err: platform_utils::HttpError) -> Self {
         Self::Network {
+            code: err.status(),
             reason: err.to_string(),
-            code: None,
         }
     }
 }

@@ -568,9 +568,9 @@ dependencies = [
 
 [[package]]
 name = "bitreq"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cdd1a33e915c66e68c47ad80b5b351d3106894461878a58f4d34a16e4ed662d"
+checksum = "1457cbcb911ab2940ef6d94b6df7b428522d62af876fc150d060871bc4a8f395"
 dependencies = [
  "rustls 0.21.12",
  "rustls-webpki 0.101.7",
@@ -2820,6 +2820,7 @@ name = "platform-utils"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "bitreq",
  "macros",
  "reqwest",

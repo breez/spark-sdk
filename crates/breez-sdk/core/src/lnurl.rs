@@ -120,14 +120,20 @@ impl DefaultLnurlServerClient {
         }
     }
 
-    /// Get common headers including authorization
-    fn get_headers(&self) -> HashMap<String, String> {
+    /// Get common headers for all requests (User-Agent and Authorization).
+    fn get_common_headers(&self) -> HashMap<String, String> {
         let mut headers = HashMap::new();
         headers.insert("User-Agent".to_string(), "breez-sdk-spark".to_string());
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
         if let Some(api_key) = &self.api_key {
             headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
         }
+        headers
+    }
+
+    /// Get headers for POST/DELETE requests (includes Content-Type).
+    fn get_post_headers(&self) -> HashMap<String, String> {
+        let mut headers = self.get_common_headers();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
         headers
     }
 
@@ -174,7 +180,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         let url = format!("{}/lnurlpay/available/{}", self.base_url(), username);
         let response = self
             .http_client
-            .get(url, Some(self.get_headers()))
+            .get(url, Some(self.get_common_headers()))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
@@ -203,7 +209,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let response = self
             .http_client
-            .post(url, Some(self.get_headers()), Some(body))
+            .post(url, Some(self.get_post_headers()), Some(body))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
@@ -250,7 +256,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let response = self
             .http_client
-            .post(url, Some(self.get_headers()), Some(body))
+            .post(url, Some(self.get_post_headers()), Some(body))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
@@ -280,7 +286,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let response = self
             .http_client
-            .delete(url, Some(self.get_headers()), Some(body))
+            .delete(url, Some(self.get_post_headers()), Some(body))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
@@ -322,7 +328,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let response = self
             .http_client
-            .get(url, Some(self.get_headers()))
+            .get(url, Some(self.get_common_headers()))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
@@ -358,7 +364,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let response = self
             .http_client
-            .post(url, Some(self.get_headers()), Some(body))
+            .post(url, Some(self.get_post_headers()), Some(body))
             .await
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 

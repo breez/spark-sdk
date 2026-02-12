@@ -1,10 +1,11 @@
 //! WASM HTTP client using reqwest.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::HttpError;
 
-use super::{HttpClient, HttpResponse};
+use super::{HttpClient, HttpResponse, REQUEST_TIMEOUT};
 
 /// HTTP client implementation using reqwest for WASM platforms.
 pub struct ReqwestHttpClient {
@@ -38,7 +39,10 @@ impl HttpClient for ReqwestHttpClient {
         headers: Option<HashMap<String, String>>,
     ) -> Result<HttpResponse, HttpError> {
         tracing::debug!("Making GET request to: {url}");
-        let mut req = self.client.get(&url);
+        let mut req = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT));
 
         if let Some(headers) = headers {
             for (key, value) in &headers {
@@ -62,7 +66,10 @@ impl HttpClient for ReqwestHttpClient {
         body: Option<String>,
     ) -> Result<HttpResponse, HttpError> {
         tracing::debug!("Making POST request to: {url}");
-        let mut req = self.client.post(&url);
+        let mut req = self
+            .client
+            .post(&url)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT));
 
         if let Some(headers) = headers {
             for (key, value) in &headers {
@@ -89,7 +96,10 @@ impl HttpClient for ReqwestHttpClient {
         body: Option<String>,
     ) -> Result<HttpResponse, HttpError> {
         tracing::debug!("Making DELETE request to: {url}");
-        let mut req = self.client.delete(&url);
+        let mut req = self
+            .client
+            .delete(&url)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT));
 
         if let Some(headers) = headers {
             for (key, value) in &headers {
