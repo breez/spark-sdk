@@ -33,6 +33,7 @@ impl Default for FaucetConfig {
 /// Client for interacting with a regtest faucet
 pub struct RegtestFaucet {
     config: FaucetConfig,
+    http_client: DefaultHttpClient,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,7 +80,10 @@ impl RegtestFaucet {
     /// Create a new faucet client with custom configuration
     pub fn with_config(config: FaucetConfig) -> Result<Self> {
         info!("Initialized faucet client with URL: {}", config.url);
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            http_client: DefaultHttpClient::default(),
+        })
     }
 
     /// Fund an address with the specified amount
@@ -119,8 +123,8 @@ impl RegtestFaucet {
             headers.insert("Authorization".to_string(), auth_header);
         }
 
-        let http_client = DefaultHttpClient::default();
-        let response = http_client
+        let response = self
+            .http_client
             .post(self.config.url.clone(), Some(headers), Some(body_json))
             .await
             .context("Failed to send faucet request")?;

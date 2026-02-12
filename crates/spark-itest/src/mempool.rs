@@ -33,6 +33,7 @@ impl Default for MempoolConfig {
 /// Client for fetching transactions from a mempool/esplora API
 pub struct MempoolClient {
     config: MempoolConfig,
+    http_client: DefaultHttpClient,
 }
 
 impl MempoolClient {
@@ -44,7 +45,10 @@ impl MempoolClient {
     /// Create a new mempool client with custom configuration
     pub fn with_config(config: MempoolConfig) -> Result<Self> {
         info!("Initialized mempool client with URL: {}", config.url);
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            http_client: DefaultHttpClient::default(),
+        })
     }
 
     /// Fetch a transaction by its txid
@@ -63,8 +67,8 @@ impl MempoolClient {
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), auth_header);
 
-        let http_client = DefaultHttpClient::default();
-        let response = http_client
+        let response = self
+            .http_client
             .get(url.clone(), Some(headers))
             .await
             .context("Failed to fetch transaction")?;
