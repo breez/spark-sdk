@@ -431,3 +431,90 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
 
     Ok(())
 }
+
+/// Tests refund with a low deposit amount (1634 sats) using fee rate.
+#[rstest]
+#[ignore]
+#[tokio::test]
+async fn test_deposit_low_amount_refund_fee_rate(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_no_fee_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_no_fee_sdk.await?;
+
+    // Ensure Alice has enough funds
+    ensure_funded(&mut alice, 10_000).await?;
+
+    // Bob acquires a static deposit address
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?
+        .payment_request;
+    info!("Bob deposit address: {}", bob_address);
+
+    // Alice sends a low amount (1634 sats) to Bob's deposit address
+    let fund_amount = 1634u64;
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_address.clone(),
+            amount: Some(fund_amount as u128),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::BitcoinAddress {
+                confirmation_speed: OnchainConfirmationSpeed::Fast,
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+    info!(
+        "Alice sent {} sats to Bob, status: {:?}",
+        fund_amount, send_resp.payment.status
+    );
+
+    // Sync Bob and wait for UnclaimedDeposits (no fee set blocks auto-claim)
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let failed = wait_for_unclaimed_event(&mut bob.events, 180).await?;
+    assert!(!failed.is_empty());
+
+    // Get the unclaimed deposit
+    let deposits = bob
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    let dep = deposits
+        .iter()
+        .find(|d| d.amount_sats == fund_amount)
+        .cloned()
+        .expect("unclaimed deposit not found");
+
+    // Refund with 2 sat/vB fee rate - this tests the vsize calculation fix
+    let refund = bob
+        .sdk
+        .refund_deposit(RefundDepositRequest {
+            txid: dep.txid.clone(),
+            vout: dep.vout,
+            destination_address: bob_address,
+            fee: Fee::Rate { sat_per_vbyte: 2 },
+        })
+        .await?;
+    info!(
+        "Low amount refund succeeded with fee rate, tx_id: {}",
+        refund.tx_id
+    );
+
+    Ok(())
+}
