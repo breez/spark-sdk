@@ -57,12 +57,12 @@ check-deps:
 	fi
 
 # Builds the Rust library & Generates Dart/Flutter bindings
-build:
+build: setup
 	just build-release
 	just gen
 
 # Builds the Rust library in release mode
-build-release:
+build-release: setup
 	cd rust && cargo build --release
 
 # Generate Dart/Flutter bindings // & Softlinks C headers
@@ -70,7 +70,7 @@ gen:
 	just codegen
 
 # Generate Dart/Flutter bindings
-codegen:
+codegen: setup
 	mkdir -p lib/src/rust
 	{{frb_bin}}
 
