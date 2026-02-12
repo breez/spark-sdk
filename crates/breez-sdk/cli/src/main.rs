@@ -119,7 +119,6 @@ async fn run_interactive_mode(
     let mut config = default_config(network);
     config.api_key = breez_api_key;
     config.stable_balance_config = stable_balance_config;
-    config.real_time_sync_server_url = Some("http://localhost:8080".to_string());
 
     let seed = Seed::Mnemonic {
         mnemonic: mnemonic.to_string(),
