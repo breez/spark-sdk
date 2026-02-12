@@ -513,7 +513,7 @@ impl BreezSdk {
                 .save_lnurl_metadata_updated_after(updated_after)
                 .await?;
 
-            let _ = self.zap_receipt_trigger.send(());
+            let _ = self.lnurl_preimage_trigger.send(());
             if len < SYNC_PAGING_LIMIT {
                 // No more invoices to fetch
                 break;

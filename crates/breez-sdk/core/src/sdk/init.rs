@@ -61,7 +61,7 @@ impl BreezSdk {
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_trigger: tokio::sync::broadcast::channel(10).0,
-            zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
+            lnurl_preimage_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),

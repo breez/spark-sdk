@@ -486,8 +486,8 @@ impl BreezSdk {
         })
     }
 
-    /// Background task that publishes zap receipts for payments with zap requests.
-    /// Triggered on startup and after syncing lnurl metadata.
+    /// Background task that publishes lnurl preimages for received lnurl payments for nostr zaps
+    /// and LNURL verify. Triggered on startup and after syncing lnurl metadata.
     pub(super) fn spawn_lnurl_preimage_publisher(&self) {
         if self.config.no_invoice_paid_support {
             debug!(
@@ -498,7 +498,7 @@ impl BreezSdk {
 
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut trigger_receiver = sdk.zap_receipt_trigger.clone().subscribe();
+        let mut trigger_receiver = sdk.lnurl_preimage_trigger.clone().subscribe();
 
         tokio::spawn(async move {
             if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
@@ -531,6 +531,7 @@ impl BreezSdk {
             // Query only payments that need their preimage sent to the server
             let pending = self.storage.get_pending_lnurl_preimages(limit).await?;
 
+            debug!("Got {} pending lnurl preimages", pending.len());
             if pending.is_empty() {
                 break;
             }
