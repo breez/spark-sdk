@@ -145,6 +145,93 @@ impl RestClient for ReqwestRestClient {
     }
 }
 
+/// A REST client that proxies GET requests through a CORS proxy endpoint.
+///
+/// In WASM/browser environments, cross-origin requests to third-party domains
+/// (e.g. LNURL-auth callbacks) are blocked by CORS policy. This client rewrites
+/// GET URLs to go through the Breez LNURL server's `/v1/proxy` endpoint.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub struct ProxyRestClient {
+    inner: ReqwestRestClient,
+    proxy_base_url: String,
+}
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+impl ProxyRestClient {
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new(domain: String) -> Result<Self, ServiceConnectivityError> {
+        let proxy_base_url = if domain.contains("://") {
+            format!("{domain}/v1/proxy")
+        } else {
+            format!("https://{domain}/v1/proxy")
+        };
+        Ok(Self {
+            inner: ReqwestRestClient::new()?,
+            proxy_base_url,
+        })
+    }
+
+    fn proxy_url(&self, url: &str) -> String {
+        format!(
+            "{}?url={}",
+            self.proxy_base_url,
+            percent_encode(url)
+        )
+    }
+}
+
+/// Percent-encode a string per RFC 3986.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+fn percent_encode(input: &str) -> String {
+    use std::fmt::Write;
+    let mut result = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                result.push(byte as char);
+            }
+            _ => {
+                result.push('%');
+                write!(result, "{byte:02X}").expect("writing to String cannot fail");
+            }
+        }
+    }
+    result
+}
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+#[macros::async_trait]
+impl RestClient for ProxyRestClient {
+    async fn get_request(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<RestResponse, ServiceConnectivityError> {
+        debug!("ProxyRestClient: proxying GET {url}");
+        self.inner
+            .get_request(self.proxy_url(&url), headers)
+            .await
+    }
+
+    async fn post_request(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<RestResponse, ServiceConnectivityError> {
+        self.inner.post_request(url, headers, body).await
+    }
+
+    async fn delete_request(
+        &self,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<String>,
+    ) -> Result<RestResponse, ServiceConnectivityError> {
+        self.inner.delete_request(url, headers, body).await
+    }
+}
+
 pub fn parse_json<T>(json: &str) -> Result<T, ServiceConnectivityError>
 where
     for<'a> T: serde::de::Deserialize<'a>,

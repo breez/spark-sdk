@@ -9,6 +9,8 @@ use breez_sdk_common::{
     buy::{BuyBitcoinProviderApi, moonpay::MoonpayProvider},
     rest::ReqwestRestClient as CommonRequestRestClient,
 };
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use breez_sdk_common::rest::ProxyRestClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
@@ -350,9 +352,28 @@ impl SdkBuilder {
 
         let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
             Some(client) => Arc::new(RestClientWrapper::new(client)),
-            None => Arc::new(
-                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
+            None => {
+                #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+                {
+                    match &self.config.lnurl_domain {
+                        Some(domain) => Arc::new(
+                            ProxyRestClient::new(domain.clone())
+                                .map_err(|e| SdkError::Generic(e.to_string()))?,
+                        ),
+                        None => Arc::new(
+                            CommonRequestRestClient::new()
+                                .map_err(|e| SdkError::Generic(e.to_string()))?,
+                        ),
+                    }
+                }
+                #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+                {
+                    Arc::new(
+                        CommonRequestRestClient::new()
+                            .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    )
+                }
+            }
         };
         let user_agent = format!(
             "{}/{}",

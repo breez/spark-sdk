@@ -310,6 +310,7 @@ where
             "/lnurlp/{identifier}/invoice",
             get(LnurlServer::<DB>::handle_invoice),
         )
+        .route("/v1/proxy", get(LnurlServer::<DB>::proxy))
         .layer(Extension(state))
         .layer(
             CorsLayer::new()

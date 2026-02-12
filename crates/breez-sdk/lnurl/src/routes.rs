@@ -2,6 +2,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
+    response::IntoResponse,
 };
 use axum_extra::extract::Host;
 use bitcoin::{
@@ -758,6 +759,91 @@ where
             "routes": Vec::<String>::new(),
         })))
     }
+
+    /// CORS proxy – forwards GET requests to third-party LNURL services that
+    /// lack CORS headers (e.g. LNURL-auth callbacks).
+    pub async fn proxy(
+        Query(params): Query<ProxyParams>,
+    ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+        let url = &params.url;
+
+        let parsed = reqwest::Url::parse(url).map_err(|e| {
+            debug!("proxy: invalid url: {e}");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid url"})),
+            )
+        })?;
+
+        if parsed.scheme() != "https" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "only https urls are allowed"})),
+            ));
+        }
+
+        let host = parsed.host_str().unwrap_or_default();
+        if is_private_host(host) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "private hosts are not allowed"})),
+            ));
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| {
+                error!("proxy: failed to create http client: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "internal server error"})),
+                )
+            })?;
+
+        let response = client.get(url.as_str()).send().await.map_err(|e| {
+            debug!("proxy: upstream request failed: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("upstream request failed: {e}")})),
+            )
+        })?;
+
+        let status = response.status();
+        let body = response.text().await.map_err(|e| {
+            debug!("proxy: failed to read upstream body: {e}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("failed to read response: {e}")})),
+            )
+        })?;
+
+        Ok((
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+            body,
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyParams {
+    pub url: String,
+}
+
+fn is_private_host(host: &str) -> bool {
+    let host_lower = host.to_lowercase();
+    if host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "[::1]" {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        };
+    }
+    false
 }
 
 fn validate_nostr_zap_request(

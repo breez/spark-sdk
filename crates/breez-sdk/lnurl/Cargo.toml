@@ -30,6 +30,7 @@ sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "sqlite", "
 thiserror = "2.0.12"
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "signal"] }
 tonic = "0.12.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
