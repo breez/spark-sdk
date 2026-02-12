@@ -43,7 +43,7 @@ pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
     pub nostr_pubkey: Option<String>,
-    /// When true, the server won't track invoice payments for this user (LUD-21 disabled)
+    /// When true, the server won't track invoice payments for this user (LUD-21 and NIP-57 disabled)
     pub no_invoice_paid_support: bool,
 }
 
@@ -89,7 +89,7 @@ pub trait LnurlServerClient: Send + Sync {
         request: &PublishZapReceiptRequest,
     ) -> Result<String, LnurlServerError>;
     /// Notify the server that an invoice has been paid with the given preimage.
-    /// This is used for LUD-21 invoice tracking.
+    /// This is used for LUD-21 and NIP-57 invoice tracking.
     async fn notify_invoice_paid(&self, preimage: &str) -> Result<(), LnurlServerError>;
 }
 

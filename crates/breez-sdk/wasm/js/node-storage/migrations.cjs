@@ -346,7 +346,7 @@ class MigrationManager {
         ],
       },
       {
-        name: "Add preimage column to lnurl_receive_metadata for LUD-21",
+        name: "Add preimage column to lnurl_receive_metadata for LUD-21 and NIP-57",
         sql: [
           `ALTER TABLE lnurl_receive_metadata ADD COLUMN preimage TEXT`,
           `DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'`

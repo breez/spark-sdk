@@ -700,7 +700,7 @@ impl PostgresStorage {
                 "UPDATE sync_revision SET revision = 0",
                 "DELETE FROM settings WHERE key = 'sync_initial_complete'",
             ],
-            // Migration 6: Add preimage column for LUD-21 verify support
+            // Migration 6: Add preimage column for LUD-21 and NIP-57 support
             &[
                 "ALTER TABLE lnurl_receive_metadata ADD COLUMN IF NOT EXISTS preimage TEXT",
                 // Clear the lnurl_metadata_updated_after setting to force re-sync

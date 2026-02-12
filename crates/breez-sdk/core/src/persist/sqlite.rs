@@ -285,7 +285,7 @@ impl SqliteStorage {
              DELETE FROM sync_state;
              UPDATE sync_revision SET revision = 0;
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
-            // Add preimage column for LUD-21 verify support
+            // Add preimage column for LUD-21 and NIP-57 support
             "ALTER TABLE lnurl_receive_metadata ADD COLUMN preimage TEXT;",
             // Clear the lnurl_metadata_updated_after setting to force re-sync
             // This ensures clients get the new preimage field from the server

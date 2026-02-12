@@ -579,7 +579,7 @@ pub struct Config {
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
     pub optimization_config: OptimizationConfig,
 
-    /// When true, the LNURL server won't track invoice payments for this user (LUD-21 disabled).
+    /// When true, the LNURL server won't track invoice payments for this user (LUD-21 and NIP-57 disabled).
     /// This can be useful for privacy-conscious users who don't need invoice payment notifications.
     pub no_invoice_paid_support: bool,
 }

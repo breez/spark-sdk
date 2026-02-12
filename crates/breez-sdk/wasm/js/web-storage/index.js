@@ -333,7 +333,7 @@ class MigrationManager {
         },
       },
       {
-        name: "Add preimage to lnurl_receive_metadata for LUD-21",
+        name: "Add preimage to lnurl_receive_metadata for LUD-21 and NIP-57",
         upgrade: (db, transaction) => {
           // IndexedDB doesn't need schema changes for new fields on existing stores.
           // Just clear the lnurl_metadata_updated_after setting to force re-sync.
