@@ -48,17 +48,59 @@ In `crates/breez-sdk/core/src/sdk/helpers.rs:228`, the argument changed from `fa
 
 ## Moderate Issues
 
-### 5. TLS backend change: native-tls → rustls
+### 5. TLS backend change: native-tls → rustls (all native platforms)
 
-**OLD:** reqwest was configured with `default-tls` (which is `native-tls` on most platforms, using OpenSSL on Linux, Secure Transport on macOS, SChannel on Windows).
+The PR **removes all TLS feature flags** (`default-tls`, `rustls-tls`, `native-tls`) from every crate in the workspace. The `native-tls` crate is entirely removed from `Cargo.lock`. This is a hard switch with no opt-out.
 
-**NEW:** bitreq uses `rustls 0.21.12` (via `async-https` feature). This means:
-- Certificate validation now uses `webpki-roots` (Mozilla's bundled CA roots) instead of the system CA store
-- Custom CA certificates installed in the system store will **not** be trusted
-- Corporate proxies with custom CA certificates will fail with TLS errors
-- Older/exotic TLS configurations that worked with OpenSSL may not work with rustls
+#### Before (per platform, per subsystem)
 
-This is a significant behavioral change that could affect enterprise users.
+| Platform | HTTP (REST) | gRPC (tonic) | Cert Source |
+|----------|-------------|--------------|-------------|
+| **Linux** | OpenSSL via `native-tls` | rustls 0.23 | System CA store (HTTP) / webpki-roots (gRPC) |
+| **macOS** | Secure Transport via `native-tls` | rustls 0.23 | System Keychain (HTTP) / webpki-roots (gRPC) |
+| **Windows** | SChannel via `native-tls` | rustls 0.23 | System cert store (HTTP) / webpki-roots (gRPC) |
+| **iOS (Swift UniFFI)** | Secure Transport via `native-tls` | rustls 0.23 | System (HTTP) / webpki-roots (gRPC) |
+| **Android (Kotlin UniFFI)** | OpenSSL via `native-tls` | rustls 0.23 | System (HTTP) / webpki-roots (gRPC) |
+| **Flutter (iOS/Android)** | OpenSSL **vendored** via `native-tls` + `openssl-vendored` | rustls 0.23 | Vendored OpenSSL (HTTP) / webpki-roots (gRPC) |
+| **Go UniFFI** | OpenSSL via `native-tls` | rustls 0.23 | System (HTTP) / webpki-roots (gRPC) |
+| **Python UniFFI** | OpenSSL via `native-tls` | rustls 0.23 | System (HTTP) / webpki-roots (gRPC) |
+| **React Native** | OpenSSL via `native-tls` | rustls 0.23 | System (HTTP) / webpki-roots (gRPC) |
+| **WASM (browser)** | Browser Fetch API | gRPC-web via browser | Browser CA store |
+
+The feature chain was: `default = ["default-tls"]` → `reqwest/default-tls` → `hyper-tls` → `native-tls` crate → platform TLS library.
+
+Cargo.lock confirmed: `reqwest` depended on `hyper-tls`, `native-tls`, `tokio-native-tls`, `openssl-sys` (Linux), `security-framework` (macOS/iOS), `schannel` (Windows).
+
+#### After (per platform, per subsystem)
+
+| Platform | HTTP (REST) | gRPC (tonic) | Cert Source |
+|----------|-------------|--------------|-------------|
+| **Linux** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **macOS** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **Windows** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **iOS (Swift UniFFI)** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **Android (Kotlin UniFFI)** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **Flutter (iOS/Android)** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **Go UniFFI** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **Python UniFFI** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **React Native** | **rustls 0.21** via bitreq | rustls 0.23 | **webpki-roots 0.25** bundled (HTTP) / webpki-roots 1.0 (gRPC) |
+| **WASM (browser)** | Browser Fetch API (unchanged) | gRPC-web via browser (unchanged) | Browser CA store (unchanged) |
+
+bitreq 0.3.2 depends on: `rustls 0.21.12` + `rustls-webpki 0.101.7` + `tokio-rustls 0.24.1` + `webpki-roots 0.25.4`.
+
+#### Key consequences
+
+1. **System CA certificates are no longer used for HTTP on any native platform.** All certificate validation uses bundled Mozilla roots (`webpki-roots 0.25.4`). Custom/corporate CA certs in the system store will NOT be trusted for REST calls. This affects all UniFFI targets (iOS, Android, Go, Kotlin, Python, Swift, React Native) and Flutter.
+
+2. **Two rustls versions compiled into every binary.** bitreq pulls rustls 0.21.12, tonic uses rustls 0.23.31. Both are compiled in, increasing binary size. They also pull different webpki-roots versions (0.25 vs 1.0).
+
+3. **The `openssl-vendored` feature in Flutter is now dead weight.** The feature still compiles vendored OpenSSL (`openssl-sys` + `openssl-src`), but nothing uses it for TLS anymore since `native-tls` is gone. It just adds build time and binary size for no benefit.
+
+4. **No opt-out.** The old `rustls-tls` / `native-tls` / `default-tls` feature flags are deleted from all crates. Integrators who were explicitly selecting `native-tls` will get a build error.
+
+5. **iOS note:** Before, Secure Transport was used which integrates with iOS App Transport Security (ATS) and the iOS keychain for client certificates. After, rustls does not integrate with ATS or the keychain.
+
+6. **The lnurl crate's `sqlx` still uses `tls-native-tls`** (`sqlx = { features = ["tls-native-tls"] }`), so that crate still depends on native-tls/OpenSSL for its Postgres connections. This is a separate binary (lnurl server) not the SDK itself, but it shows the migration is incomplete across the repo.
 
 ### 6. `RestClientWrapper` error type mismatch
 
@@ -84,6 +126,10 @@ converts `ServiceConnectivityError` (= `HttpError`) through the `?` into `HttpEr
 ## Recommendations
 
 1. **Verify redirect behavior** in bitreq's async Client mode for LNURL flows
-2. **Document the TLS backend change** (native-tls → rustls) and assess impact on enterprise users
+2. **Assess TLS migration impact** - the switch from system TLS to bundled rustls affects all native platforms. Consider:
+   - Whether iOS ATS compliance is affected
+   - Whether any integrators rely on system CA certificates or client certificates
+   - Whether the `openssl-vendored` feature in Flutter should be removed (it's now dead weight)
+   - Whether the dual rustls versions (0.21 + 0.23) are acceptable for binary size
 3. **Consider storing a shared `DefaultHttpClient`** in faucet/mempool test clients instead of creating one per request
 4. **Remove unrelated commits** from the PR branch (or document them clearly)
