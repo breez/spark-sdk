@@ -211,24 +211,24 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              ,      sc.sender_comment
              ,      z.zap_request
              ,      z.zap_event
-             ,      COALESCE(z.updated_at, sc.updated_at, i.updated_at) AS updated_at
+             ,      MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), i.updated_at) AS updated_at
              ,      i.preimage
              FROM invoices i
              LEFT JOIN zaps z ON i.payment_hash = z.payment_hash
              LEFT JOIN sender_comments sc ON i.payment_hash = sc.payment_hash
-             WHERE i.user_pubkey = $1 AND COALESCE(z.updated_at, sc.updated_at, i.updated_at) > $4
+             WHERE i.user_pubkey = $1 AND MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), i.updated_at) > $4
              UNION
              SELECT COALESCE(z.payment_hash, sc.payment_hash) AS payment_hash
              ,      sc.sender_comment
              ,      z.zap_request
              ,      z.zap_event
-             ,      COALESCE(z.updated_at, sc.updated_at) AS updated_at
+             ,      MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0)) AS updated_at
              ,      NULL as preimage
              FROM zaps z
              FULL JOIN sender_comments sc ON z.payment_hash = sc.payment_hash
              LEFT JOIN invoices i ON COALESCE(z.payment_hash, sc.payment_hash) = i.payment_hash
              WHERE (z.user_pubkey = $1 OR sc.user_pubkey = $1) AND i.payment_hash IS NULL
-               AND COALESCE(z.updated_at, sc.updated_at) > $4
+               AND MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0)) > $4
              ORDER BY updated_at ASC
              LIMIT $3 OFFSET $2",
         )
