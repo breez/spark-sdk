@@ -14,7 +14,7 @@ use crate::{
     utils::default_true,
 };
 
-use platform_utils::{HttpClient, HttpResponse};
+use platform_utils::HttpClient;
 
 pub type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 pub type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
@@ -40,13 +40,14 @@ pub async fn validate_lnurl_pay<C: HttpClient + ?Sized>(
     )?;
 
     let callback_url = build_pay_callback_url(user_amount_msat, comment, pay_request)?;
-    let HttpResponse { body, .. } = http_client.get(callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
+    let response = http_client.get(callback_url, None).await?;
+    if let Ok(err) = response.json::<LnurlErrorDetails>() {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
 
-    let mut callback_resp: CallbackResponse =
-        serde_json::from_str(&body).map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
+    let mut callback_resp: CallbackResponse = response
+        .json()
+        .map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
     if let Some(ref sa) = callback_resp.success_action {
         match sa {
             SuccessAction::Aes { data } => data.validate()?,

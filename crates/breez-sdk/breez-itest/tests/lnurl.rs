@@ -517,7 +517,7 @@ async fn test_06_client_side_zap_receipt(
         anyhow::bail!("Callback request failed: {}", response.status);
     }
 
-    let callback_json: serde_json::Value = serde_json::from_str(&response.body)?;
+    let callback_json: serde_json::Value = response.json()?;
     info!("Callback response: {}", callback_json);
 
     // Extract the invoice from the callback response

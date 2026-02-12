@@ -266,9 +266,8 @@ impl BitcoindFixture {
             ));
         }
 
-        let response_text = &response.body;
-        let response: RpcResponse<T> = serde_json::from_str(response_text)?;
-        match (response.result, response.error) {
+        let rpc_response: RpcResponse<T> = response.json()?;
+        match (rpc_response.result, rpc_response.error) {
             (Some(result), None) => Ok(result),
             (None, Some(error)) => Err(anyhow::anyhow!("RPC error: {:?}", error)),
             _ => Err(anyhow::anyhow!("Invalid RPC response")),

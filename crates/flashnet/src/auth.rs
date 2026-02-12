@@ -163,7 +163,8 @@ impl FlashnetClient {
             });
         }
 
-        serde_json::from_str::<D>(&response.body)
+        response
+            .json::<D>()
             .map_err(|e| FlashnetError::Generic(format!("Failed to parse response JSON: {e}")))
     }
 
@@ -199,7 +200,8 @@ impl FlashnetClient {
             });
         }
 
-        serde_json::from_str::<D>(&response.body)
+        response
+            .json::<D>()
             .map_err(|e| FlashnetError::Generic(format!("Failed to parse response JSON: {e}")))
     }
 }

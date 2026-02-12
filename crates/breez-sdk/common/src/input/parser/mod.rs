@@ -16,7 +16,7 @@ use crate::{
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
 };
 
-use platform_utils::{DefaultHttpClient, HttpClient, HttpResponse};
+use platform_utils::{DefaultHttpClient, HttpClient};
 
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
@@ -379,10 +379,11 @@ where
             let parser_url = parser.parser_url.replacen("<input>", &urlsafe_input, 1);
 
             // Make request
-            let HttpResponse { body, .. } = self.http_client.get(parser_url.clone(), None).await?;
+            let response = self.http_client.get(parser_url.clone(), None).await?;
+            let body = &response.body;
 
             // Try to parse as LnurlRequestDetails
-            if let Ok(lnurl_data) = serde_json::from_str::<LnurlRequestDetails>(&body) {
+            if let Ok(lnurl_data) = response.json::<LnurlRequestDetails>() {
                 let domain = url::Url::parse(&parser_url)
                     .ok()
                     .and_then(|url| url.host_str().map(ToString::to_string))
@@ -402,7 +403,7 @@ where
             }
 
             // Check other input types
-            if let Ok(input_type) = self.parse_core(&body).await {
+            if let Ok(input_type) = self.parse_core(body).await {
                 return Ok(input_type);
             }
         }

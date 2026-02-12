@@ -5,7 +5,7 @@ use crate::lnurl::{
     error::{LnurlError, LnurlResult},
 };
 
-use platform_utils::{HttpClient, HttpResponse};
+use platform_utils::HttpClient;
 
 /// Performs the second and last step of LNURL-withdraw,
 /// as per <https://github.com/lnurl/luds/blob/luds/03.md>
@@ -16,8 +16,8 @@ pub async fn execute_lnurl_withdraw<C: HttpClient + ?Sized>(
 ) -> LnurlResult<ValidatedCallbackResponse> {
     // Send invoice to the LNURL-w endpoint via the callback
     let callback_url = build_withdraw_callback_url(withdraw_request, invoice)?;
-    let HttpResponse { body, .. } = http_client.get(callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
+    let response = http_client.get(callback_url, None).await?;
+    if let Ok(err) = response.json::<LnurlErrorDetails>() {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
     Ok(ValidatedCallbackResponse::EndpointSuccess)

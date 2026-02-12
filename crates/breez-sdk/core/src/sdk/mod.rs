@@ -295,7 +295,8 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         .await
         .map_err(|e| SdkError::NetworkError(e.to_string()))?;
 
-    let api_response: StatusApiResponse = serde_json::from_str(&response.body)
+    let api_response: StatusApiResponse = response
+        .json()
         .map_err(|e| SdkError::Generic(format!("Failed to parse status response: {e}")))?;
 
     let status = api_response

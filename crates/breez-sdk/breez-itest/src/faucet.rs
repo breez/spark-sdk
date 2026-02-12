@@ -163,10 +163,8 @@ impl RegtestFaucet {
             );
         }
 
-        let response_text = &response.body;
-
         let graphql_response: GraphQLResponse =
-            serde_json::from_str(response_text).context(response_text.to_string())?;
+            response.json().context(response.body.to_string())?;
 
         // Check for GraphQL errors
         if let Some(errors) = graphql_response.errors {

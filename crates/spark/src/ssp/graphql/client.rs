@@ -86,17 +86,18 @@ impl GraphQLClient {
             .await?;
 
         let status_code = response.status;
-        let text = response.body;
+        let text = &response.body;
         tracing::trace!("Response: {text:?}");
         if (400..500).contains(&status_code) {
             return Err(GraphQLError::Network {
-                reason: text,
+                reason: text.clone(),
                 code: Some(status_code),
             });
         }
 
-        let json: Response<Q::ResponseData> =
-            serde_json::from_str(&text).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+        let json: Response<Q::ResponseData> = response
+            .json()
+            .map_err(|e| GraphQLError::Serialization(e.to_string()))?;
         if let Some(errors) = json.errors
             && !errors.is_empty()
         {
