@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
 
-use platform_utils::{HttpClient, HttpResponse, http::parse_json};
+use platform_utils::HttpClient;
 
 use super::{
     LnurlCallbackStatus,
@@ -83,8 +83,8 @@ pub async fn perform_lnurl_auth<C: HttpClient + ?Sized, S: LnurlAuthSigner>(
     callback_url
         .query_pairs_mut()
         .append_pair("key", &public_key.to_string());
-    let HttpResponse { body, .. } = http_client.get(callback_url.to_string(), None).await?;
-    Ok(parse_json(&body)?)
+    let response = http_client.get(callback_url.to_string(), None).await?;
+    Ok(response.json()?)
 }
 
 pub fn validate_request(url: &url::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {

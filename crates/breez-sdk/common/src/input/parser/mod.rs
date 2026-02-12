@@ -16,7 +16,7 @@ use crate::{
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
 };
 
-use platform_utils::{DefaultHttpClient, HttpClient, HttpError, HttpResponse};
+use platform_utils::{DefaultHttpClient, HttpClient, HttpResponse};
 
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
@@ -339,8 +339,8 @@ where
             return Ok(InputType::LnurlAuth(data));
         }
 
-        let HttpResponse { body, .. } = self.http_client.get(url.to_string(), None).await?;
-        let lnurl_data: LnurlRequestDetails = parse_json(&body)?;
+        let response = self.http_client.get(url.to_string(), None).await?;
+        let lnurl_data: LnurlRequestDetails = response.json()?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {
             LnurlRequestDetails::PayRequest { pay_request } => {
@@ -848,13 +848,6 @@ fn parse_bolt12_invoice_request(
 ) -> Option<Bolt12InvoiceRequestDetails> {
     // TODO: Implement parsing of Bolt12 invoice requests
     None
-}
-
-pub fn parse_json<T>(json: &str) -> Result<T, HttpError>
-where
-    for<'a> T: serde::de::Deserialize<'a>,
-{
-    serde_json::from_str::<T>(json).map_err(|e| HttpError::Json(e.to_string()))
 }
 
 fn parse_lightning_payment_method(input: &str, source: &PaymentRequestSource) -> Option<InputType> {

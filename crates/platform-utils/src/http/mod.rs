@@ -41,6 +41,14 @@ impl HttpResponse {
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
+
+    /// Parse the response body as JSON.
+    pub fn json<T>(&self) -> Result<T, HttpError>
+    where
+        for<'a> T: serde::de::Deserialize<'a>,
+    {
+        serde_json::from_str::<T>(&self.body).map_err(|e| HttpError::Json(e.to_string()))
+    }
 }
 
 /// HTTP client trait for making requests.
@@ -83,12 +91,4 @@ pub fn create_http_client(user_agent: Option<&str>) -> Box<dyn HttpClient> {
     {
         Box::new(ReqwestHttpClient::new(user_agent.map(String::from)))
     }
-}
-
-/// Parse JSON from a string.
-pub fn parse_json<T>(json: &str) -> Result<T, HttpError>
-where
-    for<'a> T: serde::de::Deserialize<'a>,
-{
-    serde_json::from_str::<T>(json).map_err(|e| HttpError::Json(e.to_string()))
 }
