@@ -87,7 +87,8 @@ impl BreezSdk {
             }
             ReceivePaymentMethod::BitcoinAddress => {
                 let address =
-                    get_or_create_deposit_address(&self.spark_wallet, self.storage.clone(), true).await?;
+                    get_or_create_deposit_address(&self.spark_wallet, self.storage.clone(), true)
+                        .await?;
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee: 0,
