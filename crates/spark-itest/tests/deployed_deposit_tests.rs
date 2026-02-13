@@ -36,7 +36,7 @@ async fn test_non_static_deposit_with_faucet() -> Result<()> {
     info!("Initial balance: {} sats", initial_balance);
 
     // Generate non-static deposit address
-    let deposit_address = wallet.generate_deposit_address(false).await?;
+    let deposit_address = wallet.generate_deposit_address().await?;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund via faucet
@@ -148,7 +148,7 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
     // Create Alice's wallet and deposit funds
     let (alice, mut alice_listener) = create_regtest_wallet().await?;
 
-    let deposit_address = alice.generate_deposit_address(false).await?;
+    let deposit_address = alice.generate_deposit_address().await?;
     info!("Alice deposit address: {}", deposit_address);
 
     let deposit_amount = 50_000u64;
@@ -184,7 +184,7 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
 
     // Create Bob's wallet and generate an on-chain deposit address for withdrawal target
     let (bob, _bob_listener) = create_regtest_wallet().await?;
-    let bob_deposit_address = bob.generate_deposit_address(false).await?;
+    let bob_deposit_address = bob.generate_deposit_address().await?;
     info!("Bob on-chain deposit address: {}", bob_deposit_address);
 
     // Coop withdraw all of Alice's funds to Bob's on-chain address
