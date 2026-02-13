@@ -19,7 +19,7 @@ use crate::{
     AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
     error::DepositClaimError,
-    persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
+    persist::{PaymentMetadata, PendingLnurlPreimage, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
     },
@@ -700,6 +700,13 @@ impl PostgresStorage {
                 "UPDATE sync_revision SET revision = 0",
                 "DELETE FROM settings WHERE key = 'sync_initial_complete'",
             ],
+            // Migration 6: Add preimage column for LUD-21 and NIP-57 support
+            &[
+                "ALTER TABLE lnurl_receive_metadata ADD COLUMN IF NOT EXISTS preimage TEXT",
+                // Clear the lnurl_metadata_updated_after setting to force re-sync
+                // This ensures clients get the new preimage field from the server
+                "DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'",
+            ],
         ]
     }
 }
@@ -1224,7 +1231,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(27);
+            let parent_payment_id: String = row.get(28);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1331,17 +1338,52 @@ impl Storage for PostgresStorage {
         for m in metadata {
             client
                 .execute(
-                    "INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-                     VALUES ($1, $2, $3, $4)
+                    "INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
+                     VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT(payment_hash) DO UPDATE SET
                         nostr_zap_request = EXCLUDED.nostr_zap_request,
                         nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-                        sender_comment = EXCLUDED.sender_comment",
-                    &[&m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment],
+                        sender_comment = EXCLUDED.sender_comment,
+                        preimage = EXCLUDED.preimage",
+                    &[&m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment, &m.preimage],
                 )
                 .await?;
         }
         Ok(())
+    }
+
+    async fn get_pending_lnurl_preimages(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<PendingLnurlPreimage>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let rows = client
+            .query(
+                "SELECT l.payment_hash, l.preimage, lrm.sender_comment, lrm.nostr_zap_request, lrm.nostr_zap_receipt
+                 FROM payment_details_lightning l
+                 INNER JOIN payments p ON p.id = l.payment_id
+                 INNER JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash
+                 WHERE p.payment_type = 'receive'
+                   AND p.status = 'completed'
+                   AND l.preimage IS NOT NULL
+                   AND lrm.preimage IS NULL
+                 LIMIT $1",
+                &[&(i64::from(limit))],
+            )
+            .await?;
+
+        let results = rows
+            .iter()
+            .map(|row| PendingLnurlPreimage {
+                payment_hash: row.get(0),
+                preimage: row.get(1),
+                sender_comment: row.get(2),
+                nostr_zap_request: row.get(3),
+                nostr_zap_receipt: row.get(4),
+            })
+            .collect();
+
+        Ok(results)
     }
 
     async fn add_outgoing_change(
@@ -1749,7 +1791,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-26 are used by `map_payment`, index 27 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-27 are used by `map_payment`, index 28 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1778,6 +1820,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.preimage AS lnurl_preimage,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -1811,21 +1854,25 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let lnurl_nostr_zap_request: Option<String> = row.get(24);
             let lnurl_nostr_zap_receipt: Option<String> = row.get(25);
             let lnurl_sender_comment: Option<String> = row.get(26);
+            let lnurl_preimage: Option<String> = row.get(27);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
                 from_json_opt(lnurl_withdraw_info_json)?;
 
-            let lnurl_receive_metadata =
-                if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
-                    Some(LnurlReceiveMetadata {
-                        nostr_zap_request: lnurl_nostr_zap_request,
-                        nostr_zap_receipt: lnurl_nostr_zap_receipt,
-                        sender_comment: lnurl_sender_comment,
-                    })
-                } else {
-                    None
-                };
+            let lnurl_receive_metadata = if lnurl_nostr_zap_request.is_some()
+                || lnurl_sender_comment.is_some()
+                || lnurl_preimage.is_some()
+            {
+                Some(LnurlReceiveMetadata {
+                    nostr_zap_request: lnurl_nostr_zap_request,
+                    nostr_zap_receipt: lnurl_nostr_zap_receipt,
+                    sender_comment: lnurl_sender_comment,
+                    preimage: lnurl_preimage,
+                })
+            } else {
+                None
+            };
             Some(PaymentDetails::Lightning {
                 invoice,
                 payment_hash,
@@ -2041,6 +2088,12 @@ mod tests {
     async fn test_payment_metadata_merge() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_pending_lnurl_preimages() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_pending_lnurl_preimages(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]

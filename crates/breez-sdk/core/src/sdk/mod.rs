@@ -105,7 +105,7 @@ pub struct BreezSdk {
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
     pub(crate) sync_trigger: tokio::sync::broadcast::Sender<SyncRequest>,
-    pub(crate) zap_receipt_trigger: tokio::sync::broadcast::Sender<()>,
+    pub(crate) lnurl_preimage_trigger: tokio::sync::broadcast::Sender<()>,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     pub(crate) external_input_parsers: Vec<ExternalInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
@@ -212,6 +212,7 @@ pub fn default_config(network: Network) -> Config {
             auto_enabled: true,
             multiplicity: 1,
         },
+        no_invoice_paid_support: false,
     }
 }
 

@@ -60,6 +60,7 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_request AS lnurl_nostr_zap_request,
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
+           lrm.preimage AS lnurl_preimage,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -662,7 +663,7 @@ class SqliteStorage {
   setLnurlMetadata(metadata) {
     try {
       const stmt = this.db.prepare(
-        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment) VALUES (?, ?, ?, ?)"
+        "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage) VALUES (?, ?, ?, ?, ?)"
       );
 
       const transaction = this.db.transaction(() => {
@@ -671,7 +672,8 @@ class SqliteStorage {
             item.paymentHash,
             item.nostrZapRequest || null,
             item.nostrZapReceipt || null,
-            item.senderComment || null
+            item.senderComment || null,
+            item.preimage || null
           );
         }
       });
@@ -682,6 +684,51 @@ class SqliteStorage {
       return Promise.reject(
         new StorageError(
           `Failed to add lnurl metadata: ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  /**
+   * Get pending LNURL preimages - payments that:
+   * - Are completed receive Lightning payments
+   * - Have a preimage in the payment details
+   * - Have LNURL metadata without a preimage (not yet sent to server)
+   */
+  getPendingLnurlPreimages(limit) {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT
+          lm.payment_hash,
+          l.preimage,
+          lm.sender_comment,
+          lm.nostr_zap_request,
+          lm.nostr_zap_receipt
+        FROM lnurl_receive_metadata lm
+        INNER JOIN payment_details_lightning l ON l.payment_hash = lm.payment_hash
+        INNER JOIN payments p ON p.id = l.payment_id
+        WHERE lm.preimage IS NULL
+          AND p.payment_type = 'receive'
+          AND p.status = 'completed'
+          AND l.preimage IS NOT NULL
+        LIMIT ?
+      `);
+
+      const rows = stmt.all(limit);
+      return Promise.resolve(
+        rows.map((row) => ({
+          paymentHash: row.payment_hash,
+          preimage: row.preimage,
+          senderComment: row.sender_comment || null,
+          nostrZapRequest: row.nostr_zap_request || null,
+          nostrZapReceipt: row.nostr_zap_receipt || null,
+        }))
+      );
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(
+          `Failed to get pending lnurl preimages: ${error.message}`,
           error
         )
       );
@@ -724,11 +771,12 @@ class SqliteStorage {
         }
       }
 
-      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment) {
+      if (row.lnurl_nostr_zap_request || row.lnurl_sender_comment || row.lnurl_preimage) {
         details.lnurlReceiveMetadata = {
           nostrZapRequest: row.lnurl_nostr_zap_request || null,
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
+          preimage: row.lnurl_preimage || null,
         };
       }
     } else if (row.withdraw_tx_id) {

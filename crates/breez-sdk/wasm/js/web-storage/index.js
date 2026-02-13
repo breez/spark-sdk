@@ -330,6 +330,17 @@ class MigrationManager {
           if (db.objectStoreNames.contains("settings")) {
             transaction.objectStore("settings").delete("sync_initial_complete");
           }
+        },
+      },
+      {
+        name: "Add preimage to lnurl_receive_metadata for LUD-21 and NIP-57",
+        upgrade: (db, transaction) => {
+          // IndexedDB doesn't need schema changes for new fields on existing stores.
+          // Just clear the lnurl_metadata_updated_after setting to force re-sync.
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("lnurl_metadata_updated_after");
+          }
         }
       }
     ];
@@ -355,7 +366,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 10; // Current schema version
+    this.dbVersion = 11; // Current schema version
   }
 
   /**
@@ -1251,6 +1262,7 @@ class IndexedDBStorage {
           nostrZapRequest: item.nostrZapRequest || null,
           nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
+          preimage: item.preimage || null,
         });
 
         request.onsuccess = () => {
@@ -1271,6 +1283,130 @@ class IndexedDBStorage {
           );
         };
       }
+    });
+  }
+
+  /**
+   * Get pending LNURL preimages - payments that:
+   * - Are completed receive Lightning payments
+   * - Have a preimage in the payment details
+   * - Have LNURL metadata without a preimage (not yet sent to server)
+   */
+  async getPendingLnurlPreimages(limit) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        ["payments", "lnurl_receive_metadata"],
+        "readonly"
+      );
+      const paymentStore = transaction.objectStore("payments");
+      const lnurlMetadataStore = transaction.objectStore("lnurl_receive_metadata");
+
+      const results = [];
+
+      // First, get all LNURL metadata records where preimage is null
+      const lnurlRequest = lnurlMetadataStore.openCursor();
+      const pendingMetadata = [];
+
+      lnurlRequest.onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+          const metadata = cursor.value;
+          // Only consider records without preimage (not yet sent to server)
+          if (!metadata.preimage) {
+            pendingMetadata.push(metadata);
+          }
+          cursor.continue();
+        } else {
+          // Done collecting pending metadata, now check payments
+          if (pendingMetadata.length === 0) {
+            resolve([]);
+            return;
+          }
+
+          let processed = 0;
+          for (const metadata of pendingMetadata) {
+            if (results.length >= limit) {
+              processed++;
+              if (processed === pendingMetadata.length) {
+                resolve(results);
+              }
+              continue;
+            }
+
+            // Find the payment with this payment hash
+            const paymentCursor = paymentStore.openCursor();
+            let found = false;
+
+            paymentCursor.onsuccess = (paymentEvent) => {
+              const pCursor = paymentEvent.target.result;
+              if (pCursor && !found) {
+                const payment = pCursor.value;
+
+                // Check if this payment matches our criteria
+                if (
+                  payment.paymentType === "receive" &&
+                  payment.status === "completed" &&
+                  payment.details
+                ) {
+                  let details;
+                  try {
+                    details = typeof payment.details === "string"
+                      ? JSON.parse(payment.details)
+                      : payment.details;
+                  } catch (e) {
+                    pCursor.continue();
+                    return;
+                  }
+
+                  if (
+                    details.type === "lightning" &&
+                    details.paymentHash === metadata.paymentHash &&
+                    details.preimage
+                  ) {
+                    found = true;
+                    results.push({
+                      paymentHash: metadata.paymentHash,
+                      preimage: details.preimage,
+                      senderComment: metadata.senderComment || null,
+                      nostrZapRequest: metadata.nostrZapRequest || null,
+                      nostrZapReceipt: metadata.nostrZapReceipt || null,
+                    });
+                  }
+                }
+                pCursor.continue();
+              } else {
+                // Done with this metadata item
+                processed++;
+                if (processed === pendingMetadata.length) {
+                  resolve(results);
+                }
+              }
+            };
+
+            paymentCursor.onerror = () => {
+              processed++;
+              if (processed === pendingMetadata.length) {
+                resolve(results);
+              }
+            };
+          }
+        }
+      };
+
+      lnurlRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get pending LNURL preimages: ${
+              lnurlRequest.error?.message || "Unknown error"
+            }`,
+            lnurlRequest.error
+          )
+        );
+      };
     });
   }
 
@@ -2165,12 +2301,14 @@ class IndexedDBStorage {
         if (
           lnurlReceiveMetadata &&
           (lnurlReceiveMetadata.nostrZapRequest ||
-            lnurlReceiveMetadata.senderComment)
+            lnurlReceiveMetadata.senderComment ||
+            lnurlReceiveMetadata.preimage)
         ) {
           payment.details.lnurlReceiveMetadata = {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
+            preimage: lnurlReceiveMetadata.preimage || null,
           };
         }
         resolve(payment);

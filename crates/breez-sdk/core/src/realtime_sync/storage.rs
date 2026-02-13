@@ -322,6 +322,13 @@ impl Storage for SyncedStorage {
         self.inner.set_lnurl_metadata(metadata).await
     }
 
+    async fn get_pending_lnurl_preimages(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<crate::persist::PendingLnurlPreimage>, StorageError> {
+        self.inner.get_pending_lnurl_preimages(limit).await
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,

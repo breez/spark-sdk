@@ -1116,3 +1116,214 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     info!("=== Test test_08_lnurl_send_all_with_fee_overpayment PASSED ===");
     Ok(())
 }
+
+/// Test LUD-21 verify endpoint
+/// Verifies that:
+/// 1. The callback response includes a verify URL
+/// 2. Before payment completed: verify returns settled=false
+/// 3. After payment completed: verify returns settled=true with preimage
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_09_lud21_verify(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_09_lud21_verify ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    let username = "bobverify";
+    let description = "Bob's LUD-21 verify test Lightning address";
+    let payment_amount_sats = 2_000u64;
+
+    // Bob registers a Lightning address
+    let register_response = bob
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let bob_lightning_address = register_response.lightning_address;
+    info!(
+        "Bob registered Lightning address: {}",
+        bob_lightning_address
+    );
+
+    // Fund Alice with sats for testing
+    receive_and_fund(&mut alice, 50_000, false).await?;
+    info!("Alice funded with sats");
+
+    // Alice parses Bob's Lightning address
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+
+    info!("Alice parsed Lightning address successfully");
+
+    // Make a callback request to get an invoice with verify URL
+    let callback_url = format!(
+        "{}?amount={}",
+        details.pay_request.callback,
+        payment_amount_sats * 1000, // amount in millisats
+    );
+
+    info!("Calling LNURL callback: {callback_url}");
+
+    let client = reqwest::Client::new();
+    let callback_response = client.get(&callback_url).send().await?;
+
+    if !callback_response.status().is_success() {
+        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    }
+
+    let callback_json: serde_json::Value = callback_response.json().await?;
+    info!("Callback response: {}", callback_json);
+
+    // Extract the invoice and verify URL
+    let invoice = callback_json["pr"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No invoice in callback response"))?
+        .to_string();
+
+    let verify_url = callback_json["verify"]
+        .as_str()
+        .ok_or_else(|| {
+            anyhow::anyhow!("No verify URL in callback response (LUD-21 not supported?)")
+        })?
+        .to_string();
+
+    info!("Got invoice: {invoice}");
+    info!("Got verify URL: {verify_url}");
+
+    // Before payment: verify should return settled=false
+    let verify_response = client.get(&verify_url).send().await?;
+    let verify_json: serde_json::Value = verify_response.json().await?;
+    info!("Verify response (before payment): {}", verify_json);
+
+    assert_eq!(
+        verify_json["status"].as_str(),
+        Some("OK"),
+        "Verify status should be OK"
+    );
+    assert_eq!(
+        verify_json["settled"].as_bool(),
+        Some(false),
+        "Invoice should not be settled before payment"
+    );
+    assert!(
+        verify_json["preimage"].is_null(),
+        "Preimage should be null before payment"
+    );
+    assert_eq!(
+        verify_json["pr"].as_str(),
+        Some(invoice.as_str()),
+        "Invoice should match"
+    );
+
+    info!("Verified invoice is NOT settled before payment");
+
+    // Alice pays the invoice
+    let prepare_response = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: invoice.clone(),
+            conversion_options: None,
+            amount: None,
+            fee_policy: None,
+            token_identifier: None,
+        })
+        .await?;
+
+    let pay_response = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice initiated payment to Bob");
+
+    // Wait for payment to complete on both sides
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice's side");
+
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Payment completed on Bob's side");
+
+    // Get the preimage from Alice's payment (proof of payment)
+    // Poll until the preimage is available in storage (sync may not have completed yet)
+    let payment_id = pay_response.payment.id.clone();
+    let expected_preimage = wait_for(
+        || {
+            let sdk = alice.sdk.clone();
+            let payment_id = payment_id.clone();
+            async move {
+                let alice_payment = sdk
+                    .get_payment(GetPaymentRequest { payment_id })
+                    .await?
+                    .payment;
+
+                let Some(PaymentDetails::Lightning { preimage, .. }) = alice_payment.details else {
+                    anyhow::bail!("Expected Lightning payment details");
+                };
+
+                preimage.ok_or_else(|| anyhow::anyhow!("No preimage in payment yet"))
+            }
+        },
+        30,
+    )
+    .await?;
+    info!("Payment preimage: {expected_preimage}");
+
+    // After payment: verify should return settled=true with preimage
+    // Poll until the preimage is available (server may need time to process)
+    let final_verify = wait_for(
+        || async {
+            let verify_response = client.get(&verify_url).send().await?;
+            let verify_json: serde_json::Value = verify_response.json().await?;
+            debug!("Verify response (polling): {}", verify_json);
+
+            if verify_json["settled"].as_bool() != Some(true) {
+                anyhow::bail!("Invoice not yet settled");
+            }
+
+            Ok(verify_json)
+        },
+        30,
+    )
+    .await?;
+
+    info!("Verify response (after payment): {}", final_verify);
+
+    assert_eq!(
+        final_verify["status"].as_str(),
+        Some("OK"),
+        "Verify status should be OK"
+    );
+    assert_eq!(
+        final_verify["settled"].as_bool(),
+        Some(true),
+        "Invoice should be settled after payment"
+    );
+    assert_eq!(
+        final_verify["preimage"].as_str(),
+        Some(expected_preimage.as_str()),
+        "Preimage should match"
+    );
+    assert_eq!(
+        final_verify["pr"].as_str(),
+        Some(invoice.as_str()),
+        "Invoice should match"
+    );
+
+    info!("Verified invoice IS settled with correct preimage after payment");
+
+    info!("=== Test test_09_lud21_verify PASSED ===");
+    Ok(())
+}

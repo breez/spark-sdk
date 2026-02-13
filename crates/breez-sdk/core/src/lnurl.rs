@@ -1,8 +1,8 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, InvoicePaidRequest, ListMetadataResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
 use reqwest::{
     StatusCode,
@@ -43,6 +43,8 @@ pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
     pub nostr_pubkey: Option<String>,
+    /// When true, the server won't track invoice payments for this user (LUD-21 and NIP-57 disabled)
+    pub no_invoice_paid_support: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +88,9 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &PublishZapReceiptRequest,
     ) -> Result<String, LnurlServerError>;
+    /// Notify the server that an invoice has been paid with the given preimage.
+    /// This is used for LUD-21 and NIP-57 invoice tracking.
+    async fn notify_invoice_paid(&self, preimage: &str) -> Result<(), LnurlServerError>;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -260,6 +265,7 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             signature,
             timestamp: Some(timestamp),
             nostr_pubkey: request.nostr_pubkey.clone(),
+            no_invoice_paid_support: request.no_invoice_paid_support,
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
@@ -426,6 +432,42 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
                     })?;
                 return Ok(body.zap_receipt);
             }
+            other => {
+                return Err(LnurlServerError::Network {
+                    statuscode: other.as_u16(),
+                    message: response.text().await.ok(),
+                });
+            }
+        }
+    }
+
+    async fn notify_invoice_paid(&self, preimage: &str) -> Result<(), LnurlServerError> {
+        let spark_address = self.wallet.get_spark_address().map_err(|e| {
+            LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
+        })?;
+        let pubkey = spark_address.identity_public_key;
+
+        let (signature, timestamp) = self.sign_message(preimage).await?;
+
+        let url = format!("{}/lnurlpay/{}/invoice-paid", self.base_url(), pubkey);
+
+        let payload = InvoicePaidRequest {
+            signature,
+            timestamp: Some(timestamp),
+            preimage: preimage.to_string(),
+        };
+
+        let result = self.client.post(url).json(&payload).send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(LnurlServerError::RequestFailure(e.to_string()));
+            }
+        };
+
+        match response.status() {
+            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
+            success if success.is_success() => return Ok(()),
             other => {
                 return Err(LnurlServerError::Network {
                     statuscode: other.as_u16(),

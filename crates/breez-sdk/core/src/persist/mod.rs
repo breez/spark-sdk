@@ -48,6 +48,7 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    pub preimage: Option<String>,
 }
 
 impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
@@ -57,8 +58,19 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
             nostr_zap_receipt: value.nostr_zap_receipt,
+            preimage: value.preimage,
         }
     }
+}
+
+/// LNURL payment that has a preimage but hasn't been sent to the LNURL server yet.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PendingLnurlPreimage {
+    pub payment_hash: String,
+    pub preimage: String,
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
 }
 
 /// Errors that can occur during storage operations
@@ -244,6 +256,24 @@ pub trait Storage: Send + Sync {
         &self,
         metadata: Vec<SetLnurlMetadataItem>,
     ) -> Result<(), StorageError>;
+
+    /// Gets all pending LNURL preimages that need to be sent to the LNURL server.
+    /// These are completed received Lightning payments that have LNURL receive metadata
+    /// but where the preimage has not yet been marked as sent to the server.
+    ///
+    /// The returned metadata will have the `preimage` field populated from the payment details.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Returns
+    ///
+    /// A vector of LNURL metadata with preimages or a `StorageError`
+    async fn get_pending_lnurl_preimages(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<PendingLnurlPreimage>, StorageError>;
 
     // Sync storage methods
     async fn add_outgoing_change(

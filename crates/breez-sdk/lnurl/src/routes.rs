@@ -2,6 +2,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
+    response::IntoResponse,
 };
 use axum_extra::extract::Host;
 use bitcoin::{
@@ -10,7 +11,7 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataRequest, ListMetadataResponse,
+    CheckUsernameAvailableResponse, InvoicePaidRequest, ListMetadataRequest, ListMetadataResponse,
     PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
     UnregisterLnurlPayRequest, sanitize_username,
@@ -25,6 +26,7 @@ use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
+    invoice_paid::{create_invoice, handle_invoice_paid},
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
     zap::Zap,
@@ -165,6 +167,7 @@ where
             name: username,
             description: payload.description,
             nostr_pubkey,
+            no_invoice_paid_support: payload.no_invoice_paid_support,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -284,7 +287,7 @@ where
         let limit = params.limit.unwrap_or(DEFAULT_METADATA_LIMIT);
         let metadata = state
             .db
-            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit)
+            .get_metadata_by_pubkey(&pubkey.to_string(), offset, limit, params.updated_after)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -341,6 +344,17 @@ where
             ));
         }
 
+        // Extract preimage from zap receipt for LUD-21 backward compatibility
+        // This allows old clients using publish_zap_receipt to still populate
+        // the invoice's preimage for the verify endpoint
+        let preimage_from_receipt = zap_receipt.tags.iter().find_map(|t| {
+            if let Some(TagStandard::Preimage(p)) = t.as_standardized() {
+                Some(p.clone())
+            } else {
+                None
+            }
+        });
+
         // Get the existing zap record
         let mut zap = state
             .db
@@ -368,6 +382,24 @@ where
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "unauthorized"})),
             ));
+        }
+
+        // If we have a preimage, call the invoice paid handler for LUD-21 compatibility
+        // This ensures the preimage is stored in the invoices table
+        if let Some(preimage) = &preimage_from_receipt
+            && let Err(e) = handle_invoice_paid(
+                &state.db,
+                &payment_hash,
+                preimage,
+                &state.invoice_paid_trigger,
+            )
+            .await
+        {
+            // Log but don't fail - this is for backward compatibility
+            debug!(
+                "Failed to handle invoice paid from zap receipt for {}: {}",
+                payment_hash, e
+            );
         }
 
         // Check if zap receipt already exists
@@ -536,26 +568,39 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
-        let nostr_pubkey = match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
-            (Some(nostr_pubkey), _) => {
-                let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
-                    error!(
-                        "invalid nostr pubkey in user record, could not parse: {:?}",
-                        e
-                    );
-                    lnurl_error("internal server error")
-                })?;
-                Some(xonly_pubkey)
+        // When no_invoice_paid_support is true, omit nostr fields entirely
+        // Otherwise, always return server's nostrPubkey for zap receipt signing
+        let (allows_nostr, nostr_pubkey) = if user.no_invoice_paid_support {
+            (None, None)
+        } else {
+            match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
+                // User has own nostr pubkey - they handle zap receipts
+                (Some(nostr_pubkey), _) => {
+                    let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in user record, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?;
+                    (Some(true), Some(xonly_pubkey))
+                }
+                // Server has nostr keys - server signs zap receipts
+                (None, Some(nostr_keys)) => {
+                    let xonly_pubkey = nostr_keys.public_key.xonly().map_err(|e| {
+                        error!(
+                            "invalid nostr pubkey in server keys, could not parse: {:?}",
+                            e
+                        );
+                        lnurl_error("internal server error")
+                    })?;
+                    (Some(true), Some(xonly_pubkey))
+                }
+                // No nostr support
+                _ => (None, None),
             }
-            (None, Some(nostr_keys)) => Some(nostr_keys.public_key.xonly().map_err(|e| {
-                error!(
-                    "invalid nostr pubkey in server keys, could not parse: {:?}",
-                    e
-                );
-                lnurl_error("internal server error")
-            })?),
-            _ => None,
         };
+
         Ok(Json(PayResponse {
             callback: format!(
                 "{}://{}/lnurlp/{}/invoice",
@@ -566,7 +611,7 @@ where
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
             comment_allowed: Some(255),
-            allows_nostr: nostr_pubkey.map(|_| true),
+            allows_nostr,
             nostr_pubkey,
         }))
     }
@@ -606,30 +651,19 @@ where
             return Err(lnurl_error("amount must be a whole sat amount"));
         }
 
-        let (nostr_pubkey, is_user_nostr_key) =
-            match (user.nostr_pubkey.as_ref(), state.nostr_keys.as_ref()) {
-                (Some(nostr_pubkey), _) => {
-                    let xonly_pubkey = XOnlyPublicKey::from_str(nostr_pubkey).map_err(|e| {
-                        error!(
-                            "invalid nostr pubkey in user record, could not parse: {:?}",
-                            e
-                        );
-                        lnurl_error("internal server error")
-                    })?;
-                    (Some(xonly_pubkey), true)
-                }
-                (None, Some(nostr_keys)) => (
-                    Some(nostr_keys.public_key.xonly().map_err(|e| {
-                        error!(
-                            "invalid nostr pubkey in server keys, could not parse: {:?}",
-                            e
-                        );
-                        lnurl_error("internal server error")
-                    })?),
-                    false,
-                ),
-                _ => (None, false),
-            };
+        let nostr_pubkey = state
+            .nostr_keys
+            .as_ref()
+            .map(|nostr_keys| {
+                nostr_keys.public_key.xonly().map_err(|e| {
+                    error!(
+                        "invalid nostr pubkey in server keys, could not parse: {:?}",
+                        e
+                    );
+                    lnurl_error("internal server error")
+                })
+            })
+            .transpose()?;
 
         let desc_hash = if let Some(event) = &params.nostr {
             if nostr_pubkey.is_none() {
@@ -684,25 +718,26 @@ where
         })?;
 
         let updated_at = now_millis();
+        let payment_hash = invoice.payment_hash().to_string();
+        let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
+            error!(
+                "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
+                invoice.duration_since_epoch().as_secs(),
+                invoice.expiry_time().as_secs(),
+            );
+            lnurl_error("internal server error")
+        })?;
+
         // save to zap event to db
         if let Some(zap_request) = params.nostr {
-            let invoice_expiry: i64 = i64::try_from(expiry_timestamp.as_secs()).map_err(|e| {
-                error!(
-                    "invoice has invalid expiry for i64: duration since epoch {}s, expiry time: {}s: {e}",
-                    invoice.duration_since_epoch().as_secs(),
-                    invoice.expiry_time().as_secs(),
-                );
-                lnurl_error("internal server error")
-            })?;
-
             let zap = Zap {
-                payment_hash: invoice.payment_hash().to_string(),
+                payment_hash: payment_hash.clone(),
                 zap_request,
                 zap_event: None,
                 user_pubkey: user.pubkey.clone(),
                 invoice_expiry,
                 updated_at,
-                is_user_nostr_key,
+                is_user_nostr_key: false,
             };
             if let Err(e) = state.db.upsert_zap(&zap).await {
                 error!("failed to save zap event: {}", e);
@@ -711,7 +746,7 @@ where
 
             // Subscribe to user if not already subscribed (only if nostr is enabled, and
             // the user doesn't handle the zap receipt itself)
-            if !is_user_nostr_key && let Some(nostr_keys) = &state.nostr_keys {
+            if let Some(nostr_keys) = &state.nostr_keys {
                 crate::zap::create_rpc_client_and_subscribe(
                     state.db.clone(),
                     pubkey,
@@ -738,7 +773,7 @@ where
                     .db
                     .insert_lnurl_sender_comment(&LnurlSenderComment {
                         comment: comment.to_string(),
-                        payment_hash: invoice.payment_hash().to_string(),
+                        payment_hash: payment_hash.clone(),
                         user_pubkey: user.pubkey.clone(),
                         updated_at,
                     })
@@ -749,14 +784,170 @@ where
             }
         }
 
-        // TODO: Save things like the invoice/preimage/transfer id?
-        // TODO: Validate invoice?
-        // TODO: Add lnurl-verify
+        // Store all invoices for LUD-21 verify support (unless user opted out)
+        let verify_url = if user.no_invoice_paid_support {
+            None
+        } else {
+            // Store invoice in invoices table
+            if let Err(e) = create_invoice(
+                &state.db,
+                &payment_hash,
+                &user.pubkey,
+                &res.invoice,
+                invoice_expiry,
+            )
+            .await
+            {
+                error!("Failed to create invoice record: {}", e);
+                return Err(lnurl_error("internal server error"));
+            }
 
-        Ok(Json(json!({
+            // Subscribe to user for invoice monitoring if nostr is enabled
+            if let Some(nostr_keys) = &state.nostr_keys {
+                crate::background::create_rpc_client_and_subscribe(
+                    state.db.clone(),
+                    pubkey,
+                    &state.connection_manager,
+                    &state.coordinator,
+                    state.signer.clone(),
+                    state.session_manager.clone(),
+                    state.service_provider.clone(),
+                    nostr_keys.clone(),
+                    Arc::clone(&state.subscribed_keys),
+                    state.invoice_paid_trigger.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    error!("failed to subscribe to user for invoice monitoring: {}", e);
+                    lnurl_error("internal server error")
+                })?;
+            }
+
+            // Build verify URL
+            Some(format!(
+                "{}://{}/verify/{}",
+                state.scheme, domain, payment_hash
+            ))
+        };
+
+        let mut response = json!({
             "pr": res.invoice,
             "routes": Vec::<String>::new(),
-        })))
+        });
+
+        if let Some(verify) = verify_url {
+            response["verify"] = json!(verify);
+        }
+
+        Ok(Json(response))
+    }
+
+    /// LUD-21 verify endpoint
+    pub async fn verify(
+        Path(payment_hash): Path<String>,
+        Extension(state): Extension<State<DB>>,
+    ) -> impl IntoResponse {
+        let invoice = match state.db.get_invoice_by_payment_hash(&payment_hash).await {
+            Ok(Some(invoice)) => invoice,
+            Ok(None) => {
+                return Json(json!({
+                    "status": "ERROR",
+                    "reason": "Not found"
+                }));
+            }
+            Err(e) => {
+                error!("Failed to get invoice by payment hash: {}", e);
+                return Json(json!({
+                    "status": "ERROR",
+                    "reason": "Internal server error"
+                }));
+            }
+        };
+
+        let settled = invoice.preimage.is_some();
+        Json(json!({
+            "status": "OK",
+            "settled": settled,
+            "preimage": invoice.preimage,
+            "pr": invoice.invoice
+        }))
+    }
+
+    /// Invoice-paid notification endpoint.
+    /// Client notifies server that an invoice was paid with the preimage.
+    pub async fn invoice_paid(
+        Path(pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<InvoicePaidRequest>,
+    ) -> Result<(), (StatusCode, Json<Value>)> {
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &payload.preimage,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
+
+        let preimage_bytes = hex::decode(&payload.preimage).map_err(|e| {
+            trace!("invalid preimage, could not decode: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid preimage".into())),
+            )
+        })?;
+        let payment_hash = bitcoin::hashes::sha256::Hash::hash(&preimage_bytes);
+        let payment_hash_hex = payment_hash.to_string();
+
+        // Verify the invoice belongs to this user
+        let invoice = state
+            .db
+            .get_invoice_by_payment_hash(&payment_hash_hex)
+            .await
+            .map_err(|e| {
+                error!("Failed to get invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?
+            .ok_or_else(|| {
+                trace!("invoice not found for payment hash: {}", payment_hash_hex);
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(Value::String("invoice not found".into())),
+                )
+            })?;
+
+        if invoice.user_pubkey != pubkey.to_string() {
+            trace!("invoice does not belong to this user");
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(Value::String("invoice not found".into())),
+            ));
+        }
+
+        // Use the central invoice paid handler
+        handle_invoice_paid(
+            &state.db,
+            &payment_hash_hex,
+            &payload.preimage,
+            &state.invoice_paid_trigger,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to handle invoice paid: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+
+        debug!(
+            "Invoice paid notification received for payment hash {}",
+            payment_hash_hex
+        );
+        Ok(())
     }
 }
 

@@ -1,11 +1,12 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
-use tracing::info;
+use tokio_with_wasm::alias as tokio;
+use tracing::{debug, error, info};
 
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
     LnurlWithdrawResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
-    WaitForPaymentIdentifier,
+    SetLnurlMetadataItem, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -483,5 +484,103 @@ impl BreezSdk {
             conversion_estimate: None,
             fee_policy: FeePolicy::FeesIncluded,
         })
+    }
+
+    /// Background task that publishes lnurl preimages for received lnurl payments for nostr zaps
+    /// and LNURL verify. Triggered on startup and after syncing lnurl metadata.
+    pub(super) fn spawn_lnurl_preimage_publisher(&self) {
+        if self.config.no_invoice_paid_support {
+            debug!(
+                "Invoice paid notifications are not supported. Not enabling LNURL payment status."
+            );
+            return;
+        }
+
+        let sdk = self.clone();
+        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
+        let mut trigger_receiver = sdk.lnurl_preimage_trigger.clone().subscribe();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
+                error!("Failed to process pending LNURL preimages on startup: {e:?}");
+            }
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_receiver.changed() => {
+                        info!("LNURL preimage publisher shutdown signal received");
+                        return;
+                    }
+                    _ = trigger_receiver.recv() => {
+                        if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
+                            error!("Failed to process pending LNURL preimages: {e:?}");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    async fn process_pending_lnurl_preimages(&self) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+            return Ok(());
+        };
+
+        let limit = 100;
+        loop {
+            // Query only payments that need their preimage sent to the server
+            let pending = self.storage.get_pending_lnurl_preimages(limit).await?;
+
+            debug!("Got {} pending lnurl preimages", pending.len());
+            if pending.is_empty() {
+                break;
+            }
+
+            let len = pending.len();
+
+            for item in pending {
+                // Notify the LNURL server about the paid invoice
+                if let Err(e) = lnurl_server_client
+                    .notify_invoice_paid(&item.preimage)
+                    .await
+                {
+                    error!(
+                        "Failed to notify invoice paid for payment_hash {}: {}",
+                        item.payment_hash, e
+                    );
+                    continue;
+                }
+
+                debug!(
+                    "Notified LNURL server about paid invoice for payment_hash {}",
+                    item.payment_hash
+                );
+
+                // Update the LNURL metadata to mark the preimage as sent
+                if let Err(e) = self
+                    .storage
+                    .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+                        payment_hash: item.payment_hash.clone(),
+                        sender_comment: item.sender_comment,
+                        nostr_zap_request: item.nostr_zap_request,
+                        nostr_zap_receipt: item.nostr_zap_receipt,
+                        preimage: Some(item.preimage),
+                    }])
+                    .await
+                {
+                    error!(
+                        "Failed to update LNURL metadata for payment_hash {}: {}",
+                        item.payment_hash, e
+                    );
+                }
+            }
+
+            // If we got fewer than the limit, we're done
+            if len < limit as usize {
+                break;
+            }
+        }
+
+        Ok(())
     }
 }

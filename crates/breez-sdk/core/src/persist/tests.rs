@@ -521,6 +521,9 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         sender_comment: Some("Test sender comment".to_string()),
         nostr_zap_request: Some(r#"{"kind":9734,"content":"test zap"}"#.to_string()),
         nostr_zap_receipt: Some(r#"{"kind":9735,"content":"test receipt"}"#.to_string()),
+        preimage: Some(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        ),
     };
     let lightning_lnurl_receive_payment = Payment {
         id: "lightning_lnurl_receive_pmt".to_string(),
@@ -758,6 +761,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_request: lnurl_receive_metadata.nostr_zap_request.clone(),
             payment_hash: lnurl_receive_payment_hash.clone(),
             sender_comment: lnurl_receive_metadata.sender_comment.clone(),
+            preimage: lnurl_receive_metadata.preimage.clone(),
         }])
         .await
         .unwrap();
@@ -1056,6 +1060,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             nostr_zap_receipt: Some(
                 r#"{"kind":9735,"content":"zap receipt","tags":[]}"#.to_string(),
             ),
+            preimage: None,
         }])
         .await
         .unwrap();
@@ -1150,12 +1155,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                 sender_comment: Some("Nice work!".to_string()),
                 nostr_zap_request: None,
                 nostr_zap_receipt: None,
+                preimage: None,
             },
             SetLnurlMetadataItem {
                 payment_hash: "zaphash3".to_string(),
                 sender_comment: None,
                 nostr_zap_request: Some(r#"{"kind":9734,"content":"zap3"}"#.to_string()),
                 nostr_zap_receipt: None,
+                preimage: None,
             },
         ])
         .await
@@ -2676,4 +2683,290 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         "conversion_info should be preserved, not cleared by partial update"
     );
     assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
+}
+
+/// Test that `get_pending_lnurl_preimages` returns only payments that:
+/// - Are completed receive Lightning payments
+/// - Have a preimage in the payment details
+/// - Have LNURL metadata without a preimage (i.e., preimage not yet sent to server)
+#[allow(clippy::too_many_lines)]
+pub async fn test_pending_lnurl_preimages(storage: Box<dyn Storage>) {
+    use crate::SetLnurlMetadataItem;
+
+    // Payment 1: Completed receive Lightning payment WITH preimage, LNURL metadata WITHOUT preimage
+    // This should be returned by get_pending_lnurl_preimages
+    let payment_hash_1 =
+        "pendinghash1234567890abcdef1234567890abcdef1234567890abcdef1234".to_string();
+    let preimage_1 =
+        "pendingpreimage1234567890abcdef1234567890abcdef1234567890abcdef12".to_string();
+    let payment_1 = Payment {
+        id: "pending_lnurl_pmt_1".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 50_000,
+        fees: 500,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Pending LNURL preimage test".to_string()),
+            preimage: Some(preimage_1.clone()),
+            invoice: "lnbc500n1pending1".to_string(),
+            payment_hash: payment_hash_1.clone(),
+            destination_pubkey: "03pendingpubkey1".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Payment 2: Completed receive Lightning payment WITH preimage, LNURL metadata WITH preimage
+    // This should NOT be returned (preimage already sent)
+    let payment_hash_2 =
+        "completehash234567890abcdef1234567890abcdef1234567890abcdef1234".to_string();
+    let preimage_2 = "completepreimage234567890abcdef1234567890abcdef1234567890abcdef1".to_string();
+    let payment_2 = Payment {
+        id: "pending_lnurl_pmt_2".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 60_000,
+        fees: 600,
+        timestamp: 1_700_000_001,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Already sent preimage test".to_string()),
+            preimage: Some(preimage_2.clone()),
+            invoice: "lnbc600n1complete1".to_string(),
+            payment_hash: payment_hash_2.clone(),
+            destination_pubkey: "03completepubkey2".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Payment 3: Completed receive Lightning payment WITHOUT preimage (pending payment)
+    // This should NOT be returned (no preimage in payment details)
+    let payment_hash_3 =
+        "nopreimagehash34567890abcdef1234567890abcdef1234567890abcdef123".to_string();
+    let payment_3 = Payment {
+        id: "pending_lnurl_pmt_3".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 70_000,
+        fees: 700,
+        timestamp: 1_700_000_002,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("No preimage yet test".to_string()),
+            preimage: None,
+            invoice: "lnbc700n1nopreimage1".to_string(),
+            payment_hash: payment_hash_3.clone(),
+            destination_pubkey: "03nopreimagepubkey3".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Payment 4: Completed receive Lightning payment WITH preimage, but NO LNURL metadata
+    // This should NOT be returned (no LNURL metadata)
+    let payment_hash_4 =
+        "nolnurlhash4567890abcdef1234567890abcdef1234567890abcdef12345678".to_string();
+    let preimage_4 = "nolnurlpreimage4567890abcdef1234567890abcdef1234567890abcdef1234".to_string();
+    let payment_4 = Payment {
+        id: "pending_lnurl_pmt_4".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Completed,
+        amount: 80_000,
+        fees: 800,
+        timestamp: 1_700_000_003,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("No LNURL metadata test".to_string()),
+            preimage: Some(preimage_4),
+            invoice: "lnbc800n1nolnurl1".to_string(),
+            payment_hash: payment_hash_4,
+            destination_pubkey: "03nolnurlpubkey4".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Payment 5: SEND payment (not receive) - should NOT be returned
+    let payment_hash_5 =
+        "sendhash567890abcdef1234567890abcdef1234567890abcdef1234567890ab".to_string();
+    let preimage_5 = "sendpreimage567890abcdef1234567890abcdef1234567890abcdef1234567".to_string();
+    let payment_5 = Payment {
+        id: "pending_lnurl_pmt_5".to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 90_000,
+        fees: 900,
+        timestamp: 1_700_000_004,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Send payment test".to_string()),
+            preimage: Some(preimage_5),
+            invoice: "lnbc900n1send1".to_string(),
+            payment_hash: payment_hash_5.clone(),
+            destination_pubkey: "03sendpubkey5".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Payment 6: Pending (not completed) receive payment - should NOT be returned
+    let payment_hash_6 =
+        "pendinghash67890abcdef1234567890abcdef1234567890abcdef123456789".to_string();
+    let preimage_6 = "pendingpreimage67890abcdef1234567890abcdef1234567890abcdef12345".to_string();
+    let payment_6 = Payment {
+        id: "pending_lnurl_pmt_6".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Pending,
+        amount: 100_000,
+        fees: 1000,
+        timestamp: 1_700_000_005,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Pending status test".to_string()),
+            preimage: Some(preimage_6),
+            invoice: "lnbc1000n1pendingstatus1".to_string(),
+            payment_hash: payment_hash_6.clone(),
+            destination_pubkey: "03pendingstatuspubkey6".to_string(),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Insert all payments
+    storage.insert_payment(payment_1).await.unwrap();
+    storage.insert_payment(payment_2).await.unwrap();
+    storage.insert_payment(payment_3).await.unwrap();
+    storage.insert_payment(payment_4).await.unwrap();
+    storage.insert_payment(payment_5).await.unwrap();
+    storage.insert_payment(payment_6).await.unwrap();
+
+    // Add LNURL metadata WITHOUT preimage for payment 1 (should be returned)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_1.clone(),
+            sender_comment: Some("Test comment 1".to_string()),
+            nostr_zap_request: Some(r#"{"kind":9734}"#.to_string()),
+            nostr_zap_receipt: None,
+            preimage: None, // No preimage - should be pending
+        }])
+        .await
+        .unwrap();
+
+    // Add LNURL metadata WITH preimage for payment 2 (should NOT be returned)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_2.clone(),
+            sender_comment: Some("Test comment 2".to_string()),
+            nostr_zap_request: Some(r#"{"kind":9734}"#.to_string()),
+            nostr_zap_receipt: Some(r#"{"kind":9735}"#.to_string()),
+            preimage: Some(preimage_2.clone()), // Has preimage - already sent
+        }])
+        .await
+        .unwrap();
+
+    // Add LNURL metadata WITHOUT preimage for payment 3 (should NOT be returned - no preimage in payment)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_3.clone(),
+            sender_comment: Some("Test comment 3".to_string()),
+            nostr_zap_request: None,
+            nostr_zap_receipt: None,
+            preimage: None,
+        }])
+        .await
+        .unwrap();
+
+    // Add LNURL metadata for payment 5 (send payment - should NOT be returned)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_5,
+            sender_comment: None,
+            nostr_zap_request: None,
+            nostr_zap_receipt: None,
+            preimage: None,
+        }])
+        .await
+        .unwrap();
+
+    // Add LNURL metadata for payment 6 (pending status - should NOT be returned)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_6,
+            sender_comment: None,
+            nostr_zap_request: None,
+            nostr_zap_receipt: None,
+            preimage: None,
+        }])
+        .await
+        .unwrap();
+
+    // Get pending LNURL preimages
+    let pending = storage.get_pending_lnurl_preimages(100).await.unwrap();
+
+    // Should only return payment 1
+    assert_eq!(
+        pending.len(),
+        1,
+        "Expected exactly 1 pending LNURL preimage, got {}",
+        pending.len()
+    );
+
+    let pending_item = &pending[0];
+    assert_eq!(
+        pending_item.payment_hash, payment_hash_1,
+        "Expected payment_hash_1"
+    );
+    assert_eq!(
+        pending_item.preimage, preimage_1,
+        "Expected preimage from payment details"
+    );
+    assert_eq!(
+        pending_item.sender_comment,
+        Some("Test comment 1".to_string()),
+        "Expected sender comment from LNURL metadata"
+    );
+    assert_eq!(
+        pending_item.nostr_zap_request,
+        Some(r#"{"kind":9734}"#.to_string()),
+        "Expected zap request from LNURL metadata"
+    );
+    assert!(
+        pending_item.nostr_zap_receipt.is_none(),
+        "Expected no zap receipt yet"
+    );
+
+    // Now update the LNURL metadata for payment 1 to include preimage (simulating it was sent)
+    storage
+        .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+            payment_hash: payment_hash_1.clone(),
+            sender_comment: Some("Test comment 1".to_string()),
+            nostr_zap_request: Some(r#"{"kind":9734}"#.to_string()),
+            nostr_zap_receipt: Some(r#"{"kind":9735}"#.to_string()),
+            preimage: Some(preimage_1), // Now has preimage
+        }])
+        .await
+        .unwrap();
+
+    // Should now return empty
+    let pending_after = storage.get_pending_lnurl_preimages(100).await.unwrap();
+    assert!(
+        pending_after.is_empty(),
+        "Expected no pending LNURL preimages after updating, got {}",
+        pending_after.len()
+    );
 }

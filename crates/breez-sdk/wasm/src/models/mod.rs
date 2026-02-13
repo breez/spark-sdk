@@ -621,6 +621,7 @@ pub struct Config {
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
     pub optimization_config: OptimizationConfig,
+    pub no_invoice_paid_support: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]
@@ -950,6 +951,16 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
+    pub preimage: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PendingLnurlPreimage)]
+pub struct PendingLnurlPreimage {
+    pub payment_hash: String,
+    pub preimage: String,
+    pub sender_comment: Option<String>,
+    pub nostr_zap_request: Option<String>,
+    pub nostr_zap_receipt: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateDepositPayload)]
@@ -1167,6 +1178,7 @@ pub struct LnurlReceiveMetadata {
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
     pub sender_comment: Option<String>,
+    pub preimage: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationProgress)]
