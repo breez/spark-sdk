@@ -533,7 +533,7 @@ impl BreezSdk {
             &request.prepare_response.token_identifier,
             &self.stable_balance,
         ) {
-            (None, Some(sb)) => Some(sb.create_sync_lock_guard()),
+            (None, Some(sb)) => Some(sb.create_payment_lock_guard()),
             _ => None,
         };
 

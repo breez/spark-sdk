@@ -402,7 +402,7 @@ impl SdkBuilder {
         let event_emitter = Arc::new(EventEmitter::new(
             self.config.real_time_sync_server_url.is_some(),
         ));
-        let (storage, sync_lock_client) =
+        let (storage, sync_signing_client) =
             if let Some(server_url) = &self.config.real_time_sync_server_url {
                 let result = init_and_start_real_time_sync(RealTimeSyncParams {
                     server_url: server_url.clone(),
@@ -413,7 +413,7 @@ impl SdkBuilder {
                     event_emitter: Arc::clone(&event_emitter),
                 })
                 .await?;
-                (result.storage, Some(result.sync_lock_client))
+                (result.storage, Some(result.signing_client))
             } else {
                 (storage, None)
             };
@@ -437,7 +437,7 @@ impl SdkBuilder {
             spark_wallet,
             event_emitter,
             nostr_client,
-            sync_lock_client,
+            sync_signing_client,
             buy_bitcoin_provider,
         })?;
         debug!("Initialized and started breez sdk.");

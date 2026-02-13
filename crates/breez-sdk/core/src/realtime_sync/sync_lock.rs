@@ -1,28 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use breez_sdk_common::sync::{SetLockParams, SigningClient};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, warn};
 
-/// Parameters for acquiring or releasing a distributed lock.
-pub struct SetLockParams {
-    pub lock_name: String,
-    pub acquire: bool,
-    pub exclusive: bool,
-}
-
-/// Trait for distributed lock operations via the sync service.
-///
-/// Used to coordinate actions across multiple SDK instances sharing the same identity.
-/// All operations are best-effort — callers handle errors gracefully.
-#[macros::async_trait]
-pub trait SyncLockClient: Send + Sync {
-    async fn set_lock(&self, params: SetLockParams) -> anyhow::Result<()>;
-    async fn is_locked(&self, lock_name: &str) -> anyhow::Result<bool>;
-}
-
 /// Tracks the number of in-flight lock holders sharing a distributed lock.
-pub struct LockCounter {
+pub(crate) struct LockCounter {
     count: AtomicU64,
 }
 
@@ -57,10 +41,10 @@ impl Default for LockCounter {
 /// Increments a shared counter on creation and decrements on drop. When the
 /// last guard is dropped and no holders remain, the distributed lock is
 /// released (if configured).
-pub struct SyncLockGuard {
+pub(crate) struct SyncLockGuard {
     lock_name: String,
     counter: Arc<LockCounter>,
-    sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+    signing_client: Option<SigningClient>,
 }
 
 impl SyncLockGuard {
@@ -73,14 +57,14 @@ impl SyncLockGuard {
     pub fn new(
         lock_name: String,
         counter: Arc<LockCounter>,
-        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+        signing_client: Option<SigningClient>,
     ) -> Self {
         let count = counter.increment();
         debug!("Lock guard acquired for '{}' (holders: {count})", lock_name);
 
         // Best-effort acquire (fire-and-forget)
-        if let Some(client) = &sync_lock_client {
-            let client = Arc::clone(client);
+        if let Some(client) = &signing_client {
+            let client = client.clone();
             let name = lock_name.clone();
             tokio::spawn(async move {
                 if let Err(e) = client
@@ -99,7 +83,7 @@ impl SyncLockGuard {
         Self {
             lock_name,
             counter,
-            sync_lock_client,
+            signing_client,
         }
     }
 
@@ -109,9 +93,9 @@ impl SyncLockGuard {
     /// holder. Returns `Err` if another instance already holds the lock.
     pub async fn new_exclusive(
         lock_name: String,
-        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+        signing_client: Option<SigningClient>,
     ) -> anyhow::Result<Self> {
-        if let Some(client) = &sync_lock_client {
+        if let Some(client) = &signing_client {
             client
                 .set_lock(SetLockParams {
                     lock_name: lock_name.clone(),
@@ -128,7 +112,7 @@ impl SyncLockGuard {
         Ok(Self {
             lock_name,
             counter,
-            sync_lock_client,
+            signing_client,
         })
     }
 }
@@ -143,11 +127,11 @@ impl Drop for SyncLockGuard {
 
         // Best-effort release of the distributed lock when no holders remain
         if remaining == 0
-            && let Some(sync_lock_client) = self.sync_lock_client.take()
+            && let Some(signing_client) = self.signing_client.take()
         {
             let lock_name = self.lock_name.clone();
             tokio::spawn(async move {
-                if let Err(e) = sync_lock_client
+                if let Err(e) = signing_client
                     .set_lock(SetLockParams {
                         lock_name,
                         acquire: false,

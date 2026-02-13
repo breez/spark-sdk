@@ -113,22 +113,22 @@ impl SigningClient {
         Ok(stream)
     }
 
-    pub async fn set_lock(&self, params: crate::sync::lock::SetLockParams) -> anyhow::Result<()> {
+    pub async fn set_lock(&self, params: crate::sync::SetLockParams) -> anyhow::Result<()> {
         let request_time: u32 = now();
         let instance_id = &self.client_id;
         let msg = format!(
-            "{}-{instance_id}-{}-{request_time}",
-            params.lock_name, params.acquire
+            "{}-{instance_id}-{}-{}-{request_time}",
+            params.lock_name, params.acquire, params.exclusive
         );
         let signature = self.sign_message(msg.as_bytes()).await?;
         let req = SetLockRequest {
             lock_name: params.lock_name,
             instance_id: self.client_id.clone(),
             acquire: params.acquire,
+            exclusive: params.exclusive,
             ttl_seconds: None,
             request_time,
             signature,
-            exclusive: if params.exclusive { Some(true) } else { None },
         };
         self.inner.set_lock(req).await?;
         Ok(())

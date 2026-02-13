@@ -85,19 +85,11 @@ fn create_signing_client(
     SigningClient::new(sync_client, signer, client_id)
 }
 
-fn lock_params(acquire: bool) -> SetLockParams {
+fn lock_params(acquire: bool, exclusive: bool) -> SetLockParams {
     SetLockParams {
         lock_name: LOCK_NAME.to_string(),
         acquire,
-        exclusive: false,
-    }
-}
-
-fn exclusive_lock_params(acquire: bool) -> SetLockParams {
-    SetLockParams {
-        lock_name: LOCK_NAME.to_string(),
-        acquire,
-        exclusive: true,
+        exclusive,
     }
 }
 
@@ -129,7 +121,7 @@ async fn test_distributed_lock_acquire_and_release(
     assert!(!locked, "Lock should not be held initially");
 
     // Instance A acquires the lock
-    instance_a.set_lock(lock_params(true)).await?;
+    instance_a.set_lock(lock_params(true, false)).await?;
     info!("Instance A acquired lock");
 
     // Instance B should see the lock is held
@@ -137,7 +129,7 @@ async fn test_distributed_lock_acquire_and_release(
     assert!(locked, "Lock should be held after Instance A acquired it");
 
     // Instance A releases the lock
-    instance_a.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
     info!("Instance A released lock");
 
     // Instance B should see the lock is no longer held
@@ -171,8 +163,8 @@ async fn test_distributed_lock_multiple_instances(
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
 
     // Both instances acquire the lock
-    instance_a.set_lock(lock_params(true)).await?;
-    instance_b.set_lock(lock_params(true)).await?;
+    instance_a.set_lock(lock_params(true, false)).await?;
+    instance_b.set_lock(lock_params(true, false)).await?;
     info!("Both instances acquired lock");
 
     // Lock should be held
@@ -180,7 +172,7 @@ async fn test_distributed_lock_multiple_instances(
     assert!(locked, "Lock should be held when both instances hold it");
 
     // Instance A releases
-    instance_a.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
     info!("Instance A released lock");
 
     // Lock should still be held (Instance B still has it)
@@ -191,7 +183,7 @@ async fn test_distributed_lock_multiple_instances(
     );
 
     // Instance B releases
-    instance_b.set_lock(lock_params(false)).await?;
+    instance_b.set_lock(lock_params(false, false)).await?;
     info!("Instance B released lock");
 
     // Lock should no longer be held
@@ -226,13 +218,13 @@ async fn test_distributed_lock_expiration(
     // Instance A acquires with default TTL (30s).
     // We can't easily test expiry with 30s TTL in a fast test,
     // so we verify the lock is held and then release it.
-    instance_a.set_lock(lock_params(true)).await?;
+    instance_a.set_lock(lock_params(true, false)).await?;
 
     let locked = instance_b.get_lock(LOCK_NAME).await?;
     assert!(locked, "Lock should be held immediately after acquire");
 
     // Release and verify
-    instance_a.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
     let locked = instance_b.get_lock(LOCK_NAME).await?;
     assert!(!locked, "Lock should not be held after release");
 
@@ -258,7 +250,7 @@ async fn test_distributed_lock_release_idempotent(
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
 
     // Release a lock that was never acquired — should succeed
-    instance_a.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
     info!("Released non-existent lock successfully (idempotent)");
 
     // Verify it's not locked
@@ -290,7 +282,7 @@ async fn test_distributed_lock_different_users(
     let user_b = create_signing_client(Arc::clone(&sync_client), &user_b_key);
 
     // User A acquires the lock
-    user_a.set_lock(lock_params(true)).await?;
+    user_a.set_lock(lock_params(true, false)).await?;
     info!("User A acquired lock");
 
     // User A should see it locked
@@ -305,7 +297,7 @@ async fn test_distributed_lock_different_users(
     );
 
     // Clean up
-    user_a.set_lock(lock_params(false)).await?;
+    user_a.set_lock(lock_params(false, false)).await?;
 
     info!("=== Test test_distributed_lock_different_users PASSED ===");
     Ok(())
@@ -330,11 +322,11 @@ async fn test_distributed_lock_exclusive(
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
 
     // Instance A acquires non-exclusive lock
-    instance_a.set_lock(lock_params(true)).await?;
+    instance_a.set_lock(lock_params(true, false)).await?;
     info!("Instance A acquired non-exclusive lock");
 
     // Instance B tries exclusive acquire — should fail
-    let result = instance_b.set_lock(exclusive_lock_params(true)).await;
+    let result = instance_b.set_lock(lock_params(true, true)).await;
     assert!(
         result.is_err(),
         "Exclusive lock should fail when another instance holds the lock"
@@ -342,14 +334,29 @@ async fn test_distributed_lock_exclusive(
     info!("Instance B exclusive acquire correctly failed");
 
     // Release Instance A
-    instance_a.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
 
     // Instance B tries exclusive acquire again — should succeed
-    instance_b.set_lock(exclusive_lock_params(true)).await?;
+    instance_b.set_lock(lock_params(true, true)).await?;
     info!("Instance B exclusive acquire succeeded after A released");
 
+    // Instance A tries non-exclusive acquire while B holds exclusive — should fail
+    let result = instance_a.set_lock(lock_params(true, false)).await;
+    assert!(
+        result.is_err(),
+        "Non-exclusive lock should fail when another instance holds an exclusive lock"
+    );
+    info!("Instance A non-exclusive acquire correctly failed (B holds exclusive)");
+
+    // Release Instance B
+    instance_b.set_lock(lock_params(false, true)).await?;
+
+    // Instance A can now acquire non-exclusive
+    instance_a.set_lock(lock_params(true, false)).await?;
+    info!("Instance A non-exclusive acquire succeeded after B released exclusive");
+
     // Clean up
-    instance_b.set_lock(lock_params(false)).await?;
+    instance_a.set_lock(lock_params(false, false)).await?;
 
     info!("=== Test test_distributed_lock_exclusive PASSED ===");
     Ok(())

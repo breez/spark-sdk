@@ -5,7 +5,9 @@ use tokio::sync::{Notify, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, info, warn};
 
-use breez_sdk_common::sync::{LockCounter, SyncLockClient, SyncLockGuard};
+use breez_sdk_common::sync::SigningClient;
+
+use crate::realtime_sync::sync_lock::{LockCounter, SyncLockGuard};
 
 use crate::{
     models::StableBalanceConfig,
@@ -16,9 +18,10 @@ use crate::{
     utils::expiring_cell::ExpiringCell,
 };
 
-/// The name used when setting/getting a lock using the distributed lock client.
-const LOCK_NAME: &str = "auto_conversion";
-
+/// Lock name for payment conversion guards (non-exclusive, fire-and-forget).
+const PAYMENT_LOCK_NAME: &str = "payments_conversion";
+/// Lock name for auto-conversion (exclusive).
+const AUTO_CONVERT_LOCK_NAME: &str = "auto_conversion";
 /// TTL for cached effective values (1 hour)
 const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
 
@@ -55,9 +58,9 @@ pub(crate) struct StableBalance {
     /// Notify to trigger auto-conversion
     auto_convert_trigger: Arc<Notify>,
 
-    /// Optional distributed lock client for coordinating across SDK instances.
+    /// Optional signing client for coordinating across SDK instances.
     /// `None` when real-time sync is not configured.
-    sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+    signing_client: Option<SigningClient>,
 }
 
 impl StableBalance {
@@ -67,7 +70,7 @@ impl StableBalance {
         token_converter: Arc<dyn TokenConverter>,
         spark_wallet: Arc<SparkWallet>,
         shutdown_receiver: watch::Receiver<()>,
-        sync_lock_client: Option<Arc<dyn SyncLockClient>>,
+        signing_client: Option<SigningClient>,
     ) -> Self {
         let auto_convert_trigger = Arc::new(Notify::new());
 
@@ -78,7 +81,7 @@ impl StableBalance {
             effective_values: Arc::new(ExpiringCell::new()),
             ongoing_payments: Arc::new(LockCounter::new()),
             auto_convert_trigger,
-            sync_lock_client,
+            signing_client,
         };
 
         // Spawn the background auto-convert task
@@ -103,9 +106,7 @@ impl StableBalance {
                         info!("Auto-conversion task shutdown signal received");
                         return;
                     }
-                    () = stable_balance.auto_convert_trigger.notified() => {
-                        debug!("Auto-conversion triggered");
-                    }
+                    () = stable_balance.auto_convert_trigger.notified() => {}
                 }
 
                 if let Err(e) = stable_balance.auto_convert().await {
@@ -135,10 +136,25 @@ impl StableBalance {
             return Ok(false);
         }
 
-        // 3. Acquire exclusive distributed lock — skip if another instance holds it
+        // 3. Check if payment conversions are in progress on other instances
+        if let Some(client) = &self.signing_client {
+            match client.get_lock(PAYMENT_LOCK_NAME).await {
+                Ok(true) => {
+                    debug!("Auto-conversion skipped: payments lock held on another instance");
+                    return Ok(false);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    debug!("Auto-conversion skipped: failed to check payments lock: {e:?}");
+                    return Ok(false);
+                }
+            }
+        }
+
+        // 4. Acquire exclusive auto-conversion lock — skip if another instance holds it
         let _lock_guard = match SyncLockGuard::new_exclusive(
-            LOCK_NAME.to_string(),
-            self.sync_lock_client.clone(),
+            AUTO_CONVERT_LOCK_NAME.to_string(),
+            self.signing_client.clone(),
         )
         .await
         {
@@ -149,7 +165,7 @@ impl StableBalance {
             }
         };
 
-        // 4. Convert the amount above the reserve
+        // 5. Convert the amount above the reserve
         let amount_to_convert = balance_sats.saturating_sub(reserved);
 
         info!(
@@ -239,7 +255,6 @@ impl StableBalance {
     /// This is a non-blocking operation that sends a signal to the background task.
     /// The actual conversion will wait for any active conversions to complete.
     pub fn trigger_auto_convert(&self) {
-        debug!("Triggering auto-conversion");
         self.auto_convert_trigger.notify_one();
     }
 
@@ -247,11 +262,11 @@ impl StableBalance {
     ///
     /// Auto-convert is skipped while any guard is active. When the
     /// last guard is dropped, the distributed lock is released (if configured).
-    pub fn create_sync_lock_guard(&self) -> SyncLockGuard {
+    pub fn create_payment_lock_guard(&self) -> SyncLockGuard {
         SyncLockGuard::new(
-            LOCK_NAME.to_string(),
+            PAYMENT_LOCK_NAME.to_string(),
             Arc::clone(&self.ongoing_payments),
-            self.sync_lock_client.clone(),
+            self.signing_client.clone(),
         )
     }
 
