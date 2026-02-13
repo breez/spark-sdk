@@ -83,15 +83,7 @@ impl SyncProcessor {
         // Apply the LATEST outgoing record to the relational data store before starting the sync loops.
         // It's possible this outgoing record was inserted, while the database update after that was not completed yet.
         // This goes first to ensure consistency.
-        //
-        // Rtsync is best-effort and must never block SDK startup. The failure window for
-        // ensure_outgoing_record_committed is narrow (crash between sync-state insert and
-        // relational-DB write), and an app restart will re-trigger it.
-        if let Err(e) = self.ensure_outgoing_record_committed().await {
-            error!(
-                "Failed to commit latest pending outgoing change during real-time sync startup: {e}"
-            );
-        }
+        self.ensure_outgoing_record_committed().await?;
 
         // Handle pending incoming records that were already fetched and stored locally.
         // Errors are non-fatal: pull_sync_once_local will be retried on the next iteration
@@ -1564,20 +1556,21 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_start_does_not_fail_when_initialization_steps_fail() {
+    async fn test_start_does_not_fail_when_pull_sync_once_local_fails() {
         // Setup
         let mut mock_storage = MockSyncStorage::new();
-        let pending_outgoing = create_outgoing_change("test", "123", 2);
         let pending_incoming = crate::sync::storage::IncomingChange {
             new_state: create_record("test", "123", 3),
             old_state: Some(create_record("test", "123", 2)),
         };
 
+        // For ensure_outgoing_record_committed (succeeds)
         mock_storage
             .expect_get_latest_outgoing_change()
             .times(1)
-            .returning(move || Ok(Some(pending_outgoing.clone())));
+            .returning(|| Ok(None));
 
+        // For pull_sync_once_local (handler fails)
         mock_storage
             .expect_get_incoming_records()
             .times(1)
@@ -1596,10 +1589,6 @@ mod tests {
             .returning(|_| Ok(()));
 
         let mut mock_handler = MockNewRecordHandler::new();
-        mock_handler
-            .expect_on_replay_outgoing_change()
-            .times(1)
-            .returning(|_| Err(anyhow!("replay failed")));
         mock_handler
             .expect_on_incoming_change()
             .times(1)
@@ -1624,7 +1613,7 @@ mod tests {
         // Execute
         let result = sync_processor.start(shutdown_rx).await;
 
-        // Verify
+        // Verify - pull_sync_once_local failure should not cause start to fail
         assert!(result.is_ok());
 
         // Send shutdown signal to clean up
