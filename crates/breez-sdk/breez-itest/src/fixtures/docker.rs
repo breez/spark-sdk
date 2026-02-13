@@ -28,11 +28,11 @@ pub async fn build_docker_image(config: &DockerImageConfig) -> Result<()> {
     let check = Command::new("docker")
         .args(["image", "inspect", &image_tag])
         .output();
-    if let Ok(output) = check {
-        if output.status.success() {
-            info!("Docker image {} already exists, skipping build", image_tag);
-            return Ok(());
-        }
+    if let Ok(output) = check
+        && output.status.success()
+    {
+        info!("Docker image {} already exists, skipping build", image_tag);
+        return Ok(());
     }
 
     // Resolve the context path to absolute (skip for URLs)
