@@ -21,6 +21,20 @@ pub struct DockerImageConfig {
 pub async fn build_docker_image(config: &DockerImageConfig) -> Result<()> {
     use std::path::Path;
 
+    let image_tag = format!("{}:{}", config.image_name, config.image_tag);
+
+    // Check if the image already exists (avoids "already exists" errors with
+    // Docker buildx when multiple tests try to build the same image in parallel)
+    let check = Command::new("docker")
+        .args(["image", "inspect", &image_tag])
+        .output();
+    if let Ok(output) = check
+        && output.status.success()
+    {
+        info!("Docker image {} already exists, skipping build", image_tag);
+        return Ok(());
+    }
+
     // Resolve the context path to absolute (skip for URLs)
     let context_path = Path::new(&config.context_path);
     let absolute_context_path = if config.context_path.starts_with("http://")
@@ -74,6 +88,15 @@ pub async fn build_docker_image(config: &DockerImageConfig) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Handle race condition: another parallel test may have built the image
+        // while we were building, causing a "already exists" error from buildx
+        if stderr.contains("already exists") {
+            info!(
+                "Docker image {} was built by another process, continuing",
+                image_tag
+            );
+            return Ok(());
+        }
         let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(anyhow::anyhow!(
             "Docker build failed:\nSTDOUT: {}\nSTDERR: {}",
