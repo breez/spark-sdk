@@ -217,6 +217,16 @@ impl SparkRpcClient {
         Ok(())
     }
 
+    pub async fn store_preimage_share_v2(&self, req: StorePreimageShareV2Request) -> Result<()> {
+        debug!("Calling store_preimage_share_v2 with request: {:?}", req);
+        self.spark_service_client()
+            .await?
+            .store_preimage_share_v2(req)
+            .await?
+            .into_inner();
+        Ok(())
+    }
+
     pub async fn get_signing_commitments(
         &self,
         req: GetSigningCommitmentsRequest,

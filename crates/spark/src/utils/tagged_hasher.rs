@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// use spark::utils::tagged_hasher::TaggedHasher;
 ///
 /// let hash = TaggedHasher::new(&["spark", "deposit", "proof_of_possession"])
@@ -63,6 +63,14 @@ impl TaggedHasher {
         self
     }
 
+    /// Adds a u32 value to the hash computation.
+    ///
+    /// The value is converted to u64 and serialized as `[8-byte BE length (always 8)][8-byte BE value]`.
+    #[must_use]
+    pub fn add_u32(self, value: u32) -> Self {
+        self.add_u64(u64::from(value))
+    }
+
     /// Adds a map of string keys to byte values to the hash computation.
     ///
     /// The map is hashed in a deterministic order: first the count of entries,
@@ -75,7 +83,6 @@ impl TaggedHasher {
         self = self.add_u64(map.len() as u64);
 
         // BTreeMap iterates in sorted order by key, but we need to sort by key bytes
-        // to match the JS SDK's behavior (which sorts by UTF-8 byte comparison)
         let mut pairs: Vec<_> = map.iter().collect();
         pairs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 

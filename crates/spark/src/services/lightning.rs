@@ -1,7 +1,7 @@
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
-use crate::operator::rpc::spark::{SecretShare, StorePreimageShareRequest};
+use crate::operator::rpc::spark::{SecretShare, StorePreimageShareV2Request};
 use crate::services::{ServiceError, Transfer, TransferId, TransferObserver, TransferService};
 use crate::signer::SecretToSplit;
 use crate::ssp::{
@@ -10,13 +10,16 @@ use crate::ssp::{
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
+use crate::utils::tagged_hasher::TaggedHasher;
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
+use prost::Message as ProstMessage;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -302,32 +305,65 @@ impl LightningService {
             )
             .await?;
 
-        let requests =
-            self.operator_pool
-                .get_all_operators()
-                .zip(shares)
-                .map(|(operator, share)| {
-                    operator
-                        .client
-                        .store_preimage_share(StorePreimageShareRequest {
-                            payment_hash: payment_hash.to_byte_array().to_vec(),
-                            preimage_share: Some(SecretShare {
-                                secret_share: share.secret_share.share.to_bytes().to_vec(),
-                                proofs: share
-                                    .proofs
-                                    .iter()
-                                    .map(|p| p.to_sec1_bytes().to_vec())
-                                    .collect(),
-                            }),
-                            threshold: share.secret_share.threshold as u32,
-                            invoice_string: invoice.invoice.encoded_invoice.clone(),
-                            user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                        })
-                });
+        // Build encrypted preimage shares map for V2 endpoint
+        let mut encrypted_shares: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let threshold = self.split_secret_threshold;
+        let invoice_string = invoice.invoice.encoded_invoice.clone();
 
-        futures::future::try_join_all(requests)
+        for (operator, share) in self.operator_pool.get_all_operators().zip(shares) {
+            let secret_share_proto = SecretShare {
+                secret_share: share.secret_share.share.to_bytes().to_vec(),
+                proofs: share
+                    .proofs
+                    .iter()
+                    .map(|p| p.to_sec1_bytes().to_vec())
+                    .collect(),
+            };
+
+            // Serialize the SecretShare protobuf
+            let proto_bytes = secret_share_proto.encode_to_vec();
+
+            // Encrypt using ECIES with the operator's identity public key
+            let public_key_bytes = operator.identity_public_key.serialize_uncompressed();
+            let encrypted = ecies::encrypt(&public_key_bytes, &proto_bytes)
+                .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))?;
+
+            let operator_identifier = hex::encode(operator.identifier.serialize());
+            encrypted_shares.insert(operator_identifier, encrypted);
+        }
+
+        // Create signing payload using TaggedHasher
+        let signable_message =
+            TaggedHasher::new(&["spark", "store_preimage_share", "signing payload"])
+                .add_bytes(&payment_hash.to_byte_array())
+                .add_map_string_to_bytes(&encrypted_shares)
+                .add_u32(threshold)
+                .add_string(&invoice_string)
+                .signable_message();
+
+        // Sign the payload
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&signable_message)
+            .await?;
+
+        // Send V2 request to coordinator
+        let coordinator = self.operator_pool.get_coordinator();
+
+        coordinator
+            .client
+            .store_preimage_share_v2(StorePreimageShareV2Request {
+                payment_hash: payment_hash.to_byte_array().to_vec(),
+                encrypted_preimage_shares: encrypted_shares.into_iter().collect(),
+                threshold,
+                invoice_string,
+                user_identity_public_key: identity_pubkey.serialize().to_vec(),
+                user_signature: signature.serialize_der().to_vec(),
+            })
             .await
-            .map_err(|e| ServiceError::PreimageShareStoreFailed(e.to_string()))?;
+            .map_err(|e: crate::operator::rpc::OperatorRpcError| {
+                ServiceError::PreimageShareStoreFailed(e.to_string())
+            })?;
 
         invoice.try_into()
     }
