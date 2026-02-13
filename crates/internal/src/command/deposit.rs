@@ -75,7 +75,11 @@ pub async fn handle_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         DepositCommand::NewAddress { is_static } => {
-            let address = wallet.generate_deposit_address(is_static).await?;
+            let address = if is_static {
+                wallet.generate_static_deposit_address().await?
+            } else {
+                wallet.generate_deposit_address().await?
+            };
             println!("{address}");
         }
         DepositCommand::FetchStaticClaimQuote { txid, output_index } => {

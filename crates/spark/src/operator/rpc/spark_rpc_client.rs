@@ -541,6 +541,22 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn generate_static_deposit_address(
+        &self,
+        req: GenerateStaticDepositAddressRequest,
+    ) -> Result<GenerateStaticDepositAddressResponse> {
+        debug!(
+            "Calling generate_static_deposit_address with request: {:?}",
+            req
+        );
+        Ok(self
+            .spark_service_client()
+            .await?
+            .generate_static_deposit_address(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn query_static_deposit_addresses(
         &self,
         req: QueryStaticDepositAddressesRequest,

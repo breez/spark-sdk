@@ -13,7 +13,7 @@ async fn test_create_deposit_address(#[future] wallets: WalletsFixture) -> Resul
     let fixture = wallets.await;
     let wallet = fixture.alice_wallet;
 
-    let address = wallet.generate_deposit_address(false).await?;
+    let address = wallet.generate_deposit_address().await?;
     info!("Generated deposit address: {}", address);
 
     assert!(
@@ -47,7 +47,7 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     let bitcoind = &fixture.fixtures.bitcoind;
 
     // Generate a deposit address
-    let deposit_address = alice.generate_deposit_address(false).await?;
+    let deposit_address = alice.generate_deposit_address().await?;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the deposit address with a certain amount

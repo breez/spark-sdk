@@ -7,7 +7,7 @@ use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{
-    QueryNodesRequest, StartTransferRequest, TransferFilter, TreeNodeIds,
+    HashVariant, QueryNodesRequest, StartTransferRequest, TransferFilter, TreeNodeIds,
 };
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
@@ -21,6 +21,7 @@ use crate::utils::refund::{
     RefundSignatures, SignRefundsParams, SignedRefundTransactions, prepare_refund_so_signing_jobs,
     sign_aggregate_refunds, sign_refunds,
 };
+use crate::utils::tagged_hasher::TaggedHasher;
 use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Transaction;
@@ -511,6 +512,7 @@ impl TransferService {
                 .map(|(k, v)| (hex::encode(k.serialize()), v))
                 .collect(),
             user_signature: Vec::new(),
+            hash_variant: HashVariant::V2.into(),
         };
 
         let signed_transfer_package = self
@@ -643,35 +645,31 @@ impl TransferService {
         Ok(signed_package)
     }
 
-    /// Creates the signing payload for a transfer package by hashing the transfer ID and encrypted payload
+    /// Creates the signing payload for a transfer package using tagged hashing.
+    /// Uses V2 structured hashing with domain tag for collision resistance.
     fn get_transfer_package_signing_payload(
         &self,
         transfer_id: &TransferId,
         transfer_package: &operator_rpc::spark::TransferPackage,
     ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes = hex::decode(transfer_id.to_string().replace("-", "")).unwrap();
-        // Get the encrypted payload and convert to sorted key-value pairs
-        let encrypted_payload = &transfer_package.key_tweak_package;
-        let mut pairs: Vec<(String, Vec<u8>)> = encrypted_payload
+        let transfer_id_bytes =
+            hex::decode(transfer_id.to_string().replace('-', "")).map_err(|e| {
+                ServiceError::ValidationError(format!("Failed to decode transfer ID: {e}"))
+            })?;
+
+        // Convert HashMap to BTreeMap for deterministic ordering
+        let key_tweak_package: std::collections::BTreeMap<String, Vec<u8>> = transfer_package
+            .key_tweak_package
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        // Sort by key to ensure deterministic ordering
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        let signable_message = TaggedHasher::new(&["spark", "transfer", "signing payload"])
+            .add_bytes(&transfer_id_bytes)
+            .add_map_string_to_bytes(&key_tweak_package)
+            .signable_message();
 
-        // Build the message following the JavaScript pattern:
-        // transfer_id_bytes + key + ":" + value + ";" for each pair
-        let mut message = transfer_id_bytes;
-
-        for (key, value) in pairs {
-            message.extend_from_slice(key.as_bytes());
-            message.extend_from_slice(b":");
-            message.extend_from_slice(&value);
-            message.extend_from_slice(b";");
-        }
-
-        Ok(message)
+        Ok(signable_message)
     }
 
     /// Claims a transfer with retry logic and automatic leaf preparation
