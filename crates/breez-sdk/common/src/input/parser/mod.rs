@@ -9,14 +9,14 @@ use web_time::UNIX_EPOCH;
 
 use crate::{
     dns::{self, DnsResolver},
-    error::ServiceConnectivityError,
     input::{
         Bip21Extra, ExternalInputParser, LnurlRequestDetails, ParseError, PaymentRequestSource,
         SparkAddressDetails, SparkInvoiceDetails,
     },
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
-    rest::{ReqwestRestClient, RestClient, RestResponse},
 };
+
+use platform_utils::{DefaultHttpClient, HttpClient};
 
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
@@ -39,7 +39,7 @@ pub async fn parse(
 ) -> Result<InputType, ParseError> {
     InputParser::new(
         dns::Resolver::new(),
-        ReqwestRestClient::new()?,
+        DefaultHttpClient::default(),
         external_input_parsers,
     )
     .parse(input)
@@ -51,23 +51,23 @@ pub fn parse_invoice(input: &str) -> Option<Bolt11InvoiceDetails> {
 }
 
 pub struct InputParser<C, D> {
-    rest_client: C,
+    http_client: C,
     dns_resolver: D,
     external_input_parsers: Option<Vec<ExternalInputParser>>,
 }
 
 impl<C, D> InputParser<C, D>
 where
-    C: RestClient + Send + Sync,
+    C: HttpClient + Send + Sync,
     D: DnsResolver + Send + Sync,
 {
     pub fn new(
         dns_resolver: D,
-        rest_client: C,
+        http_client: C,
         external_input_parsers: Option<Vec<ExternalInputParser>>,
     ) -> Self {
         InputParser {
-            rest_client,
+            http_client,
             dns_resolver,
             external_input_parsers,
         }
@@ -226,7 +226,7 @@ where
             "https://"
         };
 
-        let Ok(url) = reqwest::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
+        let Ok(url) = url::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
         else {
             return None;
         };
@@ -281,7 +281,7 @@ where
             }
         }
 
-        let Ok(parsed_url) = reqwest::Url::parse(&input) else {
+        let Ok(parsed_url) = url::Url::parse(&input) else {
             return Ok(None);
         };
 
@@ -305,15 +305,14 @@ where
             }
             scheme if supported_prefixes.contains(&scheme) => {
                 if has_extension(&host, "onion") {
-                    url = reqwest::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(
-                        |_| {
+                    url =
+                        url::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(|_| {
                             LnurlError::General(
                                 "failed to rewrite lnurl scheme to http".to_string(),
                             )
-                        },
-                    )?;
+                        })?;
                 } else {
-                    url = reqwest::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
+                    url = url::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
                         |_| {
                             LnurlError::General(
                                 "failed to rewrite lnurl scheme to https".to_string(),
@@ -330,7 +329,7 @@ where
 
     async fn resolve_lnurl(
         &self,
-        url: &reqwest::Url,
+        url: &url::Url,
         _source: &PaymentRequestSource,
     ) -> Result<InputType, LnurlError> {
         if let Some(query) = url.query()
@@ -340,8 +339,8 @@ where
             return Ok(InputType::LnurlAuth(data));
         }
 
-        let RestResponse { body, .. } = self.rest_client.get_request(url.to_string(), None).await?;
-        let lnurl_data: LnurlRequestDetails = parse_json(&body)?;
+        let response = self.http_client.get(url.to_string(), None).await?;
+        let lnurl_data: LnurlRequestDetails = response.json()?;
         let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
         Ok(match lnurl_data {
             LnurlRequestDetails::PayRequest { pay_request } => {
@@ -380,14 +379,12 @@ where
             let parser_url = parser.parser_url.replacen("<input>", &urlsafe_input, 1);
 
             // Make request
-            let RestResponse { body, .. } = self
-                .rest_client
-                .get_request(parser_url.clone(), None)
-                .await?;
+            let response = self.http_client.get(parser_url.clone(), None).await?;
+            let body = &response.body;
 
             // Try to parse as LnurlRequestDetails
-            if let Ok(lnurl_data) = serde_json::from_str::<LnurlRequestDetails>(&body) {
-                let domain = reqwest::Url::parse(&parser_url)
+            if let Ok(lnurl_data) = response.json::<LnurlRequestDetails>() {
+                let domain = url::Url::parse(&parser_url)
                     .ok()
                     .and_then(|url| url.host_str().map(ToString::to_string))
                     .unwrap_or_default();
@@ -406,7 +403,7 @@ where
             }
 
             // Check other input types
-            if let Ok(input_type) = self.parse_core(&body).await {
+            if let Ok(input_type) = self.parse_core(body).await {
                 return Ok(input_type);
             }
         }
@@ -852,13 +849,6 @@ fn parse_bolt12_invoice_request(
 ) -> Option<Bolt12InvoiceRequestDetails> {
     // TODO: Implement parsing of Bolt12 invoice requests
     None
-}
-
-pub fn parse_json<T>(json: &str) -> Result<T, ServiceConnectivityError>
-where
-    for<'a> T: serde::de::Deserialize<'a>,
-{
-    serde_json::from_str::<T>(json).map_err(|e| ServiceConnectivityError::Json(e.to_string()))
 }
 
 fn parse_lightning_payment_method(input: &str, source: &PaymentRequestSource) -> Option<InputType> {

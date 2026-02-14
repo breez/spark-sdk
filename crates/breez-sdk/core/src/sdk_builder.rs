@@ -7,8 +7,8 @@ use std::sync::Arc;
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     buy::{BuyBitcoinProviderApi, moonpay::MoonpayProvider},
-    rest::ReqwestRestClient as CommonRequestRestClient,
 };
+use platform_utils::DefaultHttpClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
@@ -16,14 +16,13 @@ use tokio::sync::watch;
 use tracing::{debug, info};
 
 use crate::{
-    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, RestClient,
-    RestClientWrapper, Seed,
+    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
-    lnurl::{LnurlServerClient, ReqwestLnurlServerClient},
+    lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     nostr::NostrClient,
     payment_observer::{PaymentObserver, SparkTransferObserver},
@@ -58,7 +57,7 @@ pub struct SdkBuilder {
     storage: Option<Arc<dyn Storage>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
-    lnurl_client: Option<Arc<dyn RestClient>>,
+    lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
 }
@@ -179,7 +178,7 @@ impl SdkBuilder {
             url,
             self.config.network,
             5,
-            Box::new(CommonRequestRestClient::new().unwrap()),
+            Box::new(DefaultHttpClient::default()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
             api_type,
         )));
@@ -196,8 +195,10 @@ impl SdkBuilder {
     }
 
     #[must_use]
-    pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn RestClient>) -> Self {
-        self.lnurl_client = Some(lnurl_client);
+    pub fn with_lnurl_client(mut self, lnurl_client: Arc<dyn crate::RestClient>) -> Self {
+        self.lnurl_client = Some(Arc::new(crate::common::rest::RestClientWrapper::new(
+            lnurl_client,
+        )));
         self
     }
 
@@ -271,8 +272,7 @@ impl SdkBuilder {
         let chain_service = if let Some(service) = self.chain_service {
             service
         } else {
-            let inner_client =
-                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?;
+            let inner_client = DefaultHttpClient::default();
             match self.config.network {
                 Network::Mainnet => Arc::new(RestClientChainService::new(
                     "https://blockstream.info/api".to_string(),
@@ -348,11 +348,9 @@ impl SdkBuilder {
             None => breez_server.clone(),
         };
 
-        let lnurl_client: Arc<dyn breez_sdk_common::rest::RestClient> = match self.lnurl_client {
-            Some(client) => Arc::new(RestClientWrapper::new(client)),
-            None => Arc::new(
-                CommonRequestRestClient::new().map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
+        let lnurl_client: Arc<dyn platform_utils::HttpClient> = match self.lnurl_client {
+            Some(client) => client,
+            None => Arc::new(DefaultHttpClient::default()),
         };
         let user_agent = format!(
             "{}/{}",
@@ -388,12 +386,14 @@ impl SdkBuilder {
             Some(client) => Some(client),
             None => match &self.config.lnurl_domain {
                 Some(domain) => {
-                    // Get the SparkWallet instance for signing
-                    Some(Arc::new(ReqwestLnurlServerClient::new(
+                    let http_client: Arc<dyn platform_utils::HttpClient> =
+                        Arc::new(DefaultHttpClient::default());
+                    Some(Arc::new(DefaultLnurlServerClient::new(
+                        http_client,
                         domain.clone(),
                         self.config.api_key.clone(),
                         Arc::clone(&spark_wallet),
-                    )?))
+                    )))
                 }
                 None => None,
             },

@@ -1,10 +1,7 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use jwt::{Claims, Header, Token};
-use reqwest::{
-    RequestBuilder,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
-};
 use tracing::{debug, trace};
 use web_time::{SystemTime, UNIX_EPOCH};
 
@@ -12,6 +9,8 @@ use crate::{
     FlashnetClient, FlashnetError,
     models::{ChallengeRequest, ChallengeResponse, VerifyRequest, VerifyResponse},
 };
+
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
 
 const ACCESS_TOKEN_CACHE_KEY: &str = "access_token";
 const HOUR_MS: u32 = 60 * 60 * 1000;
@@ -26,8 +25,9 @@ impl FlashnetClient {
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let headers = self.get_headers().await?;
-        self.get_request_inner(endpoint, headers, query).await
+        let access_token = self.get_access_token().await?;
+        self.get_request_inner(endpoint, Some(&access_token), query)
+            .await
     }
 
     pub(crate) async fn post_request<S, D>(
@@ -39,8 +39,9 @@ impl FlashnetClient {
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let headers = self.get_headers().await?;
-        self.post_request_inner(endpoint, headers, body).await
+        let access_token = self.get_access_token().await?;
+        self.post_request_inner(endpoint, Some(&access_token), body)
+            .await
     }
 
     async fn authenticate(&self) -> Result<String, FlashnetError> {
@@ -109,54 +110,32 @@ impl FlashnetClient {
         Ok(access_token)
     }
 
-    async fn get_headers(&self) -> Result<HeaderMap, FlashnetError> {
-        let access_token = self.get_access_token().await?;
-        let mut headers: HeaderMap = HeaderMap::new();
-
-        let auth_value = format!("Bearer {access_token}");
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&auth_value)
-                .map_err(|_| FlashnetError::Generic("Invalid header".to_string()))?,
-        );
-
-        Ok(headers)
-    }
-
     async fn auth_challenge(
         &self,
         request: ChallengeRequest,
     ) -> Result<ChallengeResponse, FlashnetError> {
         debug!("Posting auth challenge to flashnet");
-        let mut headers: HeaderMap = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-        self.post_request_inner("v1/auth/challenge", headers, request)
+        self.post_request_inner::<_, ChallengeResponse>("v1/auth/challenge", None, request)
             .await
     }
 
     async fn auth_verify(&self, request: VerifyRequest) -> Result<VerifyResponse, FlashnetError> {
         debug!("Posting auth verify to flashnet");
-        let mut headers: HeaderMap = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-        self.post_request_inner("v1/auth/verify", headers, request)
+        self.post_request_inner::<_, VerifyResponse>("v1/auth/verify", None, request)
             .await
     }
 
     async fn get_request_inner<S, D>(
         &self,
         endpoint: &str,
-        headers: HeaderMap,
+        access_token: Option<&str>,
         query: Option<S>,
     ) -> Result<D, FlashnetError>
     where
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let client = reqwest::Client::new();
-        let query = match query {
+        let query_string = match query {
             Some(q) => {
                 let qs_config =
                     serde_qs::Config::new().array_format(serde_qs::ArrayFormat::Unindexed);
@@ -167,43 +146,62 @@ impl FlashnetClient {
             }
             None => String::new(),
         };
-        let url = format!("{}/{}{}", self.config.base_url, endpoint, query);
-        let builder = client.get(&url).headers(headers);
+        let url = format!("{}/{}{}", self.config.base_url, endpoint, query_string);
 
-        self.request_inner(builder).await
+        let mut headers = HashMap::new();
+        add_content_type_header(&mut headers, ContentType::Json);
+        if let Some(token) = access_token {
+            headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+        }
+
+        let response = self.http_client.get(url, Some(headers)).await?;
+
+        if !response.is_success() {
+            return Err(FlashnetError::Network {
+                reason: response.body,
+                code: Some(response.status),
+            });
+        }
+
+        response
+            .json::<D>()
+            .map_err(|e| FlashnetError::Generic(format!("Failed to parse response JSON: {e}")))
     }
 
     async fn post_request_inner<S, D>(
         &self,
         endpoint: &str,
-        headers: HeaderMap,
+        access_token: Option<&str>,
         body: S,
     ) -> Result<D, FlashnetError>
     where
         S: serde::Serialize + Clone,
         D: serde::de::DeserializeOwned,
     {
-        let client = reqwest::Client::new();
         let url = format!("{}/{}", self.config.base_url, endpoint);
-        let builder = client.post(&url).headers(headers).json(&body);
-        self.request_inner(builder).await
-    }
+        let body_json = serde_json::to_string(&body)
+            .map_err(|e| FlashnetError::Generic(format!("Failed to serialize body: {e}")))?;
 
-    async fn request_inner<D>(&self, builder: RequestBuilder) -> Result<D, FlashnetError>
-    where
-        D: serde::de::DeserializeOwned,
-    {
-        let response = builder.send().await?;
-        let status_code = response.status();
-        let text = response.text().await?;
-        trace!("Response: {text:?}");
-        if !status_code.is_success() {
+        let mut headers = HashMap::new();
+        add_content_type_header(&mut headers, ContentType::Json);
+        if let Some(token) = access_token {
+            headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+        }
+
+        let response = self
+            .http_client
+            .post(url, Some(headers), Some(body_json))
+            .await?;
+
+        if !response.is_success() {
             return Err(FlashnetError::Network {
-                reason: text,
-                code: Some(status_code.as_u16()),
+                reason: response.body,
+                code: Some(response.status),
             });
         }
-        serde_json::from_str::<D>(&text)
+
+        response
+            .json::<D>()
             .map_err(|e| FlashnetError::Generic(format!("Failed to parse response JSON: {e}")))
     }
 }

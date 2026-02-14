@@ -1,14 +1,14 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataResponse,
+    PublishZapReceiptRequest as ModelPublishZapReceiptRequest, PublishZapReceiptResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
-use reqwest::{
-    StatusCode,
-    header::{AUTHORIZATION, HeaderMap, InvalidHeaderValue},
-};
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::sync::Arc;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
@@ -88,63 +88,53 @@ pub trait LnurlServerClient: Send + Sync {
     ) -> Result<String, LnurlServerError>;
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum ReqwestLnurlServerClientError {
-    #[error("Invalid API key")]
-    InvalidApiKey,
-
-    #[error("Failed to initialize reqwest client: {0}")]
-    Initialization(String),
-
-    #[error("Failed to generate signature: {0}")]
-    SigningError(String),
-}
-
-impl From<InvalidHeaderValue> for ReqwestLnurlServerClientError {
-    fn from(_value: InvalidHeaderValue) -> Self {
-        Self::InvalidApiKey
-    }
-}
-
-pub struct ReqwestLnurlServerClient {
-    client: reqwest::Client,
+/// Default `LnurlServerClient` implementation using `HttpClient` abstraction.
+pub struct DefaultLnurlServerClient {
+    http_client: Arc<dyn HttpClient>,
     domain: String,
-    wallet: std::sync::Arc<spark_wallet::SparkWallet>,
+    api_key: Option<String>,
+    wallet: Arc<spark_wallet::SparkWallet>,
 }
 
-impl ReqwestLnurlServerClient {
+impl DefaultLnurlServerClient {
     pub fn new(
+        http_client: Arc<dyn HttpClient>,
         domain: String,
         api_key: Option<String>,
-        wallet: std::sync::Arc<spark_wallet::SparkWallet>,
-    ) -> Result<Self, ReqwestLnurlServerClientError> {
-        let mut builder = reqwest::Client::builder().user_agent("breez-sdk-spark");
-        if let Some(api_key) = api_key {
-            builder = builder.default_headers({
-                let mut headers = HeaderMap::new();
-                headers.insert(AUTHORIZATION, format!("Bearer {api_key}").parse()?);
-                headers
-            });
-        }
-        let client = builder
-            .build()
-            .map_err(|e| ReqwestLnurlServerClientError::Initialization(e.to_string()))?;
-        Ok(Self {
-            client,
+        wallet: Arc<spark_wallet::SparkWallet>,
+    ) -> Self {
+        Self {
+            http_client,
             domain,
+            api_key,
             wallet,
-        })
+        }
     }
 
     /// Construct the base URL for the lnurl server.
-    /// If the domain already contains a protocol (e.g., <http://localhost:8080>),
-    /// use it as-is. Otherwise, prepend "https://" for production domains.
     fn base_url(&self) -> String {
         if self.domain.contains("://") {
             self.domain.clone()
         } else {
             format!("https://{}", self.domain)
         }
+    }
+
+    /// Get common headers for all requests (User-Agent and Authorization).
+    fn get_common_headers(&self) -> HashMap<String, String> {
+        let mut headers = HashMap::new();
+        headers.insert("User-Agent".to_string(), "breez-sdk-spark".to_string());
+        if let Some(api_key) = &self.api_key {
+            headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        }
+        headers
+    }
+
+    /// Get headers for POST/DELETE requests (includes Content-Type).
+    fn get_post_headers(&self) -> HashMap<String, String> {
+        let mut headers = self.get_common_headers();
+        add_content_type_header(&mut headers, ContentType::Json);
+        headers
     }
 
     async fn sign_message(&self, message: &str) -> Result<(String, u64), LnurlServerError> {
@@ -159,53 +149,54 @@ impl ReqwestLnurlServerClient {
             .map_err(|e| LnurlServerError::SigningError(e.to_string()))?;
         Ok((signature.serialize_der().to_lower_hex_string(), timestamp))
     }
+
+    /// Handle response status and parse JSON
+    fn handle_response<T: serde::de::DeserializeOwned>(
+        status: u16,
+        body: &str,
+    ) -> Result<T, LnurlServerError> {
+        match status {
+            401 => Err(LnurlServerError::InvalidApiKey),
+            s if (200..300).contains(&s) => serde_json::from_str(body).map_err(|e| {
+                LnurlServerError::RequestFailure(format!(
+                    "failed to deserialize response json: {e}"
+                ))
+            }),
+            other => Err(LnurlServerError::Network {
+                statuscode: other,
+                message: Some(body.to_string()),
+            }),
+        }
+    }
 }
 
 #[macros::async_trait]
-impl LnurlServerClient for ReqwestLnurlServerClient {
+impl LnurlServerClient for DefaultLnurlServerClient {
     fn domain(&self) -> &str {
         &self.domain
     }
 
     async fn check_username_available(&self, username: &str) -> Result<bool, LnurlServerError> {
         let url = format!("{}/lnurlpay/available/{}", self.base_url(), username);
-        let result = self.client.get(url).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let response = self
+            .http_client
+            .get(url, Some(self.get_common_headers()))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            success if success.is_success() => {
-                let body: CheckUsernameAvailableResponse = response.json().await.map_err(|e| {
-                    LnurlServerError::RequestFailure(format!(
-                        "failed to deserialize response json: {e}"
-                    ))
-                })?;
-                return Ok(body.available);
-            }
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
-        }
+        let result: CheckUsernameAvailableResponse =
+            Self::handle_response(response.status, &response.body)?;
+        Ok(result.available)
     }
 
     async fn recover_lightning_address(
         &self,
     ) -> Result<Option<RecoverLnurlPayResponse>, LnurlServerError> {
-        // Get the pubkey from the wallet
         let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;
 
-        // Sign the pubkey itself for recovery
         let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
 
         let request = RecoverLnurlPayRequest {
@@ -213,31 +204,30 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             timestamp: Some(timestamp),
         };
         let url = format!("{}/lnurlpay/{}/recover", self.base_url(), pubkey);
-        let result = self.client.post(url).json(&request).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let body = serde_json::to_string(&request)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            StatusCode::NOT_FOUND => return Ok(None),
-            success if success.is_success() => {
-                let body = response.json().await.map_err(|e| {
+        let response = self
+            .http_client
+            .post(url, Some(self.get_post_headers()), Some(body))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        match response.status {
+            401 => Err(LnurlServerError::InvalidApiKey),
+            404 => Ok(None),
+            s if (200..300).contains(&s) => {
+                let result = serde_json::from_str(&response.body).map_err(|e| {
                     LnurlServerError::RequestFailure(format!(
                         "failed to deserialize response json: {e}"
                     ))
                 })?;
-                return Ok(Some(body));
+                Ok(Some(result))
             }
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
+            other => Err(LnurlServerError::Network {
+                statuscode: other,
+                message: Some(response.body),
+            }),
         }
     }
 
@@ -245,16 +235,14 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         &self,
         request: &RegisterLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
-        // Get the pubkey from the wallet
         let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;
 
-        // Sign the username
         let (signature, timestamp) = self.sign_message(&request.username).await?;
 
-        let request = RegisterLnurlPayRequest {
+        let api_request = RegisterLnurlPayRequest {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
@@ -263,71 +251,53 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
-        let result = self.client.post(url).json(&request).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let body = serde_json::to_string(&api_request)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            success if success.is_success() => {
-                let body = response.json().await.map_err(|e| {
-                    LnurlServerError::RequestFailure(format!(
-                        "failed to deserialize response json: {e}"
-                    ))
-                })?;
-                return Ok(body);
-            }
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
-        }
+        let response = self
+            .http_client
+            .post(url, Some(self.get_post_headers()), Some(body))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        Self::handle_response(response.status, &response.body)
     }
 
     async fn unregister_lightning_address(
         &self,
         request: &UnregisterLightningAddressRequest,
     ) -> Result<(), LnurlServerError> {
-        // Get the pubkey from the wallet
         let spark_address = self.wallet.get_spark_address().map_err(|e| {
             LnurlServerError::SigningError(format!("Failed to get spark address: {e}"))
         })?;
         let pubkey = spark_address.identity_public_key;
 
-        // Sign the username
         let (signature, timestamp) = self.sign_message(&request.username).await?;
 
-        let request = UnregisterLnurlPayRequest {
+        let api_request = UnregisterLnurlPayRequest {
             username: request.username.clone(),
             signature,
             timestamp: Some(timestamp),
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
-        let result = self.client.delete(url).json(&request).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let body = serde_json::to_string(&api_request)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            StatusCode::NOT_FOUND => return Ok(()),
-            success if success.is_success() => return Ok(()),
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
+        let response = self
+            .http_client
+            .delete(url, Some(self.get_post_headers()), Some(body))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        match response.status {
+            401 => Err(LnurlServerError::InvalidApiKey),
+            404 => Ok(()),
+            s if (200..300).contains(&s) => Ok(()),
+            other => Err(LnurlServerError::Network {
+                statuscode: other,
+                message: Some(response.body),
+            }),
         }
     }
 
@@ -356,31 +326,13 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             let _ = write!(url, "&updated_after={updated_after}");
         }
 
-        let result = self.client.get(url).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let response = self
+            .http_client
+            .get(url, Some(self.get_common_headers()))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            success if success.is_success() => {
-                let body = response.json().await.map_err(|e| {
-                    LnurlServerError::RequestFailure(format!(
-                        "failed to deserialize response json: {e}"
-                    ))
-                })?;
-                return Ok(body);
-            }
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
-        }
+        Self::handle_response(response.status, &response.body)
     }
 
     async fn publish_zap_receipt(
@@ -401,37 +353,23 @@ impl LnurlServerClient for ReqwestLnurlServerClient {
             request.payment_hash
         );
 
-        let payload = lnurl_models::PublishZapReceiptRequest {
+        let payload = ModelPublishZapReceiptRequest {
             signature,
             timestamp: Some(timestamp),
             zap_receipt: request.zap_receipt.clone(),
         };
 
-        let result = self.client.post(url).json(&payload).send().await;
-        let response = match result {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(LnurlServerError::RequestFailure(e.to_string()));
-            }
-        };
+        let body = serde_json::to_string(&payload)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
-        match response.status() {
-            StatusCode::UNAUTHORIZED => return Err(LnurlServerError::InvalidApiKey),
-            success if success.is_success() => {
-                let body: lnurl_models::PublishZapReceiptResponse =
-                    response.json().await.map_err(|e| {
-                        LnurlServerError::RequestFailure(format!(
-                            "failed to deserialize response json: {e}"
-                        ))
-                    })?;
-                return Ok(body.zap_receipt);
-            }
-            other => {
-                return Err(LnurlServerError::Network {
-                    statuscode: other.as_u16(),
-                    message: response.text().await.ok(),
-                });
-            }
-        }
+        let response = self
+            .http_client
+            .post(url, Some(self.get_post_headers()), Some(body))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        let result: PublishZapReceiptResponse =
+            Self::handle_response(response.status, &response.body)?;
+        Ok(result.zap_receipt)
     }
 }

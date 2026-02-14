@@ -342,10 +342,10 @@ async fn test_bip353_address_too_long() {
 #[async_test_all]
 async fn test_bip353_real_dns() {
     use crate::dns::Resolver;
-    use crate::rest::ReqwestRestClient;
+    use platform_utils::DefaultHttpClient;
 
     let dns_resolver = Resolver::new();
-    let rest_client = ReqwestRestClient::new().expect("Failed to create REST client");
+    let rest_client = DefaultHttpClient::default();
     let input_parser = InputParser::new(dns_resolver, rest_client, None);
 
     // Test BIP353 address with ₿ prefix

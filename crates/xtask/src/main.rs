@@ -279,6 +279,7 @@ fn wasm_test_cmd(
         let mut c = Command::new("wasm-pack");
         c.current_dir(&package_dir);
         c.arg("test");
+
         if node {
             c.arg("--node");
         } else {

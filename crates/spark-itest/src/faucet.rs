@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::{debug, info};
 
 /// Configuration for the regtest faucet
@@ -31,8 +34,8 @@ impl Default for FaucetConfig {
 
 /// Client for interacting with a regtest faucet
 pub struct RegtestFaucet {
-    client: Client,
     config: FaucetConfig,
+    http_client: DefaultHttpClient,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,13 +81,11 @@ impl RegtestFaucet {
 
     /// Create a new faucet client with custom configuration
     pub fn with_config(config: FaucetConfig) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("Failed to create HTTP client")?;
-
         info!("Initialized faucet client with URL: {}", config.url);
-        Ok(Self { client, config })
+        Ok(Self {
+            config,
+            http_client: DefaultHttpClient::default(),
+        })
     }
 
     /// Fund an address with the specified amount
@@ -112,25 +113,33 @@ impl RegtestFaucet {
 
         debug!("Sending GraphQL request: {:?}", request_body);
 
-        let mut req = self.client.post(&self.config.url).json(&request_body);
+        let body_json =
+            serde_json::to_string(&request_body).context("Failed to serialize request body")?;
+
+        let mut headers = HashMap::new();
+        add_content_type_header(&mut headers, ContentType::Json);
 
         // Add basic authentication if username and password are configured
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-            req = req.basic_auth(username, Some(password));
-        }
-        req = req.header("Content-Type", "application/json");
-
-        let response = req.send().await.context("Failed to send faucet request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("Faucet request failed with status {}: {}", status, body);
+            add_basic_auth_header(&mut headers, username, password);
         }
 
-        let response_text = response.text().await?;
+        let response = self
+            .http_client
+            .post(self.config.url.clone(), Some(headers), Some(body_json))
+            .await
+            .context("Failed to send faucet request")?;
+
+        if !response.is_success() {
+            bail!(
+                "Faucet request failed with status {}: {}",
+                response.status,
+                response.body
+            );
+        }
+
         let graphql_response: GraphQLResponse =
-            serde_json::from_str(&response_text).context(response_text)?;
+            response.json().context(response.body.to_string())?;
 
         // Check for GraphQL errors
         if let Some(errors) = graphql_response.errors {

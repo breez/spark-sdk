@@ -11,7 +11,7 @@ members = [
   "crates/breez-sdk/bindings",
   "crates/breez-sdk/cli",
   "crates/breez-sdk/common",
-  "crates/breez-sdk/core", 
+  "crates/breez-sdk/core",
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/breez-bench",
@@ -19,6 +19,7 @@ members = [
   "crates/flashnet",
   "crates/macros",
   "crates/macro_test",
+  "crates/platform-utils",
   "crates/spark",
   "crates/spark-itest",
   "crates/spark-wallet",
@@ -51,6 +52,7 @@ bech32 = "0.11.0"
 bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 bitflags = "2.10.0"
+bitreq = { version = "0.3.2", default-features = false, features = ["async", "async-https", "json-using-serde"] }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
 built = { version = "0.8.0", features = ["git2"] }
@@ -84,6 +86,7 @@ lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 macros = { path = "crates/macros" }
 nostr = { version = "0.43.1", default-features = false, features = ["std", "nip57"] }
 openssl = { version = "0.10.70", default-features = false, features = ["vendored"] }
+platform-utils = { path = "crates/platform-utils" }
 proc-macro2 = "1.0.97"
 prost = "0.13.4"
 prost-types = "0.13.4"
@@ -135,6 +138,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 tsify-next = {version = "0.5.5", default-features = false}
 uniffi = "0.28.3"
+url = "2.5"
 uuid = { version = "1.17.0", features = ["v7", "v4"] }
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"

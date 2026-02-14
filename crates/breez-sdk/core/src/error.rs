@@ -1,6 +1,6 @@
 use crate::{
     Fee,
-    lnurl::{LnurlServerError, ReqwestLnurlServerClientError},
+    lnurl::LnurlServerError,
     nostr::NostrError,
     persist::{self},
 };
@@ -208,12 +208,6 @@ impl From<LnurlServerError> for SdkError {
                 SdkError::Generic(format!("Failed to sign message: {e}"))
             }
         }
-    }
-}
-
-impl From<ReqwestLnurlServerClientError> for SdkError {
-    fn from(value: ReqwestLnurlServerClientError) -> Self {
-        SdkError::Generic(value.to_string())
     }
 }
 

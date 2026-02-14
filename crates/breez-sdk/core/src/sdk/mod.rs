@@ -8,7 +8,8 @@ mod payments;
 mod sync;
 
 use bitflags::bitflags;
-use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService, rest::RestClient};
+use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService};
+use platform_utils::HttpClient;
 use spark_wallet::SparkWallet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
@@ -99,7 +100,7 @@ pub struct BreezSdk {
     pub(crate) storage: Arc<dyn Storage>,
     pub(crate) chain_service: Arc<dyn BitcoinChainService>,
     pub(crate) fiat_service: Arc<dyn FiatService>,
-    pub(crate) lnurl_client: Arc<dyn RestClient>,
+    pub(crate) lnurl_client: Arc<dyn HttpClient>,
     pub(crate) lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub(crate) lnurl_auth_signer: Arc<crate::signer::lnurl_auth::LnurlAuthSignerAdapter>,
     pub(crate) event_emitter: Arc<EventEmitter>,
@@ -119,7 +120,7 @@ pub(crate) struct BreezSdkParams {
     pub storage: Arc<dyn Storage>,
     pub chain_service: Arc<dyn BitcoinChainService>,
     pub fiat_service: Arc<dyn FiatService>,
-    pub lnurl_client: Arc<dyn RestClient>,
+    pub lnurl_client: Arc<dyn HttpClient>,
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub lnurl_auth_signer: Arc<crate::signer::lnurl_auth::LnurlAuthSignerAdapter>,
     pub shutdown_sender: watch::Sender<()>,
@@ -258,8 +259,8 @@ pub fn default_external_signer(
 /// across the Spark Operators and SSP services.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
-    use breez_sdk_common::rest::ReqwestRestClient;
     use chrono::DateTime;
+    use platform_utils::DefaultHttpClient;
 
     #[derive(serde::Deserialize)]
     struct StatusApiResponse {
@@ -287,15 +288,15 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         }
     }
 
-    let rest_client =
-        ReqwestRestClient::new().map_err(|e| SdkError::NetworkError(e.to_string()))?;
+    let http_client = DefaultHttpClient::default();
 
-    let response = rest_client
-        .get_request("https://spark.money/api/v1/status".to_string(), None)
+    let response = http_client
+        .get("https://spark.money/api/v1/status".to_string(), None)
         .await
         .map_err(|e| SdkError::NetworkError(e.to_string()))?;
 
-    let api_response: StatusApiResponse = serde_json::from_str(&response.body)
+    let api_response: StatusApiResponse = response
+        .json()
         .map_err(|e| SdkError::Generic(format!("Failed to parse status response: {e}")))?;
 
     let status = api_response

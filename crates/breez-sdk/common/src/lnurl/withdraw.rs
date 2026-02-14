@@ -1,26 +1,23 @@
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    lnurl::{
-        LnurlErrorDetails,
-        error::{LnurlError, LnurlResult},
-    },
-    rest::{RestClient, RestResponse},
+use crate::lnurl::{
+    LnurlErrorDetails,
+    error::{LnurlError, LnurlResult},
 };
+
+use platform_utils::HttpClient;
 
 /// Performs the second and last step of LNURL-withdraw,
 /// as per <https://github.com/lnurl/luds/blob/luds/03.md>
-pub async fn execute_lnurl_withdraw<C: RestClient + ?Sized>(
-    rest_client: &C,
+pub async fn execute_lnurl_withdraw<C: HttpClient + ?Sized>(
+    http_client: &C,
     withdraw_request: &LnurlWithdrawRequestDetails,
     invoice: &str,
 ) -> LnurlResult<ValidatedCallbackResponse> {
     // Send invoice to the LNURL-w endpoint via the callback
     let callback_url = build_withdraw_callback_url(withdraw_request, invoice)?;
-    let RestResponse { body, .. } = rest_client.get_request(callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
+    let response = http_client.get(callback_url, None).await?;
+    if let Ok(err) = response.json::<LnurlErrorDetails>() {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
     Ok(ValidatedCallbackResponse::EndpointSuccess)
@@ -30,7 +27,7 @@ pub fn build_withdraw_callback_url(
     withdraw_request: &LnurlWithdrawRequestDetails,
     invoice: &str,
 ) -> LnurlResult<String> {
-    let mut url = reqwest::Url::from_str(&withdraw_request.callback)
+    let mut url = url::Url::parse(&withdraw_request.callback)
         .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
 
     url.query_pairs_mut()
@@ -69,13 +66,13 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
+    use platform_utils::HttpClient;
     use serde_json::json;
 
     use crate::lnurl::tests::rand_string;
     use crate::lnurl::withdraw::{
         LnurlWithdrawRequestDetails, ValidatedCallbackResponse, execute_lnurl_withdraw,
     };
-    use crate::rest::RestClient;
     use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
 
     #[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -83,15 +80,15 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_lnurl_withdraw_validate_amount_failure() -> Result<()> {
-        let mock_rest_client = MockRestClient::new();
-        let rest_client: Arc<dyn RestClient> = Arc::new(mock_rest_client);
+        let mock_http_client = MockRestClient::new();
+        let http_client: Arc<dyn HttpClient> = Arc::new(mock_http_client);
 
         let invoice = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
         let withdraw_req = get_test_withdraw_req_data(0, 1);
 
         // Fail validation before even calling the endpoint (no mock needed)
         assert!(
-            execute_lnurl_withdraw(rest_client.as_ref(), &withdraw_req, invoice)
+            execute_lnurl_withdraw(http_client.as_ref(), &withdraw_req, invoice)
                 .await
                 .is_err()
         );
@@ -100,7 +97,7 @@ mod tests {
     }
 
     /// Mock an LNURL-withdraw endpoint that responds with an OK to a withdraw attempt
-    fn mock_lnurl_withdraw_callback(mock_rest_client: &MockRestClient, error: Option<String>) {
+    fn mock_lnurl_withdraw_callback(mock_http_client: &MockRestClient, error: Option<String>) {
         let response_body = match error {
             None => json!({"status": "OK"}).to_string(),
             Some(err_reason) => json!({
@@ -110,7 +107,7 @@ mod tests {
             .to_string(),
         };
 
-        mock_rest_client.add_response(MockResponse::new(200, response_body));
+        mock_http_client.add_response(MockResponse::new(200, response_body));
     }
 
     fn get_test_withdraw_req_data(min_sat: u64, max_sat: u64) -> LnurlWithdrawRequestDetails {
@@ -125,15 +122,15 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_lnurl_withdraw_success() -> Result<()> {
-        let mock_rest_client = MockRestClient::new();
+        let mock_http_client = MockRestClient::new();
         let invoice = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
         let withdraw_req = get_test_withdraw_req_data(0, 100);
 
-        mock_lnurl_withdraw_callback(&mock_rest_client, None);
-        let rest_client: Arc<dyn RestClient> = Arc::new(mock_rest_client);
+        mock_lnurl_withdraw_callback(&mock_http_client, None);
+        let http_client: Arc<dyn HttpClient> = Arc::new(mock_http_client);
 
         assert!(matches!(
-            execute_lnurl_withdraw(rest_client.as_ref(), &withdraw_req, invoice).await?,
+            execute_lnurl_withdraw(http_client.as_ref(), &withdraw_req, invoice).await?,
             ValidatedCallbackResponse::EndpointSuccess
         ));
 
@@ -142,16 +139,16 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_lnurl_withdraw_endpoint_failure() -> Result<()> {
-        let mock_rest_client = MockRestClient::new();
+        let mock_http_client = MockRestClient::new();
         let invoice = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
         let withdraw_req = get_test_withdraw_req_data(0, 100);
 
         // Generic error reported by endpoint
-        mock_lnurl_withdraw_callback(&mock_rest_client, Some("error".to_string()));
-        let rest_client: Arc<dyn RestClient> = Arc::new(mock_rest_client);
+        mock_lnurl_withdraw_callback(&mock_http_client, Some("error".to_string()));
+        let http_client: Arc<dyn HttpClient> = Arc::new(mock_http_client);
 
         assert!(matches!(
-            execute_lnurl_withdraw(rest_client.as_ref(), &withdraw_req, invoice).await?,
+            execute_lnurl_withdraw(http_client.as_ref(), &withdraw_req, invoice).await?,
             ValidatedCallbackResponse::EndpointError { data: _ }
         ));
 

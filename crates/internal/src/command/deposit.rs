@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use bitcoin::{
@@ -5,7 +6,9 @@ use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
 };
 use clap::Subcommand;
-use reqwest::header::CONTENT_TYPE;
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
 use crate::config::MempoolConfig;
@@ -171,14 +174,19 @@ async fn get_transaction(
     txid: String,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
     let url = format!("{}/tx/{}/hex", mempool_config.url, txid);
-    let client = reqwest::Client::new();
-    let mut request = client.get(&url);
+
+    let mut headers = HashMap::new();
     if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
-        request = request.basic_auth(username, Some(password));
+        add_basic_auth_header(&mut headers, username, password);
     }
-    let response = request.send().await?;
-    let hex = response.text().await?;
-    let tx = deserialize_hex(&hex)?;
+
+    let http_client = DefaultHttpClient::default();
+    let response = http_client
+        .get(url, Some(headers))
+        .await
+        .map_err(|e| format!("HTTP request failed: {e:?}"))?;
+
+    let tx = deserialize_hex(&response.body)?;
     Ok(tx)
 }
 
@@ -188,19 +196,22 @@ async fn broadcast_transaction(
 ) -> Result<Txid, Box<dyn std::error::Error>> {
     let tx_hex = serialize_hex(&tx);
     let url = format!("{}/tx", mempool_config.url);
-    let client = reqwest::Client::new();
-    let mut request = client
-        .post(&url)
-        .header(CONTENT_TYPE, "text/plain")
-        .body(tx_hex.clone());
+
+    let mut headers = HashMap::new();
     if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
-        request = request.basic_auth(username, Some(password));
+        add_basic_auth_header(&mut headers, username, password);
     }
-    let response = request.send().await?;
-    let text = response.text().await?;
-    let txid = Txid::from_str(&text).map_err(|_| {
+    add_content_type_header(&mut headers, ContentType::TextPlain);
+
+    let http_client = DefaultHttpClient::default();
+    let response = http_client
+        .post(url, Some(headers), Some(tx_hex.clone()))
+        .await
+        .map_err(|e| format!("HTTP request failed: {e:?}"))?;
+
+    let txid = Txid::from_str(&response.body).map_err(|_| {
         println!("Refund tx hex: {tx_hex}");
-        format!("Failed to parse txid from response: {text}")
+        format!("Failed to parse txid from response: {}", response.body)
     })?;
     Ok(txid)
 }

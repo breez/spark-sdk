@@ -4,6 +4,7 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use nostr::util::JsonUtil;
+use platform_utils::{DefaultHttpClient, HttpClient};
 use rand::RngCore;
 use rstest::*;
 use tempdir::TempDir;
@@ -506,14 +507,17 @@ async fn test_06_client_side_zap_receipt(
 
     info!("Calling LNURL callback with zap request: {callback_url}");
 
-    let client = reqwest::Client::new();
-    let callback_response = client.get(&callback_url).send().await?;
+    let http_client = DefaultHttpClient::default();
+    let response = http_client
+        .get(callback_url.clone(), None)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to send callback request: {e:?}"))?;
 
-    if !callback_response.status().is_success() {
-        anyhow::bail!("Callback request failed: {}", callback_response.status());
+    if !(200..300).contains(&response.status) {
+        anyhow::bail!("Callback request failed: {}", response.status);
     }
 
-    let callback_json: serde_json::Value = callback_response.json().await?;
+    let callback_json: serde_json::Value = response.json()?;
     info!("Callback response: {}", callback_json);
 
     // Extract the invoice from the callback response

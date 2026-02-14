@@ -1,10 +1,10 @@
 use bitcoin::bip32::ChildNumber;
 use bitcoin::secp256k1::PublicKey;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use url::Url;
 
-use crate::rest::{RestClient, RestResponse, parse_json};
+use platform_utils::HttpClient;
 
 use super::{
     LnurlCallbackStatus,
@@ -54,8 +54,8 @@ pub trait LnurlAuthSigner {
 /// <https://github.com/lnurl/luds/blob/luds/05.md>
 ///
 /// See the [`parse`] docs for more detail on the full workflow.
-pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
-    rest_client: &C,
+pub async fn perform_lnurl_auth<C: HttpClient + ?Sized, S: LnurlAuthSigner>(
+    http_client: &C,
     auth_request: &LnurlAuthRequestDetails,
     signer: &S,
 ) -> LnurlResult<LnurlCallbackStatus> {
@@ -83,13 +83,11 @@ pub async fn perform_lnurl_auth<C: RestClient + ?Sized, S: LnurlAuthSigner>(
     callback_url
         .query_pairs_mut()
         .append_pair("key", &public_key.to_string());
-    let RestResponse { body, .. } = rest_client
-        .get_request(callback_url.to_string(), None)
-        .await?;
-    Ok(parse_json(&body)?)
+    let response = http_client.get(callback_url.to_string(), None).await?;
+    Ok(response.json()?)
 }
 
-pub fn validate_request(url: &reqwest::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
+pub fn validate_request(url: &url::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
     let query_pairs = url.query_pairs();
 
     let k1 = query_pairs

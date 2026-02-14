@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Result;
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
-use reqwest::Client;
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use testcontainers::{
@@ -34,7 +37,7 @@ pub struct BitcoindFixture {
     pub rpcuser: String,
     pub rpcpassword: String,
     pub mining_address: Address,
-    client: Client,
+    http_client: DefaultHttpClient,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -104,7 +107,7 @@ impl BitcoindFixture {
             rpcpassword: REGTEST_RPC_PASSWORD.to_string(),
             mining_address: Address::from_str(DEFAULT_MINING_ADDRESS)?
                 .require_network(Network::Regtest)?,
-            client: Client::new(),
+            http_client: DefaultHttpClient::default(),
         };
 
         info!("Created bitcoind container. Ensure wallet created.");
@@ -245,23 +248,27 @@ impl BitcoindFixture {
             "params": params,
         });
 
-        let response = self
-            .client
-            .post(&self.rpc_url)
-            .basic_auth(&self.rpcuser, Some(&self.rpcpassword))
-            .json(&request)
-            .send()
-            .await?;
+        let body = serde_json::to_string(&request)?;
 
-        if !response.status().is_success() {
+        let mut headers = HashMap::new();
+        add_basic_auth_header(&mut headers, &self.rpcuser, &self.rpcpassword);
+        add_content_type_header(&mut headers, ContentType::Json);
+
+        let response = self
+            .http_client
+            .post(self.rpc_url.clone(), Some(headers), Some(body))
+            .await
+            .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
+
+        if !response.is_success() {
             return Err(anyhow::anyhow!(
                 "bitcoind returned error status: {}",
-                response.status()
+                response.status
             ));
         }
 
-        let response: RpcResponse<T> = response.json().await?;
-        match (response.result, response.error) {
+        let rpc_response: RpcResponse<T> = response.json()?;
+        match (rpc_response.result, rpc_response.error) {
             (Some(result), None) => Ok(result),
             (None, Some(error)) => Err(anyhow::anyhow!("RPC error: {:?}", error)),
             _ => Err(anyhow::anyhow!("Invalid RPC response")),

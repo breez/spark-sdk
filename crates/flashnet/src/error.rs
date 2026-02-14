@@ -36,17 +36,11 @@ impl FlashnetError {
     }
 }
 
-impl From<reqwest::Error> for FlashnetError {
-    fn from(err: reqwest::Error) -> Self {
-        let mut err_str = err.to_string();
-        let mut walk: &dyn std::error::Error = &err;
-        while let Some(src) = walk.source() {
-            err_str.push_str(format!(" : {src}").as_str());
-            walk = src;
-        }
+impl From<platform_utils::HttpError> for FlashnetError {
+    fn from(err: platform_utils::HttpError) -> Self {
         Self::Network {
-            reason: err_str,
-            code: err.status().map(|s| s.as_u16()),
+            code: err.status(),
+            reason: err.to_string(),
         }
     }
 }

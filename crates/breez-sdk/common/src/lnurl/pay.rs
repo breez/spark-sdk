@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
@@ -13,9 +11,10 @@ use crate::{
         error::{LnurlError, LnurlResult},
     },
     network::BitcoinNetwork,
-    rest::{RestClient, RestResponse},
     utils::default_true,
 };
+
+use platform_utils::HttpClient;
 
 pub type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 pub type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
@@ -24,8 +23,8 @@ pub type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 /// <https://github.com/lnurl/luds/blob/luds/06.md>
 ///
 /// See the [parse] docs for more detail on the full workflow.
-pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
-    rest_client: &C,
+pub async fn validate_lnurl_pay<C: HttpClient + ?Sized>(
+    http_client: &C,
     user_amount_msat: u64,
     comment: &Option<String>,
     pay_request: &LnurlPayRequestDetails,
@@ -41,13 +40,14 @@ pub async fn validate_lnurl_pay<C: RestClient + ?Sized>(
     )?;
 
     let callback_url = build_pay_callback_url(user_amount_msat, comment, pay_request)?;
-    let RestResponse { body, .. } = rest_client.get_request(callback_url, None).await?;
-    if let Ok(err) = serde_json::from_str::<LnurlErrorDetails>(&body) {
+    let response = http_client.get(callback_url, None).await?;
+    if let Ok(err) = response.json::<LnurlErrorDetails>() {
         return Ok(ValidatedCallbackResponse::EndpointError { data: err });
     }
 
-    let mut callback_resp: CallbackResponse =
-        serde_json::from_str(&body).map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
+    let mut callback_resp: CallbackResponse = response
+        .json()
+        .map_err(|e| LnurlError::InvalidResponse(e.to_string()))?;
     if let Some(ref sa) = callback_resp.success_action {
         match sa {
             SuccessAction::Aes { data } => data.validate()?,
@@ -73,7 +73,7 @@ pub fn build_pay_callback_url(
     pay_request: &LnurlPayRequestDetails,
 ) -> LnurlResult<String> {
     let amount_msat = user_amount_msat.to_string();
-    let mut url = reqwest::Url::from_str(&pay_request.callback)
+    let mut url = url::Url::parse(&pay_request.callback)
         .map_err(|_| LnurlError::invalid_uri("invalid callback uri"))?;
 
     url.query_pairs_mut().append_pair("amount", &amount_msat);
@@ -374,14 +374,14 @@ impl UrlSuccessActionData {
             )
         );
 
-        let req_url = reqwest::Url::parse(&pay_request.callback)
+        let req_url = url::Url::parse(&pay_request.callback)
             .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
         let req_domain = req_url
             .domain()
             .ok_or_else(|| LnurlError::InvalidUri("Could not determine callback domain".into()))?;
 
         let action_res_url =
-            reqwest::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
+            url::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
         let action_res_domain = action_res_url.domain().ok_or_else(|| {
             LnurlError::invalid_uri("Could not determine Success Action URL domain")
         })?;

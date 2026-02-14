@@ -1,12 +1,12 @@
 use base64::Engine;
 use bitcoin::secp256k1::PublicKey;
 use graphql_client::{GraphQLQuery, Response};
-use reqwest::Client;
-use reqwest::header::HeaderMap;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error};
+
+use platform_utils::{ContentType, HttpClient, add_content_type_header, create_http_client};
 
 use crate::default_user_agent;
 use crate::session_manager::{Session, SessionManager};
@@ -29,7 +29,7 @@ use crate::ssp::{
 
 /// GraphQL client for interacting with the Spark server
 pub struct GraphQLClient {
-    client: Client,
+    client: Box<dyn HttpClient>,
     base_url: String,
     schema_endpoint: String,
     signer: Arc<dyn Signer>,
@@ -50,7 +50,7 @@ impl GraphQLClient {
 
         let user_agent = config.user_agent.unwrap_or_else(default_user_agent);
         Self {
-            client: Client::builder().user_agent(user_agent).build().unwrap(),
+            client: create_http_client(Some(&user_agent)),
             base_url: config.base_url,
             schema_endpoint,
             signer,
@@ -66,33 +66,38 @@ impl GraphQLClient {
     pub async fn post_query_inner<Q: GraphQLQuery, T>(
         &self,
         url: &str,
-        headers: &HeaderMap,
+        headers: &HashMap<String, String>,
         variables: T,
     ) -> GraphQLResult<Q::ResponseData>
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
         let body = Q::build_query(variables.into());
+        let body_str =
+            serde_json::to_string(&body).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+
+        // Merge Content-Type header with provided headers
+        let mut all_headers = headers.clone();
+        add_content_type_header(&mut all_headers, ContentType::Json);
+
         let response = self
             .client
-            .post(url)
-            .headers(headers.clone())
-            .json(&body)
-            .send()
+            .post(url.to_string(), Some(all_headers), Some(body_str))
             .await?;
 
-        let status_code = response.status();
-        let text = response.text().await?;
+        let status_code = response.status;
+        let text = &response.body;
         tracing::trace!("Response: {text:?}");
-        if status_code.is_client_error() {
+        if (400..500).contains(&status_code) {
             return Err(GraphQLError::Network {
-                reason: text,
-                code: Some(status_code.as_u16()),
+                reason: text.clone(),
+                code: Some(status_code),
             });
         }
 
-        let json: Response<Q::ResponseData> =
-            serde_json::from_str(&text).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+        let json: Response<Q::ResponseData> = response
+            .json()
+            .map_err(|e| GraphQLError::Serialization(e.to_string()))?;
         if let Some(errors) = json.errors
             && !errors.is_empty()
         {
@@ -114,7 +119,7 @@ impl GraphQLClient {
     {
         let session = self.get_session().await?;
         let full_url = self.get_full_url();
-        let mut headers = HeaderMap::new();
+        let mut headers = HashMap::new();
         self.add_auth_headers(&session, &mut headers)?;
 
         match self
@@ -128,10 +133,10 @@ impl GraphQLClient {
                     code: Some(status_code),
                     ..
                 } = e.clone()
-                    && status_code == reqwest::StatusCode::UNAUTHORIZED.as_u16()
+                    && status_code == 401
                 {
                     let session = self.get_session().await?;
-                    let mut headers = HeaderMap::new();
+                    let mut headers = HashMap::new();
                     self.add_auth_headers(&session, &mut headers)?;
 
                     return self
@@ -159,7 +164,7 @@ impl GraphQLClient {
         };
 
         let full_url = self.get_full_url();
-        let headers = HeaderMap::new();
+        let headers = HashMap::new();
 
         let challenge_response = self
             .post_query_inner::<queries::GetChallenge, _>(&full_url, &headers, challenge_vars)
@@ -500,15 +505,12 @@ impl GraphQLClient {
     fn add_auth_headers(
         &self,
         session: &Session,
-        headers: &mut HeaderMap,
+        headers: &mut HashMap<String, String>,
     ) -> Result<(), GraphQLError> {
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-        let auth_value = format!("Bearer {}", session.token);
+        add_content_type_header(headers, ContentType::Json);
         headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&auth_value)
-                .map_err(|_| GraphQLError::authentication("Invalid header"))?,
+            "Authorization".to_string(),
+            format!("Bearer {}", session.token),
         );
 
         Ok(())

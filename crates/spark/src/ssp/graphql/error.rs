@@ -30,11 +30,6 @@ pub(crate) enum GraphQLError {
 }
 
 impl GraphQLError {
-    /// Creates a new authentication error
-    pub fn authentication<S: Into<String>>(reason: S) -> Self {
-        Self::Authentication(reason.into())
-    }
-
     /// Creates a new serialization error
     pub fn serialization<S: Into<String>>(reason: S) -> Self {
         Self::Serialization(reason.into())
@@ -47,17 +42,11 @@ impl GraphQLError {
     }
 }
 
-impl From<reqwest::Error> for GraphQLError {
-    fn from(err: reqwest::Error) -> Self {
-        let mut err_str = err.to_string();
-        let mut walk: &dyn std::error::Error = &err;
-        while let Some(src) = walk.source() {
-            err_str.push_str(format!(" : {src}").as_str());
-            walk = src;
-        }
+impl From<platform_utils::HttpError> for GraphQLError {
+    fn from(err: platform_utils::HttpError) -> Self {
         Self::Network {
-            reason: err_str,
-            code: err.status().map(|s| s.as_u16()),
+            code: err.status(),
+            reason: err.to_string(),
         }
     }
 }

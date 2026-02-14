@@ -1,7 +1,8 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use bitcoin::{Transaction, consensus::encode::deserialize_hex};
-use reqwest::Client;
-use std::time::Duration;
+use platform_utils::{DefaultHttpClient, HttpClient, add_basic_auth_header};
 use tracing::info;
 
 /// Configuration for the mempool/esplora API client
@@ -31,8 +32,8 @@ impl Default for MempoolConfig {
 
 /// Client for fetching transactions from a mempool/esplora API
 pub struct MempoolClient {
-    client: Client,
     config: MempoolConfig,
+    http_client: DefaultHttpClient,
 }
 
 impl MempoolClient {
@@ -43,13 +44,11 @@ impl MempoolClient {
 
     /// Create a new mempool client with custom configuration
     pub fn with_config(config: MempoolConfig) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("Failed to create HTTP client")?;
-
         info!("Initialized mempool client with URL: {}", config.url);
-        Ok(Self { client, config })
+        Ok(Self {
+            config,
+            http_client: DefaultHttpClient::default(),
+        })
     }
 
     /// Fetch a transaction by its txid
@@ -63,27 +62,26 @@ impl MempoolClient {
         let url = format!("{}/tx/{}/hex", self.config.url, txid);
         info!("Fetching transaction from: {}", url);
 
+        let mut headers = HashMap::new();
+        add_basic_auth_header(&mut headers, &self.config.username, &self.config.password);
+
         let response = self
-            .client
-            .get(&url)
-            .basic_auth(&self.config.username, Some(&self.config.password))
-            .send()
+            .http_client
+            .get(url.clone(), Some(headers))
             .await
             .context("Failed to fetch transaction")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        if !response.is_success() {
             bail!(
                 "Failed to fetch transaction {}: status {}, body: {}",
                 txid,
-                status,
-                body
+                response.status,
+                response.body
             );
         }
 
-        let hex = response.text().await?;
-        let tx: Transaction = deserialize_hex(&hex)
+        let hex = &response.body;
+        let tx: Transaction = deserialize_hex(hex)
             .context(format!("Failed to deserialize transaction hex: {}", hex))?;
 
         info!("Successfully fetched transaction: {}", txid);
