@@ -2,7 +2,8 @@ import {
   defaultConfig,
   Network,
   MaxFee,
-  OptimizationConfig
+  OptimizationConfig,
+  StableBalanceConfig
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleConfigureSdk = () => {
@@ -44,8 +45,24 @@ const exampleConfigureOptimizationConfiguration = () => {
   console.log('Config:', config)
 }
 
+const exampleConfigureStableBalance = () => {
+  // ANCHOR: stable-balance-config
+  const config = defaultConfig(Network.Mainnet)
+
+  // Enable stable balance with auto-conversion to a specific token
+  config.stableBalanceConfig = {
+    tokenIdentifier: '<token_identifier>',
+    thresholdSats: BigInt(10_000),
+    maxSlippageBps: 100,
+    reservedSats: BigInt(1_000)
+  }
+  // ANCHOR_END: stable-balance-config
+  console.log('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
-  exampleConfigureOptimizationConfiguration
+  exampleConfigureOptimizationConfiguration,
+  exampleConfigureStableBalance
 }

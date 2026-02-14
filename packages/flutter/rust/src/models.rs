@@ -32,12 +32,21 @@ pub struct _Config {
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
     pub optimization_config: OptimizationConfig,
+    pub stable_balance_config: Option<StableBalanceConfig>,
 }
 
 #[frb(mirror(OptimizationConfig))]
 pub struct _OptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
+}
+
+#[frb(mirror(StableBalanceConfig))]
+pub struct _StableBalanceConfig {
+    pub token_identifier: String,
+    pub threshold_sats: Option<u64>,
+    pub max_slippage_bps: Option<u32>,
+    pub reserved_sats: Option<u64>,
 }
 
 #[frb(mirror(ExternalInputParser))]
@@ -1068,6 +1077,7 @@ pub enum _ConversionPurpose {
         payment_request: String,
     },
     SelfTransfer,
+    AutoConversion,
 }
 
 #[frb(mirror(ConversionStatus))]

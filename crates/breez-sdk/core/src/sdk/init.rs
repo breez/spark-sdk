@@ -10,6 +10,7 @@ use crate::{
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
     persist::ObjectCacheRepository,
+    stable_balance::StableBalance,
     token_conversion::{
         DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
         TokenConverter,
@@ -51,6 +52,16 @@ impl BreezSdk {
             params.shutdown_sender.subscribe(),
         ));
 
+        // Create StableBalance if configured (spawns its own auto-convert background task)
+        let stable_balance = params.config.stable_balance_config.as_ref().map(|config| {
+            Arc::new(StableBalance::new(
+                config.clone(),
+                Arc::clone(&token_converter),
+                Arc::clone(&params.spark_wallet),
+                params.shutdown_sender.subscribe(),
+            ))
+        });
+
         let sdk = Self {
             config: params.config,
             spark_wallet: params.spark_wallet,
@@ -69,6 +80,7 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
+            stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
         };
 

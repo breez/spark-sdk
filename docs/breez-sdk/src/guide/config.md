@@ -70,3 +70,19 @@ This configuration controls optimization through the following options:
 See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
 
 {{#tabs config:optimization-configuration}}
+
+## Stable balance configuration
+
+The SDK can automatically convert received Bitcoin to a stable token (such as a USD-pegged stablecoin) to protect against Bitcoin price volatility. This is useful for users who want to hold a stable value rather than Bitcoin.
+
+When configured, any Bitcoin received above the threshold amount will be automatically converted to the specified token. This enables a "stable balance" experience where users can receive Bitcoin payments but hold their funds in a stable asset.
+
+The configuration includes:
+- **Token Identifier** - The identifier of the stable token to convert Bitcoin to.
+- **Threshold Sats** - Optional minimum sats balance to trigger auto-conversion. Defaults to the conversion limit minimum if not specified.
+- **Maximum Slippage** - Optional maximum slippage in basis points. Defaults to 50 bps (0.5%).
+- **Reserved Sats** - Optional amount of sats to keep as Bitcoin and not convert. Defaults to the conversion limit minimum if not specified. This reserve ensures you can send some Bitcoin payments that fall below the conversion limit minimum.
+
+See [Stable balance](./stable_balance.md) for more information on how stable balance works and how to send payments using token-to-Bitcoin conversion.
+
+{{#tabs config:stable-balance-config}}

@@ -3,7 +3,7 @@ pub mod docker;
 pub mod lnurl;
 
 use anyhow::Result;
-use breez_sdk_spark::{MaxFee, Network, default_config};
+use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, default_config};
 use rand::RngCore;
 use rstest::fixture;
 use tempdir::TempDir;
@@ -89,4 +89,42 @@ pub async fn bob_external_signer_sdk() -> Result<SdkInstance> {
 
     info!("Initializing Bob's SDK with external signer at: {}", path);
     build_sdk_with_external_signer(path, mnemonic, Some(bob_dir)).await
+}
+
+/// Fixture: Alice's SDK with stable balance config
+#[fixture]
+pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
+    let alice_dir = TempDir::new("breez-sdk-alice-stable-balance")?;
+    let path = alice_dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.stable_balance_config = Some(StableBalanceConfig {
+        token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
+            .to_string(),
+        threshold_sats: Some(1000),
+        max_slippage_bps: Some(500),
+        reserved_sats: None,
+    });
+    build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
+}
+
+/// Fixture: Alice's SDK with stable balance config and explicit reserved sats
+#[fixture]
+pub async fn alice_sdk_stable_balance_with_reserve() -> Result<SdkInstance> {
+    let alice_dir = TempDir::new("breez-sdk-alice-stable-balance-reserve")?;
+    let path = alice_dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.stable_balance_config = Some(StableBalanceConfig {
+        token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
+            .to_string(),
+        threshold_sats: Some(1000),
+        max_slippage_bps: Some(500),
+        reserved_sats: Some(2000),
+    });
+    build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
 }
