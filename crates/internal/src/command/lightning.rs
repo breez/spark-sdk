@@ -1,11 +1,20 @@
+use bitcoin::hashes::{Hash, sha256};
 use clap::Subcommand;
 use qrcode_rs::{EcLevel, QrCode, render::unicode};
-use spark_wallet::{InvoiceDescription, SparkWallet};
+use rand::rngs::OsRng;
+use spark_wallet::{InvoiceDescription, Preimage, SparkWallet};
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum LightningCommand {
     /// Create a lightning invoice.
     CreateInvoice {
+        amount_sat: u64,
+        description: Option<String>,
+        expiry_secs: Option<u32>,
+    },
+    /// Create a HODL lightning invoice (no preimage stored with operators).
+    /// The preimage is generated locally and printed. Use `htlc claim` to settle later.
+    CreateHodlInvoice {
         amount_sat: u64,
         description: Option<String>,
         expiry_secs: Option<u32>,
@@ -58,6 +67,40 @@ pub async fn handle_command(
                 .max_dimensions(50, 50)
                 .build();
             println!("{}\n\n{}", serde_json::to_string_pretty(&payment)?, qr);
+        }
+        LightningCommand::CreateHodlInvoice {
+            amount_sat,
+            description,
+            expiry_secs,
+        } => {
+            // Generate preimage locally
+            let preimage_secret = bitcoin::secp256k1::SecretKey::new(&mut OsRng);
+            let preimage_bytes = preimage_secret.secret_bytes();
+            let preimage = Preimage::try_from(preimage_bytes.to_vec())
+                .map_err(|e| format!("Failed to create preimage: {e}"))?;
+            let payment_hash = sha256::Hash::hash(&preimage_bytes);
+
+            let desc = description.map(InvoiceDescription::Memo);
+            let payment = wallet
+                .create_hodl_lightning_invoice(amount_sat, desc, payment_hash, None, expiry_secs)
+                .await?;
+
+            let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
+                .unwrap()
+                .render::<unicode::Dense1x2>()
+                .dark_color(unicode::Dense1x2::Light)
+                .light_color(unicode::Dense1x2::Dark)
+                .max_dimensions(50, 50)
+                .build();
+
+            println!("HODL Invoice created!");
+            println!("Preimage (save this!): {}", preimage.encode_hex());
+            println!("Payment hash: {}", payment_hash);
+            println!("\n{}\n\n{}", serde_json::to_string_pretty(&payment)?, qr);
+            println!(
+                "\nTo settle after payment: htlc claim -p {}",
+                preimage.encode_hex()
+            );
         }
         LightningCommand::FetchReceivePayment { id } => {
             let payment = wallet.fetch_lightning_receive_payment(&id).await?;

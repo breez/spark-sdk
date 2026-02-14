@@ -48,6 +48,7 @@ const SELECT_PAYMENT_SQL = `
            l.destination_pubkey AS lightning_destination_pubkey,
            COALESCE(l.description, pm.lnurl_description) AS lightning_description,
            l.preimage AS lightning_preimage,
+           l.htlc_details AS lightning_htlc_details,
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
@@ -246,6 +247,21 @@ class SqliteStorage {
             params.push(paymentDetailsFilter.txType);
           }
 
+          // Filter by Lightning HTLC status
+          if (
+            paymentDetailsFilter.type === "lightning" &&
+            paymentDetailsFilter.htlcStatus !== undefined &&
+            paymentDetailsFilter.htlcStatus.length > 0
+          ) {
+            const placeholders = paymentDetailsFilter.htlcStatus
+              .map(() => "?")
+              .join(", ");
+            paymentDetailsClauses.push(
+              `json_extract(l.htlc_details, '$.status') IN (${placeholders})`
+            );
+            params.push(...paymentDetailsFilter.htlcStatus);
+          }
+
           if (paymentDetailsClauses.length > 0) {
             allPaymentDetailsClauses.push(`(${paymentDetailsClauses.join(" AND ")})`);
           }
@@ -321,15 +337,16 @@ class SqliteStorage {
            spark=excluded.spark`
       );
       const lightningInsert = this.db.prepare(
-        `INSERT INTO payment_details_lightning 
-          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage) 
-          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage)
+        `INSERT INTO payment_details_lightning
+          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_details)
+          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage, @htlcDetails)
           ON CONFLICT(payment_id) DO UPDATE SET
             invoice=excluded.invoice,
             payment_hash=excluded.payment_hash,
             destination_pubkey=excluded.destination_pubkey,
             description=excluded.description,
-            preimage=excluded.preimage`
+            preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
+            htlc_details=COALESCE(excluded.htlc_details, payment_details_lightning.htlc_details)`
       );
       const tokenInsert = this.db.prepare(
         `INSERT INTO payment_details_token 
@@ -389,6 +406,9 @@ class SqliteStorage {
             destinationPubkey: payment.details.destinationPubkey,
             description: payment.details.description,
             preimage: payment.details.preimage,
+            htlcDetails: payment.details.htlcDetails
+              ? JSON.stringify(payment.details.htlcDetails)
+              : null,
           });
         }
 
@@ -700,6 +720,9 @@ class SqliteStorage {
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
         preimage: row.lightning_preimage,
+        htlcDetails: row.lightning_htlc_details
+          ? JSON.parse(row.lightning_htlc_details)
+          : null,
       };
 
       if (row.lnurl_pay_info) {

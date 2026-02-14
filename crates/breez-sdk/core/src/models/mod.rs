@@ -375,6 +375,9 @@ pub enum PaymentDetails {
         /// The invoice destination/payee pubkey
         destination_pubkey: String,
 
+        /// The HTLC transfer details. May be absent for legacy payments.
+        htlc_details: Option<SparkHtlcDetails>,
+
         /// Lnurl payment information if this was an lnurl payment.
         lnurl_pay_info: Option<LnurlPayInfo>,
 
@@ -834,6 +837,10 @@ pub enum ReceivePaymentMethod {
         amount_sats: Option<u64>,
         /// The expiry of the invoice as a duration in seconds
         expiry_secs: Option<u32>,
+        /// If set, creates a HODL invoice with this payment hash (hex-encoded).
+        /// The payer's HTLC will be held until the preimage is provided via
+        /// `claim_htlc_payment` or the HTLC expires.
+        payment_hash: Option<String>,
     },
 }
 
@@ -1145,6 +1152,10 @@ pub enum PaymentDetailsFilter {
         tx_hash: Option<String>,
         /// Filter by transaction type
         tx_type: Option<TokenTransactionType>,
+    },
+    Lightning {
+        /// Filter specific Spark HTLC statuses (Spark HTLCs are used to fulfil Lightning invoices)
+        htlc_status: Option<Vec<SparkHtlcStatus>>,
     },
 }
 
