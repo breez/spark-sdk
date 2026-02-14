@@ -2,6 +2,13 @@ use std::collections::HashMap;
 
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
+
+/// Parameters for acquiring or releasing a distributed lock.
+pub struct SetLockParams {
+    pub lock_name: String,
+    pub acquire: bool,
+    pub exclusive: bool,
+}
 use serde_json::Value;
 
 /// Simple semantic version for schema versioning

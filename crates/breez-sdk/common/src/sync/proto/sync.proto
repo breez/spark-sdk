@@ -7,6 +7,8 @@ service Syncer {
   rpc SetRecord(SetRecordRequest) returns (SetRecordReply) {}
   rpc ListChanges(ListChangesRequest) returns (ListChangesReply) {}
   rpc ListenChanges(ListenChangesRequest) returns (stream Notification);
+  rpc SetLock(SetLockRequest) returns (SetLockReply) {}
+  rpc GetLock(GetLockRequest) returns (GetLockReply) {}
 }
 
 message Record {
@@ -44,3 +46,23 @@ message ListenChangesRequest {
 }
 
 message Notification { optional string client_id = 1; }
+
+message SetLockRequest {
+  string lock_name = 1;
+  string instance_id = 2;
+  bool acquire = 3;
+  bool exclusive = 4;
+  optional uint32 ttl_seconds = 5;
+  uint32 request_time = 6;
+  string signature = 7;
+}
+message SetLockReply {}
+
+message GetLockRequest {
+  string lock_name = 1;
+  uint32 request_time = 2;
+  string signature = 3;
+}
+message GetLockReply {
+  bool locked = 1;
+}

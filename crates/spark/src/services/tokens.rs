@@ -6,7 +6,7 @@ use bitcoin::{
     secp256k1::PublicKey,
 };
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     operator::{
         OperatorPool,
         rpc::{
-            self,
+            self, OperatorRpcError,
             spark_token::{
                 CommitTransactionRequest, QueryTokenMetadataRequest,
                 QueryTokenTransactionsByFilters, QueryTokenTransactionsByTxHash,
@@ -42,6 +42,13 @@ use crate::{
 
 const MAX_TOKEN_TX_INPUTS: usize = 500;
 const MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS: usize = 3;
+const MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS: usize = 3;
+
+/// Checks if an error indicates a transaction was preempted because token outputs
+/// were already spent.
+fn is_transaction_preempted_error(error: &OperatorRpcError) -> bool {
+    matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::Aborted)
+}
 
 const HRP_STR_MAINNET: &str = "btkn";
 const HRP_STR_TESTNET: &str = "btknt";
@@ -462,6 +469,7 @@ impl TokenService {
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
         let mut attempt = 0;
+        let mut preempted_attempt = 0;
         let (token_transaction, reservation) = loop {
             if attempt >= MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS {
                 return Err(ServiceError::NeededTooManyOutputs);
@@ -496,6 +504,18 @@ impl TokenService {
                 {
                     self.optimize_token_outputs(Some(&token_id), 2).await?;
                     attempt += 1;
+                    continue;
+                }
+                Err(ServiceError::ServiceConnectionError(ref e))
+                    if is_transaction_preempted_error(e)
+                        && preempted_attempt < MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS - 1 =>
+                {
+                    preempted_attempt += 1;
+                    warn!(
+                        "Token transfer preempted (attempt {preempted_attempt}/{}), refreshing token outputs and retrying",
+                        MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS
+                    );
+                    self.refresh_tokens_outputs().await?;
                     continue;
                 }
                 Err(e) => return Err(e),

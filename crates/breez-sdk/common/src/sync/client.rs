@@ -9,8 +9,9 @@ use tonic::{
 use crate::{
     grpc::transport::{GrpcClient, Transport},
     sync::proto::{
-        ListChangesReply, ListChangesRequest, ListenChangesRequest, Notification, SetRecordReply,
-        SetRecordRequest, syncer_client::SyncerClient as ProtoSyncerClient,
+        GetLockReply, GetLockRequest, ListChangesReply, ListChangesRequest, ListenChangesRequest,
+        Notification, SetLockReply, SetLockRequest, SetRecordReply, SetRecordRequest,
+        syncer_client::SyncerClient as ProtoSyncerClient,
     },
 };
 
@@ -20,6 +21,8 @@ pub trait SyncerClient: Send + Sync {
     async fn set_record(&self, req: SetRecordRequest) -> Result<SetRecordReply>;
     async fn list_changes(&self, req: ListChangesRequest) -> Result<ListChangesReply>;
     async fn listen_changes(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>>;
+    async fn set_lock(&self, req: SetLockRequest) -> Result<SetLockReply>;
+    async fn get_lock(&self, req: GetLockRequest) -> Result<GetLockReply>;
 }
 
 pub struct BreezSyncerClient {
@@ -59,6 +62,14 @@ impl SyncerClient for BreezSyncerClient {
 
     async fn listen_changes(&self, req: ListenChangesRequest) -> Result<Streaming<Notification>> {
         Ok(self.client.clone().listen_changes(req).await?.into_inner())
+    }
+
+    async fn set_lock(&self, req: SetLockRequest) -> Result<SetLockReply> {
+        Ok(self.client.clone().set_lock(req).await?.into_inner())
+    }
+
+    async fn get_lock(&self, req: GetLockRequest) -> Result<GetLockReply> {
+        Ok(self.client.clone().get_lock(req).await?.into_inner())
     }
 }
 

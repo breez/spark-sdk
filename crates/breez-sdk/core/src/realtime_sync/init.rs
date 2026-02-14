@@ -18,9 +18,14 @@ pub struct RealTimeSyncParams {
     pub event_emitter: Arc<EventEmitter>,
 }
 
+pub struct RealTimeSyncResult {
+    pub storage: Arc<dyn Storage>,
+    pub signing_client: SigningClient,
+}
+
 pub async fn init_and_start_real_time_sync(
     params: RealTimeSyncParams,
-) -> Result<Arc<dyn Storage>, SdkError> {
+) -> Result<RealTimeSyncResult, SdkError> {
     debug!("Real-time sync is enabled.");
     let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> =
         Arc::new(SyncStorageWrapper::new(Arc::clone(&params.storage)));
@@ -33,16 +38,19 @@ pub async fn init_and_start_real_time_sync(
 
     synced_storage.initial_setup();
     let storage: Arc<dyn Storage> = synced_storage.clone();
-    let sync_client = BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
+    let sync_client: Arc<dyn breez_sdk_common::sync::SyncerClient> = Arc::new(
+        BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+    );
 
-    let signing_sync_client = SigningClient::new(
-        Arc::new(sync_client),
-        params.signer,
+    let signing_client = SigningClient::new(
+        Arc::clone(&sync_client),
+        Arc::clone(&params.signer),
         Uuid::now_v7().to_string(),
     );
+
     let sync_processor = Arc::new(SyncProcessor::new(
-        signing_sync_client,
+        signing_client.clone(),
         sync_service.get_sync_trigger(),
         synced_storage,
         Arc::clone(&sync_storage),
@@ -52,5 +60,8 @@ pub async fn init_and_start_real_time_sync(
         .start(params.shutdown_receiver)
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to start real-time sync processor: {e}")))?;
-    Ok(storage)
+    Ok(RealTimeSyncResult {
+        storage,
+        signing_client,
+    })
 }

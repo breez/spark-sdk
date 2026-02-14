@@ -1,4 +1,4 @@
-use crate::{FlashnetError, models::Pool};
+use crate::{FlashnetError, models::CurveType, models::Pool};
 use spark::Network;
 use tracing::debug;
 
@@ -53,6 +53,20 @@ pub fn select_best_pool(
             "No pool can provide the requested output amount".to_string(),
         ));
     }
+
+    // Filter out non V3 concentrated pools if any V3 concentrated pool exists
+    let has_v3_concentrated = viable_pools
+        .iter()
+        .any(|(pool, _)| pool.curve_type == Some(CurveType::V3Concentrated));
+    let viable_pools: Vec<(Pool, u128)> = if has_v3_concentrated {
+        debug!("Filtering to V3 concentrated pools only");
+        viable_pools
+            .into_iter()
+            .filter(|(pool, _)| pool.curve_type == Some(CurveType::V3Concentrated))
+            .collect()
+    } else {
+        viable_pools
+    };
 
     // Handle single pool case early - no scoring needed
     if viable_pools.len() == 1 {
