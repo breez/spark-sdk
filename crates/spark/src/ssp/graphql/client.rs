@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error};
 
-use platform_utils::{HttpClient, create_http_client};
+use platform_utils::{ContentType, HttpClient, add_content_type_header, create_http_client};
 
 use crate::default_user_agent;
 use crate::session_manager::{Session, SessionManager};
@@ -78,7 +78,7 @@ impl GraphQLClient {
 
         // Merge Content-Type header with provided headers
         let mut all_headers = headers.clone();
-        all_headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(&mut all_headers, ContentType::Json);
 
         let response = self
             .client
@@ -507,7 +507,7 @@ impl GraphQLClient {
         session: &Session,
         headers: &mut HashMap<String, String>,
     ) -> Result<(), GraphQLError> {
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(headers, ContentType::Json);
         headers.insert(
             "Authorization".to_string(),
             format!("Bearer {}", session.token),

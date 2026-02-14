@@ -1,6 +1,8 @@
-use base64::{Engine as _, engine::general_purpose};
 use bitcoin::{Address, address::NetworkUnchecked};
-use platform_utils::{HttpClient, HttpError, HttpResponse};
+use platform_utils::{
+    ContentType, HttpClient, HttpError, HttpResponse, add_basic_auth_header,
+    add_content_type_header,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -128,19 +130,12 @@ impl RestClientChainService {
         let mut attempts = 0;
 
         loop {
-            let mut headers: Option<HashMap<String, String>> = None;
+            let mut headers = HashMap::new();
             if let Some(basic_auth) = &self.basic_auth {
-                let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
-                let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
-
-                headers = Some(
-                    vec![("Authorization".to_string(), format!("Basic {encoded_auth}"))]
-                        .into_iter()
-                        .collect(),
-                );
+                add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
             }
 
-            let HttpResponse { body, status } = client.get(url.to_string(), headers).await?;
+            let HttpResponse { body, status } = client.get(url.to_string(), Some(headers)).await?;
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
@@ -159,11 +154,9 @@ impl RestClientChainService {
 
     async fn post(&self, url: &str, body: Option<String>) -> Result<String, ChainServiceError> {
         let mut headers: HashMap<String, String> = HashMap::new();
-        headers.insert("Content-Type".to_string(), "text/plain".to_string());
+        add_content_type_header(&mut headers, ContentType::TextPlain);
         if let Some(basic_auth) = &self.basic_auth {
-            let auth_string = format!("{}:{}", basic_auth.username, basic_auth.password);
-            let encoded_auth = general_purpose::STANDARD.encode(auth_string.as_bytes());
-            headers.insert("Authorization".to_string(), format!("Basic {encoded_auth}"));
+            add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
         }
         info!(
             "Posting to {} with body {} and headers {:?}",

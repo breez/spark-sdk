@@ -5,7 +5,9 @@ use std::time::Duration;
 use anyhow::Result;
 use bitcoin::{Address, Amount, Network, Transaction, Txid};
 use futures::TryFutureExt;
-use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use testcontainers::{
@@ -246,12 +248,11 @@ impl BitcoindFixture {
             "params": params,
         });
 
-        let auth_header = make_basic_auth_header(&self.rpcuser, &self.rpcpassword);
         let body = serde_json::to_string(&request)?;
 
         let mut headers = HashMap::new();
-        headers.insert("Authorization".to_string(), auth_header);
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_basic_auth_header(&mut headers, &self.rpcuser, &self.rpcpassword);
+        add_content_type_header(&mut headers, ContentType::Json);
 
         let response = self
             .http_client
@@ -259,7 +260,7 @@ impl BitcoindFixture {
             .await
             .map_err(|e| anyhow::anyhow!("HTTP request failed: {e:?}"))?;
 
-        if !(200..300).contains(&response.status) {
+        if !response.is_success() {
             return Err(anyhow::anyhow!(
                 "bitcoind returned error status: {}",
                 response.status

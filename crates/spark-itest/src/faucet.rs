@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
-use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -115,12 +117,11 @@ impl RegtestFaucet {
             serde_json::to_string(&request_body).context("Failed to serialize request body")?;
 
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(&mut headers, ContentType::Json);
 
         // Add basic authentication if username and password are configured
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
-            let auth_header = make_basic_auth_header(username, password);
-            headers.insert("Authorization".to_string(), auth_header);
+            add_basic_auth_header(&mut headers, username, password);
         }
 
         let response = self
@@ -129,7 +130,7 @@ impl RegtestFaucet {
             .await
             .context("Failed to send faucet request")?;
 
-        if !(200..300).contains(&response.status) {
+        if !response.is_success() {
             bail!(
                 "Faucet request failed with status {}: {}",
                 response.status,

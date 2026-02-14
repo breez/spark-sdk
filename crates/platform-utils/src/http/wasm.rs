@@ -19,9 +19,14 @@ impl ReqwestHttpClient {
         if let Some(ua) = user_agent {
             builder = builder.user_agent(ua);
         }
-        Self {
-            client: builder.build().expect("Failed to create reqwest client"),
-        }
+        let client = match builder.build() {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::error!("Failed to create reqwest client: {e}");
+                panic!("Failed to create reqwest client: {e}");
+            }
+        };
+        Self { client }
     }
 }
 

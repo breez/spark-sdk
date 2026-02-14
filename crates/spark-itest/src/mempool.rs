@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use bitcoin::{Transaction, consensus::encode::deserialize_hex};
-use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
+use platform_utils::{DefaultHttpClient, HttpClient, add_basic_auth_header};
 use tracing::info;
 
 /// Configuration for the mempool/esplora API client
@@ -62,10 +62,8 @@ impl MempoolClient {
         let url = format!("{}/tx/{}/hex", self.config.url, txid);
         info!("Fetching transaction from: {}", url);
 
-        let auth_header = make_basic_auth_header(&self.config.username, &self.config.password);
-
         let mut headers = HashMap::new();
-        headers.insert("Authorization".to_string(), auth_header);
+        add_basic_auth_header(&mut headers, &self.config.username, &self.config.password);
 
         let response = self
             .http_client
@@ -73,7 +71,7 @@ impl MempoolClient {
             .await
             .context("Failed to fetch transaction")?;
 
-        if !(200..300).contains(&response.status) {
+        if !response.is_success() {
             bail!(
                 "Failed to fetch transaction {}: status {}, body: {}",
                 txid,

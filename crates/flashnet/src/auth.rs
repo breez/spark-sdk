@@ -10,7 +10,7 @@ use crate::{
     models::{ChallengeRequest, ChallengeResponse, VerifyRequest, VerifyResponse},
 };
 
-use platform_utils::HttpClient;
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
 
 const ACCESS_TOKEN_CACHE_KEY: &str = "access_token";
 const HOUR_MS: u32 = 60 * 60 * 1000;
@@ -149,7 +149,7 @@ impl FlashnetClient {
         let url = format!("{}/{}{}", self.config.base_url, endpoint, query_string);
 
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(&mut headers, ContentType::Json);
         if let Some(token) = access_token {
             headers.insert("Authorization".to_string(), format!("Bearer {token}"));
         }
@@ -183,7 +183,7 @@ impl FlashnetClient {
             .map_err(|e| FlashnetError::Generic(format!("Failed to serialize body: {e}")))?;
 
         let mut headers = HashMap::new();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(&mut headers, ContentType::Json);
         if let Some(token) = access_token {
             headers.insert("Authorization".to_string(), format!("Bearer {token}"));
         }

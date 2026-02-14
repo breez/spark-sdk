@@ -6,7 +6,9 @@ use bitcoin::{
     consensus::encode::{deserialize_hex, serialize_hex},
 };
 use clap::Subcommand;
-use platform_utils::{DefaultHttpClient, HttpClient, make_basic_auth_header};
+use platform_utils::{
+    ContentType, DefaultHttpClient, HttpClient, add_basic_auth_header, add_content_type_header,
+};
 use spark_wallet::{Fee, PagingFilter, SparkWallet};
 
 use crate::config::MempoolConfig;
@@ -172,13 +174,11 @@ async fn get_transaction(
     txid: String,
 ) -> Result<Transaction, Box<dyn std::error::Error>> {
     let url = format!("{}/tx/{}/hex", mempool_config.url, txid);
-    let auth_header = make_basic_auth_header(
-        mempool_config.username.as_deref().unwrap_or(""),
-        mempool_config.password.as_deref().unwrap_or(""),
-    );
 
     let mut headers = HashMap::new();
-    headers.insert("Authorization".to_string(), auth_header);
+    if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
+        add_basic_auth_header(&mut headers, username, password);
+    }
 
     let http_client = DefaultHttpClient::default();
     let response = http_client
@@ -196,14 +196,12 @@ async fn broadcast_transaction(
 ) -> Result<Txid, Box<dyn std::error::Error>> {
     let tx_hex = serialize_hex(&tx);
     let url = format!("{}/tx", mempool_config.url);
-    let auth_header = make_basic_auth_header(
-        mempool_config.username.as_deref().unwrap_or(""),
-        mempool_config.password.as_deref().unwrap_or(""),
-    );
 
     let mut headers = HashMap::new();
-    headers.insert("Authorization".to_string(), auth_header);
-    headers.insert("Content-Type".to_string(), "text/plain".to_string());
+    if let (Some(username), Some(password)) = (&mempool_config.username, &mempool_config.password) {
+        add_basic_auth_header(&mut headers, username, password);
+    }
+    add_content_type_header(&mut headers, ContentType::TextPlain);
 
     let http_client = DefaultHttpClient::default();
     let response = http_client

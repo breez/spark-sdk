@@ -5,7 +5,7 @@ use lnurl_models::{
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
-use platform_utils::HttpClient;
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -133,7 +133,7 @@ impl DefaultLnurlServerClient {
     /// Get headers for POST/DELETE requests (includes Content-Type).
     fn get_post_headers(&self) -> HashMap<String, String> {
         let mut headers = self.get_common_headers();
-        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        add_content_type_header(&mut headers, ContentType::Json);
         headers
     }
 
