@@ -32,13 +32,100 @@ impl SparkSyncService {
         }
     }
 
-    pub async fn sync_payments(&self, initial_sync_complete: bool) -> Result<(), SdkError> {
+    pub async fn sync_payments(
+        &self,
+        initial_sync_complete: bool,
+    ) -> Result<(), SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         self.sync_bitcoin_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
+
+        // Emit Synced(payments) after bitcoin payments so the tx list
+        // updates without waiting for the token payment sync.
+        self.event_emitter
+            .emit(&SdkEvent::Synced {
+                balance_updated: false,
+                payments_updated: true,
+                initial_sync: false,
+            })
+            .await;
+
         self.sync_token_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;
         Ok(())
+    }
+
+    /// Prefetch the most recent payments in descending order for instant display.
+    /// Returns true if payments were prefetched and Synced(payments) was emitted.
+    /// This is a server-side query (gRPC) that does NOT require spark_wallet.sync()
+    /// to complete first, so it can run in parallel with the wallet sync.
+    pub async fn prefetch_recent_payments(&self, initial_sync_complete: bool) -> bool {
+        // Only prefetch on the first sync after connect (not on periodic re-syncs).
+        // `initial_sync_complete` is per-SDK-instance (not persisted to storage),
+        // so it correctly triggers on every wallet restore regardless of IndexedDB state.
+        info!(
+            "prefetch_recent_payments called, initial_sync_complete={}",
+            initial_sync_complete
+        );
+        if initial_sync_complete {
+            info!("Skipping prefetch: initial sync already complete");
+            return false;
+        }
+
+        info!("Initial sync: prefetching most recent payments (descending)");
+        match self
+            .spark_wallet
+            .list_transfers(ListTransfersRequest {
+                paging: Some(PagingFilter {
+                    offset: 0,
+                    limit: PAYMENT_SYNC_BATCH_SIZE,
+                    order: Order::Descending,
+                }),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(recent_transfers) => {
+                info!(
+                    "Prefetched {} recent payments for instant display",
+                    recent_transfers.len()
+                );
+                for transfer in &recent_transfers.items {
+                    match TryInto::<Payment>::try_into(transfer.clone()) {
+                        Ok(payment) => {
+                            if let Err(e) = self.apply_payment_metadata(&payment).await {
+                                error!(
+                                    "Failed to apply payment metadata for prefetched payment {}: {e:?}",
+                                    payment.id
+                                );
+                            }
+                            if let Err(err) = self.storage.insert_payment(payment).await {
+                                error!("Failed to insert prefetched payment: {err:?}");
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to convert prefetched transfer: {e:?}");
+                        }
+                    }
+                }
+                if !recent_transfers.items.is_empty() {
+                    self.event_emitter
+                        .emit(&SdkEvent::Synced {
+                            balance_updated: false,
+                            payments_updated: true,
+                            initial_sync: false,
+                        })
+                        .await;
+                    return true;
+                }
+                false
+            }
+            Err(e) => {
+                // Non-fatal: the ascending sync loop will handle everything
+                error!("Failed to prefetch recent payments: {e:?}");
+                false
+            }
+        }
     }
 
     async fn sync_bitcoin_payments_to_storage(

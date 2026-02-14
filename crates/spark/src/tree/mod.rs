@@ -706,6 +706,11 @@ pub trait TreeService: Send + Sync {
     /// ```
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError>;
 
+    /// Returns a `watch::Receiver` that notifies when the available balance
+    /// changes (e.g. after `set_leaves()` is called). Useful for reacting to
+    /// tree-store updates without polling.
+    fn subscribe_balance_changes(&self) -> watch::Receiver<u64>;
+
     /// Inserts new leaves into the tree.
     ///
     /// This method adds the provided leaves to the tree state.

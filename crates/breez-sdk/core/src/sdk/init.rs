@@ -7,16 +7,18 @@ use tracing::{error, info};
 use crate::{
     AssetFilter, Network, PaymentDetails, PaymentStatus, PaymentType, SetLnurlMetadataItem,
     error::SdkError,
+    events::SdkEvent,
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
     persist::ObjectCacheRepository,
+    sync::SparkSyncService,
     token_conversion::{
         DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
         TokenConverter,
     },
 };
 
-use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
+use super::{BreezSdk, BreezSdkParams, helpers::{update_balances, validate_breez_api_key}};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -81,13 +83,98 @@ impl BreezSdk {
     /// This method initiates the following background tasks:
     /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
     /// 2. `periodic_sync`: syncs the wallet with the Spark network
-    /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
-    /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
+    /// 3. `spawn_instant_wallet_load`: immediately fetches balance + recent payments for fast display
+    /// 4. `try_recover_lightning_address`: recovers the lightning address on startup
+    /// 5. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
     pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
+        self.spawn_instant_wallet_load();
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
+    }
+
+    /// Fires immediately on connect to show balance + recent payments as fast as possible.
+    /// Runs three concurrent tasks:
+    /// 1. `update_balances()` + `Synced { balance_updated }` — reads current TreeStore (likely 0 at startup)
+    /// 2. `prefetch_recent_payments()` + `Synced { payments_updated }` — fetches 50 newest transactions
+    /// 3. `watch_balance` — watches the TreeStore's balance change channel and emits
+    ///    `Synced { balance_updated }` as soon as `refresh_leaves()` Phase A populates the store
+    fn spawn_instant_wallet_load(&self) {
+        let sdk = self.clone();
+        tokio::spawn(async move {
+            let fetch_balance = async {
+                match update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
+                    Ok(()) => {
+                        info!("instant_wallet_load: balance updated, emitting Synced(balance)");
+                        sdk.event_emitter
+                            .emit(&SdkEvent::Synced {
+                                balance_updated: true,
+                                payments_updated: false,
+                                initial_sync: false,
+                            })
+                            .await;
+                    }
+                    Err(e) => error!("instant_wallet_load: failed to update balance: {e:?}"),
+                }
+            };
+
+            let fetch_history = async {
+                let sync_service = SparkSyncService::new(
+                    sdk.spark_wallet.clone(),
+                    sdk.storage.clone(),
+                    sdk.event_emitter.clone(),
+                );
+                let result = sync_service.prefetch_recent_payments(false).await;
+                info!("instant_wallet_load: prefetch completed, result={result}");
+            };
+
+            // Watch for balance changes from the TreeStore (fires when
+            // refresh_leaves() Phase A calls set_leaves()). This bridges the gap
+            // between the TreeStore being populated and the full sync reading it.
+            let watch_balance = async {
+                let mut balance_rx = sdk.spark_wallet.subscribe_balance_changes();
+                let timeout = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    balance_rx.changed(),
+                )
+                .await;
+                match timeout {
+                    Ok(Ok(())) => {
+                        let balance = *balance_rx.borrow();
+                        if balance > 0 {
+                            info!(
+                                "instant_wallet_load: tree store balance changed to {balance}, updating"
+                            );
+                            match update_balances(
+                                sdk.spark_wallet.clone(),
+                                sdk.storage.clone(),
+                            )
+                            .await
+                            {
+                                Ok(()) => {
+                                    sdk.event_emitter
+                                        .emit(&SdkEvent::Synced {
+                                            balance_updated: true,
+                                            payments_updated: false,
+                                            initial_sync: false,
+                                        })
+                                        .await;
+                                }
+                                Err(e) => error!(
+                                    "instant_wallet_load: balance update after tree change failed: {e:?}"
+                                ),
+                            }
+                        }
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        // Channel closed or timeout — full sync will handle it
+                    }
+                }
+            };
+
+            tokio::join!(fetch_balance, fetch_history, watch_balance);
+        });
     }
 
     fn spawn_spark_private_mode_initialization(&self) {

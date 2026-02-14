@@ -643,7 +643,7 @@ pub async fn wait_for_synced_event(
     timeout_secs: u64,
 ) -> Result<()> {
     wait_for_event(event_rx, timeout_secs, "Synced", |event| match event {
-        SdkEvent::Synced => Ok(Some(EventResult::Synced)),
+        SdkEvent::Synced { .. } => Ok(Some(EventResult::Synced)),
         other => {
             info!("Received SDK event: {:?}", other);
             Ok(None)

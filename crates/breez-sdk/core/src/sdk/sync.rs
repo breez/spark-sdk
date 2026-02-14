@@ -280,8 +280,12 @@ impl BreezSdk {
 
         let start_time = Instant::now();
 
+        // Run all sync phases concurrently. Previously, wallet_state was
+        // sequential after wallet (so payment syncing waited ~3s for
+        // refresh_leaves). Now all four run in parallel on the WASM single
+        // thread — whenever one awaits I/O, others make progress.
         let sync_wallet = async {
-            let wallet_synced = if request.sync_type.contains(SyncType::Wallet) {
+            if request.sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -303,9 +307,11 @@ impl BreezSdk {
             } else {
                 trace!("sync_wallet_internal: Skipping Wallet sync");
                 false
-            };
+            }
+        };
 
-            let wallet_state_synced = if request.sync_type.contains(SyncType::WalletState) {
+        let sync_wallet_state = async {
+            if request.sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
                 match self.sync_wallet_state_to_storage().await {
@@ -327,9 +333,7 @@ impl BreezSdk {
             } else {
                 trace!("sync_wallet_internal: Skipping WalletState sync");
                 false
-            };
-
-            (wallet_synced, wallet_state_synced)
+            }
         };
 
         let sync_lnurl = async {
@@ -384,8 +388,8 @@ impl BreezSdk {
             }
         };
 
-        let ((wallet, wallet_state), lnurl_metadata, deposits) =
-            tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
+        let (wallet, wallet_state, lnurl_metadata, deposits) =
+            tokio::join!(sync_wallet, sync_wallet_state, sync_lnurl, sync_deposits);
 
         let elapsed = start_time.elapsed();
         let event = InternalSyncedEvent {
@@ -403,6 +407,14 @@ impl BreezSdk {
     /// Synchronizes wallet state to persistent storage, making sure we have the latest balances and payments.
     pub(super) async fn sync_wallet_state_to_storage(&self) -> Result<(), SdkError> {
         update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
+        // Balance is now in storage — notify consumers early
+        self.event_emitter
+            .emit(&SdkEvent::Synced {
+                balance_updated: true,
+                payments_updated: false,
+                initial_sync: false,
+            })
+            .await;
 
         let initial_sync_complete = *self.initial_synced_watcher.borrow();
         let sync_service = SparkSyncService::new(
@@ -411,6 +423,15 @@ impl BreezSdk {
             self.event_emitter.clone(),
         );
         sync_service.sync_payments(initial_sync_complete).await?;
+
+        // Payments are now in storage — notify consumers so the tx list updates
+        self.event_emitter
+            .emit(&SdkEvent::Synced {
+                balance_updated: false,
+                payments_updated: true,
+                initial_sync: false,
+            })
+            .await;
 
         Ok(())
     }

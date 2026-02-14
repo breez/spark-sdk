@@ -953,6 +953,12 @@ impl SparkWallet {
         Ok(self.tree_service.get_available_balance().await?)
     }
 
+    /// Returns a watch receiver that fires whenever the tree-store balance
+    /// changes (e.g. after `set_leaves()` in `refresh_leaves()`).
+    pub fn subscribe_balance_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.tree_service.subscribe_balance_changes()
+    }
+
     pub async fn list_transfers(
         &self,
         request: ListTransfersRequest,
@@ -1888,13 +1894,20 @@ impl BackgroundProcessor {
             .await;
         });
 
-        if let Err(e) = self.tree_service.refresh_leaves().await {
-            error!("Error refreshing leaves on startup: {:?}", e);
-        }
-
-        if let Err(e) = self.token_service.refresh_tokens_outputs().await {
-            error!("Error refreshing token outputs on startup: {:?}", e);
-        }
+        // Spawn refreshes as a background task so process_events() starts
+        // immediately. This allows SparkEvent::Connected to be processed
+        // right away (firing WalletEvent::Synced sooner), while the tree
+        // and token stores are populated concurrently by refresh_leaves().
+        let tree_service = Arc::clone(&self.tree_service);
+        let token_service = Arc::clone(&self.token_service);
+        tokio::spawn(async move {
+            if let Err(e) = tree_service.refresh_leaves().await {
+                error!("Error refreshing leaves on startup: {:?}", e);
+            }
+            if let Err(e) = token_service.refresh_tokens_outputs().await {
+                error!("Error refreshing token outputs on startup: {:?}", e);
+            }
+        });
 
         // Start token output optimization background task if configured
         if let Some(interval) = self

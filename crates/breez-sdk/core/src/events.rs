@@ -15,8 +15,16 @@ use crate::{DepositInfo, Payment};
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SdkEvent {
-    /// Emitted when the wallet has been synchronized with the network
-    Synced,
+    /// Emitted when wallet state has been updated. The flags indicate what changed:
+    /// - `balance_updated`: The balance in storage was refreshed.
+    /// - `payments_updated`: The payment history in storage was refreshed.
+    /// - `initial_sync`: This is the first full sync after connect — consumers should
+    ///   use this flag to dismiss loading/skeleton UI.
+    Synced {
+        balance_updated: bool,
+        payments_updated: bool,
+        initial_sync: bool,
+    },
     /// Emitted when the SDK was unable to claim deposits
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
@@ -52,7 +60,14 @@ impl SdkEvent {
 impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SdkEvent::Synced => write!(f, "Synced"),
+            SdkEvent::Synced {
+                balance_updated,
+                payments_updated,
+                initial_sync,
+            } => write!(
+                f,
+                "Synced(balance={balance_updated}, payments={payments_updated}, initial={initial_sync})"
+            ),
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 write!(f, "UnclaimedDeposits: {unclaimed_deposits:?}")
             }
@@ -241,8 +256,15 @@ impl EventEmitter {
             return;
         }
 
-        // Emit the merged event
-        self.emit(&SdkEvent::Synced).await;
+        // Emit the merged event. On the first emission (initial_sync), no
+        // balance or payment flags are set — those arrive via separate direct
+        // `emit()` calls earlier in the startup sequence.
+        self.emit(&SdkEvent::Synced {
+            balance_updated: false,
+            payments_updated: false,
+            initial_sync: is_first_event,
+        })
+        .await;
     }
 }
 
@@ -286,7 +308,7 @@ mod tests {
 
         let _ = emitter.add_listener(listener).await;
 
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced { balance_updated: false, payments_updated: false, initial_sync: false };
 
         emitter.emit(&event).await;
 
@@ -318,7 +340,7 @@ mod tests {
         assert!(emitter.remove_listener(&id1).await);
 
         // Emit an event
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced { balance_updated: false, payments_updated: false, initial_sync: false };
         emitter.emit(&event).await;
 
         // The first listener should not receive the event
@@ -584,7 +606,7 @@ mod tests {
         #[macros::async_trait]
         impl EventListener for CountingListener {
             async fn on_event(&self, event: SdkEvent) {
-                if matches!(event, SdkEvent::Synced) {
+                if matches!(event, SdkEvent::Synced { .. }) {
                     self.count.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -699,7 +721,7 @@ mod tests {
         #[macros::async_trait]
         impl EventListener for CountingListener {
             async fn on_event(&self, event: SdkEvent) {
-                if matches!(event, SdkEvent::Synced) {
+                if matches!(event, SdkEvent::Synced { .. }) {
                     self.count.fetch_add(1, Ordering::Relaxed);
                 }
             }

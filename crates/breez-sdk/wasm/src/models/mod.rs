@@ -59,7 +59,11 @@ mod serde_option_u128_as_string {
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
-    Synced,
+    Synced {
+        balance_updated: bool,
+        payments_updated: bool,
+        initial_sync: bool,
+    },
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },

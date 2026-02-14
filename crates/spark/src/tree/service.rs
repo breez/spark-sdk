@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio_with_wasm::alias::sync::Mutex;
+
 use bitcoin::secp256k1::PublicKey;
 use tokio_with_wasm::alias as tokio;
 use tracing::{error, info, trace, warn};
@@ -28,6 +30,12 @@ use crate::{
 
 use super::{TreeNode, error::TreeServiceError};
 
+/// Minimum interval between consecutive `refresh_leaves()` calls.
+/// If a refresh completed within this window, subsequent calls return
+/// immediately — preventing the redundant second refresh that was adding
+/// ~3 s to the initial sync.
+const REFRESH_LEAVES_DEBOUNCE_SECS: u64 = 5;
+
 pub struct SynchronousTreeService {
     identity_pubkey: PublicKey,
     network: Network,
@@ -36,6 +44,11 @@ pub struct SynchronousTreeService {
     timelock_manager: Arc<TimelockManager>,
     signer: Arc<dyn Signer>,
     swap_service: Arc<Swap>,
+    /// Serialises `refresh_leaves()` calls and records the last completion
+    /// time so that back-to-back calls are coalesced. When a second caller
+    /// arrives while the first is in-flight, it waits for the lock, then
+    /// sees the recent timestamp and returns immediately.
+    refresh_gate: Mutex<Option<web_time::Instant>>,
 }
 
 #[macros::async_trait]
@@ -158,70 +171,31 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        // Prepare queries for coordinator and all operators and run them in parallel
+        // Acquire the gate for the entire refresh. If another refresh is
+        // in-flight, this `.lock().await` will yield until it finishes.
+        // Then the debounce check below will see the recent timestamp and
+        // skip the redundant work — saving ~3 s on the initial sync.
+        let mut gate = self.refresh_gate.lock().await;
+
+        if let Some(ts) = *gate {
+            if ts.elapsed() < Duration::from_secs(REFRESH_LEAVES_DEBOUNCE_SECS) {
+                info!(
+                    "refresh_leaves: skipping — last refresh completed {:?} ago (debounce {}s)",
+                    ts.elapsed(),
+                    REFRESH_LEAVES_DEBOUNCE_SECS
+                );
+                return Ok(());
+            }
+        }
+
+        // === PHASE A: Coordinator-only fast path ===
+        // Query only the coordinator to populate the TreeStore as quickly as possible,
+        // making balance available before operator validation completes.
         let coordinator_client = self.operator_pool.get_coordinator().client.clone();
-        let operators: Vec<_> = self
-            .operator_pool
-            .get_non_coordinator_operators()
-            .map(|op| (op.id, op.client.clone()))
-            .collect();
+        let coordinator_leaves = self.query_nodes(&coordinator_client, false, None).await?;
 
-        let coord_fut = self.query_nodes(&coordinator_client, false, None);
-        let op_futs = operators
-            .iter()
-            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
-
-        let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
-        let coordinator_leaves = coordinator_leaves_res?;
-
-        // Propagate any operator query error to preserve original behavior and
-        // collect successful operator leaves for later comparison
-        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
-        for (id, res) in operator_results {
-            match res {
-                Ok(leaves) => operator_leaves_vec.push(leaves),
-                Err(e) => {
-                    error!("Failed to query operator {id}: {e:?}");
-                    return Err(e);
-                }
-            }
-        }
-
-        let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        // Pubkey verification — local crypto only (SHA-256 + HD derivation + secp256k1)
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
-
-        // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in
-            operators.into_iter().zip(operator_leaves_vec.into_iter())
-        {
-            for leaf in &coordinator_leaves {
-                match operator_leaves.iter().find(|l| l.id == leaf.id) {
-                    Some(operator_leaf) => {
-                        // TODO: move this logic to TreeNode method
-                        if operator_leaf.status != leaf.status
-                            || operator_leaf.signing_keyshare.public_key
-                                != leaf.signing_keyshare.public_key
-                            || operator_leaf.node_tx != leaf.node_tx
-                            || operator_leaf.refund_tx != leaf.refund_tx
-                        {
-                            warn!(
-                                "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator_id.0, leaf, operator_leaf
-                            );
-                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator_id.0, leaf.id
-                        );
-                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
-                    }
-                }
-            }
-        }
-
         for leaf in &coordinator_leaves {
             if leaf.status != TreeNodeStatus::Available {
                 info!("Ignoring leaf {} due to status: {:?}", leaf.id, leaf.status);
@@ -230,14 +204,14 @@ impl TreeService for SynchronousTreeService {
             }
 
             let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id).await?;
-            let other_node_pubkey = leaf.signing_keyshare.public_key;
-            let verifying_pubkey = leaf.verifying_public_key;
+            let combined_pubkey =
+                our_node_pubkey
+                    .combine(&leaf.signing_keyshare.public_key)
+                    .map_err(|_| {
+                        TreeServiceError::Generic("Failed to combine public keys".to_string())
+                    })?;
 
-            let combined_pubkey = our_node_pubkey.combine(&other_node_pubkey).map_err(|_| {
-                TreeServiceError::Generic("Failed to combine public keys".to_string())
-            })?;
-
-            if combined_pubkey != verifying_pubkey {
+            if combined_pubkey != leaf.verifying_public_key {
                 warn!(
                     "Leaf {}'s verifying public key does not match the expected value",
                     leaf.id
@@ -246,40 +220,39 @@ impl TreeService for SynchronousTreeService {
             }
         }
 
-        let new_leaves = coordinator_leaves
-            .into_iter()
-            .filter(|leaf| {
-                !missing_operator_leaves_map.contains_key(&leaf.id)
-                    && !ignored_leaves_map.contains_key(&leaf.id)
-            })
-            .collect::<Vec<_>>();
-        let missing_operator_leaves = missing_operator_leaves_map
-            .values()
-            .filter(|leaf_id| !ignored_leaves_map.contains_key(&leaf_id.id))
+        let phase_a_leaves: Vec<_> = coordinator_leaves
+            .iter()
+            .filter(|l| !ignored_leaves_map.contains_key(&l.id))
             .cloned()
-            .collect::<Vec<_>>();
-        let refreshed_leaves = self
-            .check_renew_nodes(new_leaves, async |e| {
-                // If this is a partial check timelock error, the extend node timelock failed
-                // but we can still update the leaves that were refreshed
-                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.set_leaves(nodes, &missing_operator_leaves).await
-                {
-                    error!("Failed to set leaves: {e:?}");
-                }
-            })
-            .await?;
+            .collect();
 
-        self.state
-            .set_leaves(&refreshed_leaves, &missing_operator_leaves)
-            .await?;
+        // Balance becomes available NOW — pass empty missing_operators since we
+        // haven't queried operators yet.
+        self.state.set_leaves(&phase_a_leaves, &[]).await?;
+        info!(
+            "refresh_leaves phase A: {} leaves set from coordinator",
+            phase_a_leaves.len()
+        );
 
-        Ok(())
+        // === PHASE B: Operator validation + timelock renewal ===
+        let result = self
+            .refresh_leaves_phase_b(coordinator_leaves, &ignored_leaves_map)
+            .await;
+
+        if result.is_ok() {
+            *gate = Some(web_time::Instant::now());
+        }
+
+        result
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let leaves = self.state.get_leaves().await?;
         Ok(leaves.balance())
+    }
+
+    fn subscribe_balance_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.state.subscribe_balance_changes()
     }
 }
 
@@ -301,6 +274,7 @@ impl SynchronousTreeService {
             timelock_manager,
             signer,
             swap_service,
+            refresh_gate: Mutex::new(None),
         }
     }
 
@@ -509,6 +483,108 @@ impl SynchronousTreeService {
                 )))
             }
         }
+    }
+
+    /// Phase B of refresh_leaves: query operators, cross-check against coordinator
+    /// data, perform timelock renewal, and update the store with fully validated leaves.
+    /// Called after Phase A has already populated the store with coordinator-only data.
+    async fn refresh_leaves_phase_b(
+        &self,
+        coordinator_leaves: Vec<TreeNode>,
+        ignored_leaves_map: &HashMap<TreeNodeId, TreeNode>,
+    ) -> Result<(), TreeServiceError> {
+        let operators: Vec<_> = self
+            .operator_pool
+            .get_non_coordinator_operators()
+            .map(|op| (op.id, op.client.clone()))
+            .collect();
+
+        let op_futs = operators
+            .iter()
+            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
+        let operator_results = join_all(op_futs).await;
+
+        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
+        for (id, res) in operator_results {
+            match res {
+                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Err(e) => {
+                    error!("Failed to query operator {id}: {e:?}");
+                    return Err(e);
+                }
+            }
+        }
+
+        // HashMap-based cross-check: O(C + O) per operator instead of O(C × O)
+        let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
+        for (operator_id, operator_leaves) in
+            operators.into_iter().zip(operator_leaves_vec.into_iter())
+        {
+            let op_map: HashMap<&TreeNodeId, &TreeNode> =
+                operator_leaves.iter().map(|l| (&l.id, l)).collect();
+
+            for leaf in &coordinator_leaves {
+                match op_map.get(&leaf.id) {
+                    Some(operator_leaf) => {
+                        if operator_leaf.status != leaf.status
+                            || operator_leaf.signing_keyshare.public_key
+                                != leaf.signing_keyshare.public_key
+                            || operator_leaf.node_tx != leaf.node_tx
+                            || operator_leaf.refund_tx != leaf.refund_tx
+                        {
+                            warn!(
+                                "Mismatch between coordinator and operator {}: leaf {}",
+                                operator_id.0, leaf.id
+                            );
+                            missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
+                        }
+                    }
+                    None => {
+                        warn!(
+                            "Leaf missing from operator {}: {}",
+                            operator_id.0, leaf.id
+                        );
+                        missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
+                    }
+                }
+            }
+        }
+
+        let new_leaves: Vec<_> = coordinator_leaves
+            .into_iter()
+            .filter(|leaf| {
+                !missing_operator_leaves_map.contains_key(&leaf.id)
+                    && !ignored_leaves_map.contains_key(&leaf.id)
+            })
+            .collect();
+        let missing_operator_leaves: Vec<_> = missing_operator_leaves_map
+            .values()
+            .filter(|leaf| !ignored_leaves_map.contains_key(&leaf.id))
+            .cloned()
+            .collect();
+
+        let refreshed_leaves = self
+            .check_renew_nodes(new_leaves, async |e| {
+                if let ServiceError::PartialCheckTimelockError(ref nodes) = e
+                    && let Err(e) = self.state.set_leaves(nodes, &missing_operator_leaves).await
+                {
+                    error!("Failed to set leaves: {e:?}");
+                }
+            })
+            .await?;
+
+        // Final store update with fully validated data — replaces Phase A's
+        // coordinator-only data atomically. Reservations are preserved.
+        self.state
+            .set_leaves(&refreshed_leaves, &missing_operator_leaves)
+            .await?;
+        info!(
+            "refresh_leaves phase B: {} validated, {} missing from operators",
+            refreshed_leaves.len(),
+            missing_operator_leaves.len()
+        );
+
+        Ok(())
     }
 
     /// Renew timelocks for reserved leaves and handle partial failures.

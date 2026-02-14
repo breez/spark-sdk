@@ -27,7 +27,7 @@ pub async fn wait_for_synced_event(
         }
 
         match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(SdkEvent::Synced)) => {
+            Ok(Some(SdkEvent::Synced { .. })) => {
                 return Ok(());
             }
             Ok(Some(_)) => continue,
