@@ -216,17 +216,18 @@ async fn test_distributed_lock_expiration(
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
 
     // Instance A acquires with default TTL (30s).
-    // We can't easily test expiry with 30s TTL in a fast test,
-    // so we verify the lock is held and then release it.
     instance_a.set_lock(lock_params(true, false)).await?;
 
     let locked = instance_b.get_lock(LOCK_NAME).await?;
     assert!(locked, "Lock should be held immediately after acquire");
 
-    // Release and verify
-    instance_a.set_lock(lock_params(false, false)).await?;
+    // Wait for the lock to expire (default TTL is 30s)
+    info!("Waiting 31s for lock to expire...");
+    tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+
+    // Lock should have expired without an explicit release
     let locked = instance_b.get_lock(LOCK_NAME).await?;
-    assert!(!locked, "Lock should not be held after release");
+    assert!(!locked, "Lock should have expired after TTL");
 
     info!("=== Test test_distributed_lock_expiration PASSED ===");
     Ok(())

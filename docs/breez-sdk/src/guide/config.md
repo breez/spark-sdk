@@ -86,3 +86,10 @@ The configuration includes:
 See [Stable balance](./stable_balance.md) for more information on how stable balance works and how to send payments using token-to-Bitcoin conversion.
 
 {{#tabs config:stable-balance-config}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+Stable balance uses real-time sync to coordinate automatic conversions between multiple SDK instances. Therefore, it is advised, when sharing the same PostgreSQL database with multiple SDK instances, to only configure one instance with stable balance enabled. See [With PostgreSQL Storage](./customizing.md#with-postgres-storage) for more information on using PostgreSQL databases.
+
+</div>

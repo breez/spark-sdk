@@ -54,7 +54,7 @@ pub fn select_best_pool(
         ));
     }
 
-    // Filter out non V3 oncentrated pools if any V3 concentrated pool exists
+    // Filter out non V3 concentrated pools if any V3 concentrated pool exists
     let has_v3_concentrated = viable_pools
         .iter()
         .any(|(pool, _)| pool.curve_type == Some(CurveType::V3Concentrated));
