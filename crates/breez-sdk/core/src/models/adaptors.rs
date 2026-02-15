@@ -432,3 +432,24 @@ impl From<spark_wallet::OptimizationProgress> for OptimizationProgress {
         }
     }
 }
+
+impl From<spark_wallet::OptimizationEvent> for crate::LeafOptimizationEvent {
+    fn from(value: spark_wallet::OptimizationEvent) -> Self {
+        match value {
+            spark_wallet::OptimizationEvent::Started { total_rounds } => {
+                Self::Started { total_rounds }
+            }
+            spark_wallet::OptimizationEvent::RoundCompleted {
+                current_round,
+                total_rounds,
+            } => Self::RoundCompleted {
+                current_round,
+                total_rounds,
+            },
+            spark_wallet::OptimizationEvent::Completed => Self::Completed,
+            spark_wallet::OptimizationEvent::Cancelled => Self::Cancelled,
+            spark_wallet::OptimizationEvent::Failed { error } => Self::Failed { error },
+            spark_wallet::OptimizationEvent::Skipped => Self::Skipped,
+        }
+    }
+}

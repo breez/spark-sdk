@@ -1,9 +1,11 @@
+mod app;
 #[cfg(feature = "uniffi")]
 pub mod bindings;
 mod chain;
 mod common;
 mod error;
 mod events;
+mod fiat_api;
 mod issuer;
 mod lnurl;
 mod logger;
@@ -23,15 +25,23 @@ pub use chain::{
     rest_client::{ChainApiType, RestClientChainService},
 };
 pub use common::{fiat::*, models::*, rest::*, sync_storage};
+pub use fiat_api::FiatApi;
 pub use error::{DepositClaimError, SdkError, SignerError};
-pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
+pub use events::{
+    EventEmitter, EventListener, FilteredEventListener, LeafOptimizationEvent, OptimizationEvent,
+    SdkEvent,
+};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
-pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
+pub use app::{App, initialize_app};
+#[allow(deprecated)] // Re-export deprecated items for backward compatibility
+pub use sdk::{
+    BreezSdk, Wallet, default_config, get_spark_status, init_logging, parse_input, verify_message,
+};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;
 
@@ -44,6 +54,7 @@ pub use persist::postgres::{
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[allow(deprecated)] // Re-export deprecated items for backward compatibility
 pub use {
     persist::sqlite::SqliteStorage,
     sdk::{connect, connect_with_signer},

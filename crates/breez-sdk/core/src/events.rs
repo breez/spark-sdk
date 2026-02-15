@@ -41,9 +41,11 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
-        // Named with `optimization` prefix to avoid collision with `event` keyword in C#
-        optimization_event: OptimizationEvent,
+    /// Emitted during leaf optimization lifecycle.
+    LeafOptimization {
+        /// The optimization event details. Named with `optimization_` prefix
+        /// to avoid collision with the `event` keyword in C#.
+        optimization_event: LeafOptimizationEvent,
     },
 }
 
@@ -54,6 +56,39 @@ impl SdkEvent {
             crate::PaymentStatus::Pending => SdkEvent::PaymentPending { payment },
             crate::PaymentStatus::Failed => SdkEvent::PaymentFailed { payment },
         }
+    }
+
+    // -- Typed event helpers --------------------------------------------------
+
+    /// Returns the [`Payment`] if this is a payment event (succeeded, pending, or failed).
+    pub fn payment(&self) -> Option<&Payment> {
+        match self {
+            SdkEvent::PaymentSucceeded { payment }
+            | SdkEvent::PaymentPending { payment }
+            | SdkEvent::PaymentFailed { payment } => Some(payment),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this is any payment event.
+    pub fn is_payment(&self) -> bool {
+        self.payment().is_some()
+    }
+
+    /// Returns `true` if this is a `Synced` event.
+    pub fn is_synced(&self) -> bool {
+        matches!(self, SdkEvent::Synced { .. })
+    }
+
+    /// Returns `true` if this is a `Synced` event with `initial_sync` set.
+    pub fn is_initial_sync(&self) -> bool {
+        matches!(
+            self,
+            SdkEvent::Synced {
+                initial_sync: true,
+                ..
+            }
+        )
     }
 }
 
@@ -83,18 +118,19 @@ impl fmt::Display for SdkEvent {
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed: {payment:?}")
             }
-            SdkEvent::Optimization {
+            SdkEvent::LeafOptimization {
                 optimization_event: event,
             } => {
-                write!(f, "Optimization: {event:?}")
+                write!(f, "LeafOptimization: {event:?}")
             }
         }
     }
 }
 
+/// Events emitted during leaf optimization lifecycle.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum OptimizationEvent {
+pub enum LeafOptimizationEvent {
     /// Optimization has started with the given number of rounds.
     Started { total_rounds: u32 },
     /// A round has completed.
@@ -111,6 +147,9 @@ pub enum OptimizationEvent {
     /// Optimization was skipped because leaves are already optimal.
     Skipped,
 }
+
+/// Backward-compatible alias for [`LeafOptimizationEvent`].
+pub type OptimizationEvent = LeafOptimizationEvent;
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Default)]
@@ -161,6 +200,41 @@ impl InternalSyncedEvent {
 pub trait EventListener: Send + Sync {
     /// Called when an event occurs
     async fn on_event(&self, event: SdkEvent);
+}
+
+// ---------------------------------------------------------------------------
+// Typed event listener helpers
+// ---------------------------------------------------------------------------
+
+/// An [`EventListener`] that filters events by a predicate before invoking a
+/// closure. Used internally by [`BreezSdk::on_payment`], [`BreezSdk::on_sync`], etc.
+pub struct FilteredEventListener<F>
+where
+    F: Fn(SdkEvent) + Send + Sync + 'static,
+{
+    filter: fn(&SdkEvent) -> bool,
+    callback: F,
+}
+
+impl<F> FilteredEventListener<F>
+where
+    F: Fn(SdkEvent) + Send + Sync + 'static,
+{
+    pub fn new(filter: fn(&SdkEvent) -> bool, callback: F) -> Self {
+        Self { filter, callback }
+    }
+}
+
+#[macros::async_trait]
+impl<F> EventListener for FilteredEventListener<F>
+where
+    F: Fn(SdkEvent) + Send + Sync + 'static,
+{
+    async fn on_event(&self, event: SdkEvent) {
+        if (self.filter)(&event) {
+            (self.callback)(event);
+        }
+    }
 }
 
 /// Event publisher that manages event listeners
@@ -308,7 +382,11 @@ mod tests {
 
         let _ = emitter.add_listener(listener).await;
 
-        let event = SdkEvent::Synced { balance_updated: false, payments_updated: false, initial_sync: false };
+        let event = SdkEvent::Synced {
+            balance_updated: false,
+            payments_updated: false,
+            initial_sync: false,
+        };
 
         emitter.emit(&event).await;
 
@@ -340,7 +418,11 @@ mod tests {
         assert!(emitter.remove_listener(&id1).await);
 
         // Emit an event
-        let event = SdkEvent::Synced { balance_updated: false, payments_updated: false, initial_sync: false };
+        let event = SdkEvent::Synced {
+            balance_updated: false,
+            payments_updated: false,
+            initial_sync: false,
+        };
         emitter.emit(&event).await;
 
         // The first listener should not receive the event
