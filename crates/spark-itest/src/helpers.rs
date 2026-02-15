@@ -157,8 +157,8 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
 }
 
 pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture) -> Result<()> {
-    // Generate a deposit address
-    let deposit_address = wallet.generate_deposit_address(false).await?;
+    // Generate a non-static deposit address
+    let deposit_address = wallet.generate_deposit_address().await?;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the deposit address with a certain amount
@@ -227,7 +227,7 @@ pub async fn deposit_to_wallet(wallet: &SparkWallet, bitcoind: &BitcoindFixture)
     Ok(())
 }
 
-/// Deposit a specific amount to a wallet.
+/// Non-static deposit a specific amount to a wallet.
 /// Similar to deposit_to_wallet but allows specifying the amount.
 pub async fn deposit_with_amount(
     wallet: &SparkWallet,
@@ -235,7 +235,7 @@ pub async fn deposit_with_amount(
     amount_sats: u64,
 ) -> Result<()> {
     // Generate a deposit address
-    let deposit_address = wallet.generate_deposit_address(false).await?;
+    let deposit_address = wallet.generate_deposit_address().await?;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the deposit address with the specified amount

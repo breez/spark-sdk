@@ -639,23 +639,22 @@ impl SparkWallet {
         Ok(refund_tx)
     }
 
-    pub async fn generate_deposit_address(
-        &self,
-        is_static: bool,
-    ) -> Result<Address, SparkWalletError> {
+    pub async fn generate_deposit_address(&self) -> Result<Address, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
-        let signing_public_key = if is_static {
-            self.signer.static_deposit_signing_key(0).await?
-        } else {
-            self.signer.get_public_key_for_node(&leaf_id).await?
-        };
+        let signing_public_key = self.signer.get_public_key_for_node(&leaf_id).await?;
         let address = self
             .deposit_service
-            .generate_deposit_address(signing_public_key, &leaf_id, is_static)
+            .generate_deposit_address(signing_public_key, &leaf_id)
             .await?;
+        Ok(address.address)
+    }
 
-        // TODO: Watch this address for deposits.
-
+    pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
+        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let address = self
+            .deposit_service
+            .generate_static_deposit_address(signing_public_key)
+            .await?;
         Ok(address.address)
     }
 

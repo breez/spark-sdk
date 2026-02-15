@@ -18,7 +18,10 @@ use crate::{
         OperatorPool,
         rpc::{
             self as operator_rpc,
-            spark::{GetUtxosForAddressRequest, TransferFilter, transfer_filter::Participant},
+            spark::{
+                GetUtxosForAddressRequest, HashVariant, TransferFilter,
+                transfer_filter::Participant,
+            },
         },
     },
     services::{Transfer, Utxo},
@@ -28,6 +31,7 @@ use crate::{
     utils::{
         frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
+        tagged_hasher::TaggedHasher,
         transactions::{
             NodeTransactions, RefundTransactions, create_initial_timelock_refund_txs,
             create_root_node_txs, create_static_deposit_refund_tx,
@@ -50,9 +54,9 @@ const SCHNORR_SIG_WITNESS_VBYTES: u64 = 17;
 #[derive(Debug)]
 pub struct DepositAddress {
     pub address: Address,
-    pub leaf_id: TreeNodeId,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
+    pub leaf_id: Option<TreeNodeId>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -85,16 +89,15 @@ impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for Depo
             address: address
                 .require_network(network.into())
                 .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?,
-            // TODO: Is it possible addresses do not have a leaf_id?
-            leaf_id: result
-                .leaf_id
-                .ok_or(ServiceError::MissingLeafId)?
-                .parse()
-                .map_err(ServiceError::InvalidNodeId)?,
             user_signing_public_key: PublicKey::from_slice(&result.user_signing_public_key)
                 .map_err(|_| ServiceError::InvalidDepositAddressProof)?,
             verifying_public_key: PublicKey::from_slice(&result.verifying_public_key)
                 .map_err(|_| ServiceError::InvalidDepositAddressProof)?,
+            leaf_id: result
+                .leaf_id
+                .map(|l| l.parse())
+                .transpose()
+                .map_err(ServiceError::InvalidNodeId)?,
         })
     }
 }
@@ -198,8 +201,9 @@ impl DepositService {
             .get_unused_deposit_address(&address)
             .await?
             .ok_or(ServiceError::DepositAddressUsed)?;
+        let deposit_leaf_id = deposit_address.leaf_id.ok_or(ServiceError::MissingLeafId)?;
         self.create_tree_root(
-            &deposit_address.leaf_id,
+            &deposit_leaf_id,
             &deposit_address.verifying_public_key,
             deposit_tx,
             vout,
@@ -749,7 +753,6 @@ impl DepositService {
         &self,
         signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
-        is_static: bool,
     ) -> Result<DepositAddress, ServiceError> {
         let resp = self
             .operator_pool
@@ -760,7 +763,8 @@ impl DepositService {
                 identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.network.to_proto_network() as i32,
                 leaf_id: Some(leaf_id.to_string()),
-                is_static: Some(is_static),
+                is_static: None,
+                hash_variant: HashVariant::V2.into(),
             })
             .await?;
 
@@ -768,8 +772,40 @@ impl DepositService {
             return Err(ServiceError::MissingDepositAddress);
         };
 
+        let address = self.validate_deposit_address(
+            deposit_address,
+            signing_public_key,
+            Some(leaf_id),
+            false,
+        )?;
+
+        Ok(address)
+    }
+
+    pub async fn generate_static_deposit_address(
+        &self,
+        signing_public_key: PublicKey,
+    ) -> Result<DepositAddress, ServiceError> {
+        let resp = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .generate_static_deposit_address(
+                operator_rpc::spark::GenerateStaticDepositAddressRequest {
+                    signing_public_key: signing_public_key.serialize().to_vec(),
+                    identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    network: self.network.to_proto_network() as i32,
+                    hash_variant: HashVariant::V2.into(),
+                },
+            )
+            .await?;
+
+        let Some(deposit_address) = resp.deposit_address else {
+            return Err(ServiceError::MissingDepositAddress);
+        };
+
         let address =
-            self.validate_deposit_address(deposit_address, signing_public_key, leaf_id)?;
+            self.validate_deposit_address(deposit_address, signing_public_key, None, true)?;
 
         Ok(address)
     }
@@ -792,7 +828,7 @@ impl DepositService {
                     network: self.network.to_proto_network() as i32,
                     offset: paging.offset as i64,
                     limit: paging.limit as i64,
-                    deposit_address: None,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -940,17 +976,19 @@ impl DepositService {
         operator_public_key: &PublicKey,
         address: &Address,
     ) -> sha256::Hash {
-        let mut msg = self.identity_public_key.serialize().to_vec();
-        msg.extend_from_slice(&operator_public_key.serialize());
-        msg.extend_from_slice(address.to_string().as_bytes());
-        sha256::Hash::hash(&msg)
+        TaggedHasher::new(&["spark", "deposit", "proof_of_possession"])
+            .add_bytes(&self.identity_public_key.serialize())
+            .add_bytes(&operator_public_key.serialize())
+            .add_bytes(address.to_string().as_bytes())
+            .hash()
     }
 
     fn validate_deposit_address(
         &self,
         deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
-        leaf_id: &TreeNodeId,
+        leaf_id: Option<&TreeNodeId>,
+        verify_coordinator_proof: bool,
     ) -> Result<DepositAddress, ServiceError> {
         let address: Address<NetworkUnchecked> = deposit_address
             .address
@@ -995,7 +1033,12 @@ impl DepositService {
 
         let address_hash = sha256::Hash::hash(address.to_string().as_bytes());
         let address_hash_message = Message::from_digest(address_hash.to_byte_array());
-        for operator in self.operator_pool.get_non_coordinator_operators() {
+        for operator in self.operator_pool.get_all_operators() {
+            if operator.identifier == self.operator_pool.get_coordinator().identifier
+                && !verify_coordinator_proof
+            {
+                continue;
+            }
             // TODO: rather than using hex::encode here, we should define our own type for the frost identifier, and use a hashmap with the identifier as key here.
             let Some(operator_sig) = proof
                 .address_signatures
@@ -1031,9 +1074,9 @@ impl DepositService {
 
         Ok(DepositAddress {
             address,
-            leaf_id: leaf_id.clone(),
             user_signing_public_key,
             verifying_public_key,
+            leaf_id: leaf_id.cloned(),
         })
     }
 }

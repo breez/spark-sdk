@@ -30,6 +30,10 @@ enum Commands {
         #[arg(short = 'p', long = "package")]
         package: Option<String>,
 
+        /// Test to run; defaults to all tests
+        #[arg(short = 't', long = "test")]
+        test: Option<String>,
+
         /// Run only doctests
         #[arg(long)]
         doc: bool,
@@ -119,7 +123,7 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Test { package, doc, rest } => test_cmd(package, doc, rest),
+        Commands::Test { package, test, doc, rest } => test_cmd(package, test, doc, rest),
         Commands::WasmTest {
             package,
             browser,
@@ -154,7 +158,7 @@ fn workspace_exclude_wasm() -> Vec<String> {
     vec!["--exclude".to_string(), "breez-sdk-spark-wasm".to_string()]
 }
 
-fn test_cmd(package: Option<String>, doc: bool, rest: Vec<String>) -> Result<()> {
+fn test_cmd(package: Option<String>, test: Option<String>, doc: bool, rest: Vec<String>) -> Result<()> {
     let mut c = Command::new("cargo");
     c.arg("test");
     c.arg("--no-fail-fast");
@@ -169,6 +173,9 @@ fn test_cmd(package: Option<String>, doc: bool, rest: Vec<String>) -> Result<()>
     }
     if doc {
         c.arg("--doc");
+    }
+    if let Some(test) = test {
+        c.args(["--test", &test]);
     }
     if !rest.is_empty() {
         c.arg("--").args(&rest);

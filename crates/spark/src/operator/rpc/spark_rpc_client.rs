@@ -217,6 +217,16 @@ impl SparkRpcClient {
         Ok(())
     }
 
+    pub async fn store_preimage_share_v2(&self, req: StorePreimageShareV2Request) -> Result<()> {
+        debug!("Calling store_preimage_share_v2 with request: {:?}", req);
+        self.spark_service_client()
+            .await?
+            .store_preimage_share_v2(req)
+            .await?
+            .into_inner();
+        Ok(())
+    }
+
     pub async fn get_signing_commitments(
         &self,
         req: GetSigningCommitmentsRequest,
@@ -537,6 +547,22 @@ impl SparkRpcClient {
             .spark_token_service_client()
             .await?
             .commit_transaction(req)
+            .await?
+            .into_inner())
+    }
+
+    pub async fn generate_static_deposit_address(
+        &self,
+        req: GenerateStaticDepositAddressRequest,
+    ) -> Result<GenerateStaticDepositAddressResponse> {
+        debug!(
+            "Calling generate_static_deposit_address with request: {:?}",
+            req
+        );
+        Ok(self
+            .spark_service_client()
+            .await?
+            .generate_static_deposit_address(req)
             .await?
             .into_inner())
     }

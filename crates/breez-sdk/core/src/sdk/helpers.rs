@@ -204,13 +204,12 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
-/// Gets an existing deposit address from cache/network or creates a new one.
+/// Gets an existing static deposit address from cache/network or creates a new one.
 ///
 /// This helper is used by both `receive_payment(BitcoinAddress)` and `buy_bitcoin`.
 pub(crate) async fn get_or_create_deposit_address(
     spark_wallet: &SparkWallet,
     storage: Arc<dyn Storage>,
-    is_static: bool,
 ) -> Result<String, SdkError> {
     let object_repository = ObjectCacheRepository::new(storage);
 
@@ -226,7 +225,7 @@ pub(crate) async fn get_or_create_deposit_address(
     let address = match deposit_addresses.items.last() {
         Some(address) => address.to_string(),
         None => spark_wallet
-            .generate_deposit_address(is_static)
+            .generate_static_deposit_address()
             .await?
             .to_string(),
     };
