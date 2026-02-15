@@ -274,16 +274,16 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
     let workspace_root = env::current_dir()?;
 
     if !skip_binding_gen {
-        println!("Building Kotlin MPP Bindings");
+        println!("Building Kotlin MPP Bindings (using host binary, no cargo-ndk needed)");
 
         let bindings_dir = workspace_root.join("crates/breez-sdk/bindings");
         let status = Command::new("make")
-            .arg("package-kotlin-multiplatform-dummy-binaries")
+            .arg("package-kotlin-multiplatform-no-binaries")
             .current_dir(&bindings_dir)
             .status()?;
         if !status.success() {
             anyhow::bail!(
-                "Failed to run 'make package-kotlin-multiplatform-dummy-binaries' in {:?}",
+                "Failed to run 'make package-kotlin-multiplatform-no-binaries' in {:?}",
                 bindings_dir
             );
         }
@@ -292,6 +292,7 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
         let status = Command::new("./gradlew")
             .arg("publishToMavenLocal")
             .arg("-PlibraryVersion=0.0.0-local-docs")
+            .arg("-PenableIosTargets=false")
             .current_dir(&kotlin_mpp_dir)
             .status()?;
         if !status.success() {
@@ -306,12 +307,13 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
 
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
     let status = Command::new("./gradlew")
-        .arg("build")
+        .arg("compileKotlinJvm")
+        .arg("-PenableIosTargets=false")
         .current_dir(&kotlin_snippets_dir)
         .status()?;
     if !status.success() {
         anyhow::bail!(
-            "Failed to run './gradlew build' in {:?}",
+            "Failed to run './gradlew compileKotlinJvm' in {:?}",
             kotlin_snippets_dir
         );
     }

@@ -127,6 +127,13 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
+# Build KMP bindings using host binary (no Android NDK/cargo-ndk needed)
+build-kotlin-multiplatform-bindgen-host: build-release install-uniffi-bindgen-gobley
+	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
+		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
+		$(BIN_PATH)
+
 # Build all binaries + run bindgen
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
@@ -134,6 +141,10 @@ build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-re
 package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
+
+# Package KMP without native binaries (for docs CI, no cargo-ndk needed)
+package-kotlin-multiplatform-no-binaries: build-kotlin-multiplatform-bindgen-host
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 
 # Full package with all binaries
 package-kotlin-multiplatform: build-kotlin-multiplatform

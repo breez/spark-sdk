@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.androidLibrary)
 }
 
+val enableIosTargets = findProperty("enableIosTargets")?.toString()?.toBoolean() ?: true
+
 kotlin {
     androidTarget {
         compilations.all {
@@ -14,14 +16,16 @@ kotlin {
 
     jvm()
 
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach {
-        it.binaries.framework {
-            baseName = "shared"
-            isStatic = true
+    if (enableIosTargets) {
+        listOf(
+            iosX64(),
+            iosArm64(),
+            iosSimulatorArm64()
+        ).forEach {
+            it.binaries.framework {
+                baseName = "shared"
+                isStatic = true
+            }
         }
     }
 

@@ -6,6 +6,8 @@ plugins {
 
 apply(plugin = "kotlinx-atomicfu")
 
+val enableIosTargets = findProperty("enableIosTargets")?.toString()?.toBoolean() ?: true
+
 kotlin {
     // Enable the default target hierarchy
     applyDefaultHierarchyTemplate()
@@ -26,19 +28,21 @@ kotlin {
         }
     }
 
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach {
-        it.compilations["main"].cinterops {
-            create("breezSdkSparkCInterop") {
-                defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark.def"))
-                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark"))
-            }
-            create("breezSdkSparkBindingsCInterop") {
-                defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark_bindings.def"))
-                includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark_bindings"))
+    if (enableIosTargets) {
+        listOf(
+            iosX64(),
+            iosArm64(),
+            iosSimulatorArm64()
+        ).forEach {
+            it.compilations["main"].cinterops {
+                create("breezSdkSparkCInterop") {
+                    defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark.def"))
+                    includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark"))
+                }
+                create("breezSdkSparkBindingsCInterop") {
+                    defFile(project.file("src/nativeInterop/cinterop/breez_sdk_spark_bindings.def"))
+                    includeDirs(project.file("src/nativeInterop/cinterop/headers/breez_sdk_spark_bindings"))
+                }
             }
         }
     }
