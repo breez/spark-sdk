@@ -107,6 +107,14 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     alice.transfer(100_000, &bob_address, None).await?;
     info!("Transfer completed");
 
+    // Wait for Alice to send the funds
+    wait_for(
+        || async { alice.get_balance().await.unwrap_or(100_000) == 0 },
+        30,
+        "Alice's balance to become 0",
+    )
+    .await?;
+
     // Wait for Bob to receive the funds
     wait_for(
         || async { bob.get_balance().await.unwrap_or(0) == 100_000 },
