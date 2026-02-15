@@ -1290,7 +1290,9 @@ class IndexedDBStorage {
         const records = getAllOutgoingRequest.result;
         let maxOutgoingRevision = BigInt(0);
         for (const storeRecord of records) {
-          const rev = BigInt(storeRecord.record.revision);
+          const rev = BigInt(
+            storeRecord.record.localRevision ?? storeRecord.record.revision
+          );
           if (rev > maxOutgoingRevision) {
             maxOutgoingRevision = rev;
           }
@@ -1303,7 +1305,7 @@ class IndexedDBStorage {
           revision: Number(nextRevision),
           record: {
             ...record,
-            revision: nextRevision,
+            localRevision: nextRevision,
           },
         };
 
@@ -1422,7 +1424,11 @@ class IndexedDBStorage {
         const cursor = event.target.result;
         if (cursor && count < limit) {
           const storeRecord = cursor.value;
-          const change = storeRecord.record;
+          const change = {
+            ...storeRecord.record,
+            localRevision:
+              storeRecord.record.localRevision ?? storeRecord.record.revision,
+          };
 
           // Look up parent record if it exists
           const stateRequest = stateStore.get([
@@ -1651,7 +1657,11 @@ class IndexedDBStorage {
         const cursor = event.target.result;
         if (cursor) {
           const storeRecord = cursor.value;
-          const change = storeRecord.record;
+          const change = {
+            ...storeRecord.record,
+            localRevision:
+              storeRecord.record.localRevision ?? storeRecord.record.revision,
+          };
 
           // Get the parent record
           const stateRequest = stateStore.get([

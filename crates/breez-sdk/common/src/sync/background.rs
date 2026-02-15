@@ -138,8 +138,8 @@ impl SyncProcessor {
         };
 
         debug!(
-            "Committing latest pending outgoing change for record {:?}, revision {}",
-            record.change.id, record.change.revision
+            "Committing latest pending outgoing change for record {:?}, local queue id {}",
+            record.change.id, record.change.local_revision
         );
         self.new_record_handler
             .on_replay_outgoing_change(record.try_into()?)
@@ -675,7 +675,7 @@ mod tests {
             id: RecordId::new(id_type, id_data),
             schema_version: "0.2.6".to_string(),
             updated_fields: HashMap::new(),
-            revision,
+            local_revision: revision,
         };
 
         crate::sync::storage::OutgoingChange {
@@ -733,7 +733,7 @@ mod tests {
             .expect_prepare_outgoing_push()
             .times(times)
             .returning(|change| {
-                let local_revision = change.change.revision;
+                let local_revision = change.change.local_revision;
                 let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
                 let mut record = change.merge();
                 record.revision = parent_revision;
@@ -1196,7 +1196,7 @@ mod tests {
                 if change.change.id.data_id == "123" {
                     return Ok(OutgoingPrepareOutcome::Deferred);
                 }
-                let local_revision = change.change.revision;
+                let local_revision = change.change.local_revision;
                 let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
                 let mut record = change.merge();
                 record.revision = parent_revision;
@@ -1564,7 +1564,7 @@ mod tests {
                         },
                         schema_version: "1.0.0".to_string(),
                         updated_fields: [("field".to_string(), "\"value\"".to_string())].into(),
-                        revision: 1,
+                        local_revision: 1,
                     },
                 }])
             });

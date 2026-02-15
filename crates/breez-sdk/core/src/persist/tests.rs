@@ -49,7 +49,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     assert_eq!(pending.len(), 1, "Should have 1 pending outgoing change");
     assert_eq!(pending[0].change.id.r#type, "user");
     assert_eq!(pending[0].change.id.data_id, "user1");
-    assert_eq!(pending[0].change.revision, revision1);
+    assert_eq!(pending[0].change.local_revision, revision1);
     assert_eq!(pending[0].change.schema_version, "1.0.0");
     assert!(
         pending[0].parent.is_none(),
@@ -61,7 +61,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     assert!(latest.is_some());
     let latest = latest.unwrap();
     assert_eq!(latest.change.id.r#type, "user");
-    assert_eq!(latest.change.revision, revision1);
+    assert_eq!(latest.change.local_revision, revision1);
 
     // Test 8: Complete outgoing sync (moves to sync_state)
     let mut complete_data = HashMap::new();
@@ -221,7 +221,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     // committed sync cursor advances when incoming state is applied.
     let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
     assert!(
-        pending[0].change.revision == revision2,
+        pending[0].change.local_revision == revision2,
         "Pending outgoing local queue id should remain unchanged"
     );
     let last_revision = storage.get_last_revision().await.unwrap();
@@ -263,8 +263,9 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     let all_pending = storage.get_pending_outgoing_changes(100).await.unwrap();
     for i in 1..all_pending.len() {
         assert!(
-            all_pending[i].change.revision >= all_pending[i.saturating_sub(1)].change.revision,
-            "Pending changes should be ordered by revision ascending"
+            all_pending[i].change.local_revision
+                >= all_pending[i.saturating_sub(1)].change.local_revision,
+            "Pending changes should be ordered by local queue id ascending"
         );
     }
 

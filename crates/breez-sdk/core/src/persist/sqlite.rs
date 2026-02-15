@@ -994,7 +994,7 @@ impl Storage for SqliteStorage {
                 updated_fields: serde_json::from_str(
                     &row.get::<_, String>(4).map_err(map_sqlite_error)?,
                 )?,
-                revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get(5).map_err(map_sqlite_error)?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1166,7 +1166,7 @@ impl Storage for SqliteStorage {
                 updated_fields: serde_json::from_str(
                     &row.get::<_, String>(4).map_err(map_sqlite_error)?,
                 )?,
-                revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get(5).map_err(map_sqlite_error)?,
             };
 
             return Ok(Some(OutgoingChange { change, parent }));

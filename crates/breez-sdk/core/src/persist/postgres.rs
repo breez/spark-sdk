@@ -1499,7 +1499,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5))?,
+                local_revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1651,7 +1651,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5))?,
+                local_revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             return Ok(Some(OutgoingChange { change, parent }));
         }

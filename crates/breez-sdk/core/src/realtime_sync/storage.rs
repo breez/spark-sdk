@@ -281,7 +281,7 @@ impl SyncedStorage {
             )
         })?;
 
-        let local_revision = change.change.revision;
+        let local_revision = change.change.local_revision;
         let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
         let mut prepared_record = change.merge();
         prepared_record.revision = parent_revision;

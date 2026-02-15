@@ -927,7 +927,7 @@ class SqliteStorage {
           },
           schemaVersion: row.schema_version,
           updatedFields: JSON.parse(row.updated_fields_json),
-          revision: BigInt(row.revision),
+          localRevision: BigInt(row.revision),
         };
 
         let parent = null;
@@ -1143,7 +1143,7 @@ class SqliteStorage {
         },
         schemaVersion: row.schema_version,
         updatedFields: JSON.parse(row.updated_fields_json),
-        revision: BigInt(row.revision),
+        localRevision: BigInt(row.revision),
       };
 
       let parent = null;

@@ -119,7 +119,7 @@ impl OutgoingChange {
     pub fn merge(self) -> Record {
         let mut record = Record {
             id: self.change.id.clone(),
-            revision: self.change.revision,
+            revision: self.change.local_revision,
             schema_version: self.change.schema_version.clone(),
             data: HashMap::new(),
         };
@@ -156,7 +156,7 @@ pub struct RecordChange {
     pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
     /// Local queue id from pending outgoing storage.
-    pub revision: u64,
+    pub local_revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -212,7 +212,7 @@ impl Record {
                 id: self.id.clone(),
                 schema_version: self.schema_version.clone(),
                 updated_fields,
-                revision: self.revision,
+                local_revision: self.revision,
             },
             parent,
         }
@@ -321,7 +321,7 @@ mod test {
             id: id.clone(),
             schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
-            revision: 2,
+            local_revision: 2,
         };
 
         let outgoing_change = OutgoingChange {
@@ -363,7 +363,7 @@ mod test {
             id: id.clone(),
             schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
-            revision: 1,
+            local_revision: 1,
         };
 
         let outgoing_change = OutgoingChange {
@@ -498,7 +498,7 @@ mod test {
         // Verify change set contains only the changes
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
-        assert_eq!(change_set.change.revision, 2);
+        assert_eq!(change_set.change.local_revision, 2);
         assert_eq!(
             change_set.change.schema_version,
             SchemaVersion::new(0, 2, 6)
@@ -544,7 +544,7 @@ mod test {
         // Verify change set contains all fields
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
-        assert_eq!(change_set.change.revision, 1);
+        assert_eq!(change_set.change.local_revision, 1);
         assert_eq!(
             change_set.change.schema_version,
             SchemaVersion::new(0, 2, 5)

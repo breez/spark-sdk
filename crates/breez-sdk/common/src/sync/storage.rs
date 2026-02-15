@@ -155,7 +155,7 @@ pub struct RecordChange {
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
     /// Local queue id used to keep pending outgoing ordering stable.
-    pub revision: u64,
+    pub local_revision: u64,
 }
 
 impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
@@ -170,7 +170,7 @@ impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
                 .into_iter()
                 .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
                 .collect::<Result<HashMap<String, serde_json::Value>, SyncStorageError>>()?,
-            revision: value.revision,
+            local_revision: value.local_revision,
         })
     }
 }

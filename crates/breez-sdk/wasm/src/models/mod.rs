@@ -1119,7 +1119,7 @@ pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
-    pub revision: u64,
+    pub local_revision: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::sync_storage::Record)]
