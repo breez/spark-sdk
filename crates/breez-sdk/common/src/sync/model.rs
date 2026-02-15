@@ -117,9 +117,10 @@ pub struct OutgoingChange {
 
 impl OutgoingChange {
     pub fn merge(self) -> Record {
+        let parent_revision = self.parent.as_ref().map_or(0, |p| p.revision);
         let mut record = Record {
             id: self.change.id.clone(),
-            revision: self.change.local_revision,
+            revision: parent_revision,
             schema_version: self.change.schema_version.clone(),
             data: HashMap::new(),
         };
@@ -335,7 +336,7 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 2);
+        assert_eq!(merged.revision, 1);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that parent data was preserved
@@ -377,7 +378,7 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 1);
+        assert_eq!(merged.revision, 0);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that fields were applied

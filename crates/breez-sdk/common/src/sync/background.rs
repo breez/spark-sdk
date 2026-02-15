@@ -734,9 +734,7 @@ mod tests {
             .times(times)
             .returning(|change| {
                 let local_revision = change.change.local_revision;
-                let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
-                let mut record = change.merge();
-                record.revision = parent_revision;
+                let record = change.merge();
                 Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
                     record,
                     local_revision,
@@ -1197,9 +1195,7 @@ mod tests {
                     return Ok(OutgoingPrepareOutcome::Deferred);
                 }
                 let local_revision = change.change.local_revision;
-                let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
-                let mut record = change.merge();
-                record.revision = parent_revision;
+                let record = change.merge();
                 Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
                     record,
                     local_revision,
