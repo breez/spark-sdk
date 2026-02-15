@@ -5,13 +5,10 @@ use tracing::{debug, error, warn};
 use web_time::SystemTime;
 
 use crate::sync::{
-    Record,
     model::{IncomingChange, OutgoingChange, RecordId},
     signing_client::SigningClient,
     storage::SyncStorage,
 };
-
-const SYNC_BATCH_SIZE: u32 = 10;
 
 #[allow(clippy::ref_option)]
 #[cfg_attr(test, mockall::automock)]
@@ -19,6 +16,10 @@ const SYNC_BATCH_SIZE: u32 = 10;
 pub trait NewRecordHandler: Send + Sync {
     async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<RecordOutcome>;
     async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()>;
+    async fn prepare_outgoing_push(
+        &self,
+        change: OutgoingChange,
+    ) -> anyhow::Result<OutgoingPrepareOutcome>;
     async fn on_sync_completed(
         &self,
         incoming_count: Option<u32>,
@@ -30,6 +31,21 @@ pub trait NewRecordHandler: Send + Sync {
 #[must_use]
 pub enum RecordOutcome {
     Completed,
+    Deferred,
+}
+
+#[derive(Debug)]
+pub struct PreparedOutgoingPush {
+    /// Materialized record ready to be sent to the server.
+    pub record: crate::sync::model::Record,
+    /// Local queue id of the pending outgoing row to complete after push success.
+    pub local_revision: u64,
+}
+
+#[derive(Debug)]
+#[must_use]
+pub enum OutgoingPrepareOutcome {
+    Ready(PreparedOutgoingPush),
     Deferred,
 }
 
@@ -45,10 +61,10 @@ pub enum RecordOutcome {
 /// tracking. These races span multiple storage operations,
 /// so they cannot be fixed with simple database transactions.
 ///
-/// Example: `rebase_pending_outgoing_records` reads MAX(revision) from `sync_state`,
-/// but `sync_state` is only updated later by `update_record_from_incoming`. If two
-/// instances process concurrently, both read the same stale MAX and apply the same
-/// diff to outgoing records, double-incrementing their revisions.
+/// Example: one instance may advance the sync cursor and update `sync_state` for an
+/// incoming record while another instance is reading pending state for push decisions.
+/// Because those steps span multiple storage operations, interleavings can leave each
+/// instance with a different view of what is safe to push.
 ///
 /// For server deployments with shared storage, disable rtsync and rely on
 /// direct storage coordination instead.
@@ -282,7 +298,13 @@ impl SyncProcessor {
             Ok(count) => count,
             Err(e) => {
                 error!("Failed to pull sync once in backoff mode: {}", e);
-                None
+                self.schedule_backoff(
+                    backoff_handle,
+                    backoff_trigger_tx,
+                    last_backoff.mul_f32(1.5),
+                )
+                .await;
+                return (None, None);
             }
         };
         let outgoing_count = match self.push_sync_once().await {
@@ -317,7 +339,13 @@ impl SyncProcessor {
                         Ok(count) => count,
                         Err(e) => {
                             error!("Failed to sync once: {}", e);
-                            None
+                            self.schedule_backoff(
+                                backoff_handle,
+                                backoff_trigger_tx,
+                                Duration::from_secs(1),
+                            )
+                            .await;
+                            return (None, None);
                         }
                     }
                 } else {
@@ -395,16 +423,11 @@ impl SyncProcessor {
     async fn push_sync_once(&self) -> anyhow::Result<Option<u32>> {
         debug!("Push syncing once");
 
-        let mut count: u32 = 0;
-        while let changes = self
-            .storage
-            .get_pending_outgoing_changes(SYNC_BATCH_SIZE)
-            .await?
-            && !changes.is_empty()
-        {
-            let current_count = self.push_sync_batch(changes).await?;
-            count = count.saturating_add(current_count);
+        let changes = self.storage.get_pending_outgoing_changes(u32::MAX).await?;
+        if changes.is_empty() {
+            return Ok(None);
         }
+        let count = self.push_sync_batch(changes).await?;
 
         Ok(match count {
             0 => None,
@@ -423,107 +446,45 @@ impl SyncProcessor {
 
         let mut pushed_count: u32 = 0;
         for storage_change in changes {
-            if Self::is_outgoing_parent_schema_incompatible(&storage_change)? {
-                self.drop_incompatible_outgoing_change(storage_change)
-                    .await?;
-                continue;
-            }
+            let outgoing_id = storage_change.change.id.clone();
             let change = storage_change.try_into()?;
-            self.push_sync_record(change).await?;
-            pushed_count = pushed_count.saturating_add(1);
+            match self
+                .new_record_handler
+                .prepare_outgoing_push(change)
+                .await?
+            {
+                OutgoingPrepareOutcome::Ready(prepared) => {
+                    self.push_sync_record(prepared).await?;
+                    pushed_count = pushed_count.saturating_add(1);
+                }
+                OutgoingPrepareOutcome::Deferred => {
+                    debug!(
+                        "Deferring outgoing push for record {:?} due to prepare outcome",
+                        outgoing_id
+                    );
+                }
+            }
         }
 
         Ok(pushed_count)
     }
 
-    async fn drop_incompatible_outgoing_change(
-        &self,
-        change: crate::sync::storage::OutgoingChange,
-    ) -> anyhow::Result<()> {
-        let local_revision = change.change.revision;
-        let record_id = change.change.id;
-        let Some(parent_record) = change.parent else {
-            anyhow::bail!(
-                "cannot drop incompatible outgoing record {:?} at local revision {} without parent state",
-                record_id,
-                local_revision
-            );
-        };
-
-        warn!(
-            "Dropping incompatible outgoing record {:?} at local revision {} from pending queue",
-            record_id, local_revision
-        );
-        // Reuse complete_outgoing_sync to atomically delete the outgoing row.
-        // Passing the current parent record keeps sync_state unchanged.
-        self.storage
-            .complete_outgoing_sync(parent_record, local_revision)
-            .await?;
-        Ok(())
-    }
-
-    fn is_outgoing_parent_schema_incompatible(
-        change: &crate::sync::storage::OutgoingChange,
-    ) -> anyhow::Result<bool> {
-        let Some(parent) = &change.parent else {
-            return Ok(false);
-        };
-
-        let record_type = &change.change.id.r#type;
-        let outgoing_schema_version = &change.change.schema_version;
-        let parent_schema_version = &parent.schema_version;
-
-        // Outgoing schema is locally generated, so unparsable = local bug → fail loud.
-        let outgoing_schema = outgoing_schema_version
-            .parse::<crate::sync::SchemaVersion>()
-            .map_err(|e| {
-                anyhow::anyhow!("unparsable outgoing schema version '{outgoing_schema_version}' for record type '{record_type}': {e}")
-            })?;
-
-        let Ok(parent_schema) = parent_schema_version.parse::<crate::sync::SchemaVersion>() else {
-            warn!(
-                "Outgoing record type '{record_type}' is incompatible (outgoing_schema={outgoing_schema_version}, parent_schema={parent_schema_version}): unparsable parent schema version"
-            );
-            return Ok(true);
-        };
-
-        if !parent_schema.is_supported_by(&outgoing_schema) {
-            warn!(
-                "Outgoing record type '{record_type}' is incompatible (outgoing_schema={outgoing_schema_version}, parent_schema={parent_schema_version}): parent schema major {} is newer than outgoing schema major {}",
-                parent_schema.major, outgoing_schema.major
-            );
-            return Ok(true);
-        }
-
-        Ok(false)
-    }
-
-    async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
-        // The server expects to receive the existing revision number, if any.
-        let revision = change.parent.as_ref().map_or(0, |p| p.revision);
-
-        // Merges the updated fields with the existing record data in the local sync state to form the new record.
-        let mut record = change.merge();
-        let local_revision = record.revision;
+    async fn push_sync_record(&self, prepared: PreparedOutgoingPush) -> anyhow::Result<()> {
+        let local_revision = prepared.local_revision;
+        let mut record = prepared.record;
         debug!(
-            "Pushing outgoing record {:?}, revision {} to remote",
-            record.id, record.revision
+            "Pushing outgoing record {:?} to remote with parent revision {} (local queue id {})",
+            record.id, record.revision, local_revision
         );
         // Pushes the record to the remote server.
         // TODO: If the remote server already has this exact revision, check what happens. We should continue then for idempotency.
-        let reply = self
-            .client
-            .set_record(&Record {
-                revision,
-                ..record.clone()
-            })
-            .await?;
+        let reply = self.client.set_record(&record).await?;
 
         match reply.status() {
             crate::sync::proto::SetRecordStatus::Success => {
                 debug!(
-                    "Successfully pushed outgoing change with id {} for type {}, revision {}. Server returned revision {}.",
-                    &record.id.data_id, &record.id.r#type, &record.revision, reply.new_revision,
+                    "Successfully pushed outgoing change with id {} for type {} (local queue id {}). Server returned revision {}.",
+                    &record.id.data_id, &record.id.r#type, local_revision, reply.new_revision,
                 );
             }
             crate::sync::proto::SetRecordStatus::Conflict => {
@@ -535,13 +496,7 @@ impl SyncProcessor {
             }
         }
 
-        if reply.new_revision != record.revision {
-            warn!(
-                "Real-time sync server assigned revision number {} to change with id {}, type {}, where we expected it would get {}. Going with server's judgement.",
-                reply.new_revision, record.id.data_id, record.id.r#type, record.revision
-            );
-            record.revision = reply.new_revision;
-        }
+        record.revision = reply.new_revision;
 
         // Removes the pending outgoing record and updates the existing record with the new one.
         self.storage
@@ -600,22 +555,12 @@ impl SyncProcessor {
                 .as_ref()
                 .map(|state| state.revision);
 
+            // Update sync state if we haven't already. We don't remove the incoming record yet,
+            // to ensure we'll update the relational database state if we turn off now.
+            // We should do this even if we later fail to apply the change (e.g. due to a schema change)
+            // to avoid refetching the same record later.
             let first_time_seen = existing_revision.is_none_or(|old| old < incoming_revision);
             if first_time_seen {
-                // NOTE: The incoming record will have the same revision number as a pending outgoing record (if any).
-                // A rebase now means just updating the pending outgoing records to have a higher revision number.
-                // If data becomes more complex, we might need to do a proper rebase with conflict resolution here.
-                debug!(
-                    "Rebasing pending outgoing records to above revision {}",
-                    incoming_revision
-                );
-                self.storage
-                    .rebase_pending_outgoing_records(incoming_revision)
-                    .await?;
-
-                // First update the sync state from the incoming record. The sync state will have to change anyway,
-                // there is no going back if there is a remote change. We don't remove the incoming record yet,
-                // to ensure we'll update the relational database state if we turn off now.
                 debug!(
                     "Updating sync state from incoming record {:?}, revision {}",
                     incoming_record.new_state.id, incoming_revision
@@ -681,21 +626,19 @@ struct BackoffHandle {
 
 #[cfg(test)]
 mod tests {
-    use crate::sync::background::SYNC_BATCH_SIZE;
     use crate::sync::proto::SetRecordReply;
     use crate::sync::storage::{self, MockSyncStorage};
     use crate::sync::{
-        MockNewRecordHandler, MockSyncSigner, MockSyncerClient, RecordId, RecordOutcome,
-        SigningClient, SyncProcessor,
+        MockNewRecordHandler, MockSyncSigner, MockSyncerClient, OutgoingPrepareOutcome,
+        PreparedOutgoingPush, RecordId, RecordOutcome, SigningClient, SyncProcessor,
     };
 
     use anyhow::anyhow;
     use mockall::{Sequence, predicate::eq};
     use std::collections::HashMap;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
-    use tokio::sync::{broadcast, watch};
+    use tokio::sync::{Mutex, broadcast, mpsc, watch};
     use tokio_with_wasm::alias as tokio;
 
     // Helper function to create test records
@@ -783,6 +726,22 @@ mod tests {
             Arc::new(signer),
             "test-client-id".to_string(),
         )
+    }
+
+    fn expect_prepare_outgoing_ready(mock_handler: &mut MockNewRecordHandler, times: usize) {
+        mock_handler
+            .expect_prepare_outgoing_push()
+            .times(times)
+            .returning(|change| {
+                let local_revision = change.change.revision;
+                let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
+                let mut record = change.merge();
+                record.revision = parent_revision;
+                Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
+                    record,
+                    local_revision,
+                }))
+            });
     }
 
     #[macros::async_test_all]
@@ -875,7 +834,7 @@ mod tests {
         mock_storage
             .expect_get_pending_outgoing_changes()
             .times(1)
-            .with(eq(SYNC_BATCH_SIZE))
+            .with(eq(u32::MAX))
             .returning(|_| Ok(Vec::new()));
 
         let (_tx, rx) = broadcast::channel(10);
@@ -897,19 +856,11 @@ mod tests {
         let mut mock_storage = MockSyncStorage::new();
         let test_change = create_outgoing_change("test", "123", 1);
 
-        // First call returns one change, second call returns empty
         mock_storage
             .expect_get_pending_outgoing_changes()
-            .times(2)
-            .with(eq(SYNC_BATCH_SIZE))
-            .returning(move |_| {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Ok(vec![test_change.clone()])
-                } else {
-                    Ok(Vec::new())
-                }
-            });
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![test_change.clone()]));
 
         let mut mock_client = MockSyncerClient::new();
         mock_client.expect_set_record().times(1).returning(|_| {
@@ -925,7 +876,9 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         let (_tx, rx) = broadcast::channel(10);
-        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let mut mock_handler = MockNewRecordHandler::new();
+        expect_prepare_outgoing_ready(&mut mock_handler, 1);
+        let mock_handler = Arc::new(mock_handler);
         let client = create_signing_client(mock_client, MockSyncSigner::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
@@ -946,7 +899,7 @@ mod tests {
         mock_storage
             .expect_get_pending_outgoing_changes()
             .times(1)
-            .with(eq(SYNC_BATCH_SIZE))
+            .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
         let mut mock_client = MockSyncerClient::new();
@@ -956,7 +909,9 @@ mod tests {
             .returning(|_| Err(anyhow!("Network error")));
 
         let (_tx, rx) = broadcast::channel(10);
-        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let mut mock_handler = MockNewRecordHandler::new();
+        expect_prepare_outgoing_ready(&mut mock_handler, 1);
+        let mock_handler = Arc::new(mock_handler);
         let client = create_signing_client(mock_client, MockSyncSigner::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
@@ -1088,12 +1043,6 @@ mod tests {
             .returning(move |_| Ok(vec![incoming_record.clone()]));
 
         mock_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(1)
-            .with(eq(6))
-            .returning(|_| Ok(()));
-
-        mock_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1141,12 +1090,6 @@ mod tests {
             .returning(move |_| Ok(vec![incoming_record.clone()]));
 
         mock_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(1)
-            .with(eq(6))
-            .returning(|_| Ok(()));
-
-        mock_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1191,10 +1134,7 @@ mod tests {
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![incoming_record.clone()]));
 
-        // No rebase/state update should happen when the incoming revision is already reflected.
-        mock_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(0);
+        // No state update should happen when the incoming revision is already reflected.
         mock_storage.expect_update_record_from_incoming().times(0);
 
         let mut mock_handler = MockNewRecordHandler::new();
@@ -1221,148 +1161,147 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_push_sync_once_drops_when_parent_schema_major_is_newer() {
+    async fn test_push_sync_once_skips_only_records_deferred_by_prepare() {
         // Setup
-        let mut incompatible_change = create_outgoing_change("test", "123", 1);
-        incompatible_change.change.schema_version = "1.0.0".to_string();
-        incompatible_change.parent = Some(create_record_with_schema("test", "123", 0, "2.0.0"));
-
-        let mut mock_storage = MockSyncStorage::new();
-        mock_storage
-            .expect_get_pending_outgoing_changes()
-            .times(2)
-            .with(eq(SYNC_BATCH_SIZE))
-            .returning(move |_| {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Ok(vec![incompatible_change.clone()])
-                } else {
-                    Ok(Vec::new())
-                }
-            });
-        mock_storage
-            .expect_complete_outgoing_sync()
-            .times(1)
-            .withf(|record, local_revision| {
-                record.id.r#type == "test"
-                    && record.id.data_id == "123"
-                    && record.schema_version == "2.0.0"
-                    && record.revision == 0
-                    && *local_revision == 1
-            })
-            .returning(|_, _| Ok(()));
-
-        let (_tx, rx) = broadcast::channel(10);
-        let sync_processor = SyncProcessor::new(
-            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
-            rx,
-            Arc::new(MockNewRecordHandler::new()),
-            Arc::new(mock_storage),
-        );
-
-        // Execute
-        let result = sync_processor.push_sync_once().await;
-
-        // Verify — incompatible record is dropped; no records were pushed remotely.
-        assert_eq!(result.unwrap(), None);
-    }
-
-    #[macros::async_test_all]
-    async fn test_push_sync_once_drops_when_parent_schema_is_unparsable() {
-        // Setup
-        let mut incompatible_change = create_outgoing_change("test", "123", 1);
-        incompatible_change.change.schema_version = "1.0.0".to_string();
-        incompatible_change.parent =
-            Some(create_record_with_schema("test", "123", 0, "not-a-semver"));
-
-        let mut mock_storage = MockSyncStorage::new();
-        mock_storage
-            .expect_get_pending_outgoing_changes()
-            .times(2)
-            .with(eq(SYNC_BATCH_SIZE))
-            .returning(move |_| {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Ok(vec![incompatible_change.clone()])
-                } else {
-                    Ok(Vec::new())
-                }
-            });
-        mock_storage
-            .expect_complete_outgoing_sync()
-            .times(1)
-            .withf(|record, local_revision| {
-                record.id.r#type == "test"
-                    && record.id.data_id == "123"
-                    && record.schema_version == "not-a-semver"
-                    && record.revision == 0
-                    && *local_revision == 1
-            })
-            .returning(|_, _| Ok(()));
-
-        let (_tx, rx) = broadcast::channel(10);
-        let sync_processor = SyncProcessor::new(
-            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
-            rx,
-            Arc::new(MockNewRecordHandler::new()),
-            Arc::new(mock_storage),
-        );
-
-        // Execute
-        let result = sync_processor.push_sync_once().await;
-
-        // Verify — incompatible record is dropped; no records were pushed remotely.
-        assert_eq!(result.unwrap(), None);
-    }
-
-    #[macros::async_test_all]
-    async fn test_push_sync_once_dropped_batch_does_not_block_next_batch() {
-        // Setup
-        let mut incompatible_change = create_outgoing_change("test", "123", 1);
-        incompatible_change.change.schema_version = "1.0.0".to_string();
-        incompatible_change.parent = Some(create_record_with_schema("test", "123", 0, "2.0.0"));
+        let deferred_change = create_outgoing_change("test", "123", 1);
         let pushable_change = create_outgoing_change("test", "456", 2);
 
         let mut mock_storage = MockSyncStorage::new();
         mock_storage
             .expect_get_pending_outgoing_changes()
-            .times(3)
-            .with(eq(SYNC_BATCH_SIZE))
-            .returning(move |_| {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                match COUNTER.fetch_add(1, Ordering::SeqCst) {
-                    0 => Ok(vec![incompatible_change.clone()]),
-                    1 => Ok(vec![pushable_change.clone()]),
-                    _ => Ok(Vec::new()),
-                }
-            });
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![deferred_change.clone(), pushable_change.clone()]));
+        mock_storage
+            .expect_complete_outgoing_sync()
+            .times(1)
+            .withf(|record, local_revision| {
+                record.id.r#type == "test" && record.id.data_id == "456" && *local_revision == 2
+            })
+            .returning(|_, _| Ok(()));
 
         let mut mock_client = MockSyncerClient::new();
         mock_client.expect_set_record().times(1).returning(|_| {
             Ok(crate::sync::proto::SetRecordReply {
                 status: crate::sync::proto::SetRecordStatus::Success as i32,
-                new_revision: 2,
+                new_revision: 11,
             })
         });
 
-        mock_storage
-            .expect_complete_outgoing_sync()
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_prepare_outgoing_push()
             .times(2)
-            .returning(|_, _| Ok(()));
+            .returning(|change| {
+                if change.change.id.data_id == "123" {
+                    return Ok(OutgoingPrepareOutcome::Deferred);
+                }
+                let local_revision = change.change.revision;
+                let parent_revision = change.parent.as_ref().map_or(0, |p| p.revision);
+                let mut record = change.merge();
+                record.revision = parent_revision;
+                Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
+                    record,
+                    local_revision,
+                }))
+            });
 
-        let (_tx, rx) = broadcast::channel(10);
         let sync_processor = SyncProcessor::new(
             create_signing_client(mock_client, MockSyncSigner::new()),
-            rx,
-            Arc::new(MockNewRecordHandler::new()),
+            broadcast::channel(10).1,
+            Arc::new(mock_handler),
             Arc::new(mock_storage),
         );
 
         // Execute
         let result = sync_processor.push_sync_once().await;
 
-        // Verify — one record was pushed even though the first batch only contained a dropped row.
+        // Verify
         assert_eq!(result.unwrap(), Some(1));
+    }
+
+    #[macros::async_test_all]
+    async fn test_handle_push_skips_outgoing_when_pull_fails() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+        mock_storage.expect_get_pending_outgoing_changes().times(0);
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_list_changes()
+            .times(1)
+            .returning(|_| Err(anyhow!("pull failed")));
+        mock_client.expect_set_record().times(0);
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(mock_client, MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(MockNewRecordHandler::new()),
+            Arc::new(mock_storage),
+        );
+
+        let (pull_trigger_tx, pull_trigger) = watch::channel(());
+        let _ = pull_trigger_tx.send(());
+        let backoff_handle = Mutex::new(None);
+        let (backoff_trigger_tx, _backoff_trigger_rx) = mpsc::channel::<Duration>(1);
+
+        // Execute
+        let result = sync_processor
+            .handle_push(
+                Ok(RecordId::new("test", "123")),
+                &pull_trigger,
+                &backoff_handle,
+                &backoff_trigger_tx,
+            )
+            .await;
+
+        // Verify
+        assert_eq!(result, (None, None));
+    }
+
+    #[macros::async_test_all]
+    async fn test_handle_backoff_skips_outgoing_when_pull_fails() {
+        // Setup
+        let mut mock_storage = MockSyncStorage::new();
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+        mock_storage.expect_get_pending_outgoing_changes().times(0);
+
+        let mut mock_client = MockSyncerClient::new();
+        mock_client
+            .expect_list_changes()
+            .times(1)
+            .returning(|_| Err(anyhow!("pull failed")));
+        mock_client.expect_set_record().times(0);
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(mock_client, MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(MockNewRecordHandler::new()),
+            Arc::new(mock_storage),
+        );
+
+        let backoff_handle = Mutex::new(None);
+        let (backoff_trigger_tx, mut backoff_trigger_rx) = mpsc::channel::<Duration>(1);
+
+        // Execute
+        let result = sync_processor
+            .handle_backoff(
+                &backoff_handle,
+                &mut backoff_trigger_rx,
+                &backoff_trigger_tx,
+                Duration::from_millis(10),
+            )
+            .await;
+
+        // Verify
+        assert_eq!(result, (None, None));
     }
 
     #[macros::async_test_all]
@@ -1409,12 +1348,6 @@ mod tests {
             .with(eq(u32::MAX))
             .in_sequence(&mut incoming_seq)
             .return_once(move |_| Ok(vec![deferred_retry_incoming]));
-
-        old_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(1)
-            .with(eq(6))
-            .returning(|_| Ok(()));
         old_storage
             .expect_update_record_from_incoming()
             .times(1)
@@ -1479,9 +1412,6 @@ mod tests {
             .times(1)
             .with(eq(u32::MAX))
             .return_once(move |_| Ok(vec![deferred_for_upgrade]));
-        upgraded_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(0);
         upgraded_storage
             .expect_update_record_from_incoming()
             .times(0);
@@ -1578,12 +1508,6 @@ mod tests {
             .returning(move |_| Ok(vec![pending_incoming.clone()]));
 
         mock_storage
-            .expect_rebase_pending_outgoing_records()
-            .times(1)
-            .with(eq(3))
-            .returning(|_| Ok(()));
-
-        mock_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1628,25 +1552,21 @@ mod tests {
         // For push_sync_once
         mock_storage
             .expect_get_pending_outgoing_changes()
-            .times(2)
+            .times(1)
+            .with(eq(u32::MAX))
             .returning(|_| {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                if COUNTER.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Ok(vec![storage::OutgoingChange {
-                        parent: None,
-                        change: storage::RecordChange {
-                            id: RecordId {
-                                r#type: "test".to_string(),
-                                data_id: "123".to_string(),
-                            },
-                            schema_version: "1.0.0".to_string(),
-                            updated_fields: [("field".to_string(), "\"value\"".to_string())].into(),
-                            revision: 1,
+                Ok(vec![storage::OutgoingChange {
+                    parent: None,
+                    change: storage::RecordChange {
+                        id: RecordId {
+                            r#type: "test".to_string(),
+                            data_id: "123".to_string(),
                         },
-                    }])
-                } else {
-                    Ok(Vec::new())
-                }
+                        schema_version: "1.0.0".to_string(),
+                        updated_fields: [("field".to_string(), "\"value\"".to_string())].into(),
+                        revision: 1,
+                    },
+                }])
             });
 
         mock_storage
@@ -1656,6 +1576,7 @@ mod tests {
 
         let (tx, rx) = broadcast::channel::<RecordId>(10);
         let mut mock_handler = MockNewRecordHandler::new();
+        expect_prepare_outgoing_ready(&mut mock_handler, 1);
         mock_handler
             .expect_on_sync_completed()
             .times(1)
@@ -1771,6 +1692,7 @@ mod tests {
         mock_storage
             .expect_get_pending_outgoing_changes()
             .times(1)
+            .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
         let mock_client = MockSyncerClient::new();
@@ -1789,7 +1711,9 @@ mod tests {
         let client = create_signing_client(mock_client, mock_signer);
 
         let (_tx, rx) = broadcast::channel(10);
-        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let mut mock_handler = MockNewRecordHandler::new();
+        expect_prepare_outgoing_ready(&mut mock_handler, 1);
+        let mock_handler = Arc::new(mock_handler);
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
 
@@ -1918,6 +1842,7 @@ mod tests {
         mock_storage
             .expect_get_pending_outgoing_changes()
             .times(1)
+            .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
         let mock_client = MockSyncerClient::new();
@@ -1934,7 +1859,9 @@ mod tests {
         let client = create_signing_client(mock_client, mock_signer);
 
         let (_tx, rx) = broadcast::channel(10);
-        let mock_handler = Arc::new(MockNewRecordHandler::new());
+        let mut mock_handler = MockNewRecordHandler::new();
+        expect_prepare_outgoing_ready(&mut mock_handler, 1);
+        let mock_handler = Arc::new(mock_handler);
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
 

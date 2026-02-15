@@ -155,6 +155,7 @@ pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
+    /// Local queue id from pending outgoing storage.
     pub revision: u64,
 }
 

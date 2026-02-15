@@ -96,16 +96,6 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
             .map_err(storage_to_sync_error)
     }
 
-    async fn rebase_pending_outgoing_records(
-        &self,
-        revision: u64,
-    ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        self.inner
-            .rebase_pending_outgoing_records(revision)
-            .await
-            .map_err(storage_to_sync_error)
-    }
-
     async fn get_incoming_records(
         &self,
         limit: u32,

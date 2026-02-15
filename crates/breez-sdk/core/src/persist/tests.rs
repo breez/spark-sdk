@@ -106,10 +106,7 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
     };
 
     let revision2 = storage.add_outgoing_change(change2).await.unwrap();
-    assert!(
-        revision2 > revision1,
-        "Second revision should be greater than first"
-    );
+    assert!(revision2 > 0, "Second local queue id should be positive");
 
     // Test 12: Check pending changes now includes parent
     let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
@@ -208,14 +205,29 @@ pub async fn test_sync_storage(storage: Box<dyn Storage>) {
         "Old state should be original revision"
     );
 
-    // Test 20: Rebase pending outgoing records
-    storage.rebase_pending_outgoing_records(150).await.unwrap();
+    // Test 20: Update sync state with a higher incoming revision.
+    let cursor_bump_record = Record {
+        id: RecordId::new("cursor".to_string(), "bump".to_string()),
+        revision: 150,
+        schema_version: "1.0.0".to_string(),
+        data: HashMap::new(),
+    };
+    storage
+        .update_record_from_incoming(cursor_bump_record)
+        .await
+        .unwrap();
 
-    // Test 21: Check that pending outgoing change revision was updated
+    // Test 21: Pending outgoing local queue ids should remain unchanged, while the
+    // committed sync cursor advances when incoming state is applied.
     let pending = storage.get_pending_outgoing_changes(10).await.unwrap();
     assert!(
-        pending[0].change.revision > revision2,
-        "Revision should be rebased"
+        pending[0].change.revision == revision2,
+        "Pending outgoing local queue id should remain unchanged"
+    );
+    let last_revision = storage.get_last_revision().await.unwrap();
+    assert_eq!(
+        last_revision, 150,
+        "Committed sync cursor should be advanced"
     );
 
     // Test 22: Test limit on pending outgoing changes
