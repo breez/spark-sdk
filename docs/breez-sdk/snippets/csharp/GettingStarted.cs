@@ -89,9 +89,9 @@ namespace BreezSdkSnippets
                         var failedPayment = paymentFailedEvent.payment;
                         break;
 
-                    case SdkEvent.Optimization optimizationEvent:
-                        // An optimization event occurred
-                        var optimization = optimizationEvent.optimizationEvent;
+                    case SdkEvent.LeafOptimization leafOptimizationEvent:
+                        // A leaf optimization event occurred
+                        var leafOptimization = leafOptimizationEvent.leafOptimizationEvent;
                         break;
 
                     default:

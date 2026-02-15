@@ -83,9 +83,9 @@ class GettingStarted {
                     // A payment failed
                     val failedPayment = e.payment
                 }
-                is SdkEvent.Optimization -> {
-                    // An optimization event occurred
-                    val optimizationEvent = e.optimizationEvent
+                is SdkEvent.LeafOptimization -> {
+                    // A leaf optimization event occurred
+                    val leafOptimizationEvent = e.leafOptimizationEvent
                 }
                 else -> {
                     // Handle any future event types

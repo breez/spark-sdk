@@ -25,13 +25,13 @@ fn get_optimization_progress(sdk: &BreezSdk) {
     // ANCHOR_END: get-optimization-progress
 }
 
-fn optimization_events(event: OptimizationEvent) {
+fn leaf_optimization_events(event: LeafOptimizationEvent) {
     // ANCHOR: optimization-events
     match event {
-        OptimizationEvent::Started { total_rounds } => {
+        LeafOptimizationEvent::Started { total_rounds } => {
             info!("Optimization started with {} rounds", total_rounds);
         }
-        OptimizationEvent::RoundCompleted {
+        LeafOptimizationEvent::RoundCompleted {
             current_round,
             total_rounds,
         } => {
@@ -40,16 +40,16 @@ fn optimization_events(event: OptimizationEvent) {
                 current_round, total_rounds
             );
         }
-        OptimizationEvent::Completed => {
+        LeafOptimizationEvent::Completed => {
             info!("Optimization completed successfully");
         }
-        OptimizationEvent::Cancelled => {
+        LeafOptimizationEvent::Cancelled => {
             info!("Optimization was cancelled");
         }
-        OptimizationEvent::Failed { error } => {
+        LeafOptimizationEvent::Failed { error } => {
             info!("Optimization failed: {}", error);
         }
-        OptimizationEvent::Skipped => {
+        LeafOptimizationEvent::Skipped => {
             info!("Optimization was skipped because leaves are already optimal");
         }
     }

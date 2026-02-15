@@ -1,4 +1,4 @@
-import { type OptimizationEvent, OptimizationEvent_Tags, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { type LeafOptimizationEvent, LeafOptimizationEvent_Tags, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleStartOptimization = async (sdk: BreezSdk) => {
   // ANCHOR: start-optimization
@@ -22,19 +22,19 @@ const exampleGetOptimizationProgress = async (sdk: BreezSdk) => {
   // ANCHOR_END: get-optimization-progress
 }
 
-const exampleOptimizationEvents = async (optimizationEvent: OptimizationEvent) => {
+const exampleOptimizationEvents = async (optimizationEvent: LeafOptimizationEvent) => {
   // ANCHOR: optimization-events
-  if (optimizationEvent.tag === OptimizationEvent_Tags.Started) {
+  if (optimizationEvent.tag === LeafOptimizationEvent_Tags.Started) {
     console.log(`Optimization started with ${optimizationEvent.inner.totalRounds} rounds`)
-  } else if (optimizationEvent.tag === OptimizationEvent_Tags.RoundCompleted) {
+  } else if (optimizationEvent.tag === LeafOptimizationEvent_Tags.RoundCompleted) {
     console.log(`Optimization round ${optimizationEvent.inner.currentRound} of ${optimizationEvent.inner.totalRounds} completed`)
-  } else if (optimizationEvent.tag === OptimizationEvent_Tags.Completed) {
+  } else if (optimizationEvent.tag === LeafOptimizationEvent_Tags.Completed) {
     console.log('Optimization completed successfully')
-  } else if (optimizationEvent.tag === OptimizationEvent_Tags.Cancelled) {
+  } else if (optimizationEvent.tag === LeafOptimizationEvent_Tags.Cancelled) {
     console.log('Optimization was cancelled')
-  } else if (optimizationEvent.tag === OptimizationEvent_Tags.Failed) {
+  } else if (optimizationEvent.tag === LeafOptimizationEvent_Tags.Failed) {
     console.log(`Optimization failed: ${optimizationEvent.inner.error}`)
-  } else if (optimizationEvent.tag === OptimizationEvent_Tags.Skipped) {
+  } else if (optimizationEvent.tag === LeafOptimizationEvent_Tags.Skipped) {
     console.log('Optimization was skipped because leaves are already optimal')
   }
   // ANCHOR_END: optimization-events

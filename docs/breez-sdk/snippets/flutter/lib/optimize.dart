@@ -22,25 +22,25 @@ Future<void> getOptimizationProgress(BreezSdk sdk) async {
   // ANCHOR_END: get-optimization-progress
 }
 
-void optimizationEvents(OptimizationEvent optimizationEvent) {
+void optimizationEvents(LeafOptimizationEvent optimizationEvent) {
   // ANCHOR: optimization-events
   switch (optimizationEvent) {
-    case OptimizationEvent_Started(totalRounds: var totalRounds):
+    case LeafOptimizationEvent_Started(totalRounds: var totalRounds):
       print("Optimization started with $totalRounds rounds");
       break;
-    case OptimizationEvent_RoundCompleted(currentRound: var currentRound, totalRounds: var totalRounds):
+    case LeafOptimizationEvent_RoundCompleted(currentRound: var currentRound, totalRounds: var totalRounds):
       print("Optimization round $currentRound of $totalRounds completed");
       break;
-    case OptimizationEvent_Completed():
+    case LeafOptimizationEvent_Completed():
       print("Optimization completed successfully");
       break;
-    case OptimizationEvent_Cancelled():
+    case LeafOptimizationEvent_Cancelled():
       print("Optimization was cancelled");
       break;
-    case OptimizationEvent_Failed(error: var error):
+    case LeafOptimizationEvent_Failed(error: var error):
       print("Optimization failed: $error");
       break;
-    case OptimizationEvent_Skipped():
+    case LeafOptimizationEvent_Skipped():
       print("Optimization was skipped because leaves are already optimal");
       break;
   }

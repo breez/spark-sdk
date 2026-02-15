@@ -29,25 +29,25 @@ class Optimize {
         // ANCHOR_END: get-optimization-progress
     }
 
-    fun optimizationEvents(optimizationEvent: OptimizationEvent) {
+    fun optimizationEvents(optimizationEvent: LeafOptimizationEvent) {
         // ANCHOR: optimization-events
         when (optimizationEvent) {
-            is OptimizationEvent.Started -> {
+            is LeafOptimizationEvent.Started -> {
                 // Log.v("Breez", "Optimization started with ${optimizationEvent.totalRounds} rounds")
             }
-            is OptimizationEvent.RoundCompleted -> {
+            is LeafOptimizationEvent.RoundCompleted -> {
                 // Log.v("Breez", "Optimization round ${optimizationEvent.currentRound} of ${optimizationEvent.totalRounds} completed")
             }
-            is OptimizationEvent.Completed -> {
+            is LeafOptimizationEvent.Completed -> {
                 // Log.v("Breez", "Optimization completed successfully")
             }
-            is OptimizationEvent.Cancelled -> {
+            is LeafOptimizationEvent.Cancelled -> {
                 // Log.v("Breez", "Optimization was cancelled")
             }
-            is OptimizationEvent.Failed -> {
+            is LeafOptimizationEvent.Failed -> {
                 // Log.v("Breez", "Optimization failed: ${optimizationEvent.error}")
             }
-            is OptimizationEvent.Skipped -> {
+            is LeafOptimizationEvent.Skipped -> {
                 // Log.v("Breez", "Optimization was skipped because leaves are already optimal")
             }
         }

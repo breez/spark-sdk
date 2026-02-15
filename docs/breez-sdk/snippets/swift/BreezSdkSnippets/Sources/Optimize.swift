@@ -26,7 +26,7 @@ func getOptimizationProgress(sdk: BreezSdk) {
     // ANCHOR_END: get-optimization-progress
 }
 
-func optimizationEvents(event: OptimizationEvent) {
+func optimizationEvents(event: LeafOptimizationEvent) {
     // ANCHOR: optimization-events
     switch event {
         case .started(let totalRounds):

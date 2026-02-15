@@ -71,9 +71,9 @@ class SdkEventListener: EventListener {
         case .paymentFailed(let paymentFailed):
             // A payment failed
             let _ = paymentFailed
-        case .optimization(let optimizationEvent):
-            // An optimization event occurred
-            let _ = optimizationEvent
+        case .leafOptimization(let leafOptimizationEvent):
+            // A leaf optimization event occurred
+            let _ = leafOptimizationEvent
         default:
             // Handle any future event types
             break

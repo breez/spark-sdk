@@ -139,9 +139,9 @@ class BreezSdkSpark {
           // A payment failed
           final _ = payment;
           break;
-        case SdkEvent_Optimization(:final optimizationEvent):
-          // An optimization event occurred
-          final _ = optimizationEvent;
+        case SdkEvent_LeafOptimization(:final leafOptimizationEvent):
+          // A leaf optimization event occurred
+          final _ = leafOptimizationEvent;
           break;
       }
       _eventStreamController.add(sdkEvent);

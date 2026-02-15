@@ -82,8 +82,8 @@ impl EventListener for SdkEventListener {
             SdkEvent::PaymentFailed { payment } => {
                 // A payment failed
             }
-            SdkEvent::Optimization { optimization_event } => {
-                // An optimization event occurred
+            SdkEvent::LeafOptimization { optimization_event } => {
+                // A leaf optimization event occurred
             }
         }
     }

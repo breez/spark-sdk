@@ -40,20 +40,20 @@ func GetOptimizationProgress(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func OptimizationEvents(optimizationEvent breez_sdk_spark.OptimizationEvent) {
+func OptimizationEvents(optimizationEvent breez_sdk_spark.LeafOptimizationEvent) {
 	// ANCHOR: optimization-events
 	switch event := optimizationEvent.(type) {
-	case breez_sdk_spark.OptimizationEventStarted:
+	case breez_sdk_spark.LeafOptimizationEventStarted:
 		log.Printf("Optimization started with %v rounds\n", event.TotalRounds)
-	case breez_sdk_spark.OptimizationEventRoundCompleted:
+	case breez_sdk_spark.LeafOptimizationEventRoundCompleted:
 		log.Printf("Optimization round %v of %v completed\n", event.CurrentRound, event.TotalRounds)
-	case breez_sdk_spark.OptimizationEventCompleted:
+	case breez_sdk_spark.LeafOptimizationEventCompleted:
 		log.Printf("Optimization completed successfully\n")
-	case breez_sdk_spark.OptimizationEventCancelled:
+	case breez_sdk_spark.LeafOptimizationEventCancelled:
 		log.Printf("Optimization was cancelled\n")
-	case breez_sdk_spark.OptimizationEventFailed:
+	case breez_sdk_spark.LeafOptimizationEventFailed:
 		log.Printf("Optimization failed: %v\n", event.Error)
-	case breez_sdk_spark.OptimizationEventSkipped:
+	case breez_sdk_spark.LeafOptimizationEventSkipped:
 		log.Printf("Optimization was skipped because leaves are already optimal\n")
 	}
 	// ANCHOR_END: optimization-events
