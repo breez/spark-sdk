@@ -1,33 +1,26 @@
 import { createHash } from 'crypto'
-import type { Payment, BreezSdk, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark'
+import type { Payment, Wallet, PaymentIntent } from '@breeztech/breez-sdk-spark'
 
-const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
+const exampleSendHtlcPayment = async (wallet: Wallet): Promise<Payment> => {
   // ANCHOR: send-htlc-payment
-  const paymentRequest = '<spark address>'
+  const destination = '<spark address>'
   // Set the amount you wish to pay the receiver
   const amountSats = BigInt(50_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
-    amount: amountSats,
-    tokenIdentifier: undefined,
-    conversionOptions: undefined,
-    feePolicy: undefined
+  const intent = await wallet.createPayment(destination, {
+    amount: amountSats
   })
 
   // If the fees are acceptable, continue to create the HTLC Payment
-  if (prepareResponse.paymentMethod.type === 'sparkAddress') {
-    const fee = prepareResponse.paymentMethod.fee
-    console.debug(`Fees: ${fee} sats`)
-  }
+  const feeSats = intent.feeSats
+  console.debug(`Fees: ${feeSats} sats`)
 
   const preimage = '<32-byte unique preimage hex>'
   const preimageBuffer = Buffer.from(preimage, 'hex')
   const paymentHash = createHash('sha256').update(preimageBuffer).digest('hex')
 
-  const sendResponse = await sdk.sendPayment({
-    prepareResponse,
-    options: {
+  const sendResponse = await intent.confirm({
+    sendOptions: {
       type: 'sparkAddress',
       htlcOptions: {
         paymentHash,
@@ -40,9 +33,9 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   return payment
 }
 
-const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
+const exampleListClaimableHtlcPayments = async (wallet: Wallet): Promise<Payment[]> => {
   // ANCHOR: list-claimable-htlc-payments
-  const response = await sdk.listPayments({
+  const response = await wallet.listPayments({
     typeFilter: ['receive'],
     statusFilter: ['pending'],
     paymentDetailsFilter: [{
@@ -56,10 +49,10 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
   return payments
 }
 
-const exampleClaimHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
+const exampleClaimHtlcPayment = async (wallet: Wallet): Promise<Payment> => {
   // ANCHOR: claim-htlc-payment
   const preimage = '<preimage hex>'
-  const response = await sdk.claimHtlcPayment({
+  const response = await wallet.claimHtlcPayment({
     preimage
   })
   const payment = response.payment

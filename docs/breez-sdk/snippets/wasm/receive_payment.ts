@@ -1,6 +1,6 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { type Wallet } from '@breeztech/breez-sdk-spark'
 
-const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
+const exampleReceiveLightningPayment = async (wallet: Wallet) => {
   // ANCHOR: receive-payment-lightning-bolt11
   const description = '<invoice description>'
   // Optionally set the invoice amount you wish the payer to send
@@ -8,49 +8,47 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   // Optionally set the expiry duration in seconds
   const optionalExpirySecs = 3600
 
-  const response = await sdk.receivePayment({
-    paymentMethod: {
-      type: 'bolt11Invoice',
-      description,
-      amountSats: optionalAmountSats,
-      expirySecs: optionalExpirySecs
-    }
+  const result = await wallet.receive({
+    paymentType: 'lightning',
+    amount: optionalAmountSats.toString(),
+    description,
+    expiry: optionalExpirySecs
   })
 
-  const paymentRequest = response.paymentRequest
-  console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
+  const destination = result.destination
+  console.log(`Payment Request: ${destination}`)
+  const receiveFeeSats = result.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-lightning-bolt11
 }
 
-const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
+const exampleReceiveOnchainPayment = async (wallet: Wallet) => {
   // ANCHOR: receive-payment-onchain
-  const response = await sdk.receivePayment({
-    paymentMethod: { type: 'bitcoinAddress' }
+  const result = await wallet.receive({
+    paymentType: 'onchain'
   })
 
-  const paymentRequest = response.paymentRequest
-  console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
+  const destination = result.destination
+  console.log(`Payment Request: ${destination}`)
+  const receiveFeeSats = result.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-onchain
 }
 
-const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
+const exampleReceiveSparkAddress = async (wallet: Wallet) => {
   // ANCHOR: receive-payment-spark-address
-  const response = await sdk.receivePayment({
-    paymentMethod: { type: 'sparkAddress' }
+  const result = await wallet.receive({
+    paymentType: 'sparkAddress'
   })
 
-  const paymentRequest = response.paymentRequest
-  console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
+  const destination = result.destination
+  console.log(`Payment Request: ${destination}`)
+  const receiveFeeSats = result.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark-address
 }
 
-const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
+const exampleReceiveSparkInvoice = async (wallet: Wallet) => {
   // ANCHOR: receive-payment-spark-invoice
   const optionalDescription = '<invoice description>'
   const optionalAmountSats = '5000'
@@ -58,19 +56,17 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'
 
-  const response = await sdk.receivePayment({
-    paymentMethod: {
-      type: 'sparkInvoice',
-      description: optionalDescription,
-      amount: optionalAmountSats,
-      expiryTime: optionalExpiryTimeSeconds,
-      senderPublicKey: optionalSenderPublicKey
-    }
+  const result = await wallet.receive({
+    paymentType: 'sparkInvoice',
+    description: optionalDescription,
+    amount: optionalAmountSats,
+    expiry: optionalExpiryTimeSeconds,
+    senderPublicKey: optionalSenderPublicKey
   })
 
-  const paymentRequest = response.paymentRequest
-  console.log(`Payment Request: ${paymentRequest}`)
-  const receiveFeeSats = response.fee
+  const destination = result.destination
+  console.log(`Payment Request: ${destination}`)
+  const receiveFeeSats = result.fee
   console.log(`Fees: ${receiveFeeSats} sats`)
   // ANCHOR_END: receive-payment-spark-invoice
 }

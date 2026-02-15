@@ -1,6 +1,5 @@
 import {
-  type BreezSdk,
-  type ListUnclaimedDepositsRequest,
+  type Wallet,
   type ClaimDepositRequest,
   type RefundDepositRequest,
   type Fee,
@@ -10,12 +9,11 @@ import {
   type MaxFee
 } from '@breeztech/breez-sdk-spark'
 
-const listUnclaimedDeposits = async (sdk: BreezSdk) => {
+const listUnclaimedDeposits = async (wallet: Wallet) => {
   // ANCHOR: list-unclaimed-deposits
-  const request: ListUnclaimedDepositsRequest = {}
-  const response = await sdk.listUnclaimedDeposits(request)
+  const deposits = await wallet.deposits.listUnclaimed()
 
-  for (const deposit of response.deposits) {
+  for (const deposit of deposits) {
     console.log(`Unclaimed deposit: ${deposit.txid}:${deposit.vout}`)
     console.log(`Amount: ${deposit.amountSats} sats`)
 
@@ -47,7 +45,7 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
   // ANCHOR_END: list-unclaimed-deposits
 }
 
-const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
+const handleFeeExceeded = async (wallet: Wallet, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
     const requiredFee = deposit.claimError.requiredFeeSats
@@ -61,20 +59,20 @@ const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
         vout: deposit.vout,
         maxFee: { type: 'fixed', amount: requiredFee }
       }
-      await sdk.claimDeposit(claimRequest)
+      await wallet.deposits.claim(claimRequest)
     }
   }
   // ANCHOR_END: handle-fee-exceeded
 }
 
-const refundDeposit = async (sdk: BreezSdk) => {
+const refundDeposit = async (wallet: Wallet) => {
   // ANCHOR: refund-deposit
   const txid = 'your_deposit_txid'
   const vout = 0
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
   // Set the fee for the refund transaction using the half-hour feerate
-  const recommendedFees = await sdk.recommendedFees()
+  const recommendedFees = await wallet.fiat.recommendedFees()
   const fee: Fee = { type: 'rate', satPerVbyte: recommendedFees.halfHourFee }
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
@@ -87,7 +85,7 @@ const refundDeposit = async (sdk: BreezSdk) => {
     fee
   }
 
-  const response = await sdk.refundDeposit(request)
+  const response = await wallet.deposits.refund(request)
   console.log('Refund transaction created:')
   console.log('Transaction ID:', response.txId)
   console.log('Transaction hex:', response.txHex)
@@ -107,12 +105,12 @@ const setMaxFeeToRecommendedFees = () => {
   console.log('Config:', config)
 }
 
-const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
+const customClaimLogic = async (wallet: Wallet, deposit: DepositInfo) => {
   // ANCHOR: custom-claim-logic
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
     const requiredFeeRate = deposit.claimError.requiredFeeRateSatPerVbyte
 
-    const recommendedFees = await sdk.recommendedFees()
+    const recommendedFees = await wallet.fiat.recommendedFees()
 
     if (requiredFeeRate <= recommendedFees.fastestFee) {
       const claimRequest: ClaimDepositRequest = {
@@ -120,15 +118,15 @@ const customClaimLogic = async (sdk: BreezSdk, deposit: DepositInfo) => {
         vout: deposit.vout,
         maxFee: { type: 'rate', satPerVbyte: requiredFeeRate }
       }
-      await sdk.claimDeposit(claimRequest)
+      await wallet.deposits.claim(claimRequest)
     }
   }
   // ANCHOR_END: custom-claim-logic
 }
 
-const recommendedFees = async (sdk: BreezSdk) => {
+const exampleRecommendedFees = async (wallet: Wallet) => {
   // ANCHOR: recommended-fees
-  const response = await sdk.recommendedFees()
+  const response = await wallet.fiat.recommendedFees()
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')

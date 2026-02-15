@@ -6,116 +6,215 @@ The Breez SDK provides developers with an end-to-end solution for integrating se
 
 ## **What Is the Breez SDK - Nodeless _(Spark Implementation)_?**
 
-It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps.
+It's a nodeless integration that offers a self-custodial, end-to-end solution for integrating Lightning payments, utilizing Spark with on-chain interoperability and third-party fiat on-ramps.
 
 ## Installation
-
-To install the package:
 
 ```sh
 npm install @breeztech/breez-sdk-spark
 ```
 
-or
-
-```sh
-yarn add @breeztech/breez-sdk-spark
-```
-
-## Usage
-
-Head over to the Breez SDK - Nodeless _(Spark Implementation)_ [documentation](https://sdk-doc-spark.breez.technology/) to start implementing Lightning in your app.
+## Quick Start
 
 ### Web
 
-When developing a browser application you should import `@breeztech/breez-sdk-spark` (or the explicit `@breeztech/breez-sdk-spark/web` submodule).
+When developing a browser application, first initialize the WebAssembly module before making any other SDK calls:
 
-It's important to first initialise the WebAssembly module by using `await init()` before making any other calls to the module.
+```ts
+import init, { Breez } from "@breeztech/breez-sdk-spark/web";
 
-```js
-import init, {
-  initLogging,
-  defaultConfig,
-  SdkBuilder,
-} from "@breeztech/breez-sdk-spark/web";
-
-// Initialise the WebAssembly module
 await init();
+
+const wallet = await Breez.connect({
+  apiKey: "<breez api key>",
+  network: "mainnet",
+  seed: { type: "mnemonic", mnemonic: "<mnemonic words>", passphrase: undefined },
+});
+
+const info = await wallet.getInfo({ ensureSynced: true });
+console.log(`Balance: ${info.balanceSats} sats`);
+
+await wallet.disconnect();
 ```
 
 ### Node.js
 
-> **Note**: This package requires Node.js v22 or higher.
+> **Note**: Requires Node.js v22 or higher.
 
-When developing a node.js application you should require `@breeztech/breez-sdk-spark` (or the explicit `@breeztech/breez-sdk-spark/node` submodule).
+```ts
+const { Breez, initLogging } = require("@breeztech/breez-sdk-spark/nodejs");
 
-```js
-const {
-  initLogging,
-  defaultConfig,
-  SdkBuilder,
-} = require("@breeztech/breez-sdk-spark/nodejs");
-const { Command } = require("commander");
-require("dotenv").config();
-
-class JsLogger {
-  log = (logEntry) => {
-    console.log(
-      `[${new Date().toISOString()} ${logEntry.level}]: ${logEntry.line}`
-    );
-  };
-}
-
-const fileLogger = new JsLogger();
-
-class JsEventListener {
-  onEvent = (event) => {
-    fileLogger.log({
-      level: "INFO",
-      line: `Received event: ${JSON.stringify(event)}`,
-    });
-  };
-}
-
-const eventListener = new JsEventListener();
-const program = new Command();
-
-const initSdk = async () => {
-  // Set the logger to trace
-  await initLogging(fileLogger);
-
-  // Get the mnemonic
-  const mnemonic = process.env.MNEMONIC;
-
-  // Connect using the config
-  let config = defaultConfig("regtest");
-  config.apiKey = process.env.BREEZ_API_KEY;
-  console.log(`defaultConfig: ${JSON.stringify(config)}`);
-
-  let sdkBuilder = SdkBuilder.new(config, {
-    type: "mnemonic",
-    mnemonic: mnemonic,
-  });
-  sdkBuilder = await sdkBuilder.withDefaultStorage("./.data");
-
-  const sdk = await sdkBuilder.build();
-
-  await sdk.addEventListener(eventListener);
-  return sdk;
-};
-
-program
-  .name("breez-sdk-spark-wasm-cli")
-  .description("CLI for Breez SDK Spark - Wasm");
-
-program.command("get-info").action(async () => {
-  const sdk = await initSdk();
-  const res = await sdk.getInfo({});
-  console.log(`getInfo: ${JSON.stringify(res)}`);
+// Optional: enable logging
+await initLogging({
+  log: (entry) => console.log(`[${entry.level}]: ${entry.line}`),
 });
 
-program.parse();
+const wallet = await Breez.connect({
+  apiKey: "<breez api key>",
+  network: "mainnet",
+  seed: { type: "mnemonic", mnemonic: "<mnemonic words>", passphrase: undefined },
+  storageDir: "./.data",
+});
+
+const info = await wallet.getInfo({ ensureSynced: true });
+console.log(`Balance: ${info.balanceSats} sats`);
+
+await wallet.disconnect();
 ```
+
+## API Overview
+
+### Entry Points
+
+| Method | Description |
+|--------|-------------|
+| `Breez.connect(config)` | Single-step connection (most common) |
+| `new Breez(appConfig)` | Multi-wallet setup |
+| `breez.connectWallet(walletConfig)` | Connect additional wallets |
+
+### Wallet — Core Methods
+
+| Method | Description |
+|--------|-------------|
+| `wallet.getInfo(request?)` | Get balance and identity pubkey |
+| `wallet.createPayment(destination, options?)` | Prepare a payment intent (inspect fees before confirming) |
+| `wallet.sendPayment(destination, prepareOpts?, payOpts?)` | One-step send (no review) |
+| `wallet.receive(options)` | Generate invoice, BTC address, or Spark address |
+| `wallet.disconnect()` | Clean shutdown |
+| `wallet.pubkey` | Identity public key (sync, no network call) |
+
+### Wallet — Sub-Object APIs
+
+Access grouped functionality through property getters:
+
+```ts
+wallet.payments         // PaymentsApi
+wallet.deposits         // DepositsApi
+wallet.events           // EventsApi
+wallet.lightningAddress // LightningAddressApi
+wallet.lnurl            // LnurlApi
+wallet.fiat             // FiatApi
+wallet.settings         // SettingsApi
+wallet.message          // MessageApi
+wallet.tokens           // TokensApi
+wallet.optimization     // OptimizationApi
+wallet.tokenIssuer      // TokenIssuer
+```
+
+| API | Methods |
+|-----|---------|
+| **PaymentsApi** | `list(limit?, offset?)`, `get(id)` |
+| **DepositsApi** | `listUnclaimed()`, `claim(request)`, `refund(request)` |
+| **EventsApi** | `add(listener)`, `remove(id)`, `on(eventType, callback)` |
+| **LightningAddressApi** | `get()`, `register(request)`, `isAvailable(username)`, `delete()` |
+| **LnurlApi** | `auth(requestData)`, `withdraw(request)` |
+| **FiatApi** | `rates()`, `currencies()`, `recommendedFees()` |
+| **SettingsApi** | `get()`, `update(request)` |
+| **MessageApi** | `sign(request)` |
+| **TokensApi** | `metadata(request)`, `swapLimits(request)` |
+
+### Payment Intent Flow (Recommended)
+
+The two-step `createPayment` + `confirm` flow lets users review fees before committing:
+
+```ts
+// 1. Create the intent (nothing is sent yet)
+const intent = await wallet.createPayment("<bolt11 invoice or address>");
+
+// 2. Inspect fees
+console.log(`Amount: ${intent.amount} sats`);
+console.log(`Fee: ${intent.feeSats} sats`);
+console.log(`Type: ${intent.paymentType}`);
+
+// 3. Confirm when ready
+const result = await intent.confirm();
+console.log(`Payment ID: ${result.payment.id}`);
+```
+
+### Receiving Payments
+
+```ts
+// Lightning invoice
+const bolt11 = await wallet.receive({
+  paymentMethod: {
+    type: "bolt11Invoice",
+    amountSats: 5000,
+    description: "Coffee",
+  },
+});
+
+// On-chain Bitcoin address
+const btc = await wallet.receive({
+  paymentMethod: { type: "bitcoinAddress" },
+});
+
+// Spark address
+const spark = await wallet.receive({
+  paymentMethod: { type: "sparkAddress" },
+});
+```
+
+### Events
+
+```ts
+const listenerId = await wallet.events.add({
+  onEvent: (event) => {
+    switch (event.type) {
+      case "synced":
+        // Refresh UI - balance and payments are up to date
+        break;
+      case "paymentSucceeded":
+        console.log("Payment completed:", event.payment.id);
+        break;
+      case "paymentFailed":
+        console.log("Payment failed:", event.payment.id);
+        break;
+    }
+  },
+});
+
+// Remove when done
+await wallet.events.remove(listenerId);
+```
+
+### Advanced: SdkBuilder
+
+For custom storage, chain services, or external signers:
+
+```ts
+import { SdkBuilder, defaultConfig } from "@breeztech/breez-sdk-spark";
+
+const config = defaultConfig("mainnet");
+config.apiKey = "<breez api key>";
+
+let builder = SdkBuilder.new(config, {
+  type: "mnemonic",
+  mnemonic: "<mnemonic words>",
+});
+builder = await builder.withDefaultStorage("./.data");
+// builder = builder.withStorage(customStorage);
+// builder = builder.withChainService(customChainService);
+
+const wallet = await builder.build();
+```
+
+## Networks
+
+| Network | Use Case |
+|---------|----------|
+| `mainnet` | Production |
+| `testnet` | Testing with testnet Bitcoin |
+| `regtest` | Development (no API key needed) |
+
+**Regtest** is recommended for development — free, no real value, supports all payment types.
+
+## Code Examples
+
+Working, compiled TypeScript examples for every feature are in [`docs/breez-sdk/snippets/wasm/`](../../docs/breez-sdk/snippets/wasm/).
+
+## Full Documentation
+
+[sdk-doc-spark.breez.technology](https://sdk-doc-spark.breez.technology/)
 
 ## Pricing
 

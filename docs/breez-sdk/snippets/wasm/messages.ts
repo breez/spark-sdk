@@ -1,11 +1,11 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { type Wallet, verifyMessage } from '@breeztech/breez-sdk-spark'
 
-const exampleSignMessage = async (sdk: BreezSdk) => {
+const exampleSignMessage = async (wallet: Wallet) => {
   // ANCHOR: sign-message
   // Set to true to get a compact signature rather than a DER
   const compact = true
 
-  const signMessageResponse = await sdk.signMessage({
+  const signMessageResponse = await wallet.message.sign({
     message: '<message to sign>',
     compact
   })
@@ -18,9 +18,9 @@ const exampleSignMessage = async (sdk: BreezSdk) => {
   // ANCHOR_END: sign-message
 }
 
-const exampleCheckMessage = async (sdk: BreezSdk) => {
+const exampleCheckMessage = async () => {
   // ANCHOR: check-message
-  const checkMessageResponse = await sdk.checkMessage({
+  const checkMessageResponse = verifyMessage({
     message: '<message>',
     pubkey: '<pubkey of signer>',
     signature: '<message signature>'

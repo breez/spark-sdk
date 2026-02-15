@@ -1,12 +1,10 @@
 import {
-  type BreezSdk,
-  connect,
-  defaultConfig,
+  type Wallet,
+  Breez,
   getSparkStatus,
   initLogging,
   type LogEntry,
   type SdkEvent,
-  SdkBuilder,
   type Seed
 } from '@breeztech/breez-sdk-spark'
 
@@ -18,29 +16,25 @@ const exampleGettingStarted = async () => {
   // Call init when using the SDK in a web environment before calling any other SDK
   // methods. This is not needed when using the SDK in a Node.js/Deno environment.
   //
-  // import init, { BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
+  // import init, { Breez } from '@breeztech/breez-sdk-spark'
   await init()
 
   // Construct the seed using mnemonic words or entropy bytes
   const mnemonic = '<mnemonic words>'
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
-  // Create the default config
-  const config = defaultConfig('mainnet')
-  config.apiKey = '<breez api key>'
-
   // Connect to the SDK using the simplified connect method
-  const sdk = await connect({
-    config,
-    seed,
-    storageDir: './.data'
+  const wallet = await Breez.connect({
+    apiKey: '<breez api key>',
+    network: 'mainnet',
+    seed
   })
   // ANCHOR_END: init-sdk
 }
 
-const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
+const exampleFetchNodeInfo = async (wallet: Wallet) => {
   // ANCHOR: fetch-balance
-  const info = await sdk.getInfo({
+  const info = await wallet.getInfo({
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
     ensureSynced: false
@@ -63,7 +57,7 @@ const exampleLogging = async () => {
   // ANCHOR_END: logging
 }
 
-const exampleAddEventListener = async (sdk: BreezSdk) => {
+const exampleAddEventListener = async (wallet: Wallet) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
@@ -98,9 +92,9 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const failedPayment = event.payment
           break
         }
-        case 'optimization': {
-          // An optimization event occurred
-          const optimizationEvent = event.optimizationEvent
+        case 'leafOptimization': {
+          // A leaf optimization event occurred
+          const leafOptimizationEvent = event.leafOptimizationEvent
           break
         }
         default: {
@@ -113,13 +107,13 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
 
   const eventListener = new JsEventListener()
 
-  const listenerId = await sdk.addEventListener(eventListener)
+  const listenerId = await wallet.events.add(eventListener)
   // ANCHOR_END: add-event-listener
 }
 
-const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => {
+const exampleRemoveEventListener = async (wallet: Wallet, listenerId: string) => {
   // ANCHOR: remove-event-listener
-  await sdk.removeEventListener(listenerId)
+  await wallet.events.remove(listenerId)
   // ANCHOR_END: remove-event-listener
 }
 
@@ -154,8 +148,8 @@ const exampleGetSparkStatus = async () => {
   // ANCHOR_END: spark-status
 }
 
-const exampleDisconnect = async (sdk: BreezSdk) => {
+const exampleDisconnect = async (wallet: Wallet) => {
   // ANCHOR: disconnect
-  await sdk.disconnect()
+  await wallet.disconnect()
   // ANCHOR_END: disconnect
 }

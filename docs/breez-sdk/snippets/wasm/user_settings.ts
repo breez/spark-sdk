@@ -1,16 +1,16 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { type Wallet } from '@breeztech/breez-sdk-spark'
 
-const exampleGetUserSettings = async (sdk: BreezSdk) => {
+const exampleGetUserSettings = async (wallet: Wallet) => {
   // ANCHOR: get-user-settings
-  const userSettings = await sdk.getUserSettings()
+  const userSettings = await wallet.settings.get()
   console.log(`User settings: ${JSON.stringify(userSettings)}`)
   // ANCHOR_END: get-user-settings
 }
 
-const exampleUpdateUserSettings = async (sdk: BreezSdk) => {
+const exampleUpdateUserSettings = async (wallet: Wallet) => {
   // ANCHOR: update-user-settings
   const sparkPrivateModeEnabled = true
-  await sdk.updateUserSettings({
+  await wallet.settings.update({
     sparkPrivateModeEnabled
   })
   // ANCHOR_END: update-user-settings
