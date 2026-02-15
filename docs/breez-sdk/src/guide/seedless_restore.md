@@ -97,6 +97,11 @@ Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` wit
 
 Your app must have the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability enabled. In Xcode, go to **Signing & Capabilities** → add **Associated Domains** → add the entry `webcredentials:keys.breez.technology`.
 
+<div class="warning">
+<h4>Expo Managed Workflow</h4>
+If you're using Expo, the Breez SDK plugin can configure this automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enableSeedlessRestore</code> option.
+</div>
+
 Contact Breez to register your iOS app.
 
 ### Nostr relay configuration

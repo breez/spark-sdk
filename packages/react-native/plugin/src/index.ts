@@ -14,13 +14,19 @@ export type BreezSdkPluginOptions = {
    * Set to true if you want to handle binary downloads manually
    */
   skipBinaryDownload?: boolean;
+  /**
+   * Add webcredentials:keys.breez.technology to the iOS Associated Domains
+   * entitlement, required for seedless restore with passkeys (default: false)
+   */
+  enableSeedlessRestore?: boolean;
 };
 
 const withBreezSdk: ConfigPlugin<BreezSdkPluginOptions | void> = (
   config,
   options
 ) => {
-  const { skipBinaryDownload = false } = options || {};
+  const { skipBinaryDownload = false, enableSeedlessRestore = false } =
+    options || {};
 
   return withPlugins(config, [
     // Download binary artifacts first
@@ -28,7 +34,7 @@ const withBreezSdk: ConfigPlugin<BreezSdkPluginOptions | void> = (
     // Configure Android
     withBreezSdkAndroid,
     // Configure iOS
-    withBreezSdkIOS,
+    [withBreezSdkIOS, { enableSeedlessRestore }] as const,
   ]);
 };
 

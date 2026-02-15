@@ -38,6 +38,22 @@ Then add the plugin to your `app.json` or `app.config.js`:
 }
 ```
 
+#### Plugin Options
+
+To enable [Seedless restore](https://sdk-doc-spark.breez.technology/guide/seedless_restore.html) with passkeys, set `enableSeedlessRestore` to `true`. This adds `webcredentials:keys.breez.technology` to the iOS Associated Domains entitlement:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      ["@breeztech/breez-sdk-spark-react-native", {
+        "enableSeedlessRestore": true
+      }]
+    ]
+  }
+}
+```
+
 After adding the plugin, rebuild your app:
 
 ```sh
