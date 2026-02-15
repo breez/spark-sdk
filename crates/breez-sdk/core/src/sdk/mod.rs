@@ -6,6 +6,7 @@ mod lightning_address;
 mod lnurl;
 mod payments;
 mod sync;
+mod unified_payment;
 
 use bitflags::bitflags;
 use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService, rest::RestClient};
@@ -21,10 +22,10 @@ use crate::{
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
+pub(crate) const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology";
 
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
+pub(crate) const BREEZ_SYNC_SERVICE_URL: &str = "https://datasync.breez.technology:442";
 
 pub(crate) const CLAIM_TX_SIZE_VBYTES: u64 = 99;
 pub(crate) const SYNC_PAGING_LIMIT: u32 = 100;
@@ -89,8 +90,22 @@ impl SyncRequest {
     }
 }
 
+/// A per-seed wallet instance.
+///
+/// Created via [`App::connect_wallet`](crate::App::connect_wallet) (new API)
+/// or [`connect`] (legacy API).
+///
+/// Holds live wallet state and all payment/query operations.
+///
+/// This is a type alias for backward compatibility — [`BreezSdk`] and `Wallet`
+/// are the same type.
+pub type Wallet = BreezSdk;
+
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
+///
+/// **Note:** For new code, prefer using [`Wallet`] (which is just an alias for this type)
+/// obtained via [`App::connect_wallet`](crate::App::connect_wallet).
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
@@ -141,6 +156,35 @@ pub async fn parse_input(
     .into())
 }
 
+/// Verify a message signature without requiring a wallet connection.
+///
+/// This is a pure secp256k1 ECDSA verification — no wallet state needed.
+pub fn verify_message(
+    request: crate::CheckMessageRequest,
+) -> Result<crate::CheckMessageResponse, SdkError> {
+    use bitcoin::hashes::Hash as _;
+    use bitcoin::secp256k1::{Secp256k1, ecdsa::Signature};
+    use std::str::FromStr;
+
+    let pubkey = bitcoin::secp256k1::PublicKey::from_str(&request.pubkey)
+        .map_err(|_| SdkError::InvalidInput("Invalid public key".to_string()))?;
+    let signature_bytes = hex::decode(&request.signature)
+        .map_err(|_| SdkError::InvalidInput("Not a valid hex encoded signature".to_string()))?;
+    let signature = Signature::from_der(&signature_bytes)
+        .or_else(|_| Signature::from_compact(&signature_bytes))
+        .map_err(|_| {
+            SdkError::InvalidInput("Not a valid DER or compact encoded signature".to_string())
+        })?;
+
+    let digest = bitcoin::hashes::sha256::Hash::hash(request.message.as_bytes());
+    let msg = bitcoin::secp256k1::Message::from_digest(digest.to_byte_array());
+    let is_valid = Secp256k1::new()
+        .verify_ecdsa(&msg, &signature, &pubkey)
+        .is_ok();
+
+    Ok(crate::CheckMessageResponse { is_valid })
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(
     log_dir: Option<String>,
@@ -152,14 +196,16 @@ pub fn init_logging(
 
 /// Connects to the Spark network using the provided configuration and mnemonic.
 ///
-/// # Arguments
+/// # Deprecated
 ///
-/// * `request` - The connection request object
+/// Use [`App::new`](crate::App::new) + [`App::connect_wallet`](crate::App::connect_wallet) instead:
 ///
-/// # Returns
-///
-/// Result containing either the initialized `BreezSdk` or an `SdkError`
+/// ```ignore
+/// let app = App::new(AppConfig { api_key: "..".into(), network: Network::Mainnet, ..Default::default() })?;
+/// let wallet = app.connect_wallet(WalletConfig { seed, ..Default::default() }).await?;
+/// ```
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[deprecated(note = "Use App::new() + app.connect_wallet() instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
@@ -170,17 +216,11 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 
 /// Connects to the Spark network using an external signer.
 ///
-/// This method allows using a custom signer implementation instead of providing
-/// a seed directly.
+/// # Deprecated
 ///
-/// # Arguments
-///
-/// * `request` - The connection request object with external signer
-///
-/// # Returns
-///
-/// Result containing either the initialized `BreezSdk` or an `SdkError`
+/// Use [`App::new`](crate::App::new) + [`App::connect_wallet`](crate::App::connect_wallet) instead.
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[deprecated(note = "Use App::new() + app.connect_wallet() instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,
@@ -191,6 +231,10 @@ pub async fn connect_with_signer(
     Ok(sdk)
 }
 
+/// # Deprecated
+///
+/// Use [`AppConfig`](crate::AppConfig) with `..Default::default()` instead.
+#[deprecated(note = "Use AppConfig with defaults instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {

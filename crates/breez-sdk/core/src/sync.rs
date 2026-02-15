@@ -32,10 +32,7 @@ impl SparkSyncService {
         }
     }
 
-    pub async fn sync_payments(
-        &self,
-        initial_sync_complete: bool,
-    ) -> Result<(), SdkError> {
+    pub async fn sync_payments(&self, initial_sync_complete: bool) -> Result<(), SdkError> {
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         self.sync_bitcoin_payments_to_storage(&object_repository, initial_sync_complete)
             .await?;

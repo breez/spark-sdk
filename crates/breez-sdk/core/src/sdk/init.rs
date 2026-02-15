@@ -18,7 +18,10 @@ use crate::{
     },
 };
 
-use super::{BreezSdk, BreezSdkParams, helpers::{update_balances, validate_breez_api_key}};
+use super::{
+    BreezSdk, BreezSdkParams,
+    helpers::{update_balances, validate_breez_api_key},
+};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -134,11 +137,9 @@ impl BreezSdk {
             // between the TreeStore being populated and the full sync reading it.
             let watch_balance = async {
                 let mut balance_rx = sdk.spark_wallet.subscribe_balance_changes();
-                let timeout = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    balance_rx.changed(),
-                )
-                .await;
+                let timeout =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), balance_rx.changed())
+                        .await;
                 match timeout {
                     Ok(Ok(())) => {
                         let balance = *balance_rx.borrow();
@@ -146,11 +147,8 @@ impl BreezSdk {
                             info!(
                                 "instant_wallet_load: tree store balance changed to {balance}, updating"
                             );
-                            match update_balances(
-                                sdk.spark_wallet.clone(),
-                                sdk.storage.clone(),
-                            )
-                            .await
+                            match update_balances(sdk.spark_wallet.clone(), sdk.storage.clone())
+                                .await
                             {
                                 Ok(()) => {
                                     sdk.event_emitter

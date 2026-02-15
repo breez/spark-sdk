@@ -39,8 +39,12 @@ use super::{
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, deprecated)]
 impl BreezSdk {
+    /// # Deprecated
+    ///
+    /// Use [`receive()`](Self::receive) instead.
+    #[deprecated(note = "Use receive() instead")]
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,
@@ -147,6 +151,10 @@ impl BreezSdk {
         Ok(ClaimHtlcPaymentResponse { payment })
     }
 
+    /// # Deprecated
+    ///
+    /// Use [`prepare()`](Self::prepare) or [`prepare_payment()`](Self::prepare_payment) instead.
+    #[deprecated(note = "Use prepare() or prepare_payment() instead")]
     #[allow(clippy::too_many_lines)]
     pub async fn prepare_send_payment(
         &self,
@@ -341,6 +349,13 @@ impl BreezSdk {
         }
     }
 
+    /// # Deprecated
+    ///
+    /// Use [`pay()`](Self::pay), [`pay_to_destination()`](Self::pay_to_destination),
+    /// or [`PreparedPayment::confirm()`](crate::PreparedPayment::confirm) instead.
+    #[deprecated(
+        note = "Use pay(), pay_to_destination(), or PreparedPayment::confirm() instead"
+    )]
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,

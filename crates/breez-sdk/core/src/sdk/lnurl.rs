@@ -18,8 +18,12 @@ use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 use super::{BreezSdk, helpers::process_success_action};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, deprecated)]
 impl BreezSdk {
+    /// # Deprecated
+    ///
+    /// Use [`prepare()`](Self::prepare) or [`prepare_payment()`](Self::prepare_payment) instead.
+    #[deprecated(note = "Use prepare() or prepare_payment() instead")]
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
@@ -89,6 +93,13 @@ impl BreezSdk {
         })
     }
 
+    /// # Deprecated
+    ///
+    /// Use [`pay()`](Self::pay), [`pay_to_destination()`](Self::pay_to_destination),
+    /// or [`PreparedPayment::confirm()`](crate::PreparedPayment::confirm) instead.
+    #[deprecated(
+        note = "Use pay(), pay_to_destination(), or PreparedPayment::confirm() instead"
+    )]
     #[allow(clippy::too_many_lines)]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
