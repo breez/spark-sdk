@@ -205,7 +205,8 @@ impl SqliteStorage {
             ALTER TABLE payment_details_token ADD COLUMN invoice_details TEXT;",
             "ALTER TABLE payment_metadata ADD COLUMN lnurl_withdraw_info TEXT;",
             // sync_revision: tracks the last committed revision (from server-acknowledged
-            // or server-received records). Does NOT include pending outgoing revisions.
+            // or server-received records). Does NOT include pending outgoing queue ids.
+            // sync_outgoing.revision stores a local queue id for ordering/de-duplication only.
             "CREATE TABLE sync_revision (
                 revision INTEGER NOT NULL DEFAULT 0
             );
@@ -856,12 +857,10 @@ impl Storage for SqliteStorage {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction().map_err(map_sqlite_error)?;
 
-        let revision: u64 = tx
+        // This revision is a local queue id for pending rows, not a server revision.
+        let local_revision: u64 = tx
             .query_row(
-                "SELECT MAX(
-                    (SELECT revision FROM sync_revision),
-                    COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
-                ) + 1",
+                "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing",
                 [],
                 |row| row.get(0),
             )
@@ -882,13 +881,13 @@ impl Storage for SqliteStorage {
                 record.id.data_id,
                 record.schema_version.clone(),
                 serde_json::to_string(&record.updated_fields)?,
-                revision,
+                local_revision,
             ],
         )
         .map_err(map_sqlite_error)?;
 
         tx.commit().map_err(map_sqlite_error)?;
-        Ok(revision)
+        Ok(local_revision)
     }
 
     async fn complete_outgoing_sync(
@@ -995,7 +994,7 @@ impl Storage for SqliteStorage {
                 updated_fields: serde_json::from_str(
                     &row.get::<_, String>(4).map_err(map_sqlite_error)?,
                 )?,
-                revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get(5).map_err(map_sqlite_error)?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1057,36 +1056,6 @@ impl Storage for SqliteStorage {
             )
             .map_err(map_sqlite_error)?;
 
-        Ok(())
-    }
-
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
-        let mut connection = self.get_connection()?;
-        let tx = connection.transaction().map_err(map_sqlite_error)?;
-
-        let last_revision: u64 = tx
-            .query_row("SELECT revision FROM sync_revision", [], |row| row.get(0))
-            .map_err(map_sqlite_error)?;
-
-        let diff = revision.saturating_sub(last_revision);
-
-        if diff > 0 {
-            tx.execute(
-                "UPDATE sync_outgoing
-                 SET revision = revision + ?",
-                params![diff],
-            )
-            .map_err(map_sqlite_error)?;
-        }
-
-        // Update sync_revision within the same transaction so retries are idempotent
-        tx.execute(
-            "UPDATE sync_revision SET revision = MAX(revision, ?)",
-            params![revision],
-        )
-        .map_err(map_sqlite_error)?;
-
-        tx.commit().map_err(map_sqlite_error)?;
         Ok(())
     }
 
@@ -1197,7 +1166,7 @@ impl Storage for SqliteStorage {
                 updated_fields: serde_json::from_str(
                     &row.get::<_, String>(4).map_err(map_sqlite_error)?,
                 )?,
-                revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get(5).map_err(map_sqlite_error)?,
             };
 
             return Ok(Some(OutgoingChange { change, parent }));

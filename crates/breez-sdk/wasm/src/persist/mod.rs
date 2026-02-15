@@ -289,9 +289,9 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_storage_error)?;
 
-        let revision: u64 = serde_wasm_bindgen::from_value(result)
+        let local_revision: u64 = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        Ok(revision)
+        Ok(local_revision)
     }
 
     async fn complete_outgoing_sync(
@@ -358,16 +358,6 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let promise = self
             .storage
             .sync_delete_incoming_record(record.into())
-            .map_err(js_error_to_storage_error)?;
-        let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
-        Ok(())
-    }
-
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
-        let promise = self
-            .storage
-            .sync_rebase_pending_outgoing_records(revision)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -445,7 +435,6 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     syncGetLastRevision: () => Promise<number>;
     syncInsertIncomingRecords: (records: Record[]) => Promise<void>;
     syncDeleteIncomingRecord: (record: Record) => Promise<void>;
-    syncRebasePendingOutgoingRecords: (revision: number) => Promise<void>;
     syncGetIncomingRecords: (limit: number) => Promise<IncomingChange[]>;
     syncGetLatestOutgoingChange: () => Promise<OutgoingChange | null>;
     syncUpdateRecordFromIncoming: (record: Record) => Promise<void>;
@@ -548,12 +537,6 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = syncDeleteIncomingRecord, catch)]
     pub fn sync_delete_incoming_record(this: &Storage, record: Record) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = syncRebasePendingOutgoingRecords, catch)]
-    pub fn sync_rebase_pending_outgoing_records(
-        this: &Storage,
-        revision: u64,
-    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncGetIncomingRecords, catch)]
     pub fn sync_get_incoming_records(this: &Storage, limit: u32) -> Result<Promise, JsValue>;

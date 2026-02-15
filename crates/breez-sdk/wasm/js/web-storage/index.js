@@ -1280,30 +1280,24 @@ class IndexedDBStorage {
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        ["sync_outgoing", "sync_revision"],
-        "readwrite"
-      );
+      const transaction = this.db.transaction(["sync_outgoing"], "readwrite");
 
-      // Compute next revision as max(committed, max outgoing) + 1, without updating sync_revision
-      const revisionStore = transaction.objectStore("sync_revision");
+      // This revision is a local queue id for pending rows, not a server revision.
       const outgoingStore = transaction.objectStore("sync_outgoing");
-
-      const getRevisionRequest = revisionStore.get(1);
       const getAllOutgoingRequest = outgoingStore.getAll();
 
-      let committedRevision = null;
-      let maxOutgoingRevision = null;
-      let resultsReady = 0;
-
-      const onBothReady = () => {
-        resultsReady++;
-        if (resultsReady < 2) return;
-
-        const base = committedRevision > maxOutgoingRevision
-          ? committedRevision
-          : maxOutgoingRevision;
-        const nextRevision = base + BigInt(1);
+      getAllOutgoingRequest.onsuccess = () => {
+        const records = getAllOutgoingRequest.result;
+        let maxOutgoingRevision = BigInt(0);
+        for (const storeRecord of records) {
+          const rev = BigInt(
+            storeRecord.record.localRevision ?? storeRecord.record.revision
+          );
+          if (rev > maxOutgoingRevision) {
+            maxOutgoingRevision = rev;
+          }
+        }
+        const nextRevision = maxOutgoingRevision + BigInt(1);
 
         const storeRecord = {
           type: record.id.type,
@@ -1311,7 +1305,7 @@ class IndexedDBStorage {
           revision: Number(nextRevision),
           record: {
             ...record,
-            revision: nextRevision,
+            localRevision: nextRevision,
           },
         };
 
@@ -1330,35 +1324,6 @@ class IndexedDBStorage {
             )
           );
         };
-      };
-
-      getRevisionRequest.onsuccess = () => {
-        const revisionData = getRevisionRequest.result || {
-          id: 1,
-          revision: "0",
-        };
-        committedRevision = BigInt(revisionData.revision);
-        onBothReady();
-      };
-
-      getAllOutgoingRequest.onsuccess = () => {
-        const records = getAllOutgoingRequest.result;
-        maxOutgoingRevision = BigInt(0);
-        for (const storeRecord of records) {
-          const rev = BigInt(storeRecord.record.revision);
-          if (rev > maxOutgoingRevision) {
-            maxOutgoingRevision = rev;
-          }
-        }
-        onBothReady();
-      };
-
-      getRevisionRequest.onerror = (event) => {
-        reject(
-          new StorageError(
-            `Failed to get revision: ${event.target.error.message}`
-          )
-        );
       };
 
       getAllOutgoingRequest.onerror = (event) => {
@@ -1459,7 +1424,11 @@ class IndexedDBStorage {
         const cursor = event.target.result;
         if (cursor && count < limit) {
           const storeRecord = cursor.value;
-          const change = storeRecord.record;
+          const change = {
+            ...storeRecord.record,
+            localRevision:
+              storeRecord.record.localRevision ?? storeRecord.record.revision,
+          };
 
           // Look up parent record if it exists
           const stateRequest = stateStore.get([
@@ -1599,120 +1568,6 @@ class IndexedDBStorage {
     });
   }
 
-  async syncRebasePendingOutgoingRecords(revision) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction(
-        ["sync_outgoing", "sync_revision"],
-        "readwrite"
-      );
-      const outgoingStore = transaction.objectStore("sync_outgoing");
-      const revisionStore = transaction.objectStore("sync_revision");
-
-      // Get the last committed revision from sync_revision
-      const getRevisionRequest = revisionStore.get(1);
-
-      getRevisionRequest.onsuccess = () => {
-        const revisionData = getRevisionRequest.result || {
-          id: 1,
-          revision: "0",
-        };
-        const lastRevision = BigInt(revisionData.revision);
-
-        // Calculate the difference
-        const diff = revision > lastRevision ? revision - lastRevision : BigInt(0);
-
-        // Helper to update sync_revision within the same transaction so retries are idempotent
-        const updateSyncRevision = () => {
-          if (revision > lastRevision) {
-            revisionStore.put({ id: 1, revision: revision.toString() });
-          }
-        };
-
-        if (diff <= BigInt(0)) {
-          updateSyncRevision();
-          resolve();
-          return;
-        }
-
-        // Get all records from sync_outgoing and update their revisions
-        const getAllRequest = outgoingStore.getAll();
-
-        getAllRequest.onsuccess = () => {
-          const records = getAllRequest.result;
-
-          if (records.length === 0) {
-            updateSyncRevision();
-            resolve();
-            return;
-          }
-
-          let updatesCompleted = 0;
-
-          for (const storeRecord of records) {
-            // Delete the old record
-            const oldKey = [
-              storeRecord.type,
-              storeRecord.dataId,
-              storeRecord.revision,
-            ];
-            outgoingStore.delete(oldKey);
-
-            // Update revision in both the key and the nested record
-            const newRevision = storeRecord.record.revision + diff;
-            const updatedRecord = {
-              type: storeRecord.type,
-              dataId: storeRecord.dataId,
-              revision: Number(newRevision),
-              record: {
-                ...storeRecord.record,
-                revision: newRevision,
-              },
-            };
-
-            // Add the updated record
-            const putRequest = outgoingStore.put(updatedRecord);
-
-            putRequest.onsuccess = () => {
-              updatesCompleted++;
-              if (updatesCompleted === records.length) {
-                updateSyncRevision();
-                resolve();
-              }
-            };
-
-            putRequest.onerror = (event) => {
-              reject(
-                new StorageError(
-                  `Failed to rebase outgoing record: ${event.target.error.message}`
-                )
-              );
-            };
-          }
-        };
-
-        getAllRequest.onerror = (event) => {
-          reject(
-            new StorageError(
-              `Failed to get outgoing records for rebase: ${event.target.error.message}`
-            )
-          );
-        };
-      };
-
-      getRevisionRequest.onerror = (event) => {
-        reject(
-          new StorageError(
-            `Failed to get last revision: ${event.target.error.message}`
-          )
-        );
-      };
-    });
-  }
-
   async syncGetIncomingRecords(limit) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
@@ -1802,7 +1657,11 @@ class IndexedDBStorage {
         const cursor = event.target.result;
         if (cursor) {
           const storeRecord = cursor.value;
-          const change = storeRecord.record;
+          const change = {
+            ...storeRecord.record,
+            localRevision:
+              storeRecord.record.localRevision ?? storeRecord.record.revision,
+          };
 
           // Get the parent record
           const stateRequest = stateStore.get([

@@ -264,9 +264,8 @@ pub trait Storage: Send + Sync {
     ///
     /// The `sync_revision` table tracks the highest revision that has been committed
     /// (i.e. acknowledged by the server or received from it). It does NOT include
-    /// pending outgoing revisions. This value is used by the sync protocol to
-    /// request changes from the server, and by rebase to compute how much to shift
-    /// pending outgoing records.
+    /// pending outgoing queue ids. This value is used by the sync protocol to
+    /// request changes from the server.
     async fn get_last_revision(&self) -> Result<u64, StorageError>;
 
     /// Insert incoming records from remote sync
@@ -274,9 +273,6 @@ pub trait Storage: Send + Sync {
 
     /// Delete an incoming record after it has been processed
     async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError>;
-
-    /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError>;
 
     /// Get incoming records that need to be processed, up to the specified limit
     async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError>;

@@ -22,6 +22,13 @@ impl SchemaVersion {
             patch,
         }
     }
+
+    /// Returns true when this schema version can be handled by a client that supports up to
+    /// `supported_max`. Compatibility is gated by major version only.
+    #[must_use]
+    pub const fn is_supported_by(&self, supported_max: &SchemaVersion) -> bool {
+        self.major <= supported_max.major
+    }
 }
 
 impl std::fmt::Display for SchemaVersion {
@@ -59,7 +66,6 @@ impl std::str::FromStr for SchemaVersion {
     }
 }
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,
@@ -84,6 +90,7 @@ impl RecordId {
 #[derive(Debug)]
 pub struct RecordChangeRequest {
     pub id: RecordId,
+    pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
 }
 
@@ -91,7 +98,7 @@ impl From<&RecordChangeRequest> for UnversionedRecordChange {
     fn from(value: &RecordChangeRequest) -> Self {
         UnversionedRecordChange {
             id: value.id.clone(),
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: value.schema_version.clone(),
             updated_fields: value.updated_fields.clone(),
         }
     }
@@ -110,9 +117,10 @@ pub struct OutgoingChange {
 
 impl OutgoingChange {
     pub fn merge(self) -> Record {
+        let parent_revision = self.parent.as_ref().map_or(0, |p| p.revision);
         let mut record = Record {
             id: self.change.id.clone(),
-            revision: self.change.revision,
+            revision: parent_revision,
             schema_version: self.change.schema_version.clone(),
             data: HashMap::new(),
         };
@@ -148,7 +156,8 @@ pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: SchemaVersion,
     pub updated_fields: HashMap<String, Value>,
-    pub revision: u64,
+    /// Local queue id from pending outgoing storage.
+    pub local_revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -204,7 +213,7 @@ impl Record {
                 id: self.id.clone(),
                 schema_version: self.schema_version.clone(),
                 updated_fields,
-                revision: self.revision,
+                local_revision: self.revision,
             },
             parent,
         }
@@ -220,7 +229,7 @@ mod test {
 
     use crate::sync::{
         OutgoingChange, Record, RecordChange, RecordChangeRequest, RecordId, SchemaVersion,
-        UnversionedRecordChange, model::CURRENT_SCHEMA_VERSION,
+        UnversionedRecordChange,
     };
 
     #[test]
@@ -264,8 +273,10 @@ mod test {
         updated_fields.insert("amount".to_string(), json!(1000));
         updated_fields.insert("status".to_string(), json!("pending"));
 
+        let version = SchemaVersion::new(1, 0, 0);
         let request = RecordChangeRequest {
             id: id.clone(),
+            schema_version: version.clone(),
             updated_fields: updated_fields.clone(),
         };
 
@@ -275,7 +286,7 @@ mod test {
         // Verify conversion
         assert_eq!(unversioned.id.r#type, id.r#type);
         assert_eq!(unversioned.id.data_id, id.data_id);
-        assert_eq!(unversioned.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(unversioned.schema_version, version);
         assert_eq!(unversioned.updated_fields.get("amount"), Some(&json!(1000)));
         assert_eq!(
             unversioned.updated_fields.get("status"),
@@ -311,7 +322,7 @@ mod test {
             id: id.clone(),
             schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
-            revision: 2,
+            local_revision: 2,
         };
 
         let outgoing_change = OutgoingChange {
@@ -325,7 +336,7 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 2);
+        assert_eq!(merged.revision, 1);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that parent data was preserved
@@ -353,7 +364,7 @@ mod test {
             id: id.clone(),
             schema_version: SchemaVersion::new(0, 2, 6),
             updated_fields,
-            revision: 1,
+            local_revision: 1,
         };
 
         let outgoing_change = OutgoingChange {
@@ -367,7 +378,7 @@ mod test {
         // Verify the merged record
         assert_eq!(merged.id.r#type, "payment");
         assert_eq!(merged.id.data_id, "invoice123");
-        assert_eq!(merged.revision, 1);
+        assert_eq!(merged.revision, 0);
         assert_eq!(merged.schema_version, SchemaVersion::new(0, 2, 6));
 
         // Check that fields were applied
@@ -488,7 +499,7 @@ mod test {
         // Verify change set contains only the changes
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
-        assert_eq!(change_set.change.revision, 2);
+        assert_eq!(change_set.change.local_revision, 2);
         assert_eq!(
             change_set.change.schema_version,
             SchemaVersion::new(0, 2, 6)
@@ -534,7 +545,7 @@ mod test {
         // Verify change set contains all fields
         assert_eq!(change_set.change.id.r#type, "payment");
         assert_eq!(change_set.change.id.data_id, "invoice123");
-        assert_eq!(change_set.change.revision, 1);
+        assert_eq!(change_set.change.local_revision, 1);
         assert_eq!(
             change_set.change.schema_version,
             SchemaVersion::new(0, 2, 5)
@@ -598,5 +609,19 @@ mod test {
         let s = v.to_string();
         let parsed: SchemaVersion = s.parse().unwrap();
         assert_eq!(parsed, v);
+    }
+
+    #[test]
+    fn test_schema_version_is_supported_by_same_major() {
+        let schema = SchemaVersion::new(1, 4, 2);
+        let supported_max = SchemaVersion::new(1, 0, 0);
+        assert!(schema.is_supported_by(&supported_max));
+    }
+
+    #[test]
+    fn test_schema_version_is_supported_by_newer_major_is_unsupported() {
+        let schema = SchemaVersion::new(2, 0, 0);
+        let supported_max = SchemaVersion::new(1, 9, 9);
+        assert!(!schema.is_supported_by(&supported_max));
     }
 }

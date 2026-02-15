@@ -7,10 +7,11 @@ use std::{
 
 use breez_sdk_common::sync::{
     IncomingChange as CommonIncomingChange, NewRecordHandler,
-    OutgoingChange as CommonOutgoingChange, RecordChangeRequest, RecordId, SyncService,
+    OutgoingChange as CommonOutgoingChange, OutgoingPrepareOutcome, PreparedOutgoingPush,
+    RecordChangeRequest, RecordId, RecordOutcome, SchemaVersion, SyncService,
 };
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     DepositInfo, EventEmitter, ListPaymentsRequest, Payment, PaymentDetails, PaymentMetadata,
@@ -19,6 +20,8 @@ use crate::{
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 use tokio_with_wasm::alias as tokio;
+
+const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
@@ -54,12 +57,22 @@ pub struct SyncedStorage {
 
 #[macros::async_trait]
 impl NewRecordHandler for SyncedStorage {
-    async fn on_incoming_change(&self, change: CommonIncomingChange) -> anyhow::Result<()> {
+    async fn on_incoming_change(
+        &self,
+        change: CommonIncomingChange,
+    ) -> anyhow::Result<RecordOutcome> {
         self.handle_incoming_change(change).await
     }
 
     async fn on_replay_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
         self.handle_outgoing_change(change).await
+    }
+
+    async fn prepare_outgoing_push(
+        &self,
+        change: CommonOutgoingChange,
+    ) -> anyhow::Result<OutgoingPrepareOutcome> {
+        Self::handle_prepare_outgoing_push(change)
     }
 
     async fn on_sync_completed(
@@ -162,6 +175,7 @@ impl SyncedStorage {
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {
                 id: record_id,
+                schema_version: CURRENT_SCHEMA_VERSION,
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -178,16 +192,40 @@ impl SyncedStorage {
         Ok(())
     }
 
-    async fn handle_incoming_change(&self, change: CommonIncomingChange) -> anyhow::Result<()> {
-        let record_type =
-            RecordType::from_str(&change.new_state.id.r#type).map_err(|e| anyhow::anyhow!(e))?;
+    async fn handle_incoming_change(
+        &self,
+        change: CommonIncomingChange,
+    ) -> anyhow::Result<RecordOutcome> {
+        // Domain-level applyability check: keep unsupported rows deferred for retry after upgrade.
+        if !change
+            .new_state
+            .schema_version
+            .is_supported_by(&CURRENT_SCHEMA_VERSION)
+        {
+            warn!(
+                "Deferring incoming record type '{}' with unsupported schema version {} (supported up to major version {})",
+                change.new_state.id.r#type,
+                change.new_state.schema_version,
+                CURRENT_SCHEMA_VERSION.major,
+            );
+            return Ok(RecordOutcome::Deferred);
+        }
+
+        let Ok(record_type) = RecordType::from_str(&change.new_state.id.r#type) else {
+            warn!(
+                "Deferring incoming record with unknown type '{}' at schema version {}",
+                change.new_state.id.r#type, change.new_state.schema_version,
+            );
+            return Ok(RecordOutcome::Deferred);
+        };
         match record_type {
             RecordType::PaymentMetadata => {
                 self.handle_payment_metadata_update(
                     change.new_state.data,
                     change.new_state.id.data_id,
                 )
-                .await
+                .await?;
+                Ok(RecordOutcome::Completed)
             }
         }
     }
@@ -205,6 +243,62 @@ impl SyncedStorage {
                 .await
             }
         }
+    }
+
+    fn handle_prepare_outgoing_push(
+        change: CommonOutgoingChange,
+    ) -> anyhow::Result<OutgoingPrepareOutcome> {
+        if !change
+            .change
+            .schema_version
+            .is_supported_by(&CURRENT_SCHEMA_VERSION)
+        {
+            anyhow::bail!(
+                "Unsupported outgoing record type '{}' with local change schema version {} (supported up to major version {}). This should not happen for locally created outgoing rows.",
+                change.change.id.r#type,
+                change.change.schema_version,
+                CURRENT_SCHEMA_VERSION.major,
+            );
+        }
+
+        if let Some(parent) = &change.parent
+            && !parent
+                .schema_version
+                .is_supported_by(&CURRENT_SCHEMA_VERSION)
+        {
+            warn!(
+                "Deferring outgoing record type '{}' with unsupported parent schema version {} (supported up to major version {})",
+                parent.id.r#type, parent.schema_version, CURRENT_SCHEMA_VERSION.major,
+            );
+            return Ok(OutgoingPrepareOutcome::Deferred);
+        }
+
+        let record_type = RecordType::from_str(&change.change.id.r#type).map_err(|e| {
+            anyhow::anyhow!(
+                "Unknown outgoing record type '{}' at schema version {}: {e}",
+                change.change.id.r#type,
+                change.change.schema_version
+            )
+        })?;
+
+        let local_revision = change.change.local_revision;
+        let prepared_record = change.merge();
+
+        match record_type {
+            RecordType::PaymentMetadata => {
+                // Validate that the merged payload is still parseable for the domain.
+                let _: PaymentMetadata = serde_json::from_value(
+                    serde_json::to_value(&prepared_record.data)
+                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?;
+            }
+        }
+
+        Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
+            record: prepared_record,
+            local_revision,
+        }))
     }
 
     async fn handle_payment_metadata_update(
@@ -256,6 +350,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
+                schema_version: CURRENT_SCHEMA_VERSION,
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -356,10 +451,6 @@ impl Storage for SyncedStorage {
 
     async fn delete_incoming_record(&self, record: Record) -> Result<(), StorageError> {
         self.inner.delete_incoming_record(record).await
-    }
-
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
-        self.inner.rebase_pending_outgoing_records(revision).await
     }
 
     async fn get_incoming_records(&self, limit: u32) -> Result<Vec<IncomingChange>, StorageError> {

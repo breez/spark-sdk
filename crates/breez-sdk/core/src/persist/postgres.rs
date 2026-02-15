@@ -644,7 +644,8 @@ impl PostgresStorage {
             // Migration 2: Sync tables
             &[
                 // sync_revision: tracks the last committed revision (from server-acknowledged
-                // or server-received records). Does NOT include pending outgoing revisions.
+                // or server-received records). Does NOT include pending outgoing queue ids.
+                // sync_outgoing.revision stores a local queue id for ordering/de-duplication only.
                 "CREATE TABLE IF NOT EXISTS sync_revision (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     revision BIGINT NOT NULL DEFAULT 0,
@@ -1355,13 +1356,10 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        // Compute next revision as max(committed, max outgoing) + 1, without updating sync_revision
-        let revision: i64 = tx
+        // This revision is a local queue id for pending rows, not a server revision.
+        let local_revision: i64 = tx
             .query_one(
-                "SELECT GREATEST(
-                    (SELECT revision FROM sync_revision),
-                    COALESCE((SELECT MAX(revision) FROM sync_outgoing), 0)
-                ) + 1",
+                "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing",
                 &[],
             )
             .await
@@ -1381,7 +1379,7 @@ impl Storage for PostgresStorage {
                 &record.schema_version,
                 &commit_time,
                 &updated_fields_json,
-                &revision,
+                &local_revision,
             ],
         )
         .await
@@ -1391,7 +1389,7 @@ impl Storage for PostgresStorage {
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
-        Ok(u64::try_from(revision)?)
+        Ok(u64::try_from(local_revision)?)
     }
 
     async fn complete_outgoing_sync(
@@ -1501,7 +1499,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5))?,
+                local_revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1568,46 +1566,6 @@ impl Storage for PostgresStorage {
                     &i64::try_from(record.revision)?,
                 ],
             )
-            .await
-            .map_err(|e| StorageError::Connection(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), StorageError> {
-        let mut client = self.pool.get().await.map_err(map_pool_error)?;
-
-        let tx = client
-            .transaction()
-            .await
-            .map_err(|e| StorageError::Connection(e.to_string()))?;
-
-        let last_revision: i64 = tx
-            .query_one("SELECT revision FROM sync_revision", &[])
-            .await
-            .map_err(|e| StorageError::Connection(e.to_string()))?
-            .get(0);
-
-        let diff = i64::try_from(revision)?.saturating_sub(last_revision);
-
-        if diff > 0 {
-            tx.execute(
-                "UPDATE sync_outgoing SET revision = revision + $1",
-                &[&diff],
-            )
-            .await
-            .map_err(|e| StorageError::Connection(e.to_string()))?;
-        }
-
-        // Update sync_revision within the same transaction so retries are idempotent
-        tx.execute(
-            "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
-            &[&i64::try_from(revision)?],
-        )
-        .await
-        .map_err(|e| StorageError::Connection(e.to_string()))?;
-
-        tx.commit()
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
@@ -1693,7 +1651,7 @@ impl Storage for PostgresStorage {
                 schema_version: row.get(2),
                 updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(5))?,
+                local_revision: u64::try_from(row.get::<_, i64>(5))?,
             };
             return Ok(Some(OutgoingChange { change, parent }));
         }

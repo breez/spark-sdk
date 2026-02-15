@@ -56,9 +56,6 @@ pub trait SyncStorage: Send + Sync {
     /// Delete an incoming record after it has been processed
     async fn delete_incoming_record(&self, record: Record) -> Result<(), SyncStorageError>;
 
-    /// Update revision numbers of pending outgoing records to be higher than the given revision
-    async fn rebase_pending_outgoing_records(&self, revision: u64) -> Result<(), SyncStorageError>;
-
     /// Get incoming records that need to be processed, up to the specified limit
     async fn get_incoming_records(
         &self,
@@ -157,7 +154,8 @@ pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
-    pub revision: u64,
+    /// Local queue id used to keep pending outgoing ordering stable.
+    pub local_revision: u64,
 }
 
 impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
@@ -172,7 +170,7 @@ impl TryFrom<RecordChange> for crate::sync::model::RecordChange {
                 .into_iter()
                 .map(|(k, v)| Ok((k, serde_json::from_str(&v)?)))
                 .collect::<Result<HashMap<String, serde_json::Value>, SyncStorageError>>()?,
-            revision: value.revision,
+            local_revision: value.local_revision,
         })
     }
 }

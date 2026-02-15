@@ -96,16 +96,6 @@ impl breez_sdk_common::sync::storage::SyncStorage for SyncStorageWrapper {
             .map_err(storage_to_sync_error)
     }
 
-    async fn rebase_pending_outgoing_records(
-        &self,
-        revision: u64,
-    ) -> Result<(), breez_sdk_common::sync::storage::SyncStorageError> {
-        self.inner
-            .rebase_pending_outgoing_records(revision)
-            .await
-            .map_err(storage_to_sync_error)
-    }
-
     async fn get_incoming_records(
         &self,
         limit: u32,
@@ -261,7 +251,7 @@ pub struct RecordChange {
     pub id: RecordId,
     pub schema_version: String,
     pub updated_fields: HashMap<String, String>,
-    pub revision: u64,
+    pub local_revision: u64,
 }
 
 impl From<breez_sdk_common::sync::storage::RecordChange> for RecordChange {
@@ -270,7 +260,7 @@ impl From<breez_sdk_common::sync::storage::RecordChange> for RecordChange {
             id: value.id.into(),
             schema_version: value.schema_version,
             updated_fields: value.updated_fields,
-            revision: value.revision,
+            local_revision: value.local_revision,
         }
     }
 }
@@ -281,7 +271,7 @@ impl From<RecordChange> for breez_sdk_common::sync::storage::RecordChange {
             id: value.id.into(),
             schema_version: value.schema_version,
             updated_fields: value.updated_fields,
-            revision: value.revision,
+            local_revision: value.local_revision,
         }
     }
 }
