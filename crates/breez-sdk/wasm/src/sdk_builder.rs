@@ -11,7 +11,7 @@ use crate::{
         rest_client::{RestClient, WasmRestClient},
     },
     persist::{Storage, WasmStorage},
-    sdk::BreezSdk,
+    sdk::Wallet,
 };
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_spark::KeySet;
@@ -145,7 +145,7 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "build")]
-    pub async fn build(mut self) -> WasmResult<BreezSdk> {
+    pub async fn build(mut self) -> WasmResult<Wallet> {
         match (self.default_storage_dir, self.storage) {
             (Some(storage_dir), None) => {
                 // Create key set to get identity_pub_key for WASM-compatible storage
@@ -178,7 +178,7 @@ impl SdkBuilder {
         }
 
         let sdk = self.builder.build().await?;
-        Ok(BreezSdk { sdk: Rc::new(sdk) })
+        Ok(Wallet { sdk: Rc::new(sdk) })
     }
 }
 

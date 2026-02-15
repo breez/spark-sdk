@@ -56,6 +56,13 @@ mod serde_option_u128_as_string {
     }
 }
 
+/// Re-export `SdkEvent` as `WalletEvent` for the public API.
+/// `SdkEvent` is kept for backward compatibility.
+#[wasm_bindgen(typescript_custom_section)]
+const WALLET_EVENT_ALIAS: &str = r#"
+/** Preferred alias for SdkEvent. */
+export type WalletEvent = SdkEvent;"#;
+
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
@@ -79,13 +86,13 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
-        optimization_event: OptimizationEvent,
+    LeafOptimization {
+        optimization_event: LeafOptimizationEvent,
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]
-pub enum OptimizationEvent {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LeafOptimizationEvent)]
+pub enum LeafOptimizationEvent {
     Started {
         total_rounds: u32,
     },
@@ -1260,4 +1267,140 @@ pub struct BuyBitcoinRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinResponse)]
 pub struct BuyBitcoinResponse {
     pub url: String,
+}
+
+// ---------------------------------------------------------------------------
+//  Unified Payment API types
+// ---------------------------------------------------------------------------
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareOptions)]
+pub struct PrepareOptions {
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+    pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
+    pub lnurl_comment: Option<String>,
+    pub lnurl_validate_success_action_url: Option<bool>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PayOptions)]
+pub struct PayOptions {
+    pub idempotency_key: Option<String>,
+    pub send_options: Option<SendPaymentOptions>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PreparedPaymentFee)]
+pub enum PreparedPaymentFee {
+    Spark {
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        fee: u128,
+    },
+    Lightning {
+        fee_sats: u64,
+    },
+    Onchain {
+        speed_fast: OnchainSpeedFee,
+        speed_medium: OnchainSpeedFee,
+        speed_slow: OnchainSpeedFee,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainSpeedFee)]
+pub struct OnchainSpeedFee {
+    pub total_fee_sat: u64,
+}
+
+#[derive(Clone, Copy)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentIntentType)]
+pub enum PaymentIntentType {
+    Spark,
+    Lightning,
+    Onchain,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmPaymentResponse)]
+pub struct ConfirmPaymentResponse {
+    pub payment: Payment,
+    pub success_action: Option<SuccessActionProcessed>,
+}
+
+#[derive(Clone, Copy, Default)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentType)]
+pub enum ReceivePaymentType {
+    #[default]
+    Lightning,
+    Onchain,
+    SparkAddress,
+    SparkInvoice,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ReceiveOptions)]
+pub struct ReceiveOptions {
+    pub payment_type: Option<ReceivePaymentType>,
+    #[tsify(type = "string")]
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub amount: Option<u128>,
+    pub description: Option<String>,
+    pub expiry: Option<u64>,
+    pub token_identifier: Option<String>,
+    pub sender_public_key: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ReceiveResult)]
+pub struct ReceiveResult {
+    pub destination: String,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
+    pub fee: u128,
+}
+
+// ---------------------------------------------------------------------------
+// App / Wallet configuration types
+// ---------------------------------------------------------------------------
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AppConfig)]
+pub struct AppConfig {
+    pub api_key: String,
+    pub network: Network,
+    pub storage_root: Option<String>,
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
+    pub lnurl_domain: Option<String>,
+    pub prefer_spark: Option<bool>,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: Option<bool>,
+    pub real_time_sync_server_url: Option<String>,
+    pub private_mode: Option<bool>,
+    pub optimization: Option<OptimizationConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WalletConfig)]
+pub struct WalletConfig {
+    pub seed: Seed,
+    pub storage_dir: Option<String>,
+    pub optimization: Option<OptimizationConfig>,
+    pub prefer_spark: Option<bool>,
+    pub private_mode: Option<bool>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectConfig)]
+pub struct ConnectConfig {
+    pub api_key: String,
+    pub network: Network,
+    pub seed: Seed,
+    pub storage_root: Option<String>,
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
+    pub lnurl_domain: Option<String>,
+    pub prefer_spark: Option<bool>,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: Option<bool>,
+    pub real_time_sync_server_url: Option<String>,
+    pub private_mode: Option<bool>,
+    pub optimization: Option<OptimizationConfig>,
+    pub storage_dir: Option<String>,
 }
