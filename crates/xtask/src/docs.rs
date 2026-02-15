@@ -482,14 +482,38 @@ fn check_doc_snippets_react_native_cmd(skip_binding_gen: bool) -> Result<()> {
             anyhow::bail!("`npx patch-package` failed in packages/react-native");
         }
 
-        // TODO: Skip building binaries (right now building just for ios as it's enough to generate the bindings)
-        // Run `yarn ubrn:ios`
-        let status = Command::new("yarn")
-            .arg("ubrn:ios")
+        // Build host binary for binding generation (avoids iOS cross-compilation)
+        let status = Command::new("cargo")
+            .args([
+                "build",
+                "--release",
+                "-p",
+                "breez-sdk-spark-bindings",
+                "--no-default-features",
+            ])
+            .status()?;
+        if !status.success() {
+            anyhow::bail!(
+                "`cargo build --release -p breez-sdk-spark-bindings --no-default-features` failed"
+            );
+        }
+
+        // Generate bindings from the host binary using `ubrn generate all`
+        let lib_ext = if cfg!(target_os = "macos") {
+            "dylib"
+        } else {
+            "so"
+        };
+        let lib_file = workspace_root.join(format!(
+            "target/release/libbreez_sdk_spark_bindings.{lib_ext}"
+        ));
+        let status = Command::new("npx")
+            .args(["ubrn", "generate", "all", "--config", "ubrn.config.yaml"])
+            .arg(&lib_file)
             .current_dir(&react_native_pkg_dir)
             .status()?;
         if !status.success() {
-            anyhow::bail!("`yarn ubrn:ios` failed in packages/react-native");
+            anyhow::bail!("`npx ubrn generate all` failed in packages/react-native");
         }
 
         // Run `yarn prepare`

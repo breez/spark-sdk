@@ -303,7 +303,7 @@ jobs:
 
   docs-react-native:
     name: Docs (react-native)
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -311,10 +311,6 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Rust targets (only iOS needed)
-        run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
