@@ -23,14 +23,22 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use tokio_with_wasm::alias as tokio;
 
-const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0, 0);
-
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
 enum RecordType {
     PaymentMetadata,
     Contact,
     ContactDeletion,
+}
+
+impl RecordType {
+    #[allow(clippy::match_same_arms)] // Arms will diverge as types evolve independently.
+    const fn schema_version(&self) -> SchemaVersion {
+        match self {
+            Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
+            Self::Contact | Self::ContactDeletion => SchemaVersion::new(1, 0, 0),
+        }
+    }
 }
 
 impl Display for RecordType {
@@ -200,7 +208,7 @@ impl SyncedStorage {
             let record_id = RecordId::new(RecordType::PaymentMetadata.to_string(), &payment.id);
             let record_change_request = RecordChangeRequest {
                 id: record_id,
-                schema_version: CURRENT_SCHEMA_VERSION,
+                schema_version: RecordType::PaymentMetadata.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -221,21 +229,6 @@ impl SyncedStorage {
         &self,
         change: CommonIncomingChange,
     ) -> anyhow::Result<RecordOutcome> {
-        // Domain-level applyability check: keep unsupported rows deferred for retry after upgrade.
-        if !change
-            .new_state
-            .schema_version
-            .is_supported_by(&CURRENT_SCHEMA_VERSION)
-        {
-            warn!(
-                "Deferring incoming record type '{}' with unsupported schema version {} (supported up to major version {})",
-                change.new_state.id.r#type,
-                change.new_state.schema_version,
-                CURRENT_SCHEMA_VERSION.major,
-            );
-            return Ok(RecordOutcome::Deferred);
-        }
-
         let Ok(record_type) = RecordType::from_str(&change.new_state.id.r#type) else {
             warn!(
                 "Deferring incoming record with unknown type '{}' at schema version {}",
@@ -243,6 +236,20 @@ impl SyncedStorage {
             );
             return Ok(RecordOutcome::Deferred);
         };
+
+        // Domain-level applyability check: keep unsupported rows deferred for retry after upgrade.
+        let type_version = record_type.schema_version();
+        if !change
+            .new_state
+            .schema_version
+            .is_supported_by(&type_version)
+        {
+            warn!(
+                "Deferring incoming record type '{}' with unsupported schema version {} (supported up to major version {})",
+                change.new_state.id.r#type, change.new_state.schema_version, type_version.major,
+            );
+            return Ok(RecordOutcome::Deferred);
+        }
 
         match record_type {
             RecordType::PaymentMetadata => {
@@ -266,21 +273,21 @@ impl SyncedStorage {
 
     /// Hook when an outgoing change is replayed, to ensure data consistency.
     async fn handle_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
-        if change.change.schema_version.major > CURRENT_SCHEMA_VERSION.major {
+        let Ok(record_type) = RecordType::from_str(&change.change.id.r#type) else {
+            error!(
+                "Unknown record type '{}' with schema version {}",
+                change.change.id.r#type, change.change.schema_version
+            );
+            return Ok(());
+        };
+
+        if change.change.schema_version.major > record_type.schema_version().major {
             warn!(
                 "Skipping outgoing record '{}:{}': newer schema version {}",
                 change.change.id.r#type, change.change.id.data_id, change.change.schema_version
             );
             return Ok(());
         }
-
-        let Ok(record_type) = RecordType::from_str(&change.change.id.r#type) else {
-            error!(
-                "Unknown record type '{}' with compatible schema version {}",
-                change.change.id.r#type, change.change.schema_version
-            );
-            return Ok(());
-        };
 
         match record_type {
             RecordType::PaymentMetadata => {
@@ -380,7 +387,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::PaymentMetadata.to_string(), &payment_id),
-                schema_version: CURRENT_SCHEMA_VERSION,
+                schema_version: RecordType::PaymentMetadata.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&metadata)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -469,7 +476,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
-                schema_version: SchemaVersion::new(2, 0, 0),
+                schema_version: RecordType::Contact.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&sync_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -492,7 +499,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
-                schema_version: SchemaVersion::new(2, 0, 0),
+                schema_version: RecordType::Contact.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&sync_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -513,7 +520,7 @@ impl Storage for SyncedStorage {
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
                 id: RecordId::new(RecordType::ContactDeletion.to_string(), &id),
-                schema_version: SchemaVersion::new(2, 0, 0),
+                schema_version: RecordType::ContactDeletion.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&deletion_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -665,7 +672,7 @@ mod tests {
         let change = make_incoming_change(
             "FutureType",
             "id1",
-            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            SchemaVersion::new(99, 0, 0),
             HashMap::new(),
         );
         let result = synced.handle_incoming_change(change).await;
@@ -681,8 +688,12 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
         let synced = create_test_synced_storage(Arc::clone(&storage));
 
-        let change =
-            make_incoming_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
+        let change = make_incoming_change(
+            "UnknownType",
+            "id1",
+            SchemaVersion::new(1, 0, 0),
+            HashMap::new(),
+        );
         let result = synced.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
@@ -707,10 +718,11 @@ mod tests {
             "lnurl_pay_info".to_string(),
             serde_json::json!({"ln_address": "test@example.com"}),
         );
+        let pm_version = RecordType::PaymentMetadata.schema_version();
         let change = make_incoming_change(
             "PaymentMetadata",
             "id1",
-            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            SchemaVersion::new(pm_version.major + 1, 0, 0),
             data,
         );
         let result = synced.handle_incoming_change(change).await;
@@ -744,14 +756,11 @@ mod tests {
             "lnurl_pay_info".to_string(),
             serde_json::json!({"ln_address": "test@example.com"}),
         );
+        let pm_version = RecordType::PaymentMetadata.schema_version();
         let change = make_incoming_change(
             "PaymentMetadata",
             "pay1",
-            SchemaVersion::new(
-                CURRENT_SCHEMA_VERSION.major,
-                CURRENT_SCHEMA_VERSION.minor + 1,
-                0,
-            ),
+            SchemaVersion::new(pm_version.major, pm_version.minor + 1, 0),
             data,
         );
         let result = synced.handle_incoming_change(change).await;
@@ -778,7 +787,7 @@ mod tests {
         let change = make_outgoing_change(
             "FutureType",
             "id1",
-            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0, 0),
+            SchemaVersion::new(99, 0, 0),
             HashMap::new(),
         );
         let result = synced.handle_outgoing_change(change).await;
@@ -794,8 +803,12 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
         let synced = create_test_synced_storage(Arc::clone(&storage));
 
-        let change =
-            make_outgoing_change("UnknownType", "id1", CURRENT_SCHEMA_VERSION, HashMap::new());
+        let change = make_outgoing_change(
+            "UnknownType",
+            "id1",
+            SchemaVersion::new(1, 0, 0),
+            HashMap::new(),
+        );
         let result = synced.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
