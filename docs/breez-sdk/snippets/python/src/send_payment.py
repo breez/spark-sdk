@@ -1,7 +1,7 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     FeePolicy,
     OnchainConfirmationSpeed,
     PrepareSendPaymentRequest,
@@ -14,7 +14,7 @@ from breez_sdk_spark import (
 )
 
 
-async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
+async def prepare_send_payment_lightning_bolt11(client: BreezClient):
     # ANCHOR: prepare-send-payment-lightning-bolt11
     payment_request = "<bolt11 invoice>"
     optional_amount_sats = 5_000
@@ -26,7 +26,7 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
             conversion_options=None,
             fee_policy=None,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
         if isinstance(
@@ -46,7 +46,7 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     # ANCHOR_END: prepare-send-payment-lightning-bolt11
 
 
-async def prepare_send_payment_onchain(sdk: BreezSdk):
+async def prepare_send_payment_onchain(client: BreezClient):
     # ANCHOR: prepare-send-payment-onchain
     payment_request = "<bitcoin address>"
     amount_sats = 50_000
@@ -58,7 +58,7 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
             conversion_options=None,
             fee_policy=None,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # Review the fee quote for each confirmation speed
         if isinstance(
@@ -86,7 +86,7 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
     # ANCHOR_END: prepare-send-payment-onchain
 
 
-async def prepare_send_payment_spark_address(sdk: BreezSdk):
+async def prepare_send_payment_spark_address(client: BreezClient):
     # ANCHOR: prepare-send-payment-spark-address
     payment_request = "<spark address>"
     amount_sats = 50_000
@@ -98,7 +98,7 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
             conversion_options=None,
             fee_policy=None,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_ADDRESS):
@@ -110,7 +110,7 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
     # ANCHOR_END: prepare-send-payment-spark-address
 
 
-async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
+async def prepare_send_payment_spark_invoice(client: BreezClient):
     # ANCHOR: prepare-send-payment-spark-invoice
     payment_request = "<spark invoice>"
     optional_amount_sats = 50_000
@@ -122,7 +122,7 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
             conversion_options=None,
             fee_policy=None,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
         if isinstance(prepare_response.payment_method, SendPaymentMethod.SPARK_INVOICE):
@@ -134,7 +134,7 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     # ANCHOR_END: prepare-send-payment-spark-invoice
 
 
-async def prepare_send_payment_token_conversion(sdk: BreezSdk):
+async def prepare_send_payment_token_conversion(client: BreezClient):
     # ANCHOR: prepare-send-payment-with-conversion
     payment_request = "<payment request>"
     # Set to use token funds to pay via conversion
@@ -155,7 +155,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
             conversion_options=conversion_options,
             fee_policy=None,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # If the fees are acceptable, continue to create the Send Payment
         if prepare_response.conversion_estimate is not None:
@@ -173,7 +173,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
 
 
 async def send_payment_lightning_bolt11(
-    sdk: BreezSdk, prepare_response: PrepareSendPaymentResponse
+    client: BreezClient, prepare_response: PrepareSendPaymentResponse
 ):
     # ANCHOR: send-payment-lightning-bolt11
     try:
@@ -186,7 +186,7 @@ async def send_payment_lightning_bolt11(
             options=options,
             idempotency_key=optional_idempotency_key,
         )
-        send_response = await sdk.send_payment(request=request)
+        send_response = await client.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:
         logging.error(error)
@@ -195,7 +195,7 @@ async def send_payment_lightning_bolt11(
 
 
 async def send_payment_onchain(
-    sdk: BreezSdk, prepare_response: PrepareSendPaymentResponse
+    client: BreezClient, prepare_response: PrepareSendPaymentResponse
 ):
     # ANCHOR: send-payment-onchain
     try:
@@ -209,7 +209,7 @@ async def send_payment_onchain(
             options=options,
             idempotency_key=optional_idempotency_key,
         )
-        send_response = await sdk.send_payment(request=request)
+        send_response = await client.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:
         logging.error(error)
@@ -218,7 +218,7 @@ async def send_payment_onchain(
 
 
 async def send_payment_spark(
-    sdk: BreezSdk, prepare_response: PrepareSendPaymentResponse
+    client: BreezClient, prepare_response: PrepareSendPaymentResponse
 ):
     # ANCHOR: send-payment-spark
     try:
@@ -226,7 +226,7 @@ async def send_payment_spark(
         request = SendPaymentRequest(
             prepare_response=prepare_response, idempotency_key=optional_idempotency_key
         )
-        send_response = await sdk.send_payment(request=request)
+        send_response = await client.send_payment(request=request)
         payment = send_response.payment
     except Exception as error:
         logging.error(error)
@@ -234,7 +234,7 @@ async def send_payment_spark(
     # ANCHOR_END: send-payment-spark
 
 
-async def prepare_send_payment_fees_included(sdk: BreezSdk):
+async def prepare_send_payment_fees_included(client: BreezClient):
     # ANCHOR: prepare-send-payment-fees-included
     # By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
     # Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
@@ -249,7 +249,7 @@ async def prepare_send_payment_fees_included(sdk: BreezSdk):
             conversion_options=None,
             fee_policy=FeePolicy.FEES_INCLUDED,
         )
-        prepare_response = await sdk.prepare_send_payment(request=request)
+        prepare_response = await client.prepare_send_payment(request=request)
 
         # The response shows the fee policy used
         logging.debug(f"Fee policy: {prepare_response.fee_policy}")

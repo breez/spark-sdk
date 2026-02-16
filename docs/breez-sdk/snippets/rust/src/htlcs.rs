@@ -2,7 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
+async fn send_htlc_payment(client: &BreezClient) -> Result<()> {
     // ANCHOR: send-htlc-payment
     let payment_request = "<spark address>".to_string();
     // Set the amount you wish to pay the receiver
@@ -14,7 +14,7 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
         conversion_options: None,
         fee_policy: None,
     };
-    let prepare_response = sdk.prepare_send_payment(prepare_request).await?;
+    let prepare_response = client.prepare_send_payment(prepare_request).await?;
 
     // If the fees are acceptable, continue to create the HTLC Payment
     if let SendPaymentMethod::SparkAddress { fee, .. } = prepare_response.payment_method {
@@ -39,13 +39,13 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
         options: Some(options),
         idempotency_key: None,
     };
-    let send_response = sdk.send_payment(request).await?;
+    let send_response = client.send_payment(request).await?;
     let payment = send_response.payment;
     // ANCHOR_END: send-htlc-payment
     Ok(())
 }
 
-async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
+async fn list_claimable_htlc_payments(client: &BreezClient) -> Result<Vec<Payment>> {
     // ANCHOR: list-claimable-htlc-payments
     let request = ListPaymentsRequest {
         type_filter: Some(vec![PaymentType::Receive]),
@@ -57,16 +57,16 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
         ..Default::default()
     };
 
-    let response = sdk.list_payments(request).await?;
+    let response = client.list_payments(request).await?;
     let payments = response.payments;
     // ANCHOR_END: list-claimable-htlc-payments
     Ok(payments)
 }
 
-async fn claim_htlc_payment(sdk: &BreezSdk) -> Result<Payment> {
+async fn claim_htlc_payment(client: &BreezClient) -> Result<Payment> {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>".to_string();
-    let response = sdk
+    let response = client
         .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
         .await?;
     let payment = response.payment;

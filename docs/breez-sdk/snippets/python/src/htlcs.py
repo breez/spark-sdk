@@ -3,7 +3,7 @@ import hashlib
 import logging
 from typing import cast
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     ClaimHtlcPaymentRequest,
     ListPaymentsRequest,
     PaymentDetailsFilter,
@@ -17,7 +17,7 @@ from breez_sdk_spark import (
 )
 
 
-async def send_htlc_payment(sdk: BreezSdk):
+async def send_htlc_payment(client: BreezClient):
     # ANCHOR: send-htlc-payment
     payment_request = "<spark address>"
     amount_sats = 50_000
@@ -28,7 +28,7 @@ async def send_htlc_payment(sdk: BreezSdk):
         conversion_options=None,
         fee_policy=None,
     )
-    prepare_response = await sdk.prepare_send_payment(request=prepare_request)
+    prepare_response = await client.prepare_send_payment(request=prepare_request)
 
     # If the fees are acceptable, continue to create the HTLC Payment
     if hasattr(prepare_response.payment_method, "fee"):
@@ -50,12 +50,12 @@ async def send_htlc_payment(sdk: BreezSdk):
     request = SendPaymentRequest(
         prepare_response=prepare_response, options=options
     )
-    send_response = await sdk.send_payment(request=request)
+    send_response = await client.send_payment(request=request)
     payment = send_response.payment
     # ANCHOR_END: send-htlc-payment
 
 
-async def list_claimable_htlc_payments(sdk: BreezSdk):
+async def list_claimable_htlc_payments(client: BreezClient):
     # ANCHOR: list-claimable-htlc-payments
     request = ListPaymentsRequest(
         type_filter=[PaymentType.RECEIVE],
@@ -66,15 +66,15 @@ async def list_claimable_htlc_payments(sdk: BreezSdk):
         ))],
     )
 
-    response = await sdk.list_payments(request=request)
+    response = await client.list_payments(request=request)
     payments = response.payments
     # ANCHOR_END: list-claimable-htlc-payments
 
 
-async def claim_htlc_payment(sdk: BreezSdk):
+async def claim_htlc_payment(client: BreezClient):
     # ANCHOR: claim-htlc-payment
     preimage = "<preimage hex>"
-    response = await sdk.claim_htlc_payment(
+    response = await client.claim_htlc_payment(
         request=ClaimHtlcPaymentRequest(preimage=preimage)
     )
     payment = response.payment

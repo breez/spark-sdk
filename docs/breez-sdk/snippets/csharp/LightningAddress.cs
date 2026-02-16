@@ -15,18 +15,18 @@ namespace BreezSdkSnippets
             // ANCHOR_END: config-lightning-address
         }
 
-        async Task<bool> CheckLightningAddressAvailability(BreezSdk sdk, string username)
+        async Task<bool> CheckLightningAddressAvailability(BreezClient client, string username)
         {
             username = "myusername";
 
             // ANCHOR: check-lightning-address
             var request = new CheckLightningAddressRequest(username: username);
-            var isAvailable = await sdk.CheckLightningAddressAvailable(request);
+            var isAvailable = await client.CheckLightningAddressAvailable(request);
             // ANCHOR_END: check-lightning-address
             return isAvailable;
         }
 
-        async Task<LightningAddressInfo> RegisterLightningAddress(BreezSdk sdk, string username, string description)
+        async Task<LightningAddressInfo> RegisterLightningAddress(BreezClient client, string username, string description)
         {
             username = "myusername";
             description = "My Lightning Address";
@@ -37,7 +37,7 @@ namespace BreezSdkSnippets
                 description: description
             );
 
-            var addressInfo = await sdk.RegisterLightningAddress(request);
+            var addressInfo = await client.RegisterLightningAddress(request);
             var lightningAddress = addressInfo.lightningAddress;
             var lnurlUrl = addressInfo.lnurl.url;
             var lnurlBech32 = addressInfo.lnurl.bech32;
@@ -45,10 +45,10 @@ namespace BreezSdkSnippets
             return addressInfo;
         }
 
-        async Task GetLightningAddress(BreezSdk sdk)
+        async Task GetLightningAddress(BreezClient client)
         {
             // ANCHOR: get-lightning-address
-            var addressInfoOpt = await sdk.GetLightningAddress();
+            var addressInfoOpt = await client.GetLightningAddress();
 
             if (addressInfoOpt != null)
             {
@@ -61,17 +61,17 @@ namespace BreezSdkSnippets
             // ANCHOR_END: get-lightning-address
         }
 
-        async Task DeleteLightningAddress(BreezSdk sdk)
+        async Task DeleteLightningAddress(BreezClient client)
         {
             // ANCHOR: delete-lightning-address
-            await sdk.DeleteLightningAddress();
+            await client.DeleteLightningAddress();
             // ANCHOR_END: delete-lightning-address
         }
 
-        async Task AccessSenderComment(BreezSdk sdk)
+        async Task AccessSenderComment(BreezClient client)
         {
             var paymentId = "<payment id>";
-            var response = await sdk.GetPayment(new GetPaymentRequest(paymentId: paymentId));
+            var response = await client.GetPayment(new GetPaymentRequest(paymentId: paymentId));
             var payment = response.payment;
 
             // ANCHOR: access-sender-comment
@@ -89,10 +89,10 @@ namespace BreezSdkSnippets
             // ANCHOR_END: access-sender-comment
         }
 
-        async Task AccessNostrZap(BreezSdk sdk)
+        async Task AccessNostrZap(BreezClient client)
         {
             var paymentId = "<payment id>";
-            var response = await sdk.GetPayment(new GetPaymentRequest(paymentId: paymentId));
+            var response = await client.GetPayment(new GetPaymentRequest(paymentId: paymentId));
             var payment = response.payment;
 
             // ANCHOR: access-nostr-zap

@@ -1,4 +1,4 @@
-import { type Wallet, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { type BreezClient, defaultConfig } from '@breeztech/breez-sdk-spark'
 
 const configureLightningAddress = () => {
   // ANCHOR: config-lightning-address
@@ -9,15 +9,15 @@ const configureLightningAddress = () => {
   return config
 }
 
-const exampleCheckLightningAddressAvailability = async (wallet: Wallet) => {
+const exampleCheckLightningAddressAvailability = async (client: BreezClient) => {
   const username = 'myusername'
 
   // ANCHOR: check-lightning-address
-  const available = await wallet.lightningAddress.isAvailable(username)
+  const available = await client.lightningAddress.isAvailable(username)
   // ANCHOR_END: check-lightning-address
 }
 
-const exampleRegisterLightningAddress = async (wallet: Wallet) => {
+const exampleRegisterLightningAddress = async (client: BreezClient) => {
   const username = 'myusername'
   const description = 'My Lightning Address'
 
@@ -27,16 +27,16 @@ const exampleRegisterLightningAddress = async (wallet: Wallet) => {
     description
   }
 
-  const addressInfo = await wallet.lightningAddress.register(request)
+  const addressInfo = await client.lightningAddress.register(request)
   const lightningAddress = addressInfo.lightningAddress
   const lnurlUrl = addressInfo.lnurl.url
   const lnurlBech32 = addressInfo.lnurl.bech32
   // ANCHOR_END: register-lightning-address
 }
 
-const exampleGetLightningAddress = async (wallet: Wallet) => {
+const exampleGetLightningAddress = async (client: BreezClient) => {
   // ANCHOR: get-lightning-address
-  const addressInfoOpt = await wallet.lightningAddress.get()
+  const addressInfoOpt = await client.lightningAddress.get()
 
   if (addressInfoOpt != null) {
     const lightningAddress = addressInfoOpt.lightningAddress
@@ -48,15 +48,15 @@ const exampleGetLightningAddress = async (wallet: Wallet) => {
   // ANCHOR_END: get-lightning-address
 }
 
-const exampleDeleteLightningAddress = async (wallet: Wallet) => {
+const exampleDeleteLightningAddress = async (client: BreezClient) => {
   // ANCHOR: delete-lightning-address
-  await wallet.lightningAddress.delete()
+  await client.lightningAddress.delete()
   // ANCHOR_END: delete-lightning-address
 }
 
-const exampleAccessSenderComment = async (wallet: Wallet) => {
+const exampleAccessSenderComment = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await wallet.payments.get(paymentId)
+  const response = await client.payments.get(paymentId)
   const payment = response.payment
 
   // ANCHOR: access-sender-comment
@@ -72,9 +72,9 @@ const exampleAccessSenderComment = async (wallet: Wallet) => {
   // ANCHOR_END: access-sender-comment
 }
 
-const exampleAccessNostrZap = async (wallet: Wallet) => {
+const exampleAccessNostrZap = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await wallet.payments.get(paymentId)
+  const response = await client.payments.get(paymentId)
   const payment = response.payment
 
   // ANCHOR: access-nostr-zap

@@ -6,10 +6,10 @@ use crate::{error::WasmResult, models::OptimizationProgress};
 
 /// Sub-object for leaf optimization operations.
 ///
-/// Access via `wallet.optimization`.
+/// Access via `client.optimization`.
 #[wasm_bindgen(js_name = "OptimizationApi")]
 pub struct OptimizationApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "OptimizationApi")]

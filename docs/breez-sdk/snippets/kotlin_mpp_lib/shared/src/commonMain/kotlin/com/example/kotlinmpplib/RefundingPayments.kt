@@ -3,11 +3,11 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class RefundingPayments {
-    suspend fun listUnclaimedDeposits(sdk: BreezSdk) {
+    suspend fun listUnclaimedDeposits(client: BreezClient) {
         // ANCHOR: list-unclaimed-deposits
         try {
             val request = ListUnclaimedDepositsRequest
-            val response = sdk.listUnclaimedDeposits(request)
+            val response = client.listUnclaimedDeposits(request)
             
             for (deposit in response.deposits) {
                 // Log.v("Breez", "Unclaimed deposit: ${deposit.txid}:${deposit.vout}")
@@ -39,7 +39,7 @@ class RefundingPayments {
         // ANCHOR_END: list-unclaimed-deposits
     }
 
-    suspend fun handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) {
+    suspend fun handleFeeExceeded(client: BreezClient, deposit: DepositInfo) {
         // ANCHOR: handle-fee-exceeded
         try {
             val claimError = deposit.claimError
@@ -55,7 +55,7 @@ class RefundingPayments {
                         vout = deposit.vout,
                         maxFee = MaxFee.Fixed(requiredFee)
                     )
-                    sdk.claimDeposit(claimRequest)
+                    client.claimDeposit(claimRequest)
                 }
             }
         } catch (e: Exception) {
@@ -64,7 +64,7 @@ class RefundingPayments {
         // ANCHOR_END: handle-fee-exceeded
     }
 
-    suspend fun refundDeposit(sdk: BreezSdk) {
+    suspend fun refundDeposit(client: BreezClient) {
         // ANCHOR: refund-deposit
         try {
             val txid = "your_deposit_txid"
@@ -72,7 +72,7 @@ class RefundingPayments {
             val destinationAddress = "bc1qexample..." // Your Bitcoin address
             
             // Set the fee for the refund transaction using the half-hour feerate
-            val recommendedFees = sdk.recommendedFees()
+            val recommendedFees = client.recommendedFees()
             val fee = Fee.Rate(recommendedFees.halfHourFee)
             // or using a fixed amount
             //val fee = Fee.Fixed(500u)
@@ -85,7 +85,7 @@ class RefundingPayments {
                 fee = fee
             )
             
-            val response = sdk.refundDeposit(request)
+            val response = client.refundDeposit(request)
             // Log.v("Breez", "Refund transaction created:")
             // Log.v("Breez", "Transaction ID: ${response.txId}")
             // Log.v("Breez", "Transaction hex: ${response.txHex}")
@@ -108,14 +108,14 @@ class RefundingPayments {
         println("Config: $config")
     }
 
-    suspend fun customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) {
+    suspend fun customClaimLogic(client: BreezClient, deposit: DepositInfo) {
         // ANCHOR: custom-claim-logic
         try {
             val claimError = deposit.claimError
             if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
                 val requiredFeeRate = claimError.requiredFeeRateSatPerVbyte
 
-                val recommendedFees = sdk.recommendedFees()
+                val recommendedFees = client.recommendedFees()
 
                 if (requiredFeeRate <= recommendedFees.fastestFee) {
                     val claimRequest = ClaimDepositRequest(
@@ -123,7 +123,7 @@ class RefundingPayments {
                         vout = deposit.vout,
                         maxFee = MaxFee.Rate(requiredFeeRate)
                     )
-                    sdk.claimDeposit(claimRequest)
+                    client.claimDeposit(claimRequest)
                 }
             }
         } catch (e: Exception) {
@@ -133,9 +133,9 @@ class RefundingPayments {
     }
 }
 
-suspend fun recommendedFees(sdk: BreezSdk) {
+suspend fun recommendedFees(client: BreezClient) {
     // ANCHOR: recommended-fees
-    val response = sdk.recommendedFees()
+    val response = client.recommendedFees()
     println("Fastest fee: ${response.fastestFee} sats/vByte")
     println("Half-hour fee: ${response.halfHourFee} sats/vByte")
     println("Hour fee: ${response.hourFee} sats/vByte")

@@ -34,13 +34,13 @@ use tokio_with_wasm::alias as tokio;
 use web_time::SystemTime;
 
 use super::{
-    BreezSdk, SyncRequest, SyncType,
+    BreezClient, SyncRequest, SyncType,
     helpers::{InternalEventListener, get_or_create_deposit_address, is_payment_match},
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value, deprecated)]
-impl BreezSdk {
+impl BreezClient {
     /// # Deprecated
     ///
     /// Use [`receive()`](Self::receive) instead.
@@ -351,10 +351,10 @@ impl BreezSdk {
 
     /// # Deprecated
     ///
-    /// Use [`pay()`](Self::pay), [`pay_to_destination()`](Self::pay_to_destination),
-    /// or [`PreparedPayment::confirm()`](crate::PreparedPayment::confirm) instead.
+    /// Use [`prepare()`](Self::prepare) followed by
+    /// [`PreparedPayment::send()`](crate::PreparedPayment::send) instead.
     #[deprecated(
-        note = "Use pay(), pay_to_destination(), or PreparedPayment::confirm() instead"
+        note = "Use prepare() + PreparedPayment::send() instead"
     )]
     pub async fn send_payment(
         &self,
@@ -443,7 +443,7 @@ impl BreezSdk {
 }
 
 // Private payment methods
-impl BreezSdk {
+impl BreezClient {
     pub(super) async fn maybe_convert_token_send_payment(
         &self,
         request: SendPaymentRequest,

@@ -4,7 +4,7 @@ namespace BreezSdkSnippets
 {
     class Htlcs
     {
-        async Task SendHtlcPayment(BreezSdk sdk)
+        async Task SendHtlcPayment(BreezClient client)
         {
             // ANCHOR: send-htlc-payment
             var paymentRequest = "<spark address>";
@@ -17,7 +17,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: prepareRequest);
+            var prepareResponse = await client.PrepareSendPayment(request: prepareRequest);
 
             // If the fees are acceptable, continue to create the HTLC Payment
             if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkMethod)
@@ -43,12 +43,12 @@ namespace BreezSdkSnippets
                 prepareResponse: prepareResponse,
                 options: options
             );
-            var sendResponse = await sdk.SendPayment(request: request);
+            var sendResponse = await client.SendPayment(request: request);
             var payment = sendResponse.payment;
             // ANCHOR_END: send-htlc-payment
         }
 
-        async Task ListClaimableHtlcPayments(BreezSdk sdk)
+        async Task ListClaimableHtlcPayments(BreezClient client)
         {
             // ANCHOR: list-claimable-htlc-payments
             var request = new ListPaymentsRequest(
@@ -64,16 +64,16 @@ namespace BreezSdkSnippets
                 }
             );
 
-            var response = await sdk.ListPayments(request: request);
+            var response = await client.ListPayments(request: request);
             var payments = response.payments;
             // ANCHOR_END: list-claimable-htlc-payments
         }
 
-        async Task ClaimHtlcPayment(BreezSdk sdk)
+        async Task ClaimHtlcPayment(BreezClient client)
         {
             // ANCHOR: claim-htlc-payment
             var preimage = "<preimage hex>";
-            var response = await sdk.ClaimHtlcPayment(
+            var response = await client.ClaimHtlcPayment(
                 request: new ClaimHtlcPaymentRequest(preimage: preimage)
             );
             var payment = response.payment;

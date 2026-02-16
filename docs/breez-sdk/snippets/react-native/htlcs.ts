@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import type { Payment, BreezSdk, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark-react-native'
+import type { Payment, BreezClient, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark-react-native'
 import {
   SendPaymentOptions,
   SparkHtlcOptions,
@@ -10,7 +10,7 @@ import {
   SendPaymentMethod_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
+const exampleSendHtlcPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: send-htlc-payment
   const paymentRequest = '<spark address>'
   // Set the amount you wish to pay the receiver
@@ -22,7 +22,7 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
     conversionOptions: undefined,
     feePolicy: undefined
   }
-  const prepareResponse = await sdk.prepareSendPayment(prepareRequest)
+  const prepareResponse = await client.prepareSendPayment(prepareRequest)
 
   // If the fees are acceptable, continue to create the HTLC Payment
   if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.SparkAddress) {
@@ -47,13 +47,13 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
     options,
     idempotencyKey: undefined
   }
-  const sendResponse = await sdk.sendPayment(request)
+  const sendResponse = await client.sendPayment(request)
   const payment = sendResponse.payment
   // ANCHOR_END: send-htlc-payment
   return payment
 }
 
-const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
+const exampleListClaimableHtlcPayments = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-claimable-htlc-payments
   const request = {
     typeFilter: [PaymentType.Receive],
@@ -70,16 +70,16 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
     sortAscending: undefined
   }
 
-  const response = await sdk.listPayments(request)
+  const response = await client.listPayments(request)
   const payments = response.payments
   // ANCHOR_END: list-claimable-htlc-payments
   return payments
 }
 
-const exampleClaimHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
+const exampleClaimHtlcPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: claim-htlc-payment
   const preimage = '<preimage hex>'
-  const response = await sdk.claimHtlcPayment(
+  const response = await client.claimHtlcPayment(
     { preimage }
   )
   const payment = response.payment

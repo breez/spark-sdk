@@ -1,16 +1,16 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { type BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleGetUserSettings = async (sdk: BreezSdk) => {
+const exampleGetUserSettings = async (client: BreezClient) => {
   // ANCHOR: get-user-settings
-  const userSettings = await sdk.getUserSettings()
+  const userSettings = await client.getUserSettings()
   console.log(`User settings: ${JSON.stringify(userSettings)}`)
   // ANCHOR_END: get-user-settings
 }
 
-const exampleUpdateUserSettings = async (sdk: BreezSdk) => {
+const exampleUpdateUserSettings = async (client: BreezClient) => {
   // ANCHOR: update-user-settings
   const sparkPrivateModeEnabled = true
-  await sdk.updateUserSettings({
+  await client.updateUserSettings({
     sparkPrivateModeEnabled
   })
   // ANCHOR_END: update-user-settings

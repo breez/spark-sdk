@@ -4,26 +4,26 @@ namespace BreezSdkSnippets
 {
     class ListPayments
     {
-        async Task GetPayment(BreezSdk sdk)
+        async Task GetPayment(BreezClient client)
         {
             // ANCHOR: get-payment
             var paymentId = "<payment id>";
-            var response = await sdk.GetPayment(
+            var response = await client.GetPayment(
                 request: new GetPaymentRequest(paymentId: paymentId)
             );
             var payment = response.payment;
             // ANCHOR_END: get-payment
         }
 
-        async Task ListAllPayments(BreezSdk sdk)
+        async Task ListAllPayments(BreezClient client)
         {
             // ANCHOR: list-payments
-            var response = await sdk.ListPayments(request: new ListPaymentsRequest());
+            var response = await client.ListPayments(request: new ListPaymentsRequest());
             var payments = response.payments;
             // ANCHOR_END: list-payments
         }
 
-        async Task ListPaymentsFiltered(BreezSdk sdk)
+        async Task ListPaymentsFiltered(BreezClient client)
         {
             // ANCHOR: list-payments-filtered
             // Filter by asset (Bitcoin or Token)
@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
                 sortAscending: false
             );
 
-            var response = await sdk.ListPayments(request: request);
+            var response = await client.ListPayments(request: request);
             var payments = response.payments;
             // ANCHOR_END: list-payments-filtered
         }

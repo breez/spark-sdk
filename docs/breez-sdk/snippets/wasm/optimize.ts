@@ -1,20 +1,20 @@
-import { type LeafOptimizationEvent, type Wallet } from '@breeztech/breez-sdk-spark'
+import { type LeafOptimizationEvent, type BreezClient } from '@breeztech/breez-sdk-spark'
 
-const exampleStartOptimization = async (wallet: Wallet) => {
+const exampleStartOptimization = async (client: BreezClient) => {
   // ANCHOR: start-optimization
-  wallet.optimization.start()
+  client.optimization.start()
   // ANCHOR_END: start-optimization
 }
 
-const exampleCancelOptimization = async (wallet: Wallet) => {
+const exampleCancelOptimization = async (client: BreezClient) => {
   // ANCHOR: cancel-optimization
-  await wallet.optimization.cancel()
+  await client.optimization.cancel()
   // ANCHOR_END: cancel-optimization
 }
 
-const exampleGetOptimizationProgress = async (wallet: Wallet) => {
+const exampleGetOptimizationProgress = async (client: BreezClient) => {
   // ANCHOR: get-optimization-progress
-  const progress = wallet.optimization.progress
+  const progress = client.optimization.progress
 
   console.log(`Optimization is running: ${progress.isRunning}`)
   console.log(`Current round: ${progress.currentRound}`)

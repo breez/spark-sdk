@@ -4,17 +4,17 @@ import {
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   ConversionType,
-  type BreezSdk,
+  type BreezClient,
   type PrepareSendPaymentResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentLightningBolt11 = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   const paymentRequest = '<bolt11 invoice>'
   // Optionally set the amount you wish to pay the receiver
   const optionalAmountSats = BigInt(5_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
@@ -34,13 +34,13 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-send-payment-lightning-bolt11
 }
 
-const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentOnchain = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-onchain
   const paymentRequest = '<bitcoin address>'
   // Set the amount you wish to pay the receiver
   const amountSats = BigInt(50_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
@@ -61,13 +61,13 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-send-payment-onchain
 }
 
-const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentSparkAddress = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-spark-address
   const paymentRequest = '<spark address>'
   // Set the amount you wish to pay the receiver
   const amountSats = BigInt(50_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,
@@ -83,13 +83,13 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-send-payment-spark-address
 }
 
-const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentSparkInvoice = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-spark-invoice
   const paymentRequest = '<spark invoice>'
   // Optionally set the amount you wish to pay the receiver
   const optionalAmountSats = BigInt(50_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
@@ -105,7 +105,7 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-send-payment-spark-invoice
 }
 
-const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentTokenConversion = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-with-conversion
   const paymentRequest = '<payment request>'
   // Set to use token funds to pay via conversion
@@ -119,7 +119,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: undefined,
     tokenIdentifier: undefined,
@@ -137,7 +137,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
 }
 
 const exampleSendPaymentLightningBolt11 = async (
-  sdk: BreezSdk,
+  client: BreezClient,
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-lightning-bolt11
@@ -146,7 +146,7 @@ const exampleSendPaymentLightningBolt11 = async (
     completionTimeoutSecs: 10
   })
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const sendResponse = await sdk.sendPayment({
+  const sendResponse = await client.sendPayment({
     prepareResponse,
     options,
     idempotencyKey: optionalIdempotencyKey
@@ -157,7 +157,7 @@ const exampleSendPaymentLightningBolt11 = async (
 }
 
 const exampleSendPaymentOnchain = async (
-  sdk: BreezSdk,
+  client: BreezClient,
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-onchain
@@ -166,7 +166,7 @@ const exampleSendPaymentOnchain = async (
     confirmationSpeed: OnchainConfirmationSpeed.Medium
   })
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const sendResponse = await sdk.sendPayment({
+  const sendResponse = await client.sendPayment({
     prepareResponse,
     options,
     idempotencyKey: optionalIdempotencyKey
@@ -177,12 +177,12 @@ const exampleSendPaymentOnchain = async (
 }
 
 const exampleSendPaymentSpark = async (
-  sdk: BreezSdk,
+  client: BreezClient,
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: send-payment-spark
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const sendResponse = await sdk.sendPayment({
+  const sendResponse = await client.sendPayment({
     prepareResponse,
     options: undefined,
     idempotencyKey: optionalIdempotencyKey
@@ -192,7 +192,7 @@ const exampleSendPaymentSpark = async (
   console.log(payment)
 }
 
-const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentFeesIncluded = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-fees-included
   // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
   // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
@@ -200,7 +200,7 @@ const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
   const paymentRequest = '<payment request>'
   const amountSats = BigInt(50_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount: amountSats,
     tokenIdentifier: undefined,

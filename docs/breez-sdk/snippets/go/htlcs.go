@@ -10,7 +10,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
+func SendHtlcPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-htlc-payment
 	paymentRequest := "<spark address>"
 	// Set the amount you wish to pay the receiver
@@ -22,7 +22,7 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 		ConversionOptions: nil,
 		FeePolicy:         nil,
 	}
-	prepareResponse, err := sdk.PrepareSendPayment(prepareRequest)
+	prepareResponse, err := client.PrepareSendPayment(prepareRequest)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -61,7 +61,7 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 		PrepareResponse: prepareResponse,
 		Options:         &options,
 	}
-	sendResponse, err := sdk.SendPayment(request)
+	sendResponse, err := client.SendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -77,7 +77,7 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 	return &payment, nil
 }
 
-func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
+func ListClaimableHtlcPayments(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-claimable-htlc-payments
 	typeFilter := []breez_sdk_spark.PaymentType{
 		breez_sdk_spark.PaymentTypeReceive,
@@ -99,7 +99,7 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 		PaymentDetailsFilter:  &paymentDetailsFilter,
 	}
 
-	response, err := sdk.ListPayments(request)
+	response, err := client.ListPayments(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -115,13 +115,13 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	return &payments, nil
 }
 
-func ClaimHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
+func ClaimHtlcPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: claim-htlc-payment
 	preimage := "<preimage hex>"
 	request := breez_sdk_spark.ClaimHtlcPaymentRequest{
 		Preimage: preimage,
 	}
-	response, err := sdk.ClaimHtlcPayment(request)
+	response, err := client.ClaimHtlcPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

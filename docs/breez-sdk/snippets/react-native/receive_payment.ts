@@ -1,9 +1,9 @@
 import {
   ReceivePaymentMethod,
-  type BreezSdk
+  type BreezClient
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
+const exampleReceiveLightningPayment = async (client: BreezClient) => {
   // ANCHOR: receive-payment-lightning-bolt11
   const description = '<invoice description>'
   // Optionally set the invoice amount you wish the payer to send
@@ -11,7 +11,7 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   // Optionally set the expiry duration in seconds
   const optionalExpirySecs = 3600
 
-  const response = await sdk.receivePayment({
+  const response = await client.receivePayment({
     paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
       description,
       amountSats: optionalAmountSats,
@@ -26,9 +26,9 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: receive-payment-lightning-bolt11
 }
 
-const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
+const exampleReceiveOnchainPayment = async (client: BreezClient) => {
   // ANCHOR: receive-payment-onchain
-  const response = await sdk.receivePayment({
+  const response = await client.receivePayment({
     paymentMethod: new ReceivePaymentMethod.BitcoinAddress()
   })
 
@@ -39,9 +39,9 @@ const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: receive-payment-onchain
 }
 
-const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
+const exampleReceiveSparkAddress = async (client: BreezClient) => {
   // ANCHOR: receive-payment-spark-address
-  const response = await sdk.receivePayment({
+  const response = await client.receivePayment({
     paymentMethod: new ReceivePaymentMethod.SparkAddress()
   })
 
@@ -52,7 +52,7 @@ const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: receive-payment-spark-address
 }
 
-const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
+const exampleReceiveSparkInvoice = async (client: BreezClient) => {
   // ANCHOR: receive-payment-spark-invoice
   const optionalDescription = '<invoice description>'
   const optionalAmountSats = BigInt(5_000)
@@ -60,7 +60,7 @@ const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   const optionalExpiryTimeSeconds = BigInt(1716691200)
   const optionalSenderPublicKey = '<sender public key>'
 
-  const response = await sdk.receivePayment({
+  const response = await client.receivePayment({
     paymentMethod: new ReceivePaymentMethod.SparkInvoice({
       description: optionalDescription,
       amount: optionalAmountSats,

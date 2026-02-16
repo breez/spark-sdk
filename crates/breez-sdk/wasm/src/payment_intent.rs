@@ -7,20 +7,21 @@ use crate::{
     models::{ConfirmPaymentResponse, PayOptions, PaymentIntentType, PreparedPaymentFee},
 };
 
-/// An intent to send a payment, ready to be reviewed and confirmed.
+/// A prepared payment, ready to be reviewed and sent.
 ///
-/// Created by `Wallet.createPayment()`. Inspect `paymentType`, `amount`,
-/// and `fee` to preview the payment, then call `confirm()` to execute it.
+/// Created by `BreezClient.preparePayment()`. Inspect `paymentType`, `amountSats`/`amountTokenUnits`,
+/// and `fee` to preview the payment, then call `send()` to execute it.
 ///
 /// This is the WASM equivalent of `PreparedPayment` in the core SDK.
 /// The name follows the Stripe convention: a `PaymentIntent` represents
 /// a payment that hasn't been executed yet.
 #[wasm_bindgen(js_name = "PaymentIntent")]
 pub struct PaymentIntent {
-    pub(crate) inner: breez_sdk_spark::PreparedPayment<Rc<breez_sdk_spark::BreezSdk>>,
+    pub(crate) inner: breez_sdk_spark::PreparedPayment<Rc<breez_sdk_spark::BreezClient>>,
 }
 
 #[wasm_bindgen(js_class = "PaymentIntent")]
+#[allow(deprecated)]
 impl PaymentIntent {
     /// The type of payment: `'spark'`, `'lightning'`, or `'onchain'`.
     #[wasm_bindgen(getter, js_name = "paymentType")]
@@ -28,7 +29,21 @@ impl PaymentIntent {
         self.inner.payment_type().into()
     }
 
-    /// The amount that will be sent.
+    /// The amount in satoshis, if this is a Bitcoin payment.
+    /// Returns `undefined` for token payments.
+    #[wasm_bindgen(getter, js_name = "amountSats")]
+    pub fn amount_sats(&self) -> Option<u64> {
+        self.inner.amount_sats()
+    }
+
+    /// The amount in token base units, if this is a token payment.
+    /// Returns `undefined` for Bitcoin payments.
+    #[wasm_bindgen(getter, js_name = "amountTokenUnits")]
+    pub fn amount_token_units(&self) -> Option<String> {
+        self.inner.amount_token_units().map(|v| v.to_string())
+    }
+
+    /// @deprecated Use `amountSats` or `amountTokenUnits` instead.
     #[wasm_bindgen(getter)]
     pub fn amount(&self) -> String {
         self.inner.amount().to_string()
@@ -43,9 +58,17 @@ impl PaymentIntent {
     /// The fee in sats (convenience accessor).
     ///
     /// For on-chain payments, returns the medium-speed tier fee.
+    /// Returns 0 for token payments — use `feeTokenUnits` instead.
     #[wasm_bindgen(getter, js_name = "feeSats")]
     pub fn fee_sats(&self) -> u64 {
         self.inner.fee().fee_sats()
+    }
+
+    /// The fee in token base units, if this is a token payment.
+    /// Returns `undefined` for non-token payments.
+    #[wasm_bindgen(getter, js_name = "feeTokenUnits")]
+    pub fn fee_token_units(&self) -> Option<String> {
+        self.inner.fee().fee_token_units().map(|v| v.to_string())
     }
 
     /// The token identifier, if this is a token payment.
@@ -60,16 +83,12 @@ impl PaymentIntent {
         self.inner.is_lnurl()
     }
 
-    /// Confirm and execute the payment.
+    /// Execute the payment.
     #[wasm_bindgen]
-    pub async fn confirm(&self, options: Option<PayOptions>) -> WasmResult<ConfirmPaymentResponse> {
+    pub async fn send(&self, options: Option<PayOptions>) -> WasmResult<ConfirmPaymentResponse> {
         let options = options.map(Into::into);
-        Ok(self.inner.confirm(options).await?.into())
+        Ok(self.inner.send(options).await?.into())
     }
+
 }
 
-// Keep backward-compat type alias so existing imports still work
-#[wasm_bindgen(typescript_custom_section)]
-const PREPARED_PAYMENT_ALIAS: &str = r#"
-/** @deprecated Use `PaymentIntent` instead. */
-export type PreparedPayment = PaymentIntent;"#;

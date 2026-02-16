@@ -1,11 +1,11 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { type BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleSignMessage = async (sdk: BreezSdk) => {
+const exampleSignMessage = async (client: BreezClient) => {
   // ANCHOR: sign-message
   // Set to true to get a compact signature rather than a DER
   const compact = true
 
-  const signMessageResponse = await sdk.signMessage({
+  const signMessageResponse = await client.signMessage({
     message: '<message to sign>',
     compact
   })
@@ -18,9 +18,9 @@ const exampleSignMessage = async (sdk: BreezSdk) => {
   // ANCHOR_END: sign-message
 }
 
-const exampleCheckMessage = async (sdk: BreezSdk) => {
+const exampleCheckMessage = async (client: BreezClient) => {
   // ANCHOR: check-message
-  const checkMessageResponse = await sdk.checkMessage({
+  const checkMessageResponse = await client.checkMessage({
     message: '<message>',
     pubkey: '<pubkey of signer>',
     signature: '<message signature>'

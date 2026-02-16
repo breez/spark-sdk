@@ -4,11 +4,11 @@ namespace BreezSdkSnippets
 {
     class RefundingPayments
     {
-        async Task ListUnclaimedDeposits(BreezSdk sdk)
+        async Task ListUnclaimedDeposits(BreezClient client)
         {
             // ANCHOR: list-unclaimed-deposits
             var request = new ListUnclaimedDepositsRequest();
-            var response = await sdk.ListUnclaimedDeposits(request: request);
+            var response = await client.ListUnclaimedDeposits(request: request);
 
             foreach (var deposit in response.deposits)
             {
@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: list-unclaimed-deposits
         }
 
-        async Task HandleFeeExceeded(BreezSdk sdk, DepositInfo deposit)
+        async Task HandleFeeExceeded(BreezClient client, DepositInfo deposit)
         {
             // ANCHOR: handle-fee-exceeded
             if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
@@ -64,13 +64,13 @@ namespace BreezSdkSnippets
                         vout: deposit.vout,
                         maxFee: new MaxFee.Fixed(amount: requiredFee)
                     );
-                    await sdk.ClaimDeposit(request: claimRequest);
+                    await client.ClaimDeposit(request: claimRequest);
                 }
             }
             // ANCHOR_END: handle-fee-exceeded
         }
 
-        async Task RefundDeposit(BreezSdk sdk)
+        async Task RefundDeposit(BreezClient client)
         {
             // ANCHOR: refund-deposit
             var txid = "your_deposit_txid";
@@ -78,7 +78,7 @@ namespace BreezSdkSnippets
             var destinationAddress = "bc1qexample...";  // Your Bitcoin address
 
             // Set the fee for the refund transaction using the half-hour feerate
-            var recommendedFees = await sdk.RecommendedFees();
+            var recommendedFees = await client.RecommendedFees();
             var fee = new Fee.Rate(satPerVbyte: recommendedFees.halfHourFee);
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
@@ -91,7 +91,7 @@ namespace BreezSdkSnippets
                 fee: fee
             );
 
-            var response = await sdk.RefundDeposit(request: request);
+            var response = await client.RefundDeposit(request: request);
             Console.WriteLine("Refund transaction created:");
             Console.WriteLine($"Transaction ID: {response.txId}");
             Console.WriteLine($"Transaction hex: {response.txHex}");
@@ -114,14 +114,14 @@ namespace BreezSdkSnippets
             Console.WriteLine($"Config: {config}");
         }
 
-        async Task CustomClaimLogic(BreezSdk sdk, DepositInfo deposit)
+        async Task CustomClaimLogic(BreezClient client, DepositInfo deposit)
         {
             // ANCHOR: custom-claim-logic
             if (deposit.claimError is DepositClaimError.MaxDepositClaimFeeExceeded exceeded)
             {
                 var requiredFeeRate = exceeded.requiredFeeRateSatPerVbyte;
 
-                var recommendedFees = await sdk.RecommendedFees();
+                var recommendedFees = await client.RecommendedFees();
 
                 if (requiredFeeRate <= recommendedFees.fastestFee)
                 {
@@ -130,16 +130,16 @@ namespace BreezSdkSnippets
                         vout: deposit.vout,
                         maxFee: new MaxFee.Rate(satPerVbyte: requiredFeeRate)
                     );
-                    await sdk.ClaimDeposit(request: claimRequest);
+                    await client.ClaimDeposit(request: claimRequest);
                 }
             }
             // ANCHOR_END: custom-claim-logic
         }
 
-        async Task RecommendedFees(BreezSdk sdk)
+        async Task RecommendedFees(BreezClient client)
         {
             // ANCHOR: recommended-fees
-            var response = await sdk.RecommendedFees();
+            var response = await client.RecommendedFees();
             Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
             Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
             Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");

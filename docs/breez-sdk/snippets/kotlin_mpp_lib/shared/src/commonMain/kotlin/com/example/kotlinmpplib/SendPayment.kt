@@ -4,7 +4,7 @@ import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class SendPayment {
-    suspend fun prepareSendPaymentLightningBolt11(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentLightningBolt11(client: BreezClient) {
         // ANCHOR: prepare-send-payment-lightning-bolt11
         val paymentRequest = "<bolt11 invoice>"
         // Optionally set the amount you wish to pay the receiver
@@ -21,7 +21,7 @@ class SendPayment {
                 conversionOptions = null,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
             val paymentMethod = prepareResponse.paymentMethod
@@ -39,7 +39,7 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-lightning-bolt11
     }
 
-    suspend fun prepareSendPaymentOnchain(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentOnchain(client: BreezClient) {
         // ANCHOR: prepare-send-payment-onchain
         val paymentRequest = "<bitcoin address>"
         // Set the amount you wish to pay the receiver
@@ -56,7 +56,7 @@ class SendPayment {
                 conversionOptions = null,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // Review the fee quote for each confirmation speed
             val paymentMethod = prepareResponse.paymentMethod
@@ -75,7 +75,7 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-onchain
     }
 
-    suspend fun prepareSendPaymentFeesIncluded(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentFeesIncluded(client: BreezClient) {
         // ANCHOR: prepare-send-payment-fees-included
         // By default (FeePolicy.FEES_EXCLUDED), fees are added on top of the amount.
         // Use FeePolicy.FEES_INCLUDED to deduct fees from the amount instead.
@@ -94,7 +94,7 @@ class SendPayment {
                 conversionOptions = null,
                 feePolicy = FeePolicy.FEES_INCLUDED,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // The response shows the fee policy used
             // Log.v("Breez", "Fee policy: ${prepareResponse.feePolicy}")
@@ -106,7 +106,7 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-fees-included
     }
 
-    suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentSparkAddress(client: BreezClient) {
         // ANCHOR: prepare-send-payment-spark-address
         val paymentRequest = "<spark address>"
         // Set the amount you wish to pay the receiver
@@ -123,7 +123,7 @@ class SendPayment {
                 conversionOptions = null,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
             val paymentMethod = prepareResponse.paymentMethod
@@ -137,7 +137,7 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-spark-address
     }
 
-    suspend fun prepareSendPaymentSparkInvoice(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentSparkInvoice(client: BreezClient) {
         // ANCHOR: prepare-send-payment-spark-invoice
         val paymentRequest = "<spark invoice>"
         // Optionally set the amount you wish to pay the receiver
@@ -154,7 +154,7 @@ class SendPayment {
                 conversionOptions = null,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
             val paymentMethod = prepareResponse.paymentMethod
@@ -168,7 +168,7 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-spark-invoice
     }
     
-    suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentTokenConversion(client: BreezClient) {
         // ANCHOR: prepare-send-payment-with-conversion
         val paymentRequest = "<payment request>"
         // Set to use token funds to pay via conversion
@@ -190,7 +190,7 @@ class SendPayment {
                 conversionOptions = conversionOptions,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(req)
+            val prepareResponse = client.prepareSendPayment(req)
 
             // If the fees are acceptable, continue to create the Send Payment
             prepareResponse.conversionEstimate?.let { conversionEstimate ->
@@ -204,7 +204,7 @@ class SendPayment {
     }
 
     suspend fun sendPaymentLightningBolt11(
-            sdk: BreezSdk,
+            client: BreezClient,
             prepareResponse: PrepareSendPaymentResponse
     ) {
         // ANCHOR: send-payment-lightning-bolt11
@@ -214,7 +214,7 @@ class SendPayment {
                 completionTimeoutSecs = 10u
             )
             val optionalIdempotencyKey = "<idempotency key uuid>"
-            val sendResponse = sdk.sendPayment(
+            val sendResponse = client.sendPayment(
                 SendPaymentRequest(
                     prepareResponse,
                     options,
@@ -228,7 +228,7 @@ class SendPayment {
         // ANCHOR_END: send-payment-lightning-bolt11
     }
 
-    suspend fun sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
+    suspend fun sendPaymentOnchain(client: BreezClient, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-onchain
         try {
             // Select the confirmation speed for the on-chain transaction
@@ -236,7 +236,7 @@ class SendPayment {
                 confirmationSpeed = OnchainConfirmationSpeed.MEDIUM
             )
             val optionalIdempotencyKey = "<idempotency key uuid>"
-            val sendResponse = sdk.sendPayment(
+            val sendResponse = client.sendPayment(
                 SendPaymentRequest(
                     prepareResponse,
                     options,
@@ -250,11 +250,11 @@ class SendPayment {
         // ANCHOR_END: send-payment-onchain
     }
 
-    suspend fun sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) {
+    suspend fun sendPaymentSpark(client: BreezClient, prepareResponse: PrepareSendPaymentResponse) {
         // ANCHOR: send-payment-spark
         try {
             val optionalIdempotencyKey = "<idempotency key uuid>"
-            val sendResponse = sdk.sendPayment(
+            val sendResponse = client.sendPayment(
                 SendPaymentRequest(
                     prepareResponse,
                     idempotencyKey = optionalIdempotencyKey

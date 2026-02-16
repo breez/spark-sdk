@@ -1,7 +1,7 @@
 import {
   type Payment,
   type TokenMetadata,
-  type Wallet,
+  type BreezClient,
   type TokenIssuer,
   type Seed,
   defaultConfig,
@@ -14,9 +14,9 @@ import { Network } from 'node:inspector'
 // Init stub
 const init = async () => { }
 
-const getTokenIssuer = (wallet: Wallet) => {
+const getTokenIssuer = (client: BreezClient) => {
   // ANCHOR: get-token-issuer
-  const tokenIssuer = wallet.tokenIssuer
+  const tokenIssuer = client.tokenIssuer
   // ANCHOR_END: get-token-issuer
   return tokenIssuer
 }

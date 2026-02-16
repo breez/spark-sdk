@@ -1,6 +1,6 @@
 import BreezSdkSpark
 
-func initSdk() async throws -> BreezSdk {
+func initSdk() async throws -> BreezClient {
     // ANCHOR: init-sdk
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>"
@@ -11,7 +11,7 @@ func initSdk() async throws -> BreezSdk {
     config.apiKey = "<breez api key>"
 
     // Connect to the SDK using the simplified connect method
-    let sdk = try await connect(
+    let client = try await connect(
         request: ConnectRequest(
             config: config,
             seed: seed,
@@ -19,14 +19,14 @@ func initSdk() async throws -> BreezSdk {
         ))
     // ANCHOR_END: init-sdk
 
-    return sdk
+    return client
 }
 
-func gettingStartedNodeInfo(sdk: BreezSdk) async throws {
+func gettingStartedNodeInfo(client: BreezClient) async throws {
     // ANCHOR: fetch-balance
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
-    let info = try await sdk.getInfo(
+    let info = try await client.getInfo(
         request: GetInfoRequest(
             ensureSynced: false
         ))
@@ -81,15 +81,15 @@ class SdkEventListener: EventListener {
     }
 }
 
-func addEventListener(sdk: BreezSdk, listener: SdkEventListener) async -> String {
-    let listenerId = await sdk.addEventListener(listener: listener)
+func addEventListener(client: BreezClient, listener: SdkEventListener) async -> String {
+    let listenerId = await client.addEventListener(listener: listener)
     return listenerId
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-func removeEventListener(sdk: BreezSdk, listenerId: String) async {
-    await sdk.removeEventListener(id: listenerId)
+func removeEventListener(client: BreezClient, listenerId: String) async {
+    await client.removeEventListener(id: listenerId)
 }
 // ANCHOR_END: remove-event-listener
 
@@ -115,7 +115,7 @@ func gettingStartedSparkStatus() async throws {
 // ANCHOR_END: spark-status
 
 // ANCHOR: disconnect
-func disconnect(sdk: BreezSdk) async throws {
-    try await sdk.disconnect()
+func disconnect(client: BreezClient) async throws {
+    try await client.disconnect()
 }
 // ANCHOR_END: disconnect

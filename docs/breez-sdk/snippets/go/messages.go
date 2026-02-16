@@ -7,7 +7,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func SignMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.SignMessageResponse, error) {
+func SignMessage(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.SignMessageResponse, error) {
 	// ANCHOR: sign-message
 	message := "<message to sign>"
 	// Set to true to get a compact signature rather than a DER
@@ -17,7 +17,7 @@ func SignMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.SignMessageRes
 		Message: message,
 		Compact: compact,
 	}
-	signMessageResponse, err := sdk.SignMessage(signMessageRequest)
+	signMessageResponse, err := client.SignMessage(signMessageRequest)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -36,7 +36,7 @@ func SignMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.SignMessageRes
 	return &signMessageResponse, nil
 }
 
-func CheckMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.CheckMessageResponse, error) {
+func CheckMessage(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.CheckMessageResponse, error) {
 	// ANCHOR: check-message
 	message := "<message>"
 	pubkey := "<pubkey of signer>"
@@ -47,7 +47,7 @@ func CheckMessage(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.CheckMessageR
 		Pubkey:    pubkey,
 		Signature: signature,
 	}
-	checkMessageResponse, err := sdk.CheckMessage(checkMessageRequest)
+	checkMessageResponse, err := client.CheckMessage(checkMessageRequest)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

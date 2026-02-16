@@ -7,14 +7,14 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func LnurlWithdraw(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LnurlWithdrawResponse, error) {
+func LnurlWithdraw(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.LnurlWithdrawResponse, error) {
 	// ANCHOR: lnurl-withdraw
 	// Endpoint can also be of the form:
 	// lnurlw://domain.com/lnurl-withdraw?key=val
 	lnurlWithdrawUrl := "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4exctthd96xserjv9mn7um9wdekj" +
 		"mmw843xxwpexdnxzen9vgunsvfexq6rvdecx93rgdmyxcuxverrvcursenpxvukzv3c8qunsdecx33nzwpnvg6ryc3hv93nzvecxgcxgwp3h33lxk"
 
-	input, err := sdk.Parse(lnurlWithdrawUrl)
+	input, err := client.Parse(lnurlWithdrawUrl)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -38,7 +38,7 @@ func LnurlWithdraw(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LnurlWithdra
 			CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
 		}
 
-		response, err := sdk.LnurlWithdraw(request)
+		response, err := client.LnurlWithdraw(request)
 
 		if err != nil {
 			var sdkErr *breez_sdk_spark.SdkError

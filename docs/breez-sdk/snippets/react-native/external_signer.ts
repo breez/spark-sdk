@@ -31,7 +31,7 @@ const exampleConnectWithSigner = async (signer: ReturnType<typeof defaultExterna
   config.apiKey = '<breez api key>'
 
   // Connect using the external signer
-  const sdk = await connectWithSigner({
+  const client = await connectWithSigner({
     config,
     signer,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`

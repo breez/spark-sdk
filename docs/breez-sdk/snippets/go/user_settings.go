@@ -7,9 +7,9 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
+func GetUserSettings(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: get-user-settings
-	userSettings, err := sdk.GetUserSettings()
+	userSettings, err := client.GetUserSettings()
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -25,10 +25,10 @@ func GetUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
+func UpdateUserSettings(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: update-user-settings
 	sparkPrivateModeEnabled := true
-	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
+	err := client.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
 		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
 	})
 

@@ -41,14 +41,14 @@ func createSigner() (breez_sdk_spark.ExternalSigner, error) {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.BreezSdk, error) {
+func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.BreezClient, error) {
 	// Create the config
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	apiKey := "<breez api key>"
 	config.ApiKey = &apiKey
 
 	// Connect using the external signer
-	sdk, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
+	client, err := breez_sdk_spark.ConnectWithSigner(breez_sdk_spark.ConnectWithSignerRequest{
 		Config:     config,
 		Signer:     signer,
 		StorageDir: "./.data",
@@ -62,7 +62,7 @@ func connectWithSigner(signer breez_sdk_spark.ExternalSigner) (*breez_sdk_spark.
 		return nil, err
 	}
 
-	return sdk, nil
+	return client, nil
 }
 
 // ANCHOR_END: connect-with-signer

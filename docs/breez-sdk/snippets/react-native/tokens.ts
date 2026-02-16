@@ -2,12 +2,12 @@ import {
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
   ConversionType,
-  type BreezSdk
+  type BreezClient
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
+const exampleFetchTokenBalances = async (client: BreezClient) => {
   // ANCHOR: fetch-token-balances
-  const info = await sdk.getInfo({
+  const info = await client.getInfo({
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
     ensureSynced: false
@@ -25,9 +25,9 @@ const exampleFetchTokenBalances = async (sdk: BreezSdk) => {
   // ANCHOR_END: fetch-token-balances
 }
 
-const exampleFetchTokenMetadata = async (sdk: BreezSdk) => {
+const exampleFetchTokenMetadata = async (client: BreezClient) => {
   // ANCHOR: fetch-token-metadata
-  const response = await sdk.getTokensMetadata({
+  const response = await client.getTokensMetadata({
     tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
   })
 
@@ -43,7 +43,7 @@ const exampleFetchTokenMetadata = async (sdk: BreezSdk) => {
   // ANCHOR_END: fetch-token-metadata
 }
 
-const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
+const exampleReceiveTokenPaymentSparkInvoice = async (client: BreezClient) => {
   // ANCHOR: receive-token-payment-spark-invoice
   const tokenIdentifier = '<token identifier>'
   const optionalDescription = '<invoice description>'
@@ -52,7 +52,7 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
   const optionalExpiryTimeSeconds = BigInt(1716691200)
   const optionalSenderPublicKey = '<sender public key>'
 
-  const response = await sdk.receivePayment({
+  const response = await client.receivePayment({
     paymentMethod: new ReceivePaymentMethod.SparkInvoice({
       tokenIdentifier,
       description: optionalDescription,
@@ -69,7 +69,7 @@ const exampleReceiveTokenPaymentSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR_END: receive-token-payment-spark-invoice
 }
 
-const exampleSendTokenPayment = async (sdk: BreezSdk) => {
+const exampleSendTokenPayment = async (client: BreezClient) => {
   // ANCHOR: send-token-payment
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
@@ -77,7 +77,7 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // Set the amount of tokens you wish to send (in token base units).
   const amount = BigInt(1_000)
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount,
     tokenIdentifier,
@@ -96,7 +96,7 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   }
 
   // Send the token payment
-  const sendResponse = await sdk.sendPayment({
+  const sendResponse = await client.sendPayment({
     prepareResponse,
     options: undefined,
     idempotencyKey: undefined
@@ -106,10 +106,10 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   // ANCHOR_END: send-token-payment
 }
 
-const exampleFetchConversionLimits = async (sdk: BreezSdk) => {
+const exampleFetchConversionLimits = async (client: BreezClient) => {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  const fromBitcoinResponse = await sdk.fetchConversionLimits({
+  const fromBitcoinResponse = await client.fetchConversionLimits({
     conversionType: new ConversionType.FromBitcoin(),
     tokenIdentifier: '<token identifier>'
   })
@@ -122,7 +122,7 @@ const exampleFetchConversionLimits = async (sdk: BreezSdk) => {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  const toBitcoinResponse = await sdk.fetchConversionLimits({
+  const toBitcoinResponse = await client.fetchConversionLimits({
     conversionType: new ConversionType.ToBitcoin({
       fromTokenIdentifier: '<token identifier>'
     }),
@@ -138,7 +138,7 @@ const exampleFetchConversionLimits = async (sdk: BreezSdk) => {
   // ANCHOR_END: fetch-conversion-limits
 }
 
-const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
+const examplePrepareSendPaymentTokenConversion = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-with-conversion
   const paymentRequest = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
@@ -154,7 +154,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
 
-  const prepareResponse = await sdk.prepareSendPayment({
+  const prepareResponse = await client.prepareSendPayment({
     paymentRequest,
     amount,
     tokenIdentifier,

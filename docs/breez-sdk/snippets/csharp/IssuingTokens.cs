@@ -5,10 +5,10 @@ namespace BreezSdkSnippets
 {
     class IssuingTokens
     {
-        void GetTokenIssuer(BreezSdk sdk)
+        void GetTokenIssuer(BreezClient client)
         {
             // ANCHOR: get-token-issuer
-            var tokenIssuer = sdk.GetTokenIssuer();
+            var tokenIssuer = client.GetTokenIssuer();
             // ANCHOR_END: get-token-issuer
         }
 
@@ -51,7 +51,7 @@ namespace BreezSdkSnippets
             );
             await builder.WithKeySet(keySetConfig);
 
-            var sdk = await builder.Build();
+            var client = await builder.Build();
             // ANCHOR_END: custom-account-number
         }
 
@@ -77,7 +77,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: burn-token
         }
 
-        async Task ListMintBurnPayments(BreezSdk sdk)
+        async Task ListMintBurnPayments(BreezClient client)
         {
             // ANCHOR: list-mint-burn-payments
             // Provide one or multiple of the following filters to 

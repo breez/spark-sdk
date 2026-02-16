@@ -5,19 +5,18 @@ use crate::{
     ReceivePaymentRequest,
     error::SdkError,
     models::{
-        PayOptions, PrepareOptions, PreparedPaymentData, ReceiveOptions, ReceivePaymentType,
-        ReceiveResult,
-        prepared_payment::{ConfirmPaymentResponse, PreparedPayment, PreparedPaymentHandle},
+        PrepareOptions, PreparedPaymentData, ReceiveOptions, ReceivePaymentType, ReceiveResult,
+        prepared_payment::{PreparedPayment, PreparedPaymentHandle},
     },
 };
 
-use super::BreezSdk;
+use super::BreezClient;
 
 // prepare() and pay() return PreparedPayment<S> which is generic and cannot be
 // exported through UniFFI.  WASM bindings wrap these in crates/breez-sdk/wasm/src/sdk.rs.
 // UniFFI bindings will be added in Phase 6 (language binding idiomaticity).
 #[allow(deprecated)] // New unified API delegates to legacy methods internally
-impl BreezSdk {
+impl BreezClient {
     /// Parse the destination and prepare a payment in one step.
     ///
     /// This is the main entry point for the unified payment API.
@@ -36,7 +35,7 @@ impl BreezSdk {
         &self,
         destination: &str,
         options: Option<PrepareOptions>,
-    ) -> Result<PreparedPayment<Arc<BreezSdk>>, SdkError> {
+    ) -> Result<PreparedPayment<Arc<BreezClient>>, SdkError> {
         let options = options.unwrap_or_default();
         let parsed = self.parse(destination).await?;
 
@@ -49,20 +48,23 @@ impl BreezSdk {
                     _ => unreachable!(),
                 };
 
-                let amount_sats: u64 = options
-                    .amount
-                    .ok_or(SdkError::InvalidInput(
-                        "Amount is required for LNURL-Pay/Lightning Address".to_string(),
-                    ))?
-                    .try_into()
-                    .map_err(|_| SdkError::InvalidInput("Amount too large".to_string()))?;
+                if options.amount_token_units.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "LNURL-Pay/Lightning Address only supports amount_sats, not amount_token_units".to_string(),
+                    ));
+                }
 
+                let amount_sats: u64 = options.amount_sats.ok_or(SdkError::InvalidInput(
+                    "amount_sats is required for LNURL-Pay/Lightning Address".to_string(),
+                ))?;
+
+                let lnurl_opts = options.lnurl.unwrap_or_default();
                 let response = self
                     .prepare_lnurl_pay(PrepareLnurlPayRequest {
                         amount_sats,
                         pay_request: pay_request_details,
-                        comment: options.lnurl_comment,
-                        validate_success_action_url: options.lnurl_validate_success_action_url,
+                        comment: lnurl_opts.comment,
+                        validate_success_action_url: lnurl_opts.validate_success_action_url,
                         conversion_options: options.conversion_options,
                         fee_policy: options.fee_policy,
                     })
@@ -76,10 +78,11 @@ impl BreezSdk {
             | InputType::SparkInvoice(_)
             | InputType::Bolt11Invoice(_)
             | InputType::BitcoinAddress(_) => {
+                let amount = options.unified_amount()?;
                 let response = self
                     .prepare_send_payment(PrepareSendPaymentRequest {
                         payment_request: destination.to_string(),
-                        amount: options.amount,
+                        amount,
                         token_identifier: options.token_identifier,
                         conversion_options: options.conversion_options,
                         fee_policy: options.fee_policy,
@@ -93,10 +96,13 @@ impl BreezSdk {
             InputType::Bip21(bip21) => {
                 // Use the raw destination so prepare_send_payment can re-parse and extract
                 // the best payment method from the BIP21 URI.
+                let amount = options
+                    .unified_amount()?
+                    .or(bip21.amount_sat.map(u128::from));
                 let response = self
                     .prepare_send_payment(PrepareSendPaymentRequest {
                         payment_request: destination.to_string(),
-                        amount: options.amount.or(bip21.amount_sat.map(u128::from)),
+                        amount,
                         token_identifier: options.token_identifier,
                         conversion_options: options.conversion_options,
                         fee_policy: options.fee_policy,
@@ -122,30 +128,12 @@ impl BreezSdk {
         Ok(PreparedPayment::new(sdk_ref, data))
     }
 
-    /// Parse, prepare, and execute a payment in one step.
-    ///
-    /// This is the simplest way to send a payment — a one-liner for callers
-    /// who don't need to preview fees before confirming.
-    ///
-    /// # Example (Rust)
-    /// ```ignore
-    /// let result = sdk.pay("lnbc1...", None, None).await?;
-    /// ```
-    pub async fn pay(
-        &self,
-        destination: &str,
-        prepare_options: Option<PrepareOptions>,
-        pay_options: Option<PayOptions>,
-    ) -> Result<ConfirmPaymentResponse, SdkError> {
-        let prepared = self.prepare(destination, prepare_options).await?;
-        prepared.confirm(pay_options).await
-    }
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 #[allow(deprecated)] // receive() delegates to legacy receive_payment() internally
-impl BreezSdk {
+impl BreezClient {
     /// Parse the destination and prepare a payment in one step.
     ///
     /// Returns a [`PreparedPaymentHandle`] that can be inspected (amount, fee)
@@ -159,18 +147,6 @@ impl BreezSdk {
     ) -> Result<Arc<PreparedPaymentHandle>, SdkError> {
         let prepared = self.prepare(&destination, options).await?;
         Ok(Arc::new(PreparedPaymentHandle::new(prepared)))
-    }
-
-    /// Parse, prepare, and execute a payment in one step.
-    ///
-    /// This is the UniFFI-exported version of [`pay`](Self::pay).
-    pub async fn pay_to_destination(
-        &self,
-        destination: String,
-        prepare_options: Option<PrepareOptions>,
-        pay_options: Option<PayOptions>,
-    ) -> Result<ConfirmPaymentResponse, SdkError> {
-        self.pay(&destination, prepare_options, pay_options).await
     }
 
     /// Generate a payment request (invoice, address) to receive funds.
@@ -190,40 +166,68 @@ impl BreezSdk {
     /// ```
     pub async fn receive(&self, options: ReceiveOptions) -> Result<ReceiveResult, SdkError> {
         let payment_type = options.payment_type.unwrap_or_default();
+        let has_token = options.token_identifier.is_some();
 
         let payment_method = match payment_type {
             ReceivePaymentType::Lightning => {
-                let amount_sats: Option<u64> = options
-                    .amount
-                    .map(|a| {
-                        a.try_into()
-                            .map_err(|_| SdkError::InvalidInput("Amount too large".to_string()))
-                    })
-                    .transpose()?;
+                if options.amount_token_units.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "Lightning receive only supports amount_sats, not amount_token_units"
+                            .to_string(),
+                    ));
+                }
                 ReceivePaymentMethod::Bolt11Invoice {
                     description: options.description.unwrap_or_default(),
-                    amount_sats,
+                    amount_sats: options.amount_sats,
                     expiry_secs: options.expiry.map(|e| e.try_into().unwrap_or(u32::MAX)),
                 }
             }
-            ReceivePaymentType::Onchain => ReceivePaymentMethod::BitcoinAddress,
-            ReceivePaymentType::SparkAddress => ReceivePaymentMethod::SparkAddress,
-            ReceivePaymentType::SparkInvoice => ReceivePaymentMethod::SparkInvoice {
-                amount: options.amount,
-                token_identifier: options.token_identifier,
-                expiry_time: options.expiry,
-                description: options.description,
-                sender_public_key: options.sender_public_key,
-            },
+            ReceivePaymentType::Onchain => {
+                if options.amount_token_units.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "Onchain receive only supports amount_sats, not amount_token_units"
+                            .to_string(),
+                    ));
+                }
+                ReceivePaymentMethod::BitcoinAddress
+            }
+            ReceivePaymentType::SparkAddress => {
+                if options.amount_token_units.is_some() {
+                    return Err(SdkError::InvalidInput(
+                        "SparkAddress receive only supports amount_sats, not amount_token_units"
+                            .to_string(),
+                    ));
+                }
+                ReceivePaymentMethod::SparkAddress
+            }
+            ReceivePaymentType::SparkInvoice => {
+                let amount = options.unified_amount()?;
+                ReceivePaymentMethod::SparkInvoice {
+                    amount,
+                    token_identifier: options.token_identifier,
+                    expiry_time: options.expiry,
+                    description: options.description,
+                    sender_public_key: options.sender_public_key,
+                }
+            }
         };
 
         let response = self
             .receive_payment(ReceivePaymentRequest { payment_method })
             .await?;
 
+        // The legacy response.fee is dual-purpose (sats or token units).
+        // Split into the appropriate field based on whether this is a token receive.
+        let (fee_sats, fee_token_units) = if has_token {
+            (0, Some(response.fee))
+        } else {
+            (response.fee as u64, None)
+        };
+
         Ok(ReceiveResult {
             destination: response.payment_request,
-            fee: response.fee,
+            fee_sats,
+            fee_token_units,
         })
     }
 }

@@ -1,7 +1,7 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     TokenIssuer,
     CreateIssuerTokenRequest,
     MintIssuerTokenRequest,
@@ -19,9 +19,9 @@ from breez_sdk_spark import (
 )
 
 
-def get_token_issuer(sdk: BreezSdk):
+def get_token_issuer(client: BreezClient):
     # ANCHOR: get-token-issuer
-    token_issuer = sdk.get_token_issuer()
+    token_issuer = client.get_token_issuer()
     # ANCHOR_END: get-token-issuer
 
 
@@ -62,8 +62,8 @@ async def create_token_with_custom_account_number():
         )
         await builder.with_key_set(config=key_set_config)
 
-        sdk = await builder.build()
-        return sdk
+        client = await builder.build()
+        return client
     except Exception as error:
         logging.error(error)
         raise

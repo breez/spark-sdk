@@ -5,11 +5,11 @@ use crate::{
     error::SdkError, persist::ObjectCacheRepository,
 };
 
-use super::BreezSdk;
+use super::BreezClient;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
+impl BreezClient {
     pub async fn check_lightning_address_available(
         &self,
         req: CheckLightningAddressRequest,
@@ -63,7 +63,7 @@ impl BreezSdk {
 }
 
 // Private lightning address methods
-impl BreezSdk {
+impl BreezClient {
     /// Attempts to recover a lightning address from the lnurl server.
     pub(super) async fn recover_lightning_address(
         &self,

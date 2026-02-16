@@ -1,11 +1,11 @@
-import { type Wallet, verifyMessage } from '@breeztech/breez-sdk-spark'
+import { type BreezClient, verifyMessage } from '@breeztech/breez-sdk-spark'
 
-const exampleSignMessage = async (wallet: Wallet) => {
+const exampleSignMessage = async (client: BreezClient) => {
   // ANCHOR: sign-message
   // Set to true to get a compact signature rather than a DER
   const compact = true
 
-  const signMessageResponse = await wallet.message.sign({
+  const signMessageResponse = await client.message.sign({
     message: '<message to sign>',
     compact
   })

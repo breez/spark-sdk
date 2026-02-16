@@ -2,7 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
+async fn buy_bitcoin(client: &BreezClient) -> Result<()> {
     // ANCHOR: buy-bitcoin
     // Optionally, lock the purchase to a specific amount
     let optional_locked_amount_sat = Some(100_000);
@@ -14,7 +14,7 @@ async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
         redirect_url: optional_redirect_url,
     };
 
-    let response = sdk.buy_bitcoin(request).await?;
+    let response = client.buy_bitcoin(request).await?;
     info!("Open this URL in a browser to complete the purchase:");
     info!("{}", response.url);
     // ANCHOR_END: buy-bitcoin

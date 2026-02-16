@@ -22,7 +22,7 @@ class SdkBuilding {
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)
             // builder.withPaymentObserver(<your payment observer implementation>)
-            val sdk = builder.build()
+            val client = builder.build()
         } catch (e: Exception) {
             // handle error
         }
@@ -99,7 +99,7 @@ class SdkBuilding {
             val storage = createPostgresStorage(postgresConfig)
             val builder = SdkBuilder(config, seed)
             builder.withStorage(storage)
-            val sdk = builder.build()
+            val client = builder.build()
         } catch (e: Exception) {
             // handle error
         }

@@ -2,8 +2,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
-    models::{AppConfig, ConnectConfig, WalletConfig},
-    sdk::Wallet,
+    models::{AppConfig, ConnectConfig, ClientConfig},
+    sdk::BreezClient,
     sdk_builder::SdkBuilder,
 };
 
@@ -47,8 +47,8 @@ impl Breez {
     ///
     /// For the common single-wallet case, use the static `Breez.connect()` instead.
     #[wasm_bindgen(js_name = "connectWallet")]
-    pub async fn connect_wallet(&self, wallet_config: WalletConfig) -> WasmResult<Wallet> {
-        let core_wallet_config: breez_sdk_spark::WalletConfig = wallet_config.into();
+    pub async fn connect_wallet(&self, wallet_config: ClientConfig) -> WasmResult<BreezClient> {
+        let core_wallet_config: breez_sdk_spark::ClientConfig = wallet_config.into();
 
         let config = self.inner.to_config(&core_wallet_config);
         let storage_dir = self.inner.derive_storage_dir(&core_wallet_config)?;
@@ -71,7 +71,7 @@ impl Breez {
     ///   seed: { type: "mnemonic", mnemonic: "..." },
     /// });
     /// ```
-    pub async fn connect(config: ConnectConfig) -> WasmResult<Wallet> {
+    pub async fn connect(config: ConnectConfig) -> WasmResult<BreezClient> {
         let core_config: breez_sdk_spark::ConnectConfig = config.into();
         let (app_config, wallet_config) = core_config.into_parts();
 
@@ -87,14 +87,3 @@ impl Breez {
     }
 }
 
-/// @deprecated Use `new Breez(config)` instead.
-#[wasm_bindgen(js_name = "initializeApp")]
-pub fn initialize_app(config: AppConfig) -> WasmResult<Breez> {
-    Breez::new(config)
-}
-
-/// Backward-compat alias so existing `import { App }` still works.
-#[wasm_bindgen(typescript_custom_section)]
-const APP_ALIAS: &'static str = r#"
-/** @deprecated Use `Breez` instead. */
-export type App = Breez;"#;

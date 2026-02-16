@@ -1,4 +1,4 @@
-import { type Wallet, type LnurlAuthRequestDetails, parseInput } from '@breeztech/breez-sdk-spark'
+import { type BreezClient, type LnurlAuthRequestDetails, parseInput } from '@breeztech/breez-sdk-spark'
 
 const parseLnurlAuth = async () => {
   // ANCHOR: parse-lnurl-auth
@@ -19,10 +19,10 @@ const parseLnurlAuth = async () => {
   // ANCHOR_END: parse-lnurl-auth
 }
 
-const authenticate = async (wallet: Wallet, requestData: LnurlAuthRequestDetails) => {
+const authenticate = async (client: BreezClient, requestData: LnurlAuthRequestDetails) => {
   // ANCHOR: lnurl-auth
   // Perform LNURL authentication
-  const result = await wallet.lnurl.auth(requestData)
+  const result = await client.lnurl.auth(requestData)
 
   if (result.type === 'ok') {
     console.log('Authentication successful')

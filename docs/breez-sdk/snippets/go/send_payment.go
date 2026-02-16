@@ -8,7 +8,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentLightningBolt11(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-lightning-bolt11
 	paymentRequest := "<bolt11 invoice>"
 	// Optionally set the amount you wish to pay the receiver
@@ -21,7 +21,7 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 		ConversionOptions: nil,
 		FeePolicy:         nil,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -46,7 +46,7 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	return &response, nil
 }
 
-func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentOnchain(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-onchain
 	paymentRequest := "<bitcoin address>"
 	// Set the amount you wish to pay the receiver
@@ -59,7 +59,7 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 		ConversionOptions: nil,
 		FeePolicy:         nil,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -85,7 +85,7 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	return &response, nil
 }
 
-func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentSparkAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-address
 	paymentRequest := "<spark address>"
 	// Set the amount you wish to pay the receiver
@@ -98,7 +98,7 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 		ConversionOptions: nil,
 		FeePolicy:         nil,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -119,7 +119,7 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	return &response, nil
 }
 
-func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentSparkInvoice(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-spark-invoice
 	paymentRequest := "<spark invoice>"
 	// Optionally set the amount you wish to pay the receiver
@@ -132,7 +132,7 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 		ConversionOptions: nil,
 		FeePolicy:         nil,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -153,7 +153,7 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	return &response, nil
 }
 
-func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentTokenConversion(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-with-conversion
 	paymentRequest := "<payment request>"
 	// Set to use token funds to pay via conversion
@@ -174,7 +174,7 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 		ConversionOptions: &conversionOptions,
 		FeePolicy:         nil,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -194,7 +194,7 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	return &response, nil
 }
 
-func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
+func SendPaymentLightningBolt11(client *breez_sdk_spark.BreezClient, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-lightning-bolt11
 	var completionTimeoutSecs uint32 = 10
 	var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBolt11Invoice{
@@ -208,7 +208,7 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 		Options:         &options,
 		IdempotencyKey:  &optionalIdempotencyKey,
 	}
-	response, err := sdk.SendPayment(request)
+	response, err := client.SendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -224,7 +224,7 @@ func SendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk, prepareResponse b
 	return &payment, nil
 }
 
-func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
+func SendPaymentOnchain(client *breez_sdk_spark.BreezClient, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-onchain
 	// Select the confirmation speed for the on-chain transaction
 	var options breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBitcoinAddress{
@@ -236,7 +236,7 @@ func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk
 		Options:         &options,
 		IdempotencyKey:  &optionalIdempotencyKey,
 	}
-	response, err := sdk.SendPayment(request)
+	response, err := client.SendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -252,14 +252,14 @@ func SendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk
 	return &payment, nil
 }
 
-func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
+func SendPaymentSpark(client *breez_sdk_spark.BreezClient, prepareResponse breez_sdk_spark.PrepareSendPaymentResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: send-payment-spark
 	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
 		IdempotencyKey:  &optionalIdempotencyKey,
 	}
-	response, err := sdk.SendPayment(request)
+	response, err := client.SendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -275,7 +275,7 @@ func SendPaymentSpark(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_s
 	return &payment, nil
 }
 
-func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+func PrepareSendPaymentFeesIncluded(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-fees-included
 	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
 	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
@@ -291,7 +291,7 @@ func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 		ConversionOptions: nil,
 		FeePolicy:         &feePolicy,
 	}
-	response, err := sdk.PrepareSendPayment(request)
+	response, err := client.PrepareSendPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

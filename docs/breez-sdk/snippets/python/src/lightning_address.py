@@ -1,5 +1,5 @@
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     CheckLightningAddressRequest,
     GetPaymentRequest,
     Network,
@@ -16,17 +16,17 @@ def configure_lightning_address():
     # ANCHOR_END: config-lightning-address
     return config
 
-async def check_lightning_address_availability(sdk: BreezSdk, username: str) -> bool:
+async def check_lightning_address_availability(client: BreezClient, username: str) -> bool:
     username = "myusername"
 
     # ANCHOR: check-lightning-address
     request = CheckLightningAddressRequest(username=username)
-    is_available = await sdk.check_lightning_address_available(request)
+    is_available = await client.check_lightning_address_available(request)
     # ANCHOR_END: check-lightning-address
     return is_available
 
 
-async def register_lightning_address(sdk: BreezSdk, username: str, description: str):
+async def register_lightning_address(client: BreezClient, username: str, description: str):
     username = "myusername"
     description = "My Lightning Address"
 
@@ -36,7 +36,7 @@ async def register_lightning_address(sdk: BreezSdk, username: str, description: 
         description=description
     )
 
-    address_info = await sdk.register_lightning_address(request)
+    address_info = await client.register_lightning_address(request)
     lightning_address = address_info.lightning_address
     lnurl_url = address_info.lnurl.url
     lnurl_bech32 = address_info.lnurl.bech32
@@ -44,9 +44,9 @@ async def register_lightning_address(sdk: BreezSdk, username: str, description: 
     return address_info
 
 
-async def get_lightning_address(sdk: BreezSdk):
+async def get_lightning_address(client: BreezClient):
     # ANCHOR: get-lightning-address
-    address_info_opt = await sdk.get_lightning_address()
+    address_info_opt = await client.get_lightning_address()
 
     if address_info_opt is not None:
         lightning_address = address_info_opt.lightning_address
@@ -57,15 +57,15 @@ async def get_lightning_address(sdk: BreezSdk):
     # ANCHOR_END: get-lightning-address
 
 
-async def delete_lightning_address(sdk: BreezSdk):
+async def delete_lightning_address(client: BreezClient):
     # ANCHOR: delete-lightning-address
-    await sdk.delete_lightning_address()
+    await client.delete_lightning_address()
     # ANCHOR_END: delete-lightning-address
 
 
-async def access_sender_comment(sdk: BreezSdk):
+async def access_sender_comment(client: BreezClient):
     payment_id = "<payment id>"
-    response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
+    response = await client.get_payment(GetPaymentRequest(payment_id=payment_id))
     payment = response.payment
 
     # ANCHOR: access-sender-comment
@@ -79,9 +79,9 @@ async def access_sender_comment(sdk: BreezSdk):
     # ANCHOR_END: access-sender-comment
 
 
-async def access_nostr_zap(sdk: BreezSdk):
+async def access_nostr_zap(client: BreezClient):
     payment_id = "<payment id>"
-    response = await sdk.get_payment(GetPaymentRequest(payment_id=payment_id))
+    response = await client.get_payment(GetPaymentRequest(payment_id=payment_id))
     payment = response.payment
 
     # ANCHOR: access-nostr-zap

@@ -4,24 +4,24 @@ namespace BreezSdkSnippets
 {
     class Optimize
     {
-        void StartOptimization(BreezSdk sdk)
+        void StartOptimization(BreezClient client)
         {
             // ANCHOR: start-optimization
-            sdk.StartLeafOptimization();
+            client.StartLeafOptimization();
             // ANCHOR_END: start-optimization
         }
 
-        async Task CancelOptimization(BreezSdk sdk)
+        async Task CancelOptimization(BreezClient client)
         {
             // ANCHOR: cancel-optimization
-            await sdk.CancelLeafOptimization();
+            await client.CancelLeafOptimization();
             // ANCHOR_END: cancel-optimization
         }
 
-        void GetOptimizationProgress(BreezSdk sdk)
+        void GetOptimizationProgress(BreezClient client)
         {
             // ANCHOR: get-optimization-progress
-            var progress = sdk.GetLeafOptimizationProgress();
+            var progress = client.GetLeafOptimizationProgress();
 
             Console.WriteLine($"Optimization is running: {progress.isRunning}");
             Console.WriteLine($"Current round: {progress.currentRound}");

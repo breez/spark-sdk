@@ -3,10 +3,10 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class UserSettings {
-    suspend fun getUserSettings(sdk: BreezSdk) {
+    suspend fun getUserSettings(client: BreezClient) {
         // ANCHOR: get-user-settings
         try {
-            val userSettings = sdk.getUserSettings()
+            val userSettings = client.getUserSettings()
             println("User settings: $userSettings")
         } catch (e: Exception) {
             // handle error
@@ -14,11 +14,11 @@ class UserSettings {
         // ANCHOR_END: get-user-settings
     }
 
-    suspend fun updateUserSettings(sdk: BreezSdk) {
+    suspend fun updateUserSettings(client: BreezClient) {
         // ANCHOR: update-user-settings
         try {
             val sparkPrivateModeEnabled = true
-            sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
+            client.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
         } catch (e: Exception) {
             // handle error
         }

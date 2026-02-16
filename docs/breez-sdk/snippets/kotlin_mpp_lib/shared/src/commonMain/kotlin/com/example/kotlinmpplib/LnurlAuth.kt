@@ -2,7 +2,7 @@ package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
 
-suspend fun parseLnurlAuth(sdk: BreezSdk) {
+suspend fun parseLnurlAuth(client: BreezClient) {
     // ANCHOR: parse-lnurl-auth
     // LNURL-auth URL from a service
     // Can be in the form:
@@ -10,7 +10,7 @@ suspend fun parseLnurlAuth(sdk: BreezSdk) {
     // - https://service.com/lnurl-auth?tag=login&k1=...
     val lnurlAuthUrl = "lnurl1..."
 
-    when (val inputType = sdk.parse(lnurlAuthUrl)) {
+    when (val inputType = client.parse(lnurlAuthUrl)) {
         is InputType.LnurlAuth -> {
             val requestData = inputType.v1
             println("Domain: ${requestData.domain}")
@@ -24,10 +24,10 @@ suspend fun parseLnurlAuth(sdk: BreezSdk) {
     // ANCHOR_END: parse-lnurl-auth
 }
 
-suspend fun authenticate(sdk: BreezSdk, requestData: LnurlAuthRequestDetails) {
+suspend fun authenticate(client: BreezClient, requestData: LnurlAuthRequestDetails) {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    when (val result = sdk.lnurlAuth(requestData)) {
+    when (val result = client.lnurlAuth(requestData)) {
         is LnurlCallbackStatus.Ok -> {
             println("Authentication successful")
         }

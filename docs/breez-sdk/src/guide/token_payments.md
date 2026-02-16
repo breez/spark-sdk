@@ -4,7 +4,7 @@ Spark supports tokens using the [BTKN protocol](https://docs.spark.money/learn/t
 
 <h2 id="fetching-the-balance">
     <a class="header" href="#fetching-the-balance">Fetching token balances</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_info">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.get_info">API docs</a>
 </h2>
 
 Token balances for all tokens currently held in the wallet can be retrieved along with general wallet information. Each token balance includes both the balance amount and the token metadata (identifier, name, ticker, issuer public key, etc.).
@@ -18,7 +18,7 @@ Token balances are cached for fast responses. For details on ensuring up-to-date
 
 <h2 id="fetching-token-metadata">
     <a class="header" href="#fetching-token-metadata">Fetching token metadata</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_tokens_metadata">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.get_tokens_metadata">API docs</a>
 </h2>
 
 Token metadata can be fetched for specific tokens by providing their identifiers. This is especially useful for retrieving metadata for tokens that are not currently held in the wallet. The metadata is cached locally after the first fetch for faster subsequent lookups.
@@ -27,7 +27,7 @@ Token metadata can be fetched for specific tokens by providing their identifiers
 
 <h2 id="receiving-payments">
     <a class="header" href="#receiving-payments">Receiving a token payment</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.receive_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.receive_payment">API docs</a>
 </h2>
 
 Token payments can be received using either a Spark address or invoice. Using an invoice is useful to impose restrictions on the payment, such as the token to receive, amount, expiry, and who can pay it.
@@ -44,7 +44,7 @@ Spark token invoices can be created using the same API as Bitcoin Spark invoices
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Sending a token payment</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.prepare_send_payment">API docs</a>
 </h2>
 
 To send tokens, provide a Spark address as the payment request. The token identifier must be specified in one of two ways:
@@ -65,7 +65,7 @@ Payments can be sent without holding an asset by converting on-the-fly as a step
 
 <h2 id="listing-payments">
     <a class="header" href="#listing-payments">Listing token payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.list_payments">API docs</a>
 </h2>
 
 Token payments are included in the regular payment history alongside Bitcoin payments. Your application can retrieve and distinguish token payments from other payment types using the standard payment listing functionality. See the [Listing payments](./list_payments.md) guide for more details.

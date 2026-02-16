@@ -34,8 +34,8 @@ async def init_sdk_advanced():
         # await builder.with_rest_client(<your rest client implementation>)
         # await builder.with_key_set(<your key set type>, <use address index>, <account number>)
         # await builder.with_payment_observer(<your payment observer implementation>)
-        sdk = await builder.build()
-        return sdk
+        client = await builder.build()
+        return client
     except Exception as error:
         logging.error(error)
         raise
@@ -112,8 +112,8 @@ async def init_sdk_postgres():
         storage = await create_postgres_storage(config=postgres_config)
         builder = SdkBuilder(config=config, seed=seed)
         await builder.with_storage(storage=storage)
-        sdk = await builder.build()
-        return sdk
+        client = await builder.build()
+        return client
     except Exception as error:
         logging.error(error)
         raise

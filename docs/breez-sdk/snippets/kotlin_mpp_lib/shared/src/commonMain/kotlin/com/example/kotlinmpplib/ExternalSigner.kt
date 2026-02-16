@@ -36,7 +36,7 @@ class ExternalSigner {
         
         try {
             // Connect using the external signer
-            val sdk = connectWithSigner(ConnectWithSignerRequest(
+            val client = connectWithSigner(ConnectWithSignerRequest(
                 config = config,
                 signer = signer,
                 storageDir = "./.data"

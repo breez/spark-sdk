@@ -1,7 +1,7 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<ReceivePaymentResponse> receivePaymentLightning(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: receive-payment-lightning-bolt11
   String description = "<invoice description>";
   // Optionally set the invoice amount you wish the payer to send
@@ -15,7 +15,7 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
           description: description,
           amountSats: optionalAmountSats,
           expirySecs: optionalExpirySecs));
-  ReceivePaymentResponse response = await sdk.receivePayment(
+  ReceivePaymentResponse response = await client.receivePayment(
     request: request,
   );
 
@@ -28,11 +28,11 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
 }
 
 Future<ReceivePaymentResponse> receivePaymentOnchain(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: receive-payment-onchain
   ReceivePaymentRequest request = ReceivePaymentRequest(
       paymentMethod: ReceivePaymentMethod.bitcoinAddress());
-  ReceivePaymentResponse response = await sdk.receivePayment(
+  ReceivePaymentResponse response = await client.receivePayment(
     request: request,
   );
 
@@ -44,11 +44,11 @@ Future<ReceivePaymentResponse> receivePaymentOnchain(
   return response;
 }
 
-Future<ReceivePaymentResponse> receivePaymentSparkAddress(BreezSdk sdk) async {
+Future<ReceivePaymentResponse> receivePaymentSparkAddress(BreezClient client) async {
   // ANCHOR: receive-payment-spark-address
   ReceivePaymentRequest request =
       ReceivePaymentRequest(paymentMethod: ReceivePaymentMethod.sparkAddress());
-  ReceivePaymentResponse response = await sdk.receivePayment(
+  ReceivePaymentResponse response = await client.receivePayment(
     request: request,
   );
 
@@ -60,7 +60,7 @@ Future<ReceivePaymentResponse> receivePaymentSparkAddress(BreezSdk sdk) async {
   return response;
 }
 
-Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
+Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezClient client) async {
   // ANCHOR: receive-payment-spark-invoice
   String optionalDescription = "<invoice description>";
   BigInt optionalAmountSats = BigInt.from(5000);
@@ -75,7 +75,7 @@ Future<ReceivePaymentResponse> receivePaymentSparkInvoice(BreezSdk sdk) async {
         expiryTime: optionalExpiryTimeSeconds,
         senderPublicKey: optionalSenderPublicKey,
       ));
-  ReceivePaymentResponse response = await sdk.receivePayment(
+  ReceivePaymentResponse response = await client.receivePayment(
     request: request,
   );
 

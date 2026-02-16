@@ -1,13 +1,13 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<void> prepareLnurlPay(BreezSdk sdk) async {
+Future<void> prepareLnurlPay(BreezClient client) async {
   // ANCHOR: prepare-lnurl-pay
   // Endpoint can also be of the form:
   // lnurlp://domain.com/lnurl-pay?key=val
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   String lnurlPayUrl = "lightning@address.com";
 
-  InputType inputType = await sdk.parse(input: lnurlPayUrl);
+  InputType inputType = await client.parse(input: lnurlPayUrl);
   if (inputType is InputType_LightningAddress) {
     BigInt amountSats = BigInt.from(5000);
     String optionalComment = "<comment>";
@@ -32,7 +32,7 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
       feePolicy: null,
     );
     PrepareLnurlPayResponse prepareResponse =
-        await sdk.prepareLnurlPay(request: request);
+        await client.prepareLnurlPay(request: request);
 
     // If the fees are acceptable, continue to create the LNURL Pay
     if (prepareResponse.conversionEstimate != null) {
@@ -49,10 +49,10 @@ Future<void> prepareLnurlPay(BreezSdk sdk) async {
 }
 
 Future<void> lnurlPay(
-    BreezSdk sdk, PrepareLnurlPayResponse prepareResponse) async {
+    BreezClient client, PrepareLnurlPayResponse prepareResponse) async {
   // ANCHOR: lnurl-pay
   String? optionalIdempotencyKey = "<idempotency key uuid>";
-  LnurlPayResponse response = await sdk.lnurlPay(
+  LnurlPayResponse response = await client.lnurlPay(
     request: LnurlPayRequest(
       prepareResponse: prepareResponse,
       idempotencyKey: optionalIdempotencyKey),
@@ -61,7 +61,7 @@ Future<void> lnurlPay(
   print(response);
 }
 
-Future<void> prepareLnurlPayFeesIncluded(BreezSdk sdk, LnurlPayRequestDetails payRequest) async {
+Future<void> prepareLnurlPayFeesIncluded(BreezClient client, LnurlPayRequestDetails payRequest) async {
   // ANCHOR: prepare-lnurl-pay-fees-included
   // By default (FeePolicy.feesExcluded), fees are added on top of the amount.
   // Use FeePolicy.feesIncluded to deduct fees from the amount instead.
@@ -79,7 +79,7 @@ Future<void> prepareLnurlPayFeesIncluded(BreezSdk sdk, LnurlPayRequestDetails pa
     feePolicy: FeePolicy.feesIncluded,
   );
   PrepareLnurlPayResponse prepareResponse =
-      await sdk.prepareLnurlPay(request: request);
+      await client.prepareLnurlPay(request: request);
 
   // If the fees are acceptable, continue to create the LNURL Pay
   BigInt feeSats = prepareResponse.feeSats;

@@ -5,12 +5,12 @@ namespace BreezSdkSnippets
 {
     class Tokens
     {
-        async Task FetchTokenBalances(BreezSdk sdk)
+        async Task FetchTokenBalances(BreezClient client)
         {
             // ANCHOR: fetch-token-balances
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
-            var info = await sdk.GetInfo(request: new GetInfoRequest(ensureSynced: false));
+            var info = await client.GetInfo(request: new GetInfoRequest(ensureSynced: false));
 
             // Token balances are a map of token identifier to balance
             var tokenBalances = info.tokenBalances;
@@ -27,10 +27,10 @@ namespace BreezSdkSnippets
             // ANCHOR_END: fetch-token-balances
         }
 
-        async Task FetchTokenMetadata(BreezSdk sdk)
+        async Task FetchTokenMetadata(BreezClient client)
         {
             // ANCHOR: fetch-token-metadata
-            var response = await sdk.GetTokensMetadata(
+            var response = await client.GetTokensMetadata(
                 request: new GetTokensMetadataRequest(
                     tokenIdentifiers: new List<string> { "<token identifier 1>", "<token identifier 2>" }
                 )
@@ -49,7 +49,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: fetch-token-metadata
         }
 
-        async Task ReceiveTokenPaymentSparkInvoice(BreezSdk sdk)
+        async Task ReceiveTokenPaymentSparkInvoice(BreezClient client)
         {
             // ANCHOR: receive-token-payment-spark-invoice
             var tokenIdentifier = "<token identifier>";
@@ -68,7 +68,7 @@ namespace BreezSdkSnippets
                     senderPublicKey: optionalSenderPublicKey
                 )
             );
-            var response = await sdk.ReceivePayment(request: request);
+            var response = await client.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment request: {paymentRequest}");
@@ -77,7 +77,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: receive-token-payment-spark-invoice
         }
 
-        async Task SendTokenPayment(BreezSdk sdk)
+        async Task SendTokenPayment(BreezClient client)
         {
             // ANCHOR: send-token-payment
             var paymentRequest = "<spark address or invoice>";
@@ -86,7 +86,7 @@ namespace BreezSdkSnippets
             // Set the amount of tokens you wish to send.
             ulong? amount = 1_000UL;
 
-            var prepareResponse = await sdk.PrepareSendPayment(
+            var prepareResponse = await client.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
                     amount: amount,
@@ -109,7 +109,7 @@ namespace BreezSdkSnippets
             }
 
             // Send the token payment
-            var sendResponse = await sdk.SendPayment(
+            var sendResponse = await client.SendPayment(
                 request: new SendPaymentRequest(
                     prepareResponse: prepareResponse,
                     options: null
@@ -120,11 +120,11 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-token-payment
         }
 
-        async Task FetchConversionLimits(BreezSdk sdk)
+        async Task FetchConversionLimits(BreezClient client)
         {
             // ANCHOR: fetch-conversion-limits
             // Fetch limits for converting Bitcoin to a token
-            var fromBitcoinResponse = await sdk.FetchConversionLimits(
+            var fromBitcoinResponse = await client.FetchConversionLimits(
                 request: new FetchConversionLimitsRequest(
                     conversionType: new ConversionType.FromBitcoin(),
                     tokenIdentifier: "<token identifier>"
@@ -141,7 +141,7 @@ namespace BreezSdkSnippets
             }
 
             // Fetch limits for converting a token to Bitcoin
-            var toBitcoinResponse = await sdk.FetchConversionLimits(
+            var toBitcoinResponse = await client.FetchConversionLimits(
                 request: new FetchConversionLimitsRequest(
                     conversionType: new ConversionType.ToBitcoin(
                         fromTokenIdentifier: "<token identifier>"
@@ -161,7 +161,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: fetch-conversion-limits
         }
 
-        async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
+        async Task PrepareSendPaymentTokenConversion(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-with-conversion
             var paymentRequest = "<spark address or invoice>";
@@ -178,7 +178,7 @@ namespace BreezSdkSnippets
                 completionTimeoutSecs: optionalCompletionTimeoutSecs
             );
 
-            var prepareResponse = await sdk.PrepareSendPayment(
+            var prepareResponse = await client.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
                     paymentRequest: paymentRequest,
                     amount: amount,

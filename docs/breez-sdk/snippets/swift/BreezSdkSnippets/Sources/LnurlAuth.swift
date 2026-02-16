@@ -1,7 +1,7 @@
 import BreezSdkSpark
 import Foundation
 
-func parseLnurlAuth(sdk: BreezSdk) async throws {
+func parseLnurlAuth(client: BreezClient) async throws {
     // ANCHOR: parse-lnurl-auth
     // LNURL-auth URL from a service
     // Can be in the form:
@@ -9,7 +9,7 @@ func parseLnurlAuth(sdk: BreezSdk) async throws {
     // - https://service.com/lnurl-auth?tag=login&k1=...
     let lnurlAuthUrl = "lnurl1..."
 
-    if case .lnurlAuth(v1: let requestData) = try await sdk.parse(input: lnurlAuthUrl) {
+    if case .lnurlAuth(v1: let requestData) = try await client.parse(input: lnurlAuthUrl) {
         print("Domain: \(requestData.domain)")
         print("Action: \(String(describing: requestData.action))")
 
@@ -19,10 +19,10 @@ func parseLnurlAuth(sdk: BreezSdk) async throws {
     // ANCHOR_END: parse-lnurl-auth
 }
 
-func authenticate(sdk: BreezSdk, requestData: LnurlAuthRequestDetails) async throws {
+func authenticate(client: BreezClient, requestData: LnurlAuthRequestDetails) async throws {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    let result = try await sdk.lnurlAuth(requestData: requestData)
+    let result = try await client.lnurlAuth(requestData: requestData)
 
     switch result {
     case .ok:

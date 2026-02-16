@@ -1,6 +1,6 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<void> buyBitcoin(BreezSdk sdk) async {
+Future<void> buyBitcoin(BreezClient client) async {
   // ANCHOR: buy-bitcoin
   // Optionally, lock the purchase to a specific amount
   final optionalLockedAmountSat = BigInt.from(100000);
@@ -11,7 +11,7 @@ Future<void> buyBitcoin(BreezSdk sdk) async {
       lockedAmountSat: optionalLockedAmountSat,
       redirectUrl: optionalRedirectUrl);
 
-  final response = await sdk.buyBitcoin(request: request);
+  final response = await client.buyBitcoin(request: request);
   print("Open this URL in a browser to complete the purchase:");
   print(response.url);
   // ANCHOR_END: buy-bitcoin

@@ -12,10 +12,10 @@ use crate::{
 
 /// Sub-object for token operations.
 ///
-/// Access via `wallet.tokens`.
+/// Access via `client.tokens`.
 #[wasm_bindgen(js_name = "TokensApi")]
 pub struct TokensApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "TokensApi")]

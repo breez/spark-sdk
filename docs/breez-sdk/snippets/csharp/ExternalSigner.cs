@@ -31,7 +31,7 @@ namespace BreezSdkSnippets
         // ANCHOR_END: default-external-signer
 
         // ANCHOR: connect-with-signer
-        public static async Task<BreezSdk> ConnectWithSigner(ExternalSigner signer)
+        public static async Task<BreezClient> ConnectWithSigner(ExternalSigner signer)
         {
             // Create the config
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
@@ -40,13 +40,13 @@ namespace BreezSdkSnippets
             };
 
             // Connect using the external signer
-            var sdk = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
+            var client = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
                 config: config,
                 signer: signer,
                 storageDir: "./.data"
             ));
 
-            return sdk;
+            return client;
         }
         // ANCHOR_END: connect-with-signer
     }

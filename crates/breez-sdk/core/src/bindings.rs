@@ -3,17 +3,17 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
+    BitcoinChainService, BreezClient, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
     RestClient, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
 };
 
-/// Builder for creating `BreezSdk` instances with customizable components.
+/// Builder for creating `BreezClient` instances with customizable components.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SdkBuilder {
     inner: Mutex<crate::sdk_builder::SdkBuilder>,
 }
 
-/// Builder for creating `BreezSdk` instances with customizable components.
+/// Builder for creating `BreezClient` instances with customizable components.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
     /// Creates a new `SdkBuilder` with the provided configuration.
@@ -100,8 +100,8 @@ impl SdkBuilder {
         *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
-    /// Builds the `BreezSdk` instance with the configured components.
-    pub async fn build(&self) -> Result<BreezSdk, SdkError> {
+    /// Builds the `BreezClient` instance with the configured components.
+    pub async fn build(&self) -> Result<BreezClient, SdkError> {
         self.inner.lock().await.clone().build().await
     }
 }

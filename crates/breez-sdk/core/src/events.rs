@@ -207,7 +207,7 @@ pub trait EventListener: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// An [`EventListener`] that filters events by a predicate before invoking a
-/// closure. Used internally by [`BreezSdk::on_payment`], [`BreezSdk::on_sync`], etc.
+/// closure. Used internally by [`BreezClient::on_payment`], [`BreezClient::on_sync`], etc.
 pub struct FilteredEventListener<F>
 where
     F: Fn(SdkEvent) + Send + Sync + 'static,

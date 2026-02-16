@@ -6,7 +6,7 @@ import org.kotlincrypto.hash.sha2.SHA256
 
 @OptIn(kotlin.ExperimentalStdlibApi::class)
 class Htlcs {
-    suspend fun sendHtlcPayment(sdk: BreezSdk) {
+    suspend fun sendHtlcPayment(client: BreezClient) {
         // ANCHOR: send-htlc-payment
         val paymentRequest = "<spark address>"
         // Set the amount you wish the pay the receiver
@@ -22,7 +22,7 @@ class Htlcs {
                 conversionOptions = null,
                 feePolicy = null,
             )
-            val prepareResponse = sdk.prepareSendPayment(prepareRequest)
+            val prepareResponse = client.prepareSendPayment(prepareRequest)
 
             // If the fees are acceptable, continue to create the HTLC Payment
             val paymentMethod = prepareResponse.paymentMethod
@@ -49,7 +49,7 @@ class Htlcs {
                 prepareResponse = prepareResponse,
                 options = options
             )
-            val sendResponse = sdk.sendPayment(request)
+            val sendResponse = client.sendPayment(request)
             val payment = sendResponse.payment
         } catch (e: Exception) {
             // handle error
@@ -58,7 +58,7 @@ class Htlcs {
         // ANCHOR_END: send-htlc-payment
     }
 
-    suspend fun listClaimableHtlcPayments(sdk: BreezSdk) {
+    suspend fun listClaimableHtlcPayments(client: BreezClient) {
         // ANCHOR: list-claimable-htlc-payments
         try {
             val request = ListPaymentsRequest(
@@ -72,7 +72,7 @@ class Htlcs {
                 )
             )
 
-            val response = sdk.listPayments(request)
+            val response = client.listPayments(request)
             val payments = response.payments
         } catch (e: Exception) {
             // handle error
@@ -81,12 +81,12 @@ class Htlcs {
         // ANCHOR_END: list-claimable-htlc-payments
     }
 
-    suspend fun claimHtlcPayment(sdk: BreezSdk) {
+    suspend fun claimHtlcPayment(client: BreezClient) {
         // ANCHOR: claim-htlc-payment
         try {
             val preimage = "<preimage hex>"
             val request = ClaimHtlcPaymentRequest(preimage = preimage)
-            val response = sdk.claimHtlcPayment(request)
+            val response = client.claimHtlcPayment(request)
             val payment = response.payment
         } catch (e: Exception) {
             // handle error

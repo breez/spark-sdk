@@ -7,14 +7,14 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
+func PrepareLnurlPay(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
 	// ANCHOR: prepare-lnurl-pay
 	// Endpoint can also be of the form:
 	// lnurlp://domain.com/lnurl-pay?key=val
 	// lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
 	lnurlPayUrl := "lightning@address.com"
 
-	input, err := sdk.Parse(lnurlPayUrl)
+	input, err := client.Parse(lnurlPayUrl)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -50,7 +50,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 			FeePolicy:                nil,
 		}
 
-		prepareResponse, err := sdk.PrepareLnurlPay(request)
+		prepareResponse, err := client.PrepareLnurlPay(request)
 
 		if err != nil {
 			var sdkErr *breez_sdk_spark.SdkError
@@ -75,7 +75,7 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 	return nil, nil
 }
 
-func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.PrepareLnurlPayResponse) (*breez_sdk_spark.Payment, error) {
+func LnurlPay(client *breez_sdk_spark.BreezClient, prepareResponse breez_sdk_spark.PrepareLnurlPayResponse) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: lnurl-pay
 	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.LnurlPayRequest{
@@ -83,7 +83,7 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 		IdempotencyKey:  &optionalIdempotencyKey,
 	}
 
-	response, err := sdk.LnurlPay(request)
+	response, err := client.LnurlPay(request)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -98,7 +98,7 @@ func LnurlPay(sdk *breez_sdk_spark.BreezSdk, prepareResponse breez_sdk_spark.Pre
 	return &payment, nil
 }
 
-func PrepareLnurlPayFeesIncluded(sdk *breez_sdk_spark.BreezSdk, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
+func PrepareLnurlPayFeesIncluded(client *breez_sdk_spark.BreezClient, payRequest breez_sdk_spark.LnurlPayRequestDetails) (*breez_sdk_spark.PrepareLnurlPayResponse, error) {
 	// ANCHOR: prepare-lnurl-pay-fees-included
 	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
 	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
@@ -117,7 +117,7 @@ func PrepareLnurlPayFeesIncluded(sdk *breez_sdk_spark.BreezSdk, payRequest breez
 		FeePolicy:                &feePolicy,
 	}
 
-	response, err := sdk.PrepareLnurlPay(request)
+	response, err := client.PrepareLnurlPay(request)
 	if err != nil {
 		return nil, err
 	}

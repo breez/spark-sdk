@@ -7,7 +7,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func InitSdk() (*breez_sdk_spark.BreezSdk, error) {
+func InitSdk() (*breez_sdk_spark.BreezClient, error) {
 	// ANCHOR: init-sdk
 	// Construct the seed using mnemonic words or entropy bytes
 	mnemonic := "<mnemonic words>"
@@ -28,16 +28,16 @@ func InitSdk() (*breez_sdk_spark.BreezSdk, error) {
 	}
 
 	// Connect to the SDK using the simplified connect method
-	sdk, err := breez_sdk_spark.Connect(connectRequest)
+	client, err := breez_sdk_spark.Connect(connectRequest)
 
-	return sdk, err
+	return client, err
 	// ANCHOR_END: init-sdk
 }
 
-func FetchBalance(sdk *breez_sdk_spark.BreezSdk) error {
+func FetchBalance(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-balance
 	ensureSynced := false
-	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
+	info, err := client.GetInfo(breez_sdk_spark.GetInfoRequest{
 		// EnsureSynced: true will ensure the SDK is synced with the Spark network
 		// before returning the balance
 		EnsureSynced: &ensureSynced,
@@ -110,15 +110,15 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	}
 }
 
-func AddEventListener(sdk *breez_sdk_spark.BreezSdk, listener SdkListener) string {
-	return sdk.AddEventListener(listener)
+func AddEventListener(client *breez_sdk_spark.BreezClient, listener SdkListener) string {
+	return client.AddEventListener(listener)
 }
 
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-func RemoveEventListener(sdk *breez_sdk_spark.BreezSdk, listenerId string) bool {
-	return sdk.RemoveEventListener(listenerId)
+func RemoveEventListener(client *breez_sdk_spark.BreezClient, listenerId string) bool {
+	return client.RemoveEventListener(listenerId)
 }
 
 // ANCHOR_END: remove-event-listener
@@ -150,8 +150,8 @@ func GetSparkStatus() error {
 // ANCHOR_END: spark-status
 
 // ANCHOR: disconnect
-func Disconnect(sdk *breez_sdk_spark.BreezSdk) {
-	sdk.Disconnect()
+func Disconnect(client *breez_sdk_spark.BreezClient) {
+	client.Disconnect()
 }
 
 // ANCHOR_END: disconnect

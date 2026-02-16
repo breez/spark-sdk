@@ -4,9 +4,9 @@ import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class IssuingTokens {
-    fun getTokenIssuer(sdk: BreezSdk): TokenIssuer {
+    fun getTokenIssuer(client: BreezClient): TokenIssuer {
         // ANCHOR: get-token-issuer
-        val tokenIssuer = sdk.getTokenIssuer()
+        val tokenIssuer = client.getTokenIssuer()
         // ANCHOR_END: get-token-issuer
         return tokenIssuer
     }
@@ -51,7 +51,7 @@ class IssuingTokens {
             )
             builder.withKeySet(keySetConfig)
 
-            val sdk = builder.build()
+            val client = builder.build()
         } catch (e: Exception) {
             // handle error
         }

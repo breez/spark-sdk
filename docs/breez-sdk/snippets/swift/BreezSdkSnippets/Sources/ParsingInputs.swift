@@ -1,12 +1,12 @@
 import BreezSdkSpark
 import Foundation
 
-func parseInput(sdk: BreezSdk) async throws {
+func parseInput(client: BreezClient) async throws {
     // ANCHOR: parse-inputs
     let input = "an input to be parsed..."
 
     do {
-        let inputType = try await sdk.parse(input: input)
+        let inputType = try await client.parse(input: input)
         switch inputType {
         case .bitcoinAddress(v1: let details):
             print("Input is Bitcoin address \(details.address)")

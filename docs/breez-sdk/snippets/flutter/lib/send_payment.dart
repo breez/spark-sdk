@@ -1,7 +1,7 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-lightning-bolt11
   String paymentRequest = "<bolt11 invoice>";
   // Optionally set the amount you wish to pay the receiver
@@ -13,7 +13,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: null);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
@@ -30,7 +30,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-onchain
   String paymentRequest = "<bitcoin address>";
   // Set the amount you wish to pay the receiver
@@ -42,7 +42,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: null);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // Review the fee quote for each confirmation speed
   final paymentMethod = response.paymentMethod;
@@ -60,7 +60,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-spark-address
   String paymentRequest = "<spark address>";
   // Set the amount you wish to pay the receiver
@@ -72,7 +72,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: null);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
@@ -85,7 +85,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-spark-invoice
   String paymentRequest = "<spark invoice>";
   // Optionally set the amount you wish to pay the receiver
@@ -97,7 +97,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: null);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
   final paymentMethod = response.paymentMethod;
@@ -110,7 +110,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-with-conversion
   String paymentRequest = "<payment request>";
   // Set to use token funds to pay via conversion
@@ -130,7 +130,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
       tokenIdentifier: null,
       conversionOptions: conversionOptions,
       feePolicy: null);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // If the fees are acceptable, continue to create the Send Payment
   if (response.conversionEstimate != null) {
@@ -144,7 +144,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
 }
 
 Future<SendPaymentResponse> sendPaymentLightningBolt11(
-    BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
+    BreezClient client, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-lightning-bolt11
   final options = SendPaymentOptions.bolt11Invoice(
       preferSpark: false, completionTimeoutSecs: 10);
@@ -153,7 +153,7 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
       prepareResponse: prepareResponse,
       options: options,
       idempotencyKey: optionalIdempotencyKey);
-  SendPaymentResponse response = await sdk.sendPayment(request: request);
+  SendPaymentResponse response = await client.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-lightning-bolt11
   print(payment);
@@ -161,7 +161,7 @@ Future<SendPaymentResponse> sendPaymentLightningBolt11(
 }
 
 Future<SendPaymentResponse> sendPaymentOnchain(
-    BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
+    BreezClient client, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-onchain
   // Select the confirmation speed for the on-chain transaction
   final options = SendPaymentOptions.bitcoinAddress(
@@ -171,7 +171,7 @@ Future<SendPaymentResponse> sendPaymentOnchain(
       prepareResponse: prepareResponse,
       options: options,
       idempotencyKey: optionalIdempotencyKey);
-  SendPaymentResponse response = await sdk.sendPayment(request: request);
+  SendPaymentResponse response = await client.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-onchain
   print(payment);
@@ -179,12 +179,12 @@ Future<SendPaymentResponse> sendPaymentOnchain(
 }
 
 Future<SendPaymentResponse> sendPaymentSpark(
-    BreezSdk sdk, PrepareSendPaymentResponse prepareResponse) async {
+    BreezClient client, PrepareSendPaymentResponse prepareResponse) async {
   // ANCHOR: send-payment-spark
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
       prepareResponse: prepareResponse, idempotencyKey: optionalIdempotencyKey);
-  SendPaymentResponse response = await sdk.sendPayment(request: request);
+  SendPaymentResponse response = await client.sendPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: send-payment-spark
   print(payment);
@@ -192,7 +192,7 @@ Future<SendPaymentResponse> sendPaymentSpark(
 }
 
 Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: prepare-send-payment-fees-included
   // By default (FeePolicy.feesExcluded), fees are added on top of the amount.
   // Use FeePolicy.feesIncluded to deduct fees from the amount instead.
@@ -206,7 +206,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: FeePolicy.feesIncluded);
-  final response = await sdk.prepareSendPayment(request: request);
+  final response = await client.prepareSendPayment(request: request);
 
   // The response shows the fee policy used
   print("Fee policy: ${response.feePolicy}");

@@ -7,4 +7,4 @@ pub mod models;
 pub mod sdk;
 pub mod sdk_builder;
 
-pub use sdk::BreezSdk;
+pub use sdk::BreezClient;

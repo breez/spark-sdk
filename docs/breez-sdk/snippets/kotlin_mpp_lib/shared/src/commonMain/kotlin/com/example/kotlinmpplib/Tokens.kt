@@ -4,12 +4,12 @@ import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class Tokens {
-    suspend fun fetchTokenBalances(sdk: BreezSdk) {
+    suspend fun fetchTokenBalances(client: BreezClient) {
         // ANCHOR: fetch-token-balances
         try {
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
-            val info = sdk.getInfo(GetInfoRequest(false))
+            val info = client.getInfo(GetInfoRequest(false))
 
             // Token balances are a map of token identifier to balance
             val tokenBalances = info.tokenBalances
@@ -26,11 +26,11 @@ class Tokens {
         // ANCHOR_END: fetch-token-balances
     }
 
-    suspend fun fetchTokenMetadata(sdk: BreezSdk) {
+    suspend fun fetchTokenMetadata(client: BreezClient) {
         // ANCHOR: fetch-token-metadata
         try {
             val response = 
-                sdk.getTokensMetadata(
+                client.getTokensMetadata(
                     GetTokensMetadataRequest(
                         tokenIdentifiers = listOf("<token identifier 1>", "<token identifier 2>")
                 )
@@ -51,7 +51,7 @@ class Tokens {
         // ANCHOR_END: fetch-token-metadata
     }
 
-    suspend fun receiveTokenPaymentSparkInvoice(sdk: BreezSdk) {
+    suspend fun receiveTokenPaymentSparkInvoice(client: BreezClient) {
         // ANCHOR: receive-token-payment-spark-invoice
         try {
             val tokenIdentifier = "<token identifier>"
@@ -74,7 +74,7 @@ class Tokens {
                     senderPublicKey = optionalSenderPublicKey
                 )
             )
-            val response = sdk.receivePayment(request)
+            val response = client.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             println("Payment request: $paymentRequest")
@@ -86,7 +86,7 @@ class Tokens {
         // ANCHOR_END: receive-token-payment-spark-invoice
     }
 
-    suspend fun sendTokenPayment(sdk: BreezSdk) {
+    suspend fun sendTokenPayment(client: BreezClient) {
         // ANCHOR: send-token-payment
         try {
             val paymentRequest = "<spark address or invoice>"
@@ -99,7 +99,7 @@ class Tokens {
             // val amount = BigInteger.valueOf(1_000L)
 
             val prepareResponse =
-                sdk.prepareSendPayment(
+                client.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
                         amount = amount,
@@ -124,7 +124,7 @@ class Tokens {
 
             // Send the token payment
             val sendResponse =
-                sdk.sendPayment(
+                client.sendPayment(
                     SendPaymentRequest(prepareResponse = prepareResponse, options = null)
                 )
             val payment = sendResponse.payment
@@ -135,11 +135,11 @@ class Tokens {
         // ANCHOR_END: send-token-payment
     }
 
-    suspend fun fetchConversionLimits(sdk: BreezSdk) {
+    suspend fun fetchConversionLimits(client: BreezClient) {
         // ANCHOR: fetch-conversion-limits
         try {
             // Fetch limits for converting Bitcoin to a token
-            val fromBitcoinResponse = sdk.fetchConversionLimits(
+            val fromBitcoinResponse = client.fetchConversionLimits(
                 FetchConversionLimitsRequest(
                     conversionType = ConversionType.FromBitcoin,
                     tokenIdentifier = "<token identifier>"
@@ -154,7 +154,7 @@ class Tokens {
             }
 
             // Fetch limits for converting a token to Bitcoin
-            val toBitcoinResponse = sdk.fetchConversionLimits(
+            val toBitcoinResponse = client.fetchConversionLimits(
                 FetchConversionLimitsRequest(
                     conversionType = ConversionType.ToBitcoin(
                         fromTokenIdentifier = "<token identifier>"
@@ -175,7 +175,7 @@ class Tokens {
         // ANCHOR_END: fetch-conversion-limits
     }
 
-    suspend fun prepareSendPaymentTokenConversion(sdk: BreezSdk) {
+    suspend fun prepareSendPaymentTokenConversion(client: BreezClient) {
         // ANCHOR: prepare-send-payment-with-conversion
         try {
             val paymentRequest = "<spark address or invoice>"
@@ -196,7 +196,7 @@ class Tokens {
             )
 
             val prepareResponse =
-                sdk.prepareSendPayment(
+                client.prepareSendPayment(
                     PrepareSendPaymentRequest(
                         paymentRequest = paymentRequest,
                         amount = amount,

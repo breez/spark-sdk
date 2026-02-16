@@ -8,9 +8,9 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func GetTokenIssuer(sdk *breez_sdk_spark.BreezSdk) *breez_sdk_spark.TokenIssuer {
+func GetTokenIssuer(client *breez_sdk_spark.BreezClient) *breez_sdk_spark.TokenIssuer {
 	// ANCHOR: get-token-issuer
-	tokenIssuer := sdk.GetTokenIssuer()
+	tokenIssuer := client.GetTokenIssuer()
 	// ANCHOR_END: get-token-issuer
 	return tokenIssuer
 }
@@ -38,7 +38,7 @@ func CreateToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Tok
 	return &tokenMetadata, nil
 }
 
-func CreateTokenWithCustomAccountNumber() (*breez_sdk_spark.BreezSdk, error) {
+func CreateTokenWithCustomAccountNumber() (*breez_sdk_spark.BreezClient, error) {
 	// ANCHOR: custom-account-number
 	accountNumber := uint32(21)
 
@@ -61,9 +61,9 @@ func CreateTokenWithCustomAccountNumber() (*breez_sdk_spark.BreezSdk, error) {
 	}
 	builder.WithKeySet(keySetConfig)
 
-	sdk, err := builder.Build()
+	client, err := builder.Build()
 	// ANCHOR_END: custom-account-number
-	return sdk, err
+	return client, err
 }
 
 func MintToken(tokenIssuer *breez_sdk_spark.TokenIssuer) (*breez_sdk_spark.Payment, error) {

@@ -4,7 +4,7 @@ namespace BreezSdkSnippets
 {
     class Messages
     {
-        async Task SignMessage(BreezSdk sdk)
+        async Task SignMessage(BreezClient client)
         {
             // ANCHOR: sign-message
             var message = "<message to sign>";
@@ -14,7 +14,7 @@ namespace BreezSdkSnippets
                 message: message,
                 compact: compact
             );
-            var signMessageResponse = await sdk.SignMessage(request: signMessageRequest);
+            var signMessageResponse = await client.SignMessage(request: signMessageRequest);
 
             var signature = signMessageResponse.signature;
             var pubkey = signMessageResponse.pubkey;
@@ -24,7 +24,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: sign-message
         }
 
-        async Task CheckMessage(BreezSdk sdk)
+        async Task CheckMessage(BreezClient client)
         {
             // ANCHOR: check-message
             var message = "<message>";
@@ -35,7 +35,7 @@ namespace BreezSdkSnippets
                 pubkey: pubkey,
                 signature: signature
             );
-            var checkMessageResponse = await sdk.CheckMessage(request: checkMessageRequest);
+            var checkMessageResponse = await client.CheckMessage(request: checkMessageRequest);
 
             var isValid = checkMessageResponse.isValid;
 

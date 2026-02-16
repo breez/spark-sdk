@@ -2,9 +2,9 @@ import BigNumber
 import BreezSdkSpark
 import Foundation
 
-func getTokenIssuer(sdk: BreezSdk) -> TokenIssuer {
+func getTokenIssuer(client: BreezClient) -> TokenIssuer {
     // ANCHOR: get-token-issuer
-    let tokenIssuer = sdk.getTokenIssuer()
+    let tokenIssuer = client.getTokenIssuer()
     // ANCHOR_END: get-token-issuer
     return tokenIssuer
 }
@@ -24,7 +24,7 @@ func createToken(tokenIssuer: TokenIssuer) async throws -> TokenMetadata {
     return tokenMetadata
 }
 
-func createTokenWithCustomAccountNumber() async throws -> BreezSdk {
+func createTokenWithCustomAccountNumber() async throws -> BreezClient {
     // ANCHOR: custom-account-number
     let accountNumber = UInt32(21)
 
@@ -42,9 +42,9 @@ func createTokenWithCustomAccountNumber() async throws -> BreezSdk {
     )
     await builder.withKeySet(config: keySetConfig)
 
-    let sdk = try await builder.build()
+    let client = try await builder.build()
     // ANCHOR_END: custom-account-number
-    return sdk
+    return client
 }
 
 func mintToken(tokenIssuer: TokenIssuer) async throws -> Payment {

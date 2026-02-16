@@ -1,11 +1,11 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
 
-async fn parse_input(sdk: &BreezSdk) -> Result<()> {
+async fn parse_input(client: &BreezClient) -> Result<()> {
     // ANCHOR: parse-inputs
     let input = "an input to be parsed...";
 
-    match sdk.parse(input).await? {
+    match client.parse(input).await? {
         InputType::BitcoinAddress(details) => {
             println!("Input is Bitcoin address {}", details.address);
         }

@@ -3,7 +3,7 @@ import {
   connect,
   Network,
   SdkBuilder,
-  type BreezSdk,
+  type BreezClient,
   initLogging,
   type LogEntry,
   type SdkEvent,
@@ -24,7 +24,7 @@ const exampleGettingStarted = async () => {
   const config = defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
-  const sdk = await connect({
+  const client = await connect({
     config,
     seed,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`
@@ -32,11 +32,11 @@ const exampleGettingStarted = async () => {
   // ANCHOR_END: init-sdk
 }
 
-const exampleFetchNodeInfo = async (sdk: BreezSdk) => {
+const exampleFetchNodeInfo = async (client: BreezClient) => {
   // ANCHOR: fetch-balance
   // ensureSynced: true will ensure the SDK is synced with the Spark network
   // before returning the balance
-  const info = await sdk.getInfo({
+  const info = await client.getInfo({
     ensureSynced: false
   })
   const identityPubkey = info.identityPubkey
@@ -57,7 +57,7 @@ const exampleLogging = async () => {
   // ANCHOR_END: logging
 }
 
-const exampleAddEventListener = async (sdk: BreezSdk) => {
+const exampleAddEventListener = async (client: BreezClient) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
@@ -90,13 +90,13 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
 
   const eventListener = new JsEventListener()
 
-  const listenerId = await sdk.addEventListener(eventListener)
+  const listenerId = await client.addEventListener(eventListener)
   // ANCHOR_END: add-event-listener
 }
 
-const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => {
+const exampleRemoveEventListener = async (client: BreezClient, listenerId: string) => {
   // ANCHOR: remove-event-listener
-  await sdk.removeEventListener(listenerId)
+  await client.removeEventListener(listenerId)
   // ANCHOR_END: remove-event-listener
 }
 
@@ -126,8 +126,8 @@ const exampleGetSparkStatus = async () => {
   // ANCHOR_END: spark-status
 }
 
-const exampleDisconnect = async (sdk: BreezSdk) => {
+const exampleDisconnect = async (client: BreezClient) => {
   // ANCHOR: disconnect
-  await sdk.disconnect()
+  await client.disconnect()
   // ANCHOR_END: disconnect
 }

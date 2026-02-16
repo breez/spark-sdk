@@ -19,12 +19,12 @@ use crate::{
 };
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
+    BreezClient, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
     helpers::{BalanceWatcher, update_balances},
     parse_input,
 };
 
-impl BreezSdk {
+impl BreezClient {
     pub(super) fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
@@ -609,7 +609,7 @@ impl BreezSdk {
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
+impl BreezClient {
     /// Synchronizes the wallet with the Spark network
     #[allow(unused_variables)]
     pub async fn sync_wallet(

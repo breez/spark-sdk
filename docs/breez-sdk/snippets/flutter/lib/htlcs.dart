@@ -2,7 +2,7 @@ import 'package:convert/convert.dart';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:crypto/crypto.dart';
 
-Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
+Future<Payment> sendHtlcPayment(BreezClient client) async {
   // ANCHOR: send-htlc-payment
   String paymentRequest = "<spark address>";
   // Set the amount you wish the pay the receiver
@@ -13,7 +13,7 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
       tokenIdentifier: null,
       conversionOptions: null,
       feePolicy: null);
-  final prepareResponse = await sdk.prepareSendPayment(request: prepareRequest);
+  final prepareResponse = await client.prepareSendPayment(request: prepareRequest);
 
   // If the fees are acceptable, continue to create the HTLC Payment
   final paymentMethod = prepareResponse.paymentMethod;
@@ -34,13 +34,13 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
 
   final request =
       SendPaymentRequest(prepareResponse: prepareResponse, options: options);
-  final sendResponse = await sdk.sendPayment(request: request);
+  final sendResponse = await client.sendPayment(request: request);
   final payment = sendResponse.payment;
   // ANCHOR_END: send-htlc-payment
   return payment;
 }
 
-Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
+Future<List<Payment>> listClaimableHtlcPayments(BreezClient client) async {
   // ANCHOR: list-claimable-htlc-payments
   final request = ListPaymentsRequest(
     typeFilter: [PaymentType.receive],
@@ -50,16 +50,16 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
     )],
   );
 
-  final response = await sdk.listPayments(request: request);
+  final response = await client.listPayments(request: request);
   final payments = response.payments;
   // ANCHOR_END: list-claimable-htlc-payments
   return payments;
 }
 
-Future<Payment> claimHtlcPayment(BreezSdk sdk) async {
+Future<Payment> claimHtlcPayment(BreezClient client) async {
   // ANCHOR: claim-htlc-payment
   String preimage = "<preimage hex>";
-  final response = await sdk.claimHtlcPayment(
+  final response = await client.claimHtlcPayment(
       request: ClaimHtlcPaymentRequest(preimage: preimage));
   final payment = response.payment;
   // ANCHOR_END: claim-htlc-payment

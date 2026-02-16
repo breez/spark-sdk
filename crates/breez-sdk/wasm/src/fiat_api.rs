@@ -4,21 +4,20 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
-    models::{FiatCurrency, Rate, chain_service::RecommendedFees},
+    models::{FiatCurrency, Rate},
 };
 
-/// Sub-object for fiat data (exchange rates, currencies, recommended fees).
+/// Sub-object for fiat data (exchange rates, currencies).
 ///
-/// Access via `wallet.fiat`.
+/// Access via `client.fiat`.
 ///
 /// ```js
-/// const rates = await wallet.fiat.rates();         // → Rate[]
-/// const currencies = await wallet.fiat.currencies(); // → FiatCurrency[]
-/// const fees = await wallet.fiat.recommendedFees();
+/// const rates = await client.fiat.rates();         // → Rate[]
+/// const currencies = await client.fiat.currencies(); // → FiatCurrency[]
 /// ```
 #[wasm_bindgen(js_name = "FiatApi")]
 pub struct FiatApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "FiatApi")]
@@ -37,11 +36,5 @@ impl FiatApi {
     pub async fn currencies(&self) -> WasmResult<Vec<FiatCurrency>> {
         let currencies = self.sdk.list_fiat_currencies().await?.currencies;
         Ok(currencies.into_iter().map(Into::into).collect())
-    }
-
-    /// Get the recommended BTC fees.
-    #[wasm_bindgen(js_name = "recommendedFees")]
-    pub async fn recommended_fees(&self) -> WasmResult<RecommendedFees> {
-        Ok(self.sdk.recommended_fees().await?.into())
     }
 }

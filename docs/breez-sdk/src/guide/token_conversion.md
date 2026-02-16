@@ -4,7 +4,7 @@ Token conversion enables payments to be made without holding the required asset 
 
 <h2 id="fetching-conversion-limits">
     <a class="header" href="#fetching-conversion-limits">Fetching conversion limits</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.fetch_conversion_limits">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.fetch_conversion_limits">API docs</a>
 </h2>
 
 Before performing a conversion, you can fetch the minimum amounts required for the conversion. The limits depend on the conversion direction:
@@ -21,7 +21,7 @@ Amounts are denominated in satoshis for Bitcoin (1 BTC = 100,000,000 sats) and i
 
 <h2 id="bitcoin-to-token">
     <a class="header" href="#bitcoin-to-token">Converting Bitcoin to tokens</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.prepare_send_payment">API docs</a>
 </h2>
 
 Token conversion enables payments of tokens like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a> to be made without holding the token, but instead using Bitcoin.
@@ -42,7 +42,7 @@ The conversion may result in some token balance remaining in the wallet after th
 
 <h2 id="token-to-bitcoin">
     <a class="header" href="#token-to-bitcoin">Converting tokens to Bitcoin</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.prepare_send_payment">API docs</a>
 </h2>
 
 Token conversion also enables Bitcoin payments to be made without holding the required Bitcoin, but instead using a supported token asset like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>.

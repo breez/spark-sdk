@@ -1,16 +1,16 @@
-import { type Wallet } from '@breeztech/breez-sdk-spark'
+import { type BreezClient } from '@breeztech/breez-sdk-spark'
 
-const exampleGetUserSettings = async (wallet: Wallet) => {
+const exampleGetUserSettings = async (client: BreezClient) => {
   // ANCHOR: get-user-settings
-  const userSettings = await wallet.settings.get()
+  const userSettings = await client.settings.get()
   console.log(`User settings: ${JSON.stringify(userSettings)}`)
   // ANCHOR_END: get-user-settings
 }
 
-const exampleUpdateUserSettings = async (wallet: Wallet) => {
+const exampleUpdateUserSettings = async (client: BreezClient) => {
   // ANCHOR: update-user-settings
   const sparkPrivateModeEnabled = true
-  await wallet.settings.update({
+  await client.settings.update({
     sparkPrivateModeEnabled
   })
   // ANCHOR_END: update-user-settings

@@ -1,8 +1,8 @@
-import type { Wallet, ConversionOptions, PaymentIntent } from '@breeztech/breez-sdk-spark'
+import type { BreezClient, ConversionOptions, PaymentIntent } from '@breeztech/breez-sdk-spark'
 
-const exampleFetchTokenBalances = async (wallet: Wallet) => {
+const exampleFetchTokenBalances = async (client: BreezClient) => {
   // ANCHOR: fetch-token-balances
-  const info = await wallet.getInfo({
+  const info = await client.getInfo({
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
     ensureSynced: false
@@ -20,9 +20,9 @@ const exampleFetchTokenBalances = async (wallet: Wallet) => {
   // ANCHOR_END: fetch-token-balances
 }
 
-const exampleFetchTokenMetadata = async (wallet: Wallet) => {
+const exampleFetchTokenMetadata = async (client: BreezClient) => {
   // ANCHOR: fetch-token-metadata
-  const response = await wallet.tokens.metadata({
+  const response = await client.tokens.metadata({
     tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
   })
 
@@ -38,62 +38,62 @@ const exampleFetchTokenMetadata = async (wallet: Wallet) => {
   // ANCHOR_END: fetch-token-metadata
 }
 
-const exampleReceiveTokenPaymentSparkInvoice = async (wallet: Wallet) => {
+const exampleReceiveTokenPaymentSparkInvoice = async (client: BreezClient) => {
   // ANCHOR: receive-token-payment-spark-invoice
   const tokenIdentifier = '<token identifier>'
   const optionalDescription = '<invoice description>'
-  const optionalAmount = '5000'
+  const optionalAmountTokenUnits = '5000'
   // Optionally set the expiry UNIX timestamp in seconds
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'
 
-  const result = await wallet.receive({
+  const result = await client.receive({
     paymentType: 'sparkInvoice',
     tokenIdentifier,
     description: optionalDescription,
-    amount: optionalAmount,
+    amountTokenUnits: optionalAmountTokenUnits,
     expiry: optionalExpiryTimeSeconds,
     senderPublicKey: optionalSenderPublicKey
   })
 
   const destination = result.destination
   console.log(`Payment request: ${destination}`)
-  const receiveFeeSats = result.fee
-  console.log(`Fees: ${receiveFeeSats} token base units`)
+  const receiveFeeTokenUnits = result.feeTokenUnits
+  console.log(`Fees: ${receiveFeeTokenUnits} token base units`)
   // ANCHOR_END: receive-token-payment-spark-invoice
 }
 
-const exampleSendTokenPayment = async (wallet: Wallet) => {
+const exampleSendTokenPayment = async (client: BreezClient) => {
   // ANCHOR: send-token-payment
   const destination = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send (in token base units).
-  const amount = BigInt(1_000)
+  const amountTokenUnits = '1000'
 
-  const intent = await wallet.createPayment(destination, {
-    amount,
+  const payment = await client.preparePayment(destination, {
+    amountTokenUnits,
     tokenIdentifier
   })
 
   // If the fees are acceptable, continue to send the token payment
-  const fee = intent.fee
-  if (fee.type === 'spark') {
-    console.log(`Token ID: ${intent.tokenIdentifier}`)
-    console.log(`Fees: ${fee.fee} token base units`)
+  const fee = payment.fee
+  if (fee.type === 'sparkToken') {
+    console.log(`Token ID: ${payment.tokenIdentifier}`)
+    console.log(`Fees: ${fee.feeTokenUnits} token base units`)
   }
 
   // Send the token payment
-  const sendResponse = await intent.confirm()
-  const payment = sendResponse.payment
-  console.log(`Payment: ${JSON.stringify(payment)}`)
+  const sendResponse = await payment.send()
+  const confirmedPayment = sendResponse.payment
+  console.log(`Payment: ${JSON.stringify(confirmedPayment)}`)
   // ANCHOR_END: send-token-payment
 }
 
-const exampleFetchConversionLimits = async (wallet: Wallet) => {
+const exampleFetchConversionLimits = async (client: BreezClient) => {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  const fromBitcoinResponse = await wallet.tokens.swapLimits({
+  const fromBitcoinResponse = await client.tokens.swapLimits({
     conversionType: { type: 'fromBitcoin' },
     tokenIdentifier: '<token identifier>'
   })
@@ -106,7 +106,7 @@ const exampleFetchConversionLimits = async (wallet: Wallet) => {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  const toBitcoinResponse = await wallet.tokens.swapLimits({
+  const toBitcoinResponse = await client.tokens.swapLimits({
     conversionType: {
       type: 'toBitcoin',
       fromTokenIdentifier: '<token identifier>'
@@ -123,13 +123,13 @@ const exampleFetchConversionLimits = async (wallet: Wallet) => {
   // ANCHOR_END: fetch-conversion-limits
 }
 
-const examplePrepareSendPaymentTokenConversion = async (wallet: Wallet) => {
+const examplePrepareSendPaymentTokenConversion = async (client: BreezClient) => {
   // ANCHOR: prepare-send-payment-with-conversion
   const destination = '<spark address or invoice>'
   // Token identifier must match the invoice in case it specifies one.
   const tokenIdentifier = '<token identifier>'
   // Set the amount of tokens you wish to send (in token base units).
-  const amount = BigInt(1_000)
+  const amountTokenUnits = '1000'
   // Set to use Bitcoin funds to pay via conversion
   const optionalMaxSlippageBps = 50
   const optionalCompletionTimeoutSecs = 30
@@ -141,15 +141,15 @@ const examplePrepareSendPaymentTokenConversion = async (wallet: Wallet) => {
     completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
 
-  const intent = await wallet.createPayment(destination, {
-    amount,
+  const payment = await client.preparePayment(destination, {
+    amountTokenUnits,
     tokenIdentifier,
     conversionOptions
   })
 
   // If the fees are acceptable, continue to send the token payment
-  if (intent.conversionEstimate !== undefined) {
-    const conversionEstimate = intent.conversionEstimate
+  if (payment.conversionEstimate !== undefined) {
+    const conversionEstimate = payment.conversionEstimate
     console.log(`Estimated conversion amount: ${conversionEstimate.amount} sats`)
     console.log(`Estimated conversion fee: ${conversionEstimate.fee} sats`)
   }

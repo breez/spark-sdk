@@ -2,13 +2,13 @@ package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
 class LnurlWithdraw {
-    suspend fun lnurlWithdraw(sdk: BreezSdk) {
+    suspend fun lnurlWithdraw(client: BreezClient) {
         // ANCHOR: lnurl-withdraw
         // Endpoint can also be of the form:
         // lnurlw://domain.com/lnurl-withdraw?key=val
         val lnurlWithdrawUrl = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7..."
         try {
-            val inputType = sdk.parse(lnurlWithdrawUrl)
+            val inputType = client.parse(lnurlWithdrawUrl)
             if (inputType is InputType.LnurlWithdraw) {
                 // Amount to withdraw in sats between min/max withdrawable amounts
                 val amountSats = 5_000.toULong()
@@ -20,7 +20,7 @@ class LnurlWithdraw {
                     withdrawRequest,
                     optionalCompletionTimeoutSecs
                 )
-                val response = sdk.lnurlWithdraw(request)
+                val response = client.lnurlWithdraw(request)
 
                 val payment = response.payment
                 // Log.v("Breez", "Payment: $payment")

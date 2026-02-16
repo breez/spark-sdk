@@ -1,11 +1,11 @@
 import BigNumber
 import BreezSdkSpark
 
-func fetchTokenBalances(sdk: BreezSdk) async throws {
+func fetchTokenBalances(client: BreezClient) async throws {
     // ANCHOR: fetch-token-balances
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
-    let info = try await sdk.getInfo(
+    let info = try await client.getInfo(
         request: GetInfoRequest(
             ensureSynced: false
         ))
@@ -22,9 +22,9 @@ func fetchTokenBalances(sdk: BreezSdk) async throws {
     // ANCHOR_END: fetch-token-balances
 }
 
-func fetchTokenMetadata(sdk: BreezSdk) async throws {
+func fetchTokenMetadata(client: BreezClient) async throws {
     // ANCHOR: fetch-token-metadata
-    let response = try await sdk.getTokensMetadata(
+    let response = try await client.getTokensMetadata(
         request: GetTokensMetadataRequest(tokenIdentifiers: [
             "<token identifier 1>", "<token identifier 2>",
         ]))
@@ -41,7 +41,7 @@ func fetchTokenMetadata(sdk: BreezSdk) async throws {
     // ANCHOR_END: fetch-token-metadata
 }
 
-func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+func receiveTokenPaymentSparkInvoice(client: BreezClient) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-token-payment-spark-invoice
     let tokenIdentifier = "<token identifier>"
     let optionalDescription = "<invoice description>"
@@ -51,7 +51,7 @@ func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePayme
     let optionalSenderPublicKey = "<sender public key>"
 
     let response =
-        try await sdk
+        try await client
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.sparkInvoice(
@@ -72,7 +72,7 @@ func receiveTokenPaymentSparkInvoice(sdk: BreezSdk) async throws -> ReceivePayme
     return response
 }
 
-func sendTokenPayment(sdk: BreezSdk) async throws {
+func sendTokenPayment(client: BreezClient) async throws {
     // ANCHOR: send-token-payment
     let paymentRequest = "<spark address or invoice>"
     // Token identifier must match the invoice in case it specifies one.
@@ -80,7 +80,7 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // Set the amount of tokens you wish to send.
     let amount: BInt? = BInt(1_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: amount,
@@ -100,7 +100,7 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     }
 
     // Send the token payment
-    let sendResponse = try await sdk.sendPayment(
+    let sendResponse = try await client.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
             options: nil
@@ -110,10 +110,10 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
     // ANCHOR_END: send-token-payment
 }
 
-func fetchConversionLimits(sdk: BreezSdk) async throws {
+func fetchConversionLimits(client: BreezClient) async throws {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token
-    let fromBitcoinResponse = try await sdk.fetchConversionLimits(
+    let fromBitcoinResponse = try await client.fetchConversionLimits(
         request: FetchConversionLimitsRequest(
             conversionType: ConversionType.fromBitcoin,
             tokenIdentifier: "<token identifier>"
@@ -127,7 +127,7 @@ func fetchConversionLimits(sdk: BreezSdk) async throws {
     }
 
     // Fetch limits for converting a token to Bitcoin
-    let toBitcoinResponse = try await sdk.fetchConversionLimits(
+    let toBitcoinResponse = try await client.fetchConversionLimits(
         request: FetchConversionLimitsRequest(
             conversionType: ConversionType.toBitcoin(
                 fromTokenIdentifier: "<token identifier>"
@@ -144,7 +144,7 @@ func fetchConversionLimits(sdk: BreezSdk) async throws {
     // ANCHOR_END: fetch-conversion-limits
 }
 
-func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
+func prepareSendPaymentTokenConversion(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-with-conversion
     let paymentRequest = "<spark address or invoice>"
     // Token identifier must match the invoice in case it specifies one.
@@ -160,7 +160,7 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
         completionTimeoutSecs: optionalCompletionTimeoutSecs
     )
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: amount,

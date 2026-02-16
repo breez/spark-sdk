@@ -20,16 +20,16 @@ Future<void> initSdk() async {
   final connectRequest =
       ConnectRequest(config: config, seed: seed, storageDir: "./.data");
 
-  final sdk = await connect(request: connectRequest);
+  final client = await connect(request: connectRequest);
   // ANCHOR_END: init-sdk
-  print(sdk);
+  print(client);
 }
 
-Future<void> fetchBalance(BreezSdk sdk) async {
+Future<void> fetchBalance(BreezClient client) async {
   // ANCHOR: fetch-balance
   // ensureSynced: true will ensure the SDK is synced with the Spark network
   // before returning the balance
-  final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
+  final info = await client.getInfo(request: GetInfoRequest(ensureSynced: false));
   final identityPubkey = info.identityPubkey;
   final balanceSats = info.balanceSats;
   // ANCHOR_END: fetch-balance
@@ -104,8 +104,8 @@ class BreezSdkSpark {
   // Call once on your Dart entrypoint file, e.g.; `lib/main.dart`
   // or singleton SDK service. It is recommended to use a single instance
   // of the SDK across your Flutter app.
-  void initializeEventsStream(BreezSdk sdk) {
-    _eventStream ??= sdk.addEventListener().asBroadcastStream();
+  void initializeEventsStream(BreezClient client) {
+    _eventStream ??= client.addEventListener().asBroadcastStream();
   }
 
   final _eventStreamController = StreamController<SdkEvent>.broadcast();
@@ -158,8 +158,8 @@ class BreezSdkSpark {
   // ANCHOR_END: remove-event-listener
 
   // ANCHOR: disconnect
-  Future<void> disconnect(BreezSdk sdk) async {
-    await sdk.disconnect();
+  Future<void> disconnect(BreezClient client) async {
+    await client.disconnect();
   }
   // ANCHOR_END: disconnect
 }

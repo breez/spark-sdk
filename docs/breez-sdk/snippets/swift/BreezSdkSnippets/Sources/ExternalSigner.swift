@@ -23,19 +23,19 @@ class ExternalSignerSnippets {
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    func connectExample(signer: ExternalSigner) async throws -> BreezSdk {
+    func connectExample(signer: ExternalSigner) async throws -> BreezClient {
         // Create the config
         var config = defaultConfig(network: .mainnet)
         config.apiKey = "<breez api key>"
-        
+
         // Connect using the external signer
-        let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
+        let client = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
             config: config,
             signer: signer,
             storageDir: "./.data"
         ))
-        
-        return sdk
+
+        return client
     }
     // ANCHOR_END: connect-with-signer
 }

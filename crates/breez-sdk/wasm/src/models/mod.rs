@@ -1275,14 +1275,20 @@ pub struct BuyBitcoinResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareOptions)]
 pub struct PrepareOptions {
+    pub amount_sats: Option<u64>,
     #[tsify(type = "string")]
     #[serde(default, with = "serde_option_u128_as_string")]
-    pub amount: Option<u128>,
+    pub amount_token_units: Option<u128>,
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
-    pub lnurl_comment: Option<String>,
-    pub lnurl_validate_success_action_url: Option<bool>,
+    pub lnurl: Option<LnurlPayOptions>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlPayOptions)]
+pub struct LnurlPayOptions {
+    pub comment: Option<String>,
+    pub validate_success_action_url: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PayOptions)]
@@ -1293,10 +1299,13 @@ pub struct PayOptions {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PreparedPaymentFee)]
 pub enum PreparedPaymentFee {
-    Spark {
+    SparkSats {
+        fee_sats: u64,
+    },
+    SparkToken {
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
-        fee: u128,
+        fee_token_units: u128,
     },
     Lightning {
         fee_sats: u64,
@@ -1340,9 +1349,10 @@ pub enum ReceivePaymentType {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceiveOptions)]
 pub struct ReceiveOptions {
     pub payment_type: Option<ReceivePaymentType>,
+    pub amount_sats: Option<u64>,
     #[tsify(type = "string")]
     #[serde(default, with = "serde_option_u128_as_string")]
-    pub amount: Option<u128>,
+    pub amount_token_units: Option<u128>,
     pub description: Option<String>,
     pub expiry: Option<u64>,
     pub token_identifier: Option<String>,
@@ -1352,9 +1362,10 @@ pub struct ReceiveOptions {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceiveResult)]
 pub struct ReceiveResult {
     pub destination: String,
+    pub fee_sats: u64,
     #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
-    pub fee: u128,
+    #[serde(default, with = "serde_option_u128_as_string")]
+    pub fee_token_units: Option<u128>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1377,8 +1388,8 @@ pub struct AppConfig {
     pub optimization: Option<OptimizationConfig>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::WalletConfig)]
-pub struct WalletConfig {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClientConfig)]
+pub struct ClientConfig {
     pub seed: Seed,
     pub storage_dir: Option<String>,
     pub optimization: Option<OptimizationConfig>,

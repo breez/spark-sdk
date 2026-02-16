@@ -1,11 +1,11 @@
 import {
-  type BreezSdk,
+  type BreezClient,
   InputType_Tags,
   type LnurlAuthRequestDetails,
   LnurlCallbackStatus_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const parseLnurlAuth = async (sdk: BreezSdk) => {
+const parseLnurlAuth = async (client: BreezClient) => {
   // ANCHOR: parse-lnurl-auth
   // LNURL-auth URL from a service
   // Can be in the form:
@@ -13,7 +13,7 @@ const parseLnurlAuth = async (sdk: BreezSdk) => {
   // - https://service.com/lnurl-auth?tag=login&k1=...
   const lnurlAuthUrl = 'lnurl1...'
 
-  const inputType = await sdk.parse(lnurlAuthUrl)
+  const inputType = await client.parse(lnurlAuthUrl)
   if (inputType.tag === InputType_Tags.LnurlAuth) {
     const requestData = inputType.inner[0]
     console.log(`Domain: ${requestData.domain}`)
@@ -25,10 +25,10 @@ const parseLnurlAuth = async (sdk: BreezSdk) => {
   // ANCHOR_END: parse-lnurl-auth
 }
 
-const authenticate = async (sdk: BreezSdk, requestData: LnurlAuthRequestDetails) => {
+const authenticate = async (client: BreezClient, requestData: LnurlAuthRequestDetails) => {
   // ANCHOR: lnurl-auth
   // Perform LNURL authentication
-  const result = await sdk.lnurlAuth(requestData)
+  const result = await client.lnurlAuth(requestData)
 
   if (result.tag === LnurlCallbackStatus_Tags.Ok) {
     console.log('Authentication successful')

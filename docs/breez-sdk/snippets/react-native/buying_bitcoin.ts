@@ -1,9 +1,9 @@
 import {
-  type BreezSdk,
+  type BreezClient,
   type BuyBitcoinRequest
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const buyBitcoin = async (sdk: BreezSdk) => {
+const buyBitcoin = async (client: BreezClient) => {
   // ANCHOR: buy-bitcoin
   // Optionally, lock the purchase to a specific amount
   const optionalLockedAmountSat = BigInt(100_000)
@@ -15,7 +15,7 @@ const buyBitcoin = async (sdk: BreezSdk) => {
     redirectUrl: optionalRedirectUrl
   }
 
-  const response = await sdk.buyBitcoin(request)
+  const response = await client.buyBitcoin(request)
   console.log('Open this URL in a browser to complete the purchase:')
   console.log(response.url)
   // ANCHOR_END: buy-bitcoin

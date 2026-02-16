@@ -23,20 +23,22 @@ use crate::{
     tokens_api::TokensApi,
 };
 
-#[wasm_bindgen(js_name = "Wallet")]
-pub struct Wallet {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+#[wasm_bindgen(js_name = "BreezClient")]
+pub struct BreezClient {
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
-/// Backward-compat alias so existing `import { BreezSdk }` still works.
+/// Backward-compat aliases so existing imports still work.
 #[wasm_bindgen(typescript_custom_section)]
 const BREEZ_SDK_ALIAS: &'static str = r#"
-/** @deprecated Use `Wallet` instead. */
-export type BreezSdk = Wallet;"#;
+/** @deprecated Use `BreezClient` instead. */
+export type BreezSdk = BreezClient;
+/** @deprecated Use `BreezClient` instead. */
+export type Wallet = BreezClient;"#;
 
 // ── Sub-object getters (sync — just Rc::clone) ─────────────────────
-#[wasm_bindgen(js_class = "Wallet")]
-impl Wallet {
+#[wasm_bindgen(js_class = "BreezClient")]
+impl BreezClient {
     /// Payment query API.
     #[wasm_bindgen(getter)]
     pub fn payments(&self) -> PaymentsApi {
@@ -118,7 +120,7 @@ impl Wallet {
         }
     }
 
-    /// Fiat data API (exchange rates, currencies, recommended fees).
+    /// Fiat data API (exchange rates, currencies).
     #[wasm_bindgen(getter)]
     pub fn fiat(&self) -> FiatApi {
         FiatApi {
@@ -151,9 +153,9 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
     Ok(())
 }
 
-/// @deprecated Use `initializeApp()` + `app.connectWallet()` instead.
+/// @deprecated Use `new Breez()` + `breez.connectWallet()` or `Breez.connect()` instead.
 #[wasm_bindgen(js_name = "connect")]
-pub async fn connect(request: ConnectRequest) -> WasmResult<Wallet> {
+pub async fn connect(request: ConnectRequest) -> WasmResult<BreezClient> {
     let builder = SdkBuilder::new(request.config, request.seed)
         .with_default_storage(request.storage_dir)
         .await?;
@@ -161,13 +163,13 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<Wallet> {
     Ok(sdk)
 }
 
-/// @deprecated Use `initializeApp()` + `app.connectWallet()` instead.
+/// @deprecated Use `new Breez()` + `breez.connectWallet()` or `Breez.connect()` instead.
 #[wasm_bindgen(js_name = "connectWithSigner")]
 pub async fn connect_with_signer(
     config: Config,
     signer: crate::signer::JsExternalSigner,
     storage_dir: String,
-) -> WasmResult<Wallet> {
+) -> WasmResult<BreezClient> {
     let builder = SdkBuilder::new_with_signer(config, signer)
         .with_default_storage(storage_dir)
         .await?;
@@ -207,10 +209,10 @@ pub fn default_external_signer(
     Ok(crate::signer::DefaultSigner::new(signer))
 }
 
-#[wasm_bindgen(js_class = "Wallet")]
+#[wasm_bindgen(js_class = "BreezClient")]
 #[allow(deprecated)] // WASM methods delegate to deprecated core methods during migration
-impl Wallet {
-    /// @deprecated Use `wallet.events.add()` instead.
+impl BreezClient {
+    /// @deprecated Use `client.events.add()` instead.
     #[wasm_bindgen(js_name = "addEventListener")]
     pub async fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
@@ -218,13 +220,13 @@ impl Wallet {
             .await
     }
 
-    /// @deprecated Use `wallet.events.remove()` instead.
+    /// @deprecated Use `client.events.remove()` instead.
     #[wasm_bindgen(js_name = "removeEventListener")]
     pub async fn remove_event_listener(&self, id: &str) -> bool {
         self.sdk.remove_event_listener(id).await
     }
 
-    /// @deprecated Use `wallet.events.on()` instead.
+    /// @deprecated Use `client.events.on()` instead.
     #[wasm_bindgen(js_name = "on")]
     pub async fn on(&self, event_type: &str, callback: js_sys::Function) -> WasmResult<String> {
         // Build a filter based on the event type string
@@ -257,14 +259,14 @@ impl Wallet {
         Ok(self.sdk.parse(input).await?.into())
     }
 
-    /// Create a payment intent for the given destination.
+    /// Prepare a payment to the given destination.
     ///
     /// Returns a `PaymentIntent` that can be inspected (`paymentType`, `amount`,
-    /// `fee`, `feeSats`) and then confirmed with `confirm()`.
+    /// `fee`, `feeSats`) and then sent with `send()`.
     ///
     /// Nothing is committed or reserved — this is a fee estimate + validation step.
-    #[wasm_bindgen(js_name = "createPayment")]
-    pub async fn create_payment(
+    #[wasm_bindgen(js_name = "preparePayment")]
+    pub async fn prepare_payment(
         &self,
         destination: &str,
         options: Option<PrepareOptions>,
@@ -277,31 +279,24 @@ impl Wallet {
         Ok(PaymentIntent { inner })
     }
 
-    /// @deprecated Use `createPayment()` instead.
+    /// @deprecated Use `preparePayment()` instead.
+    #[wasm_bindgen(js_name = "createPayment")]
+    pub async fn create_payment(
+        &self,
+        destination: &str,
+        options: Option<PrepareOptions>,
+    ) -> WasmResult<PaymentIntent> {
+        self.prepare_payment(destination, options).await
+    }
+
+    /// @deprecated Use `preparePayment()` instead.
     #[wasm_bindgen(js_name = "prepare")]
     pub async fn prepare(
         &self,
         destination: &str,
         options: Option<PrepareOptions>,
     ) -> WasmResult<PaymentIntent> {
-        self.create_payment(destination, options).await
-    }
-
-    /// Parse, prepare, and execute a payment in one step (no review).
-    #[wasm_bindgen(js_name = "sendPayment")]
-    pub async fn send_payment_unified(
-        &self,
-        destination: &str,
-        prepare_options: Option<PrepareOptions>,
-        pay_options: Option<PayOptions>,
-    ) -> WasmResult<ConfirmPaymentResponse> {
-        let prepare_options = prepare_options.map(Into::into);
-        let pay_options = pay_options.map(Into::into);
-        Ok(self
-            .sdk
-            .pay(destination, prepare_options, pay_options)
-            .await?
-            .into())
+        self.prepare_payment(destination, options).await
     }
 
     /// Generate a payment request (invoice, address) to receive funds.
@@ -374,7 +369,7 @@ impl Wallet {
         Ok(self.sdk.lnurl_pay(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.lnurl.withdraw()` instead.
+    /// @deprecated Use `client.lnurl.withdraw()` instead.
     #[wasm_bindgen(js_name = "lnurlWithdraw")]
     pub async fn lnurl_withdraw(
         &self,
@@ -383,7 +378,7 @@ impl Wallet {
         Ok(self.sdk.lnurl_withdraw(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.lnurl.auth()` instead.
+    /// @deprecated Use `client.lnurl.auth()` instead.
     #[wasm_bindgen(js_name = "lnurlAuth")]
     pub async fn lnurl_auth(
         &self,
@@ -392,7 +387,7 @@ impl Wallet {
         Ok(self.sdk.lnurl_auth(request_data.into()).await?.into())
     }
 
-    /// @deprecated Use `sendPayment()` or `createPayment()` + `confirm()` instead.
+    /// @deprecated Use `sendPayment()` or `preparePayment()` + `send()` instead.
     #[wasm_bindgen(js_name = "sendPaymentLegacy")]
     pub async fn send_payment_legacy(
         &self,
@@ -406,7 +401,7 @@ impl Wallet {
         Ok(self.sdk.sync_wallet(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.payments.list()` instead.
+    /// @deprecated Use `client.payments.list()` instead.
     #[wasm_bindgen(js_name = "listPayments")]
     pub async fn list_payments(
         &self,
@@ -415,13 +410,13 @@ impl Wallet {
         Ok(self.sdk.list_payments(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.payments.get()` instead.
+    /// @deprecated Use `client.payments.get()` instead.
     #[wasm_bindgen(js_name = "getPayment")]
     pub async fn get_payment(&self, request: GetPaymentRequest) -> WasmResult<GetPaymentResponse> {
         Ok(self.sdk.get_payment(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.deposits.claim()` instead.
+    /// @deprecated Use `client.deposits.claim()` instead.
     #[wasm_bindgen(js_name = "claimDeposit")]
     pub async fn claim_deposit(
         &self,
@@ -430,7 +425,7 @@ impl Wallet {
         Ok(self.sdk.claim_deposit(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.deposits.refund()` instead.
+    /// @deprecated Use `client.deposits.refund()` instead.
     #[wasm_bindgen(js_name = "refundDeposit")]
     pub async fn refund_deposit(
         &self,
@@ -439,7 +434,7 @@ impl Wallet {
         Ok(self.sdk.refund_deposit(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.deposits.listUnclaimed()` instead.
+    /// @deprecated Use `client.deposits.listUnclaimed()` instead.
     #[wasm_bindgen(js_name = "listUnclaimedDeposits")]
     pub async fn list_unclaimed_deposits(
         &self,
@@ -452,7 +447,7 @@ impl Wallet {
             .into())
     }
 
-    /// @deprecated Use `wallet.lightningAddress.checkAvailable()` instead.
+    /// @deprecated Use `client.lightningAddress.checkAvailable()` instead.
     #[wasm_bindgen(js_name = "checkLightningAddressAvailable")]
     pub async fn check_lightning_address_available(
         &self,
@@ -464,7 +459,7 @@ impl Wallet {
             .await?)
     }
 
-    /// @deprecated Use `wallet.lightningAddress.get()` instead.
+    /// @deprecated Use `client.lightningAddress.get()` instead.
     #[wasm_bindgen(js_name = "getLightningAddress")]
     pub async fn get_lightning_address(&self) -> WasmResult<Option<LightningAddressInfo>> {
         Ok(self
@@ -474,7 +469,7 @@ impl Wallet {
             .map(|resp| resp.into()))
     }
 
-    /// @deprecated Use `wallet.lightningAddress.register()` instead.
+    /// @deprecated Use `client.lightningAddress.register()` instead.
     #[wasm_bindgen(js_name = "registerLightningAddress")]
     pub async fn register_lightning_address(
         &self,
@@ -487,7 +482,7 @@ impl Wallet {
             .into())
     }
 
-    /// @deprecated Use `wallet.lightningAddress.delete()` instead.
+    /// @deprecated Use `client.lightningAddress.delete()` instead.
     #[wasm_bindgen(js_name = "deleteLightningAddress")]
     pub async fn delete_lightning_address(&self) -> WasmResult<()> {
         Ok(self.sdk.delete_lightning_address().await?)
@@ -505,13 +500,15 @@ impl Wallet {
         Ok(self.sdk.list_fiat_rates().await?.into())
     }
 
-    /// @deprecated Use standalone `Fiat.recommendedFees()` or keep for convenience.
+    /// Get the recommended BTC fees.
+    ///
+    /// This is the canonical location for recommended fees on the client.
     #[wasm_bindgen(js_name = "recommendedFees")]
     pub async fn recommended_fees(&self) -> WasmResult<RecommendedFees> {
         Ok(self.sdk.recommended_fees().await?.into())
     }
 
-    /// @deprecated Use `wallet.tokens.metadata()` instead.
+    /// @deprecated Use `client.tokens.metadata()` instead.
     #[wasm_bindgen(js_name = "getTokensMetadata")]
     pub async fn get_tokens_metadata(
         &self,
@@ -520,7 +517,7 @@ impl Wallet {
         Ok(self.sdk.get_tokens_metadata(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.message.sign()` instead.
+    /// @deprecated Use `client.message.sign()` instead.
     #[wasm_bindgen(js_name = "signMessage")]
     pub async fn sign_message(
         &self,
@@ -538,43 +535,43 @@ impl Wallet {
         Ok(self.sdk.check_message(request.into()).await?.into())
     }
 
-    /// @deprecated Use `wallet.settings.get()` instead.
+    /// @deprecated Use `client.settings.get()` instead.
     #[wasm_bindgen(js_name = "getUserSettings")]
     pub async fn get_user_settings(&self) -> WasmResult<UserSettings> {
         Ok(self.sdk.get_user_settings().await?.into())
     }
 
-    /// @deprecated Use `wallet.settings.update()` instead.
+    /// @deprecated Use `client.settings.update()` instead.
     #[wasm_bindgen(js_name = "updateUserSettings")]
     pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> WasmResult<()> {
         Ok(self.sdk.update_user_settings(request.into()).await?)
     }
 
-    /// @deprecated Use `wallet.tokenIssuer` getter instead.
+    /// @deprecated Use `client.tokenIssuer` getter instead.
     #[wasm_bindgen(js_name = "getTokenIssuer")]
     pub fn get_token_issuer(&self) -> TokenIssuer {
         self.token_issuer()
     }
 
-    /// @deprecated Use `wallet.optimization.start()` instead.
+    /// @deprecated Use `client.optimization.start()` instead.
     #[wasm_bindgen(js_name = "startLeafOptimization")]
     pub fn start_leaf_optimization(&self) {
         self.sdk.start_leaf_optimization();
     }
 
-    /// @deprecated Use `wallet.optimization.cancel()` instead.
+    /// @deprecated Use `client.optimization.cancel()` instead.
     #[wasm_bindgen(js_name = "cancelLeafOptimization")]
     pub async fn cancel_leaf_optimization(&self) -> WasmResult<()> {
         Ok(self.sdk.cancel_leaf_optimization().await?)
     }
 
-    /// @deprecated Use `wallet.optimization.progress` getter instead.
+    /// @deprecated Use `client.optimization.progress` getter instead.
     #[wasm_bindgen(js_name = "getLeafOptimizationProgress")]
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.sdk.get_leaf_optimization_progress().into()
     }
 
-    /// @deprecated Use `wallet.tokens.swapLimits()` instead.
+    /// @deprecated Use `client.tokens.swapLimits()` instead.
     #[wasm_bindgen(js_name = "fetchConversionLimits")]
     pub async fn fetch_conversion_limits(
         &self,

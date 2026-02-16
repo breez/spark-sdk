@@ -4,12 +4,12 @@ namespace BreezSdkSnippets
 {
     class ParsingInputs
     {
-        async Task ParseInput(BreezSdk sdk)
+        async Task ParseInput(BreezClient client)
         {
             // ANCHOR: parse-inputs
             var inputStr = "an input to be parsed...";
 
-            var parsedInput = await sdk.Parse(input: inputStr);
+            var parsedInput = await client.Parse(input: inputStr);
             switch (parsedInput)
             {
                 case InputType.BitcoinAddress bitcoinAddress:

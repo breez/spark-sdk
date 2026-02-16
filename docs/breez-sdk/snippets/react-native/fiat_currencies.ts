@@ -1,13 +1,13 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { type BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleListCurrencies = async (sdk: BreezSdk) => {
+const exampleListCurrencies = async (client: BreezClient) => {
   // ANCHOR: list-fiat-currencies
-  const response = await sdk.listFiatCurrencies()
+  const response = await client.listFiatCurrencies()
   // ANCHOR_END: list-fiat-currencies
 }
 
-const exampleListRates = async (sdk: BreezSdk) => {
+const exampleListRates = async (client: BreezClient) => {
   // ANCHOR: list-fiat-rates
-  const response = await sdk.listFiatRates()
+  const response = await client.listFiatRates()
   // ANCHOR_END: list-fiat-rates
 }

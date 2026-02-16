@@ -11,10 +11,10 @@ pub async fn get_spark_status() -> Result<SparkStatus, SdkError> {
     breez_sdk_spark::get_spark_status().await
 }
 
-pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
-    let sdk = breez_sdk_spark::connect(request).await?;
-    Ok(BreezSdk {
-        inner: Arc::new(sdk),
+pub async fn connect(request: ConnectRequest) -> Result<BreezClient, SdkError> {
+    let client = breez_sdk_spark::connect(request).await?;
+    Ok(BreezClient {
+        inner: Arc::new(client),
     })
 }
 
@@ -33,11 +33,11 @@ pub fn init_logging(
     breez_sdk_spark::init_logging(log_dir, Some(app_logger), log_filter)
 }
 
-pub struct BreezSdk {
-    pub(crate) inner: Arc<breez_sdk_spark::BreezSdk>,
+pub struct BreezClient {
+    pub(crate) inner: Arc<breez_sdk_spark::BreezClient>,
 }
 
-impl BreezSdk {
+impl BreezClient {
     pub async fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
         self.inner
             .add_event_listener(Box::new(BindingEventListener { listener }))

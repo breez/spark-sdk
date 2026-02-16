@@ -25,16 +25,16 @@ import init, { Breez } from "@breeztech/breez-sdk-spark/web";
 
 await init();
 
-const wallet = await Breez.connect({
+const client = await Breez.connect({
   apiKey: "<breez api key>",
   network: "mainnet",
   seed: { type: "mnemonic", mnemonic: "<mnemonic words>", passphrase: undefined },
 });
 
-const info = await wallet.getInfo({ ensureSynced: true });
+const info = await client.getInfo({ ensureSynced: true });
 console.log(`Balance: ${info.balanceSats} sats`);
 
-await wallet.disconnect();
+await client.disconnect();
 ```
 
 ### Node.js
@@ -49,17 +49,17 @@ await initLogging({
   log: (entry) => console.log(`[${entry.level}]: ${entry.line}`),
 });
 
-const wallet = await Breez.connect({
+const client = await Breez.connect({
   apiKey: "<breez api key>",
   network: "mainnet",
   seed: { type: "mnemonic", mnemonic: "<mnemonic words>", passphrase: undefined },
   storageDir: "./.data",
 });
 
-const info = await wallet.getInfo({ ensureSynced: true });
+const info = await client.getInfo({ ensureSynced: true });
 console.log(`Balance: ${info.balanceSats} sats`);
 
-await wallet.disconnect();
+await client.disconnect();
 ```
 
 ## API Overview
@@ -69,36 +69,36 @@ await wallet.disconnect();
 | Method | Description |
 |--------|-------------|
 | `Breez.connect(config)` | Single-step connection (most common) |
-| `new Breez(appConfig)` | Multi-wallet setup |
-| `breez.connectWallet(walletConfig)` | Connect additional wallets |
+| `new Breez(appConfig)` | Multi-client setup |
+| `breez.connectClient(clientConfig)` | Connect additional clients |
 
-### Wallet — Core Methods
+### BreezClient — Core Methods
 
 | Method | Description |
 |--------|-------------|
-| `wallet.getInfo(request?)` | Get balance and identity pubkey |
-| `wallet.createPayment(destination, options?)` | Prepare a payment intent (inspect fees before confirming) |
-| `wallet.sendPayment(destination, prepareOpts?, payOpts?)` | One-step send (no review) |
-| `wallet.receive(options)` | Generate invoice, BTC address, or Spark address |
-| `wallet.disconnect()` | Clean shutdown |
-| `wallet.pubkey` | Identity public key (sync, no network call) |
+| `client.getInfo(request?)` | Get balance and identity pubkey |
+| `client.preparePayment(destination, options?)` | Prepare a payment (inspect fees before sending) |
+| `client.sendPayment(destination, prepareOpts?, payOpts?)` | One-step send (no review) |
+| `client.receive(options)` | Generate invoice, BTC address, or Spark address |
+| `client.disconnect()` | Clean shutdown |
+| `client.pubkey` | Identity public key (sync, no network call) |
 
-### Wallet — Sub-Object APIs
+### BreezClient — Sub-Object APIs
 
 Access grouped functionality through property getters:
 
 ```ts
-wallet.payments         // PaymentsApi
-wallet.deposits         // DepositsApi
-wallet.events           // EventsApi
-wallet.lightningAddress // LightningAddressApi
-wallet.lnurl            // LnurlApi
-wallet.fiat             // FiatApi
-wallet.settings         // SettingsApi
-wallet.message          // MessageApi
-wallet.tokens           // TokensApi
-wallet.optimization     // OptimizationApi
-wallet.tokenIssuer      // TokenIssuer
+client.payments         // PaymentsApi
+client.deposits         // DepositsApi
+client.events           // EventsApi
+client.lightningAddress // LightningAddressApi
+client.lnurl            // LnurlApi
+client.fiat             // FiatApi
+client.settings         // SettingsApi
+client.message          // MessageApi
+client.tokens           // TokensApi
+client.optimization     // OptimizationApi
+client.tokenIssuer      // TokenIssuer
 ```
 
 | API | Methods |
@@ -108,26 +108,26 @@ wallet.tokenIssuer      // TokenIssuer
 | **EventsApi** | `add(listener)`, `remove(id)`, `on(eventType, callback)` |
 | **LightningAddressApi** | `get()`, `register(request)`, `isAvailable(username)`, `delete()` |
 | **LnurlApi** | `auth(requestData)`, `withdraw(request)` |
-| **FiatApi** | `rates()`, `currencies()`, `recommendedFees()` |
+| **FiatApi** | `rates()`, `currencies()` |
 | **SettingsApi** | `get()`, `update(request)` |
 | **MessageApi** | `sign(request)` |
 | **TokensApi** | `metadata(request)`, `swapLimits(request)` |
 
 ### Payment Intent Flow (Recommended)
 
-The two-step `createPayment` + `confirm` flow lets users review fees before committing:
+The two-step `preparePayment` + `send` flow lets users review fees before committing:
 
 ```ts
-// 1. Create the intent (nothing is sent yet)
-const intent = await wallet.createPayment("<bolt11 invoice or address>");
+// 1. Prepare the payment (nothing is sent yet)
+const payment = await client.preparePayment("<bolt11 invoice or address>");
 
 // 2. Inspect fees
-console.log(`Amount: ${intent.amount} sats`);
-console.log(`Fee: ${intent.feeSats} sats`);
-console.log(`Type: ${intent.paymentType}`);
+console.log(`Amount: ${payment.amount} sats`);
+console.log(`Fee: ${payment.feeSats} sats`);
+console.log(`Type: ${payment.paymentType}`);
 
-// 3. Confirm when ready
-const result = await intent.confirm();
+// 3. Send when ready
+const result = await payment.send();
 console.log(`Payment ID: ${result.payment.id}`);
 ```
 
@@ -135,7 +135,7 @@ console.log(`Payment ID: ${result.payment.id}`);
 
 ```ts
 // Lightning invoice
-const bolt11 = await wallet.receive({
+const bolt11 = await client.receive({
   paymentMethod: {
     type: "bolt11Invoice",
     amountSats: 5000,
@@ -144,12 +144,12 @@ const bolt11 = await wallet.receive({
 });
 
 // On-chain Bitcoin address
-const btc = await wallet.receive({
+const btc = await client.receive({
   paymentMethod: { type: "bitcoinAddress" },
 });
 
 // Spark address
-const spark = await wallet.receive({
+const spark = await client.receive({
   paymentMethod: { type: "sparkAddress" },
 });
 ```
@@ -157,7 +157,7 @@ const spark = await wallet.receive({
 ### Events
 
 ```ts
-const listenerId = await wallet.events.add({
+const listenerId = await client.events.add({
   onEvent: (event) => {
     switch (event.type) {
       case "synced":
@@ -174,7 +174,7 @@ const listenerId = await wallet.events.add({
 });
 
 // Remove when done
-await wallet.events.remove(listenerId);
+await client.events.remove(listenerId);
 ```
 
 ### Advanced: SdkBuilder
@@ -195,7 +195,7 @@ builder = await builder.withDefaultStorage("./.data");
 // builder = builder.withStorage(customStorage);
 // builder = builder.withChainService(customChainService);
 
-const wallet = await builder.build();
+const client = await builder.build();
 ```
 
 ## Networks

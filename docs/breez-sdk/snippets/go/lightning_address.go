@@ -17,7 +17,7 @@ func ConfigLightningAddress() *breez_sdk_spark.Config {
 	return &config
 }
 
-func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, error) {
+func CheckLightningAddressAvailability(client *breez_sdk_spark.BreezClient) (bool, error) {
 	username := "myusername"
 
 	// ANCHOR: check-lightning-address
@@ -25,7 +25,7 @@ func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, err
 		Username: username,
 	}
 
-	isAvailable, err := sdk.CheckLightningAddressAvailable(request)
+	isAvailable, err := client.CheckLightningAddressAvailable(request)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -39,7 +39,7 @@ func CheckLightningAddressAvailability(sdk *breez_sdk_spark.BreezSdk) (bool, err
 	return isAvailable, nil
 }
 
-func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LightningAddressInfo, error) {
+func RegisterLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.LightningAddressInfo, error) {
 	username := "myusername"
 	description := "My Lightning Address"
 
@@ -49,7 +49,7 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 		Description: &description,
 	}
 
-	addressInfo, err := sdk.RegisterLightningAddress(request)
+	addressInfo, err := client.RegisterLightningAddress(request)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -67,9 +67,9 @@ func RegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.L
 	return &addressInfo, nil
 }
 
-func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.LightningAddressInfo, error) {
+func GetLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.LightningAddressInfo, error) {
 	// ANCHOR: get-lightning-address
-	addressInfoOpt, err := sdk.GetLightningAddress()
+	addressInfoOpt, err := client.GetLightningAddress()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -91,9 +91,9 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
-func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
+func DeleteLightningAddress(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: delete-lightning-address
-	err := sdk.DeleteLightningAddress()
+	err := client.DeleteLightningAddress()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -107,9 +107,9 @@ func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func AccessSenderComment(sdk *breez_sdk_spark.BreezSdk) error {
+func AccessSenderComment(client *breez_sdk_spark.BreezClient) error {
 	paymentID := "<payment id>"
-	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
+	response, err := client.GetPayment(breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentID,
 	})
 	if err != nil {
@@ -136,9 +136,9 @@ func AccessSenderComment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func AccessNostrZap(sdk *breez_sdk_spark.BreezSdk) error {
+func AccessNostrZap(client *breez_sdk_spark.BreezClient) error {
 	paymentID := "<payment id>"
-	response, err := sdk.GetPayment(breez_sdk_spark.GetPaymentRequest{
+	response, err := client.GetPayment(breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentID,
 	})
 	if err != nil {

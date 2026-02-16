@@ -9,10 +9,10 @@ use crate::{
 
 /// Sub-object for payment queries.
 ///
-/// Access via `wallet.payments`.
+/// Access via `client.payments`.
 #[wasm_bindgen(js_name = "PaymentsApi")]
 pub struct PaymentsApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "PaymentsApi")]

@@ -4,7 +4,7 @@ namespace BreezSdkSnippets
 {
     class LnurlWithdraw
     {
-        async Task Withdraw(BreezSdk sdk)
+        async Task Withdraw(BreezClient client)
         {
             // ANCHOR: lnurl-withdraw
             // Endpoint can also be of the form:
@@ -13,7 +13,7 @@ namespace BreezSdkSnippets
                                     "mmw843xxwpexdnxzen9vgunsvfexq6rvdecx93rgdmyxcuxverrvcursenpxvukzv3c8" +
                                     "qunsdecx33nzwpnvg6ryc3hv93nzvecxgcxgwp3h33lxk";
 
-            var inputType = await sdk.Parse(lnurlWithdrawUrl);
+            var inputType = await client.Parse(lnurlWithdrawUrl);
             if (inputType is InputType.LnurlWithdraw lnurlWithdraw)
             {
                 // Amount to withdraw in sats between min/max withdrawable amounts
@@ -26,7 +26,7 @@ namespace BreezSdkSnippets
                     withdrawRequest: withdrawRequest,
                     completionTimeoutSecs: optionalCompletionTimeoutSecs
                 );
-                var response = await sdk.LnurlWithdraw(request: request);
+                var response = await client.LnurlWithdraw(request: request);
 
                 var payment = response.payment;
                 Console.WriteLine($"Payment: {payment}");

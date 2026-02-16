@@ -15,13 +15,13 @@ from src.getting_started import (
 async def main():
     # getting started
     set_logger(SdkLogger)
-    sdk = await init_sdk()
-    fetch_balance(sdk)
-    listener_id = add_event_listener(sdk, SdkListener)
+    client = await init_sdk()
+    fetch_balance(client)
+    listener_id = add_event_listener(client, SdkListener)
 
     # disconnect
-    remove_event_listener(sdk, listener_id)
-    await disconnect(sdk)
+    remove_event_listener(client, listener_id)
+    await disconnect(client)
 
 
 asyncio.run(main())

@@ -1,10 +1,10 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<void> fetchTokenBalances(BreezSdk sdk) async {
+Future<void> fetchTokenBalances(BreezClient client) async {
   // ANCHOR: fetch-token-balances
   // ensureSynced: true will ensure the SDK is synced with the Spark network
   // before returning the balance
-  final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
+  final info = await client.getInfo(request: GetInfoRequest(ensureSynced: false));
   
   // Token balances are a map of token identifier to balance
   final tokenBalances = info.tokenBalances;
@@ -18,9 +18,9 @@ Future<void> fetchTokenBalances(BreezSdk sdk) async {
   // ANCHOR_END: fetch-token-balances
 }
 
-Future<void> fetchTokenMetadata(BreezSdk sdk) async {
+Future<void> fetchTokenMetadata(BreezClient client) async {
   // ANCHOR: fetch-token-metadata
-  final response = await sdk.getTokensMetadata(
+  final response = await client.getTokensMetadata(
     request: GetTokensMetadataRequest(
       tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
       )
@@ -38,7 +38,7 @@ Future<void> fetchTokenMetadata(BreezSdk sdk) async {
   // ANCHOR_END: fetch-token-metadata
 }
 
-Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) async {
+Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezClient client) async {
   // ANCHOR: receive-token-payment-spark-invoice
   String tokenIdentifier = '<token identifier>';
   String optionalDescription = "<invoice description>";
@@ -55,7 +55,7 @@ Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) asy
         expiryTime: optionalExpiryTimeSeconds,
         senderPublicKey: optionalSenderPublicKey,
       ));
-  ReceivePaymentResponse response = await sdk.receivePayment(
+  ReceivePaymentResponse response = await client.receivePayment(
     request: request,
   );
 
@@ -67,7 +67,7 @@ Future<ReceivePaymentResponse> receiveTokenPaymentSparkInvoice(BreezSdk sdk) asy
   return response;
 }
 
-Future<void> sendTokenPayment(BreezSdk sdk) async {
+Future<void> sendTokenPayment(BreezClient client) async {
   // ANCHOR: send-token-payment
   final paymentRequest = '<spark address or invoice>';
   // Token identifier must match the invoice in case it specifies one.
@@ -75,7 +75,7 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // Set the amount of tokens you wish to send (in token base units).
   final amount = BigInt.from(1000);
 
-  final prepareResponse = await sdk.prepareSendPayment(
+  final prepareResponse = await client.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
       amount: amount,
@@ -98,7 +98,7 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   }
 
   // Send the token payment
-  final sendResponse = await sdk.sendPayment(
+  final sendResponse = await client.sendPayment(
     request: SendPaymentRequest(
       prepareResponse: prepareResponse,
       options: null,
@@ -109,10 +109,10 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
   // ANCHOR_END: send-token-payment
 }
 
-Future<void> fetchConversionLimits(BreezSdk sdk) async {
+Future<void> fetchConversionLimits(BreezClient client) async {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  final fromBitcoinResponse = await sdk.fetchConversionLimits(
+  final fromBitcoinResponse = await client.fetchConversionLimits(
     request: FetchConversionLimitsRequest(
       conversionType: ConversionType.fromBitcoin(),
       tokenIdentifier: '<token identifier>',
@@ -127,7 +127,7 @@ Future<void> fetchConversionLimits(BreezSdk sdk) async {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  final toBitcoinResponse = await sdk.fetchConversionLimits(
+  final toBitcoinResponse = await client.fetchConversionLimits(
     request: FetchConversionLimitsRequest(
       conversionType: ConversionType.toBitcoin(
         fromTokenIdentifier: '<token identifier>',
@@ -145,7 +145,7 @@ Future<void> fetchConversionLimits(BreezSdk sdk) async {
   // ANCHOR_END: fetch-conversion-limits
 }
 
-Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
+Future<void> prepareSendPaymentTokenConversion(BreezClient client) async {
   // ANCHOR: prepare-send-payment-with-conversion
   final paymentRequest = '<spark address or invoice>';
   // Token identifier must match the invoice in case it specifies one.
@@ -161,7 +161,7 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
     completionTimeoutSecs: optionalCompletionTimeoutSecs,
   );
 
-  final prepareResponse = await sdk.prepareSendPayment(
+  final prepareResponse = await client.prepareSendPayment(
     request: PrepareSendPaymentRequest(
       paymentRequest: paymentRequest,
       amount: amount,

@@ -4,7 +4,7 @@ namespace BreezSdkSnippets
 {
     class SendPayment
     {
-        async Task PrepareSendPaymentLightningBolt11(BreezSdk sdk)
+        async Task PrepareSendPaymentLightningBolt11(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-lightning-bolt11
             var paymentRequest = "<bolt11 invoice>";
@@ -18,7 +18,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.paymentMethod is SendPaymentMethod.Bolt11Invoice bolt11Method)
@@ -33,7 +33,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-lightning-bolt11
         }
 
-        async Task PrepareSendPaymentOnchain(BreezSdk sdk)
+        async Task PrepareSendPaymentOnchain(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-onchain
             var paymentRequest = "<bitcoin address>";
@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // Review the fee quote for each confirmation speed
             if (prepareResponse.paymentMethod is SendPaymentMethod.BitcoinAddress bitcoinMethod)
@@ -63,7 +63,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-onchain
         }
 
-        async Task PrepareSendPaymentSparkAddress(BreezSdk sdk)
+        async Task PrepareSendPaymentSparkAddress(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-spark-address
             var paymentRequest = "<spark address>";
@@ -77,7 +77,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.paymentMethod is SendPaymentMethod.SparkAddress sparkMethod)
@@ -88,7 +88,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-spark-address
         }
 
-        async Task PrepareSendPaymentSparkInvoice(BreezSdk sdk)
+        async Task PrepareSendPaymentSparkInvoice(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-spark-invoice
             var paymentRequest = "<spark invoice>";
@@ -102,7 +102,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.paymentMethod is SendPaymentMethod.SparkInvoice sparkInvoiceMethod)
@@ -113,7 +113,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-spark-invoice
         }
 
-        async Task PrepareSendPaymentFeesIncluded(BreezSdk sdk)
+        async Task PrepareSendPaymentFeesIncluded(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-fees-included
             // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
@@ -129,7 +129,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: FeePolicy.FeesIncluded
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // The response shows the fee policy used
             Console.WriteLine($"Fee policy: {prepareResponse.feePolicy}");
@@ -138,7 +138,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-fees-included
         }
 
-        async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
+        async Task PrepareSendPaymentTokenConversion(BreezClient client)
         {
             // ANCHOR: prepare-send-payment-with-conversion
             var paymentRequest = "<payment request>";
@@ -160,7 +160,7 @@ namespace BreezSdkSnippets
                 conversionOptions: conversionOptions,
                 feePolicy: null
             );
-            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+            var prepareResponse = await client.PrepareSendPayment(request: request);
 
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.conversionEstimate != null)
@@ -173,7 +173,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-with-conversion
         }
 
-        async Task SendPaymentLightningBolt11(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
+        async Task SendPaymentLightningBolt11(BreezClient client, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-lightning-bolt11
             var options = new SendPaymentOptions.Bolt11Invoice(
@@ -186,12 +186,12 @@ namespace BreezSdkSnippets
                 options: options,
                 idempotencyKey: optionalIdempotencyKey
             );
-            var sendResponse = await sdk.SendPayment(request: request);
+            var sendResponse = await client.SendPayment(request: request);
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-lightning-bolt11
         }
 
-        async Task SendPaymentOnchain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
+        async Task SendPaymentOnchain(BreezClient client, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-onchain
             // Select the confirmation speed for the on-chain transaction
@@ -204,12 +204,12 @@ namespace BreezSdkSnippets
                 options: options,
                 idempotencyKey: optionalIdempotencyKey
             );
-            var sendResponse = await sdk.SendPayment(request: request);
+            var sendResponse = await client.SendPayment(request: request);
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-onchain
         }
 
-        async Task SendPaymentSpark(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
+        async Task SendPaymentSpark(BreezClient client, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: send-payment-spark
             var optionalIdempotencyKey = "<idempotency key uuid>";
@@ -217,7 +217,7 @@ namespace BreezSdkSnippets
                 prepareResponse: prepareResponse,
                 idempotencyKey: optionalIdempotencyKey
             );
-            var sendResponse = await sdk.SendPayment(request: request);
+            var sendResponse = await client.SendPayment(request: request);
             var payment = sendResponse.payment;
             // ANCHOR_END: send-payment-spark
         }

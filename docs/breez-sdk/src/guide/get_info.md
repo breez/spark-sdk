@@ -1,6 +1,6 @@
 <h1 id="getting-the-sdk-info">
     <a class="header" href="#getting-the-sdk-info">Getting the SDK info</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_info">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.get_info">API docs</a>
 </h1>
 
 Once connected, you can retrieve the current state of the SDK at any time using {{#name get_info}}. This returns:

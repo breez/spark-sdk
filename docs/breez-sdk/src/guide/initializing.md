@@ -1,6 +1,6 @@
 <h1 id="initializing">
     <a class="header" href="#initializing">Initializing the SDK</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.connect">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.connect">API docs</a>
 </h1>
 
 ## Basic Initialization
@@ -43,7 +43,7 @@ See [Customizing the SDK](customizing.md) for examples of this advanced initiali
 
 <h2 id="disconnecting">
     <a class="header" href="#disconnecting">Disconnecting</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.disconnect">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.disconnect">API docs</a>
 </h2>
 
 When you’re done using the SDK, call the disconnect method to release any resources in use.

@@ -1,15 +1,15 @@
 import {
-  type Wallet
+  type BreezClient
 } from '@breeztech/breez-sdk-spark'
 
-const exampleListCurrencies = async (wallet: Wallet) => {
+const exampleListCurrencies = async (client: BreezClient) => {
   // ANCHOR: list-fiat-currencies
-  const currencies = await wallet.fiat.currencies()
+  const currencies = await client.fiat.currencies()
   // ANCHOR_END: list-fiat-currencies
 }
 
-const exampleListRates = async (wallet: Wallet) => {
+const exampleListRates = async (client: BreezClient) => {
   // ANCHOR: list-fiat-rates
-  const rates = await wallet.fiat.rates()
+  const rates = await client.fiat.rates()
   // ANCHOR_END: list-fiat-rates
 }

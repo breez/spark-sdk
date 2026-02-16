@@ -24,19 +24,19 @@ pub enum PaymentIntentType {
 
 /// A payment that has been prepared and is ready to be confirmed.
 ///
-/// Created by [`BreezSdk::prepare`](crate::BreezSdk::prepare). Holds a reference
+/// Created by [`BreezClient::prepare`](crate::BreezClient::prepare). Holds a reference
 /// back to the SDK so that the caller can simply call [`confirm`](Self::confirm)
 /// to execute the payment.
 ///
-/// The generic parameter `S` is the smart-pointer type wrapping [`BreezSdk`](crate::BreezSdk):
-/// - `Arc<BreezSdk>` for native (`UniFFI`) bindings
-/// - `Rc<BreezSdk>` for WASM bindings
+/// The generic parameter `S` is the smart-pointer type wrapping [`BreezClient`](crate::BreezClient):
+/// - `Arc<BreezClient>` for native (`UniFFI`) bindings
+/// - `Rc<BreezClient>` for WASM bindings
 ///
 /// Most consumers will never see the generic parameter since the SDK's
-/// `prepare()` method returns a concrete `PreparedPayment<Arc<BreezSdk>>`.
+/// `prepare()` method returns a concrete `PreparedPayment<Arc<BreezClient>>`.
 pub struct PreparedPayment<S>
 where
-    S: Deref<Target = crate::BreezSdk> + Clone,
+    S: Deref<Target = crate::BreezClient> + Clone,
 {
     sdk: S,
     data: PreparedPaymentData,
@@ -44,7 +44,7 @@ where
 
 impl<S> PreparedPayment<S>
 where
-    S: Deref<Target = crate::BreezSdk> + Clone,
+    S: Deref<Target = crate::BreezClient> + Clone,
 {
     /// Create a new `PreparedPayment` from an SDK reference and prepared data.
     pub fn new(sdk: S, data: PreparedPaymentData) -> Self {
@@ -61,7 +61,7 @@ where
 // Manual Debug to avoid S: Debug bound
 impl<S> std::fmt::Debug for PreparedPayment<S>
 where
-    S: Deref<Target = crate::BreezSdk> + Clone,
+    S: Deref<Target = crate::BreezClient> + Clone,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PreparedPayment")
@@ -81,7 +81,7 @@ pub struct ConfirmPaymentResponse {
 
 impl<S> PreparedPayment<S>
 where
-    S: Deref<Target = crate::BreezSdk> + Clone,
+    S: Deref<Target = crate::BreezClient> + Clone,
 {
     /// The type of payment (Spark, Lightning, or Onchain).
     ///
@@ -99,8 +99,35 @@ where
         }
     }
 
+    /// The amount that will be sent, in satoshis.
+    ///
+    /// Returns `None` for token payments — use [`amount_token_units()`](Self::amount_token_units) instead.
+    pub fn amount_sats(&self) -> Option<u64> {
+        if self.token_identifier().is_some() {
+            return None;
+        }
+        match &self.data {
+            PreparedPaymentData::Standard(resp) => Some(resp.amount as u64),
+            PreparedPaymentData::Lnurl(resp) => Some(resp.amount_sats),
+        }
+    }
+
+    /// The amount that will be sent, in token base units.
+    ///
+    /// Returns `None` for non-token (Bitcoin) payments — use [`amount_sats()`](Self::amount_sats) instead.
+    pub fn amount_token_units(&self) -> Option<u128> {
+        if self.token_identifier().is_none() {
+            return None;
+        }
+        match &self.data {
+            PreparedPaymentData::Standard(resp) => Some(resp.amount),
+            PreparedPaymentData::Lnurl(_) => None, // LNURL is never a token payment
+        }
+    }
+
     /// The amount that will be sent.
     /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
+    #[deprecated(note = "Use `amount_sats()` or `amount_token_units()` instead.")]
     pub fn amount(&self) -> u128 {
         match &self.data {
             PreparedPaymentData::Standard(resp) => resp.amount,
@@ -147,16 +174,16 @@ where
         }
     }
 
-    /// Confirm and execute the payment.
+    /// Send the prepared payment.
     ///
     /// This is the single method callers need after `prepare()`:
     /// ```ignore
-    /// let prepared = sdk.prepare("lnbc1...", None).await?;
+    /// let prepared = client.prepare("lnbc1...", None).await?;
     /// println!("Fee: {:?}", prepared.fee());
-    /// let result = prepared.confirm(None).await?;
+    /// let result = prepared.send(None).await?;
     /// ```
     #[allow(deprecated)] // Delegates to legacy methods internally
-    pub async fn confirm(
+    pub async fn send(
         &self,
         options: Option<PayOptions>,
     ) -> Result<ConfirmPaymentResponse, SdkError> {
@@ -192,6 +219,7 @@ where
             }
         }
     }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -202,27 +230,41 @@ where
 /// (Kotlin, Swift, Python, C#, Go).
 ///
 /// UniFFI cannot export generic types, so this wraps
-/// `PreparedPayment<Arc<BreezSdk>>` with a concrete Object type.
+/// `PreparedPayment<Arc<BreezClient>>` with a concrete Object type.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct PreparedPaymentHandle {
-    inner: PreparedPayment<Arc<crate::BreezSdk>>,
+    inner: PreparedPayment<Arc<crate::BreezClient>>,
 }
 
 impl PreparedPaymentHandle {
     /// Wrap a generic `PreparedPayment` into a UniFFI-compatible handle.
-    pub fn new(inner: PreparedPayment<Arc<crate::BreezSdk>>) -> Self {
+    pub fn new(inner: PreparedPayment<Arc<crate::BreezClient>>) -> Self {
         Self { inner }
     }
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(deprecated)]
 impl PreparedPaymentHandle {
     /// The type of payment (Spark, Lightning, or Onchain).
     pub fn payment_type(&self) -> PaymentIntentType {
         self.inner.payment_type()
     }
 
+    /// The amount that will be sent, in satoshis.
+    /// Returns `None` for token payments.
+    pub fn amount_sats(&self) -> Option<u64> {
+        self.inner.amount_sats()
+    }
+
+    /// The amount that will be sent, in token base units.
+    /// Returns `None` for non-token (Bitcoin) payments.
+    pub fn amount_token_units(&self) -> Option<u128> {
+        self.inner.amount_token_units()
+    }
+
     /// The amount that will be sent.
+    #[deprecated(note = "Use `amount_sats()` or `amount_token_units()` instead.")]
     pub fn amount(&self) -> u128 {
         self.inner.amount()
     }
@@ -242,11 +284,12 @@ impl PreparedPaymentHandle {
         self.inner.is_lnurl()
     }
 
-    /// Confirm and execute the payment.
-    pub async fn confirm(
+    /// Send the prepared payment.
+    pub async fn send(
         &self,
         options: Option<PayOptions>,
     ) -> Result<ConfirmPaymentResponse, SdkError> {
-        self.inner.confirm(options).await
+        self.inner.send(options).await
     }
+
 }

@@ -1,13 +1,13 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
 )
 
 
-async def receive_lightning(sdk: BreezSdk):
+async def receive_lightning(client: BreezClient):
     # ANCHOR: receive-payment-lightning-bolt11
     try:
         description = "<invoice description>"
@@ -21,7 +21,7 @@ async def receive_lightning(sdk: BreezSdk):
             expiry_secs=optional_expiry_secs,
         )
         request = ReceivePaymentRequest(payment_method=payment_method)
-        response = await sdk.receive_payment(request=request)
+        response = await client.receive_payment(request=request)
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
@@ -34,13 +34,13 @@ async def receive_lightning(sdk: BreezSdk):
     # ANCHOR_END: receive-payment-lightning-bolt11
 
 
-async def receive_onchain(sdk: BreezSdk):
+async def receive_onchain(client: BreezClient):
     # ANCHOR: receive-payment-onchain
     try:
         request = ReceivePaymentRequest(
             payment_method=ReceivePaymentMethod.BITCOIN_ADDRESS()
         )
-        response = await sdk.receive_payment(request=request)
+        response = await client.receive_payment(request=request)
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
@@ -53,13 +53,13 @@ async def receive_onchain(sdk: BreezSdk):
     # ANCHOR_END: receive-payment-onchain
 
 
-async def receive_spark_address(sdk: BreezSdk):
+async def receive_spark_address(client: BreezClient):
     # ANCHOR: receive-payment-spark-address
     try:
         request = ReceivePaymentRequest(
             payment_method=ReceivePaymentMethod.SPARK_ADDRESS()
         )
-        response = await sdk.receive_payment(request=request)
+        response = await client.receive_payment(request=request)
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")
@@ -72,7 +72,7 @@ async def receive_spark_address(sdk: BreezSdk):
     # ANCHOR_END: receive-payment-spark-address
 
 
-async def receive_spark_invoice(sdk: BreezSdk):
+async def receive_spark_invoice(client: BreezClient):
     # ANCHOR: receive-payment-spark-invoice
     try:
         optional_description = "<invoice description>"
@@ -90,7 +90,7 @@ async def receive_spark_invoice(sdk: BreezSdk):
                 token_identifier=None,
             )
         )
-        response = await sdk.receive_payment(request=request)
+        response = await client.receive_payment(request=request)
 
         payment_request = response.payment_request
         logging.debug(f"Payment Request: {payment_request}")

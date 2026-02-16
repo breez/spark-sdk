@@ -9,10 +9,10 @@ use crate::{
 
 /// Sub-object for lightning address operations.
 ///
-/// Access via `wallet.lightningAddress`.
+/// Access via `client.lightningAddress`.
 #[wasm_bindgen(js_name = "LightningAddressApi")]
 pub struct LightningAddressApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "LightningAddressApi")]

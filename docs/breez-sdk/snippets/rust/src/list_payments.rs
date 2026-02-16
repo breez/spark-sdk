@@ -1,26 +1,26 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
 
-async fn get_payment(sdk: &BreezSdk) -> Result<Payment> {
+async fn get_payment(client: &BreezClient) -> Result<Payment> {
     // ANCHOR: get-payment
     let payment_id = "<payment id>".to_string();
-    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
     // ANCHOR_END: get-payment
 
     Ok(payment)
 }
 
-async fn list_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
+async fn list_payments(client: &BreezClient) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments
-    let response = sdk.list_payments(ListPaymentsRequest::default()).await?;
+    let response = client.list_payments(ListPaymentsRequest::default()).await?;
     let payments = response.payments;
     // ANCHOR_END: list-payments
 
     Ok(payments)
 }
 
-async fn list_payments_filtered(sdk: &BreezSdk) -> Result<Vec<Payment>> {
+async fn list_payments_filtered(client: &BreezClient) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments-filtered
     // Filter by asset (Bitcoin or Token)
     let asset_filter = AssetFilter::Token {
@@ -29,7 +29,7 @@ async fn list_payments_filtered(sdk: &BreezSdk) -> Result<Vec<Payment>> {
     // To filter by Bitcoin instead:
     // let asset_filter = AssetFilter::Bitcoin;
 
-    let response = sdk
+    let response = client
         .list_payments(ListPaymentsRequest {
             // Filter by payment type
             type_filter: Some(vec![PaymentType::Send, PaymentType::Receive]),

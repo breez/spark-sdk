@@ -2,20 +2,19 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
-    models::{Config, FiatCurrency, Rate, chain_service::RecommendedFees},
+    models::{Config, FiatCurrency, Rate},
 };
 
 /// A standalone fiat data API that doesn't require a wallet connection.
 ///
-/// Use this to fetch fiat rates, currencies, and recommended BTC fees
-/// without needing to initialize a wallet.
+/// Use this to fetch fiat rates and currencies without needing to
+/// initialize a wallet.
 ///
 /// ```js
 /// import { Fiat, defaultConfig } from '@breeztech/breez-sdk-spark';
 /// const fiat = new Fiat(defaultConfig('mainnet'));
 /// const rates = await fiat.rates();         // → Rate[]
 /// const currencies = await fiat.currencies(); // → FiatCurrency[]
-/// const fees = await fiat.recommendedFees();
 /// ```
 #[wasm_bindgen(js_name = "Fiat")]
 pub struct Fiat {
@@ -46,11 +45,5 @@ impl Fiat {
     pub async fn currencies(&self) -> WasmResult<Vec<FiatCurrency>> {
         let currencies = self.inner.currencies().await?;
         Ok(currencies.into_iter().map(Into::into).collect())
-    }
-
-    /// Get the recommended BTC fees.
-    #[wasm_bindgen(js_name = "recommendedFees")]
-    pub async fn recommended_fees(&self) -> WasmResult<RecommendedFees> {
-        Ok(self.inner.recommended_fees().await?.into())
     }
 }

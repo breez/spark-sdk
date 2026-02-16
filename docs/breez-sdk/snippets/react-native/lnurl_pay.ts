@@ -1,5 +1,5 @@
 import {
-  type BreezSdk,
+  type BreezClient,
   InputType_Tags,
   type LnurlPayRequestDetails,
   FeePolicy,
@@ -7,14 +7,14 @@ import {
   ConversionType
 } from '@breeztech/breez-sdk-spark-react-native'
 
-const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
+const examplePrepareLnurlPay = async (client: BreezClient) => {
   // ANCHOR: prepare-lnurl-pay
   // Endpoint can also be of the form:
   // lnurlp://domain.com/lnurl-pay?key=val
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   const lnurlPayUrl = 'lightning@address.com'
 
-  const input = await sdk.parse(lnurlPayUrl)
+  const input = await client.parse(lnurlPayUrl)
   if (input.tag === InputType_Tags.LightningAddress) {
     const amountSats = BigInt(5_000)
     const optionalComment = '<comment>'
@@ -31,7 +31,7 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
       completionTimeoutSecs: optionalCompletionTimeoutSecs
     }
 
-    const prepareResponse = await sdk.prepareLnurlPay({
+    const prepareResponse = await client.prepareLnurlPay({
       amountSats,
       payRequest,
       comment: optionalComment,
@@ -53,10 +53,10 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
   // ANCHOR_END: prepare-lnurl-pay
 }
 
-const exampleLnurlPay = async (sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) => {
+const exampleLnurlPay = async (client: BreezClient, prepareResponse: PrepareLnurlPayResponse) => {
   // ANCHOR: lnurl-pay
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const response = await sdk.lnurlPay({
+  const response = await client.lnurlPay({
     prepareResponse,
     idempotencyKey: optionalIdempotencyKey
   })
@@ -64,7 +64,7 @@ const exampleLnurlPay = async (sdk: BreezSdk, prepareResponse: PrepareLnurlPayRe
   console.log(response)
 }
 
-const examplePrepareLnurlPayFeesIncluded = async (sdk: BreezSdk, payRequest: LnurlPayRequestDetails) => {
+const examplePrepareLnurlPayFeesIncluded = async (client: BreezClient, payRequest: LnurlPayRequestDetails) => {
   // ANCHOR: prepare-lnurl-pay-fees-included
   // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
   // Use FeePolicy.FeesIncluded to deduct fees from the amount instead.
@@ -73,7 +73,7 @@ const examplePrepareLnurlPayFeesIncluded = async (sdk: BreezSdk, payRequest: Lnu
   const optionalValidateSuccessActionUrl = true
   const amountSats = BigInt(5_000)
 
-  const prepareResponse = await sdk.prepareLnurlPay({
+  const prepareResponse = await client.prepareLnurlPay({
     amountSats,
     payRequest,
     comment: optionalComment,

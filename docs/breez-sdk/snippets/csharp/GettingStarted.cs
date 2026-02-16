@@ -16,7 +16,7 @@ namespace BreezSdkSnippets
                 apiKey = "<breez api key>"
             };
             // Connect to the SDK using the simplified connect method
-            var sdk = await BreezSdkSparkMethods.Connect(
+            var client = await BreezSdkSparkMethods.Connect(
                 request: new ConnectRequest(
                     config: config,
                     seed: seed,
@@ -26,12 +26,12 @@ namespace BreezSdkSnippets
             // ANCHOR_END: init-sdk
         }
 
-        async Task FetchBalance(BreezSdk sdk)
+        async Task FetchBalance(BreezClient client)
         {
             // ANCHOR: fetch-balance
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
-            var info = await sdk.GetInfo(request: new GetInfoRequest(ensureSynced: false));
+            var info = await client.GetInfo(request: new GetInfoRequest(ensureSynced: false));
             var identityPubkey = info.identityPubkey;
             var balanceSats = info.balanceSats;
             // ANCHOR_END: fetch-balance
@@ -101,17 +101,17 @@ namespace BreezSdkSnippets
             }
         }
 
-        async Task<string> AddEventListener(BreezSdk sdk, SdkListener listener)
+        async Task<string> AddEventListener(BreezClient client, SdkListener listener)
         {
-            var listenerId = await sdk.AddEventListener(listener: listener);
+            var listenerId = await client.AddEventListener(listener: listener);
             return listenerId;
         }
         // ANCHOR_END: add-event-listener
 
         // ANCHOR: remove-event-listener
-        async Task RemoveEventListener(BreezSdk sdk, string listenerId)
+        async Task RemoveEventListener(BreezClient client, string listenerId)
         {
-            await sdk.RemoveEventListener(id: listenerId);
+            await client.RemoveEventListener(id: listenerId);
         }
         // ANCHOR_END: remove-event-listener
 
@@ -144,9 +144,9 @@ namespace BreezSdkSnippets
         // ANCHOR_END: spark-status
 
         // ANCHOR: disconnect
-        async Task Disconnect(BreezSdk sdk)
+        async Task Disconnect(BreezClient client)
         {
-            await sdk.Disconnect();
+            await client.Disconnect();
         }
         // ANCHOR_END: disconnect
     }

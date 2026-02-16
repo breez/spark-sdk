@@ -3,25 +3,25 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class Optimize {
-    fun startOptimization(sdk: BreezSdk) {
+    fun startOptimization(client: BreezClient) {
         // ANCHOR: start-optimization
-        sdk.startLeafOptimization()
+        client.startLeafOptimization()
         // ANCHOR_END: start-optimization
     }
 
-    suspend fun cancelOptimization(sdk: BreezSdk) {
+    suspend fun cancelOptimization(client: BreezClient) {
         // ANCHOR: cancel-optimization
         try {
-            sdk.cancelLeafOptimization()
+            client.cancelLeafOptimization()
         } catch (e: Exception) {
             // handle error
         }
         // ANCHOR_END: cancel-optimization
     }
 
-    fun getOptimizationProgress(sdk: BreezSdk) {
+    fun getOptimizationProgress(client: BreezClient) {
         // ANCHOR: get-optimization-progress
-        val progress = sdk.getLeafOptimizationProgress()
+        val progress = client.getLeafOptimizationProgress()
 
         println("Optimization is running: ${progress.isRunning}")
         println("Current round: ${progress.currentRound}")

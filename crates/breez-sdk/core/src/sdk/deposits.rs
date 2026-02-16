@@ -7,11 +7,11 @@ use crate::{
     persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
-use super::{BreezSdk, SyncRequest, SyncType};
+use super::{BreezClient, SyncRequest, SyncType};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
+impl BreezClient {
     pub async fn claim_deposit(
         &self,
         request: ClaimDepositRequest,

@@ -9,7 +9,7 @@ For sending payments via LNURL, see [LNURL-Pay](lnurl_pay.md).
 
 <h2 id="preparing-payments">
     <a class="header" href="#preparing-payments">Preparing Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.prepare_send_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.prepare_send_payment">API docs</a>
 </h2>
 
 During the prepare step, the SDK ensures that the inputs are valid with respect to the payment request type,
@@ -67,7 +67,7 @@ This is particularly useful when you want to spend your entire balance in a sing
 
 <h2 id="sending-payments">
     <a class="header" href="#sending-payments">Sending Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.send_payment">API docs</a>
 </h2>
 
 Once the payment has been prepared and the fees are accepted, the payment can be sent by passing:

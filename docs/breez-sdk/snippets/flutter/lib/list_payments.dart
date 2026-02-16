@@ -1,25 +1,25 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<Payment> getPayment(BreezSdk sdk) async {
+Future<Payment> getPayment(BreezClient client) async {
   // ANCHOR: get-payment
   String paymentId = "<payment id>";
   GetPaymentRequest request = GetPaymentRequest(paymentId: paymentId);
-  GetPaymentResponse response = await sdk.getPayment(request: request);
+  GetPaymentResponse response = await client.getPayment(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: get-payment
   return payment;
 }
 
-Future<List<Payment>> listPayments(BreezSdk sdk) async {
+Future<List<Payment>> listPayments(BreezClient client) async {
   // ANCHOR: list-payments
   ListPaymentsRequest request = ListPaymentsRequest();
-  ListPaymentsResponse response = await sdk.listPayments(request: request);
+  ListPaymentsResponse response = await client.listPayments(request: request);
   List<Payment> payments = response.payments;
   // ANCHOR_END: list-payments
   return payments;
 }
 
-Future<List<Payment>> listPaymentsFiltered(BreezSdk sdk) async {
+Future<List<Payment>> listPaymentsFiltered(BreezClient client) async {
   // ANCHOR: list-payments-filtered
   // Filter by asset (Bitcoin or Token)
   AssetFilter assetFilter = AssetFilter.token(tokenIdentifier: "token_identifier_here");
@@ -41,7 +41,7 @@ Future<List<Payment>> listPaymentsFiltered(BreezSdk sdk) async {
     // Sort order (true = oldest first, false = newest first)
     sortAscending: false,
   );
-  ListPaymentsResponse response = await sdk.listPayments(request: request);
+  ListPaymentsResponse response = await client.listPayments(request: request);
   List<Payment> payments = response.payments;
   // ANCHOR_END: list-payments-filtered
   return payments;

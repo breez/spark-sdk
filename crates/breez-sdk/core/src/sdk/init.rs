@@ -19,12 +19,12 @@ use crate::{
 };
 
 use super::{
-    BreezSdk, BreezSdkParams,
+    BreezClient, BreezSdkParams,
     helpers::{update_balances, validate_breez_api_key},
 };
 
-impl BreezSdk {
-    /// Creates a new instance of the `BreezSdk`
+impl BreezClient {
+    /// Creates a new instance of the `BreezClient`
     pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.

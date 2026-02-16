@@ -1,6 +1,6 @@
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     GetPaymentRequest,
     ListPaymentsRequest,
     PaymentType,
@@ -9,11 +9,11 @@ from breez_sdk_spark import (
 )
 
 
-async def get_payment(sdk: BreezSdk):
+async def get_payment(client: BreezClient):
     try:
         # ANCHOR: get-payment
         payment_id = "<payment id>"
-        response = await sdk.get_payment(
+        response = await client.get_payment(
             request=GetPaymentRequest(payment_id=payment_id)
         )
         payment = response.payment
@@ -23,10 +23,10 @@ async def get_payment(sdk: BreezSdk):
         raise
 
 
-async def list_payments(sdk: BreezSdk):
+async def list_payments(client: BreezClient):
     try:
         # ANCHOR: list-payments
-        response = await sdk.list_payments(request=ListPaymentsRequest())
+        response = await client.list_payments(request=ListPaymentsRequest())
         payments = response.payments
         # ANCHOR_END: list-payments
     except Exception as error:
@@ -34,7 +34,7 @@ async def list_payments(sdk: BreezSdk):
         raise
 
 
-async def list_payments_filtered(sdk: BreezSdk):
+async def list_payments_filtered(client: BreezClient):
     try:
         # ANCHOR: list-payments-filtered
         # Filter by asset (Bitcoin or Token)
@@ -57,7 +57,7 @@ async def list_payments_filtered(sdk: BreezSdk):
             # Sort order (true = oldest first, false = newest first)
             sort_ascending=False
         )
-        response = await sdk.list_payments(request=request)
+        response = await client.list_payments(request=request)
         payments = response.payments
         # ANCHOR_END: list-payments-filtered
     except Exception as error:

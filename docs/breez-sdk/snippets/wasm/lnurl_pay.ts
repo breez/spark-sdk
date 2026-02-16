@@ -1,19 +1,20 @@
 import {
-  type Wallet,
+  type BreezClient,
   type PaymentIntent,
   type ConversionOptions,
   type FeePolicy,
+  type LnurlPayOptions,
   parseInput
 } from '@breeztech/breez-sdk-spark'
 
-const examplePrepareLnurlPay = async (wallet: Wallet) => {
+const examplePrepareLnurlPay = async (client: BreezClient) => {
   // ANCHOR: prepare-lnurl-pay
   // Endpoint can also be of the form:
   // lnurlp://domain.com/lnurl-pay?key=val
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   const lnurlPayUrl = 'lightning@address.com'
 
-  // The modern API handles LNURL resolution internally via createPayment
+  // The modern API handles LNURL resolution internally via preparePayment
   const amountSats = 5_000
   const optionalComment = '<comment>'
   const optionalValidateSuccessActionUrl = true
@@ -29,21 +30,25 @@ const examplePrepareLnurlPay = async (wallet: Wallet) => {
     completionTimeoutSecs: optionalCompletionTimeoutSecs
   }
 
-  const intent = await wallet.createPayment(lnurlPayUrl, {
-    amount: BigInt(amountSats),
-    lnurlComment: optionalComment,
-    lnurlValidateSuccessActionUrl: optionalValidateSuccessActionUrl,
+  const lnurl: LnurlPayOptions = {
+    comment: optionalComment,
+    validateSuccessActionUrl: optionalValidateSuccessActionUrl
+  }
+
+  const payment = await client.preparePayment(lnurlPayUrl, {
+    amountSats,
+    lnurl,
     conversionOptions: optionalConversionOptions
   })
 
-  // Inspect the payment intent
-  console.log(`Payment type: ${intent.paymentType}`)
-  console.log(`Is LNURL: ${intent.isLnurl}`)
-  console.log(`Fees: ${intent.feeSats} sats`)
+  // Inspect the payment
+  console.log(`Payment type: ${payment.paymentType}`)
+  console.log(`Is LNURL: ${payment.isLnurl}`)
+  console.log(`Fees: ${payment.feeSats} sats`)
   // ANCHOR_END: prepare-lnurl-pay
 }
 
-const examplePrepareLnurlPayFeesIncluded = async (wallet: Wallet) => {
+const examplePrepareLnurlPayFeesIncluded = async (client: BreezClient) => {
   // ANCHOR: prepare-lnurl-pay-fees-included
   // By default, fees are added on top of the amount.
   // Use 'feesIncluded' to deduct fees from the amount instead.
@@ -53,22 +58,22 @@ const examplePrepareLnurlPayFeesIncluded = async (wallet: Wallet) => {
   const amountSats = 5_000
   const feePolicy: FeePolicy = 'feesIncluded'
 
-  const intent = await wallet.createPayment(lnurlPayUrl, {
-    amount: BigInt(amountSats),
-    lnurlComment: optionalComment,
+  const payment = await client.preparePayment(lnurlPayUrl, {
+    amountSats,
+    lnurl: { comment: optionalComment },
     feePolicy
   })
 
   // If the fees are acceptable, continue to confirm the payment
-  console.log(`Fees: ${intent.feeSats} sats`)
+  console.log(`Fees: ${payment.feeSats} sats`)
   // The receiver gets amountSats - feeSats
   // ANCHOR_END: prepare-lnurl-pay-fees-included
 }
 
-const exampleLnurlPay = async (wallet: Wallet, intent: PaymentIntent) => {
+const exampleLnurlPay = async (client: BreezClient, payment: PaymentIntent) => {
   // ANCHOR: lnurl-pay
   const optionalIdempotencyKey = '<idempotency key uuid>'
-  const result = await intent.confirm({
+  const result = await payment.send({
     idempotencyKey: optionalIdempotencyKey
   })
   // ANCHOR_END: lnurl-pay

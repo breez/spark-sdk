@@ -4,7 +4,7 @@ namespace BreezSdkSnippets
 {
     class LnurlPay
     {
-        async Task PreparePay(BreezSdk sdk)
+        async Task PreparePay(BreezClient client)
         {
             // ANCHOR: prepare-lnurl-pay
             // Endpoint can also be of the form:
@@ -13,7 +13,7 @@ namespace BreezSdkSnippets
             //     vv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3k
             //     vdnxx5crxwpjvyunsephsz36jf
             var lnurlPayUrl = "lightning@address.com";
-            var parsedInput = await sdk.Parse(lnurlPayUrl);
+            var parsedInput = await client.Parse(lnurlPayUrl);
             if (parsedInput is InputType.LightningAddress lightningAddress)
             {
                 var details = lightningAddress.v1;
@@ -40,7 +40,7 @@ namespace BreezSdkSnippets
                     conversionOptions: optionalConversionOptions,
                     feePolicy: null
                 );
-                var prepareResponse = await sdk.PrepareLnurlPay(request: request);
+                var prepareResponse = await client.PrepareLnurlPay(request: request);
 
                 // If the fees are acceptable, continue to create the LNURL Pay
                 if (prepareResponse.conversionEstimate != null)
@@ -56,7 +56,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-lnurl-pay
         }
 
-        async Task PrepareLnurlPayFeesIncluded(BreezSdk sdk, LnurlPayRequestDetails payRequest)
+        async Task PrepareLnurlPayFeesIncluded(BreezClient client, LnurlPayRequestDetails payRequest)
         {
             // ANCHOR: prepare-lnurl-pay-fees-included
             // By default (FeePolicy.FeesExcluded), fees are added on top of the amount.
@@ -74,7 +74,7 @@ namespace BreezSdkSnippets
                 conversionOptions: null,
                 feePolicy: FeePolicy.FeesIncluded
             );
-            var prepareResponse = await sdk.PrepareLnurlPay(request: request);
+            var prepareResponse = await client.PrepareLnurlPay(request: request);
 
             // If the fees are acceptable, continue to create the LNURL Pay
             var feeSats = prepareResponse.feeSats;
@@ -83,11 +83,11 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-lnurl-pay-fees-included
         }
 
-        async Task Pay(BreezSdk sdk, PrepareLnurlPayResponse prepareResponse)
+        async Task Pay(BreezClient client, PrepareLnurlPayResponse prepareResponse)
         {
             // ANCHOR: lnurl-pay
             var optionalIdempotencyKey = "<idempotency key uuid>";
-            var response = await sdk.LnurlPay(
+            var response = await client.LnurlPay(
                 new LnurlPayRequest(
                     prepareResponse: prepareResponse,
                     idempotencyKey: optionalIdempotencyKey

@@ -1,12 +1,12 @@
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     InputType,
     LnurlWithdrawRequest,
 )
 
 
-async def withdraw(sdk: BreezSdk):
+async def withdraw(client: BreezClient):
     # ANCHOR: lnurl-withdraw
     # Endpoint can also be of the form:
     # lnurlw://domain.com/lnurl-withdraw?key=val
@@ -17,7 +17,7 @@ async def withdraw(sdk: BreezSdk):
     )
 
     try:
-        input_type = await sdk.parse(lnurl_withdraw_url)
+        input_type = await client.parse(lnurl_withdraw_url)
         if isinstance(input_type, InputType.LNURL_WITHDRAW):
             # Amount to withdraw in sats between min/max withdrawable amounts
             amount_sats = 5_000
@@ -29,7 +29,7 @@ async def withdraw(sdk: BreezSdk):
                 withdraw_request=withdraw_request,
                 completion_timeout_secs=optional_completion_timeout_secs,
             )
-            response = await sdk.lnurl_withdraw(request=request)
+            response = await client.lnurl_withdraw(request=request)
 
 
             payment = response.payment

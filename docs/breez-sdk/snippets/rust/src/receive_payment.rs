@@ -2,7 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
+async fn receive_lightning_bolt11(client: &BreezClient) -> Result<()> {
     // ANCHOR: receive-payment-lightning-bolt11
     let description = "<invoice description>".to_string();
     // Optionally set the invoice amount you wish the payer to send
@@ -10,7 +10,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     // Optionally set the expiry duration in seconds
     let optional_expiry_secs = Some(3600_u32);
 
-    let response = sdk
+    let response = client
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description,
@@ -28,9 +28,9 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
+async fn receive_onchain(client: &BreezClient) -> Result<()> {
     // ANCHOR: receive-payment-onchain
-    let response = sdk
+    let response = client
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::BitcoinAddress,
         })
@@ -44,9 +44,9 @@ async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn receive_spark_address(sdk: &BreezSdk) -> Result<()> {
+async fn receive_spark_address(client: &BreezClient) -> Result<()> {
     // ANCHOR: receive-payment-spark-address
-    let response = sdk
+    let response = client
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkAddress,
         })
@@ -60,7 +60,7 @@ async fn receive_spark_address(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
+async fn receive_spark_invoice(client: &BreezClient) -> Result<()> {
     // ANCHOR: receive-payment-spark-invoice
     let optional_description = "<invoice description>".to_string();
     let optional_amount_sats = Some(5_000);
@@ -68,7 +68,7 @@ async fn receive_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     let optional_expiry_time_seconds = Some(1716691200);
     let optional_sender_public_key = Some("<sender public key>".to_string());
 
-    let response = sdk
+    let response = client
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkInvoice {
                 token_identifier: None,

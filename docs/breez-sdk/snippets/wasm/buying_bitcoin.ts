@@ -1,9 +1,9 @@
 import {
-  type Wallet,
+  type BreezClient,
   type BuyBitcoinRequest
 } from '@breeztech/breez-sdk-spark'
 
-const buyBitcoin = async (wallet: Wallet) => {
+const buyBitcoin = async (client: BreezClient) => {
   // ANCHOR: buy-bitcoin
   // Optionally, lock the purchase to a specific amount
   const optionalLockedAmountSat = 100_000
@@ -15,7 +15,7 @@ const buyBitcoin = async (wallet: Wallet) => {
     redirectUrl: optionalRedirectUrl
   }
 
-  const response = await wallet.buyBitcoin(request)
+  const response = await client.buyBitcoin(request)
   console.log('Open this URL in a browser to complete the purchase:')
   console.log(response.url)
   // ANCHOR_END: buy-bitcoin

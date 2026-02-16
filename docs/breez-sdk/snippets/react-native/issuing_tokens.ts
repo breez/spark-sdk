@@ -1,6 +1,6 @@
 import {
   defaultConfig,
-  type BreezSdk,
+  type BreezClient,
   Network,
   Seed,
   type TokenIssuer,
@@ -14,9 +14,9 @@ import {
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
-const getTokenIssuer = (sdk: BreezSdk) => {
+const getTokenIssuer = (client: BreezClient) => {
   // ANCHOR: get-token-issuer
-  const tokenIssuer = sdk.getTokenIssuer()
+  const tokenIssuer = client.getTokenIssuer()
   // ANCHOR_END: get-token-issuer
 }
 
@@ -53,7 +53,7 @@ const createTokenWithCustomAccountNumber = async () => {
   }
   await builder.withKeySet(keySetConfig)
 
-  const sdk = await builder.build()
+  const client = await builder.build()
   // ANCHOR_END: custom-account-number
 }
 

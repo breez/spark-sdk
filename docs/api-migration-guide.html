@@ -1,0 +1,2102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Breez SDK — API Migration Guide</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #181b23;
+    --card: #1e2130;
+    --border: #2a2d3e;
+    --border-accent: #3b3f54;
+    --text: #e0e0e6;
+    --text-muted: #8b8fa3;
+    --text-dim: #5c6078;
+    --accent: #7c6bf5;
+    --accent-glow: rgba(124,107,245,.12);
+    --red: #f5534f;
+    --red-bg: rgba(245,83,79,.08);
+    --green: #4ade80;
+    --green-bg: rgba(74,222,128,.08);
+    --orange: #fb923c;
+    --orange-bg: rgba(251,146,60,.08);
+    --blue: #60a5fa;
+    --blue-bg: rgba(96,165,250,.08);
+    --code-bg: #141620;
+    --code-border: #252838;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  .hero {
+    text-align: center;
+    padding: 80px 24px 56px;
+    background: linear-gradient(180deg, rgba(124,107,245,.06) 0%, transparent 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .hero-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    background: var(--accent-glow);
+    border: 1px solid rgba(124,107,245,.25);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 20px;
+  }
+  .hero h1 {
+    font-size: clamp(28px, 4vw, 44px);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero p {
+    font-size: 17px;
+    color: var(--text-muted);
+    max-width: 620px;
+    margin: 0 auto;
+  }
+
+  /* ── Sections ───────────────────────────────────────── */
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  section {
+    padding: 56px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  section:last-child { border-bottom: none; }
+
+  .section-header {
+    margin-bottom: 32px;
+  }
+  .section-number {
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    line-height: 28px;
+    text-align: center;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+  .section-header h2 {
+    display: inline;
+    font-size: 22px;
+    font-weight: 700;
+    vertical-align: middle;
+  }
+  .section-header p {
+    color: var(--text-muted);
+    font-size: 15px;
+    margin-top: 8px;
+    max-width: 720px;
+  }
+
+  /* ── Comparison cards ───────────────────────────────── */
+  .comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 768px) {
+    .comparison { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+  }
+  .card-header.old {
+    color: var(--red);
+    background: var(--red-bg);
+  }
+  .card-header.new {
+    color: var(--green);
+    background: var(--green-bg);
+  }
+  .card-header .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+  .card-header.old .dot { background: var(--red); }
+  .card-header.new .dot { background: var(--green); }
+
+  .card pre {
+    margin: 0;
+    padding: 16px;
+    background: var(--code-bg);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.65;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    color: var(--text);
+    tab-size: 2;
+  }
+
+  /* ── Migration steps ────────────────────────────────── */
+  .steps {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+  }
+  .steps-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--orange);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .steps-title svg { flex-shrink: 0; }
+  .step {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+  }
+  .step + .step {
+    border-top: 1px solid var(--border);
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    background: var(--orange-bg);
+    border: 1px solid rgba(251,146,60,.2);
+    color: var(--orange);
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    margin-top: 1px;
+  }
+  .step-text {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .step-text code {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    color: var(--text);
+  }
+  .step-text .arrow {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* ── Sub-object map ─────────────────────────────────── */
+  .api-map {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 24px;
+  }
+  .api-map-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    transition: border-color .15s;
+  }
+  .api-map-item:hover {
+    border-color: var(--accent);
+  }
+  .api-map-item .accessor {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .api-map-item .methods {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+  }
+
+  /* ── Syntax highlighting (minimal) ─────────────────── */
+  .kw { color: #c792ea; }   /* keyword */
+  .fn { color: #82aaff; }   /* function / method */
+  .st { color: #c3e88d; }   /* string */
+  .cm { color: #546e7a; }   /* comment */
+  .tp { color: #ffcb6b; }   /* type */
+  .op { color: #89ddff; }   /* operator / punctuation */
+  .nr { color: #f78c6c; }   /* number */
+  .pr { color: #f07178; }   /* property */
+  .del { color: var(--red); opacity: .7; text-decoration: line-through; }
+  .add { color: var(--green); }
+  .new-api { color: var(--green); background: var(--green-bg); padding: 1px 0; }
+
+  /* ── Unification panel ───────────────────────────────── */
+  .unify-panel {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+    align-items: center;
+    margin-top: 20px;
+  }
+  @media (max-width: 820px) {
+    .unify-panel { grid-template-columns: 1fr; }
+    .unify-arrow-col { transform: rotate(90deg); padding: 16px 0; }
+  }
+  .unify-old {
+    background: var(--red-bg);
+    border: 1px solid rgba(245,83,79,.25);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+  }
+  .unify-old .unify-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--red);
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+  .unify-old code {
+    display: block;
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 2px 0;
+    text-decoration: line-through;
+    opacity: .7;
+  }
+  .unify-arrow-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 20px;
+  }
+  .unify-arrow-col svg { color: var(--green); }
+  .unify-new {
+    background: var(--green-bg);
+    border: 1px solid rgba(74,222,128,.3);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+  }
+  .unify-new .unify-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--green);
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+  .unify-new-api {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--green);
+    margin-bottom: 6px;
+  }
+  .unify-new-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  .unify-new-flow {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .unify-divider {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 24px 0;
+  }
+
+  /* ── Type reference ──────────────────────────────────── */
+  .type-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+  }
+  .type-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    transition: border-color .15s;
+  }
+  .type-card:hover { border-color: var(--accent); }
+  .type-card-title {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--green);
+    margin-bottom: 8px;
+  }
+  .type-card-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
+  .type-card-variants {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: var(--text);
+  }
+  .type-card-variants code {
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--code-border);
+    display: inline-block;
+    margin: 2px 0;
+  }
+
+  /* ── Section context cards (Problem / Solution / Benefits) ── */
+  .section-context {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 900px) {
+    .section-context { grid-template-columns: 1fr; }
+  }
+  .context-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+  }
+  .context-card-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin-bottom: 8px;
+  }
+  .context-card-label.problem { color: var(--red); }
+  .context-card-label.solution { color: var(--green); }
+  .context-card-label.benefits { color: var(--accent); }
+  .context-card p {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  /* ── Language switcher ─────────────────────────────── */
+  .lang-switcher {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+  .lang-switcher select {
+    appearance: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 28px 4px 10px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b8fa3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+  .lang-switcher select:hover {
+    border-color: var(--accent);
+  }
+  .lang-panel { display: none; }
+  .lang-panel.active { display: block; }
+
+  /* ── Naming convention reference ────────────────────── */
+  .naming-ref {
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .naming-ref-title {
+    padding: 12px 16px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--accent);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .naming-ref table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .naming-ref th {
+    text-align: left;
+    padding: 10px 16px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .naming-ref td {
+    padding: 10px 16px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .naming-ref tr:last-child td { border-bottom: none; }
+  .naming-ref code {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    color: var(--text);
+  }
+
+  /* ── Footer ─────────────────────────────────────────── */
+  .footer {
+    text-align: center;
+    padding: 40px 24px;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  .footer a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════ Hero ═══ -->
+<div class="hero">
+  <div class="hero-badge">Migration Guide</div>
+  <h1>Breez SDK <span>API Modernization</span></h1>
+  <p>From flat <code>sdk.method()</code> calls to a structured <code>client.domain.action()</code> sub-object API with a unified payment flow.</p>
+</div>
+
+<!-- ═══════════════════════════ Why Migrate? ═══════════════════ -->
+<div class="container" style="margin-bottom:0;padding-bottom:0">
+  <section>
+    <div class="section-header" style="border-left-color:var(--accent)">
+      <h2 style="margin-top:0">Why Migrate?</h2>
+      <p>The modern API is a strict superset &mdash; all deprecated methods keep working. Migrate at your own pace for these benefits:</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:16px">
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">IDE discoverability</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem"><code>client.payments.</code> autocompletes 2&ndash;3 methods, not 30+</p>
+      </div>
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">No parameter noise</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">Drop <code>undefined</code> on every optional field &mdash; pass only what you need</p>
+      </div>
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">Unified LNURL</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">3 calls &rarr; 1: <code>preparePayment(lnurlUrl)</code> resolves internally</p>
+      </div>
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">Inspect-then-send</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">See fees before committing with <code>PaymentIntent</code></p>
+      </div>
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">Cross-language consistency</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">Same names (<code>BreezClient</code>, <code>.send()</code>) in all 9 supported languages</p>
+      </div>
+      <div class="card" style="padding:16px">
+        <strong style="color:var(--green)">Non-breaking</strong>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">All deprecated methods still work &mdash; migrate at your pace</p>
+      </div>
+    </div>
+
+    <div class="naming-ref">
+      <div class="naming-ref-title">Language Naming Conventions</div>
+      <table>
+        <tr>
+          <th>Convention</th>
+          <th>Languages</th>
+          <th>Method Example</th>
+          <th>Enum Example</th>
+        </tr>
+        <tr>
+          <td><code>snake_case</code></td>
+          <td>Rust, Python</td>
+          <td><code>prepare_send_payment()</code></td>
+          <td><code>SdkEvent::Synced</code> (Rust) &middot; <code>SdkEvent.SYNCED</code> (Python)</td>
+        </tr>
+        <tr>
+          <td><code>camelCase</code></td>
+          <td>TypeScript, Swift, Kotlin, Flutter, React Native</td>
+          <td><code>prepareSendPayment()</code></td>
+          <td><code>SdkEvent.synced</code> (Swift) &middot; <code>SdkEvent.Synced</code> (others)</td>
+        </tr>
+        <tr>
+          <td><code>PascalCase</code></td>
+          <td>Go, C#</td>
+          <td><code>PrepareSendPayment()</code></td>
+          <td><code>SdkEventSynced</code> (Go) &middot; <code>SdkEvent.Synced</code> (C#)</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div class="container">
+
+<!-- ═════════════════════════════ 1. Entry Point ════════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">1</span>
+    <h2>Entry Point &amp; Connection</h2>
+    <p>Replace <code>defaultConfig()</code> + <code>connect()</code> with a single <code>Breez.connect()</code> call. The <code>BreezSdk</code> type becomes <code>BreezClient</code>.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p><code>defaultConfig()</code> creates a throwaway config every time. No way to share platform config across multiple wallets. Storage directory must be manually specified. Invalid API keys only fail at connection time, not at configuration.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p><code>Breez</code> (WASM) / <code>App</code> (Rust) holds validated, immutable platform config (API key, network). <code>ClientConfig</code> holds wallet-level overrides (seed, storage). <code>connectWallet()</code> merges them. For single-wallet, <code>Breez.connect()</code> combines both in one call.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>Multi-wallet apps share one <code>Breez</code> instance. Deterministic storage directories keyed to seed fingerprint. Fail-fast validation at creation time. One-call convenience for the common case.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
+      <pre><span class="kw">import</span> { <span class="tp">BreezSdk</span>, <span class="fn">connect</span>, <span class="fn">defaultConfig</span> }
+  <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="kw">const</span> config = <span class="fn">defaultConfig</span>(<span class="st">'mainnet'</span>)
+config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
+
+<span class="kw">const</span> sdk = <span class="kw">await</span> <span class="fn">connect</span>({
+  config,
+  seed,
+  storageDir: <span class="st">'./.data'</span>
+})</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (modern)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+            <option value="go">Go</option>
+            <option value="python">Python</option>
+            <option value="csharp">C#</option>
+            <option value="flutter">Flutter</option>
+            <option value="react-native">React Native</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">import</span> { <span class="tp">Breez</span> } <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="kw">const</span> seed: <span class="tp">Seed</span> = { type: <span class="st">'mnemonic'</span>, mnemonic, passphrase: <span class="kw">undefined</span> }
+
+<span class="kw">const</span> client = <span class="kw">await</span> <span class="tp">Breez</span>.<span class="fn">connect</span>({
+  apiKey: <span class="st">'&lt;breez api key&gt;'</span>,
+  network: <span class="st">'mainnet'</span>,
+  seed
+})</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> seed = <span class="tp">Seed</span>::<span class="tp">Mnemonic</span> { mnemonic, passphrase: <span class="tp">None</span> };
+
+<span class="kw">let mut</span> config = <span class="fn">default_config</span>(<span class="tp">Network</span>::<span class="tp">Mainnet</span>);
+config.api_key = <span class="tp">Some</span>(<span class="st">"&lt;breez api key&gt;"</span>.<span class="fn">to_string</span>());
+
+<span class="kw">let</span> client = <span class="fn">connect</span>(<span class="tp">ConnectRequest</span> {
+    config,
+    seed,
+    storage_dir: <span class="st">"./.data"</span>.<span class="fn">to_string</span>(),
+}).<span class="kw">await</span>?;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> seed = <span class="tp">Seed</span>.<span class="fn">mnemonic</span>(mnemonic: mnemonic, passphrase: <span class="kw">nil</span>)
+
+<span class="kw">var</span> config = <span class="fn">defaultConfig</span>(network: <span class="tp">Network</span>.mainnet)
+config.apiKey = <span class="st">"&lt;breez api key&gt;"</span>
+
+<span class="kw">let</span> client = <span class="kw">try await</span> <span class="fn">connect</span>(
+    request: <span class="tp">ConnectRequest</span>(
+        config: config, seed: seed, storageDir: <span class="st">"./.data"</span>
+    ))</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> seed = <span class="tp">Seed</span>.<span class="tp">Mnemonic</span>(mnemonic, <span class="kw">null</span>)
+
+<span class="kw">val</span> config = <span class="fn">defaultConfig</span>(<span class="tp">Network</span>.MAINNET)
+config.apiKey = <span class="st">"&lt;breez api key&gt;"</span>
+
+<span class="kw">val</span> client = <span class="fn">connect</span>(<span class="tp">ConnectRequest</span>(
+    config = config, seed = seed, storageDir = <span class="st">"./.data"</span>
+))</pre>
+      </div>
+      <div class="lang-panel" data-lang="go">
+        <pre>seed := <span class="tp">breez_sdk_spark</span>.<span class="tp">SeedMnemonic</span>{
+    Mnemonic: mnemonic, Passphrase: <span class="kw">nil</span>,
+}
+
+apiKey := <span class="st">"&lt;breez api key&gt;"</span>
+config := <span class="tp">breez_sdk_spark</span>.<span class="fn">DefaultConfig</span>(<span class="tp">breez_sdk_spark</span>.<span class="tp">NetworkMainnet</span>)
+config.ApiKey = &amp;apiKey
+
+client, err := <span class="tp">breez_sdk_spark</span>.<span class="fn">Connect</span>(<span class="tp">breez_sdk_spark</span>.<span class="tp">ConnectRequest</span>{
+    Config: config, Seed: seed, StorageDir: <span class="st">"./.data"</span>,
+})</pre>
+      </div>
+      <div class="lang-panel" data-lang="python">
+        <pre>seed = <span class="tp">Seed</span>.<span class="fn">MNEMONIC</span>(mnemonic=mnemonic, passphrase=<span class="kw">None</span>)
+
+config = <span class="fn">default_config</span>(network=<span class="tp">Network</span>.MAINNET)
+config.api_key = <span class="st">"&lt;breez api key&gt;"</span>
+
+client = <span class="kw">await</span> <span class="fn">connect</span>(
+    request=<span class="tp">ConnectRequest</span>(config=config, seed=seed, storage_dir=<span class="st">"./.data"</span>)
+)</pre>
+      </div>
+      <div class="lang-panel" data-lang="csharp">
+        <pre><span class="kw">var</span> seed = <span class="kw">new</span> <span class="tp">Seed</span>.<span class="tp">Mnemonic</span>(mnemonic: mnemonic, passphrase: <span class="kw">null</span>);
+
+<span class="kw">var</span> config = <span class="tp">BreezSdkSparkMethods</span>.<span class="fn">DefaultConfig</span>(<span class="tp">Network</span>.Mainnet)
+    <span class="kw">with</span> { apiKey = <span class="st">"&lt;breez api key&gt;"</span> };
+
+<span class="kw">var</span> client = <span class="kw">await</span> <span class="tp">BreezSdkSparkMethods</span>.<span class="fn">Connect</span>(
+    request: <span class="kw">new</span> <span class="tp">ConnectRequest</span>(
+        config: config, seed: seed, storageDir: <span class="st">"./.data"</span>
+    ));</pre>
+      </div>
+      <div class="lang-panel" data-lang="flutter">
+        <pre><span class="kw">final</span> seed = <span class="tp">Seed</span>.<span class="fn">mnemonic</span>(mnemonic: mnemonic, passphrase: <span class="kw">null</span>);
+
+<span class="kw">final</span> config = <span class="fn">defaultConfig</span>(network: <span class="tp">Network</span>.mainnet)
+    .<span class="fn">copyWith</span>(apiKey: <span class="st">"&lt;breez api key&gt;"</span>);
+
+<span class="kw">final</span> client = <span class="kw">await</span> <span class="fn">connect</span>(
+    request: <span class="tp">ConnectRequest</span>(
+        config: config, seed: seed, storageDir: <span class="st">"./.data"</span>
+    ));</pre>
+      </div>
+      <div class="lang-panel" data-lang="react-native">
+        <pre><span class="kw">const</span> seed = <span class="kw">new</span> <span class="tp">Seed</span>.<span class="tp">Mnemonic</span>({ mnemonic, passphrase: <span class="kw">undefined</span> })
+
+<span class="kw">const</span> config = <span class="fn">defaultConfig</span>(<span class="tp">Network</span>.Mainnet)
+config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
+
+<span class="kw">const</span> client = <span class="kw">await</span> <span class="fn">connect</span>({
+  config, seed, storageDir: <span class="st">`${RNFS.DocumentDirectoryPath}/data`</span>
+})</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text">Replace import <code>BreezSdk</code> <span class="arrow">&rarr;</span> <code>BreezClient</code>, and <code>connect</code>/<code>defaultConfig</code> <span class="arrow">&rarr;</span> <code>Breez</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text">Replace <code>defaultConfig('mainnet') + connect({config, seed, storageDir})</code> <span class="arrow">&rarr;</span> <code>Breez.connect({apiKey, network, seed})</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text">Rename all <code>sdk</code> variables to <code>client</code> and update type annotations to <code>BreezClient</code></span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 2. Send Payment ══════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">2</span>
+    <h2>Send Payment — Unified PaymentIntent Flow</h2>
+    <p>The two-step <code>prepareSendPayment()</code> + <code>sendPayment()</code> becomes <code>preparePayment()</code> returning a <code>PaymentIntent</code> you inspect and <code>send()</code>.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p><code>prepareSendPayment()</code> + <code>sendPayment()</code> required different request types per payment method. LNURL needed a completely separate 3-step flow. Fee amounts used a generic <code>u128</code> &mdash; ambiguous between sats and token units. All optional fields had to be passed as <code>undefined</code>.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>Single <code>preparePayment(destination, options)</code> auto-parses any destination (invoice, Spark address, LNURL, BIP-21). Returns a <code>PaymentIntent</code> with typed fee breakdown, separate <code>amountSats</code> and <code>amountTokenUnits</code> accessors. Call <code>.send()</code> when ready.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>One entry point for all payment types. Typed fees prevent denomination confusion. Prepare&ndash;inspect&ndash;send flow prevents accidental fee approval. Only pass fields you need.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
+      <pre><span class="kw">const</span> prepareResponse = <span class="kw">await</span> sdk.<span class="fn">prepareSendPayment</span>({
+  paymentRequest,
+  amount: amountSats,
+  tokenIdentifier: <span class="kw">undefined</span>,
+  conversionOptions: <span class="kw">undefined</span>,
+  feePolicy: <span class="kw">undefined</span>
+})
+
+<span class="cm">// Inspect fees through nested discriminated union</span>
+<span class="kw">if</span> (prepareResponse.paymentMethod.type === <span class="st">'bolt11Invoice'</span>) {
+  <span class="kw">const</span> fee = prepareResponse.paymentMethod.lightningFeeSats
+}
+
+<span class="kw">const</span> result = <span class="kw">await</span> sdk.<span class="fn">sendPayment</span>({
+  prepareResponse,
+  options: <span class="kw">undefined</span>
+})</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (modern)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+            <option value="go">Go</option>
+            <option value="python">Python</option>
+            <option value="csharp">C#</option>
+            <option value="flutter">Flutter</option>
+            <option value="react-native">React Native</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(destination, {
+  amountSats: <span class="nr">5_000</span>
+})
+
+console.log(<span class="st">`Amount: </span>${payment.<span class="pr">amountSats</span>}<span class="st"> sats`</span>)
+console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
+
+<span class="kw">if</span> (payment.fee.type === <span class="st">'lightning'</span>) {
+  console.log(<span class="st">`Lightning fee: </span>${payment.fee.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
+}
+
+<span class="kw">const</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>()</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> prepare_response = client
+    .<span class="fn">prepare_send_payment</span>(<span class="tp">PrepareSendPaymentRequest</span> {
+        payment_request,
+        amount: <span class="tp">Some</span>(<span class="nr">5_000</span>),
+        token_identifier: <span class="tp">None</span>,
+        conversion_options: <span class="tp">None</span>,
+        fee_policy: <span class="tp">None</span>,
+    }).<span class="kw">await</span>?;
+
+<span class="kw">if let</span> <span class="tp">SendPaymentMethod</span>::<span class="tp">Bolt11Invoice</span> {
+    lightning_fee_sats, ..
+} = prepare_response.payment_method {
+    info!(<span class="st">"Lightning Fees: {lightning_fee_sats} sats"</span>);
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> prepareResponse = <span class="kw">try await</span> client.<span class="fn">prepareSendPayment</span>(
+    request: <span class="tp">PrepareSendPaymentRequest</span>(
+        paymentRequest: paymentRequest,
+        amount: <span class="tp">BInt</span>(<span class="nr">5_000</span>),
+        tokenIdentifier: <span class="kw">nil</span>,
+        conversionOptions: <span class="kw">nil</span>,
+        feePolicy: <span class="kw">nil</span>
+    ))
+
+<span class="kw">if case let</span> .bolt11Invoice(_, sparkFee, lightningFee)
+    = prepareResponse.paymentMethod {
+    print(<span class="st">"Lightning Fees: \(lightningFee) sats"</span>)
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> req = <span class="tp">PrepareSendPaymentRequest</span>(
+    paymentRequest,
+    amount = <span class="tp">BigInteger</span>.<span class="fn">fromLong</span>(<span class="nr">5_000L</span>),
+    tokenIdentifier = <span class="kw">null</span>,
+    conversionOptions = <span class="kw">null</span>,
+    feePolicy = <span class="kw">null</span>,
+)
+<span class="kw">val</span> prepareResponse = client.<span class="fn">prepareSendPayment</span>(req)
+
+<span class="kw">if</span> (prepareResponse.paymentMethod <span class="kw">is</span>
+    <span class="tp">SendPaymentMethod</span>.<span class="tp">Bolt11Invoice</span>) {
+    <span class="kw">val</span> fee = prepareResponse.paymentMethod.lightningFeeSats
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="go">
+        <pre>optionalAmount := <span class="kw">new</span>(big.Int).<span class="fn">SetInt64</span>(<span class="nr">5_000</span>)
+request := <span class="tp">breez_sdk_spark</span>.<span class="tp">PrepareSendPaymentRequest</span>{
+    PaymentRequest: paymentRequest,
+    Amount:         &amp;optionalAmount,
+    TokenIdentifier: <span class="kw">nil</span>, ConversionOptions: <span class="kw">nil</span>, FeePolicy: <span class="kw">nil</span>,
+}
+response, err := client.<span class="fn">PrepareSendPayment</span>(request)
+
+<span class="kw">switch</span> pm := response.PaymentMethod.(<span class="kw">type</span>) {
+<span class="kw">case</span> <span class="tp">breez_sdk_spark</span>.<span class="tp">SendPaymentMethodBolt11Invoice</span>:
+    log.<span class="fn">Printf</span>(<span class="st">"Lightning Fees: %v sats"</span>, pm.LightningFeeSats)
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="python">
+        <pre>request = <span class="tp">PrepareSendPaymentRequest</span>(
+    payment_request=payment_request,
+    amount=<span class="nr">5_000</span>,
+    token_identifier=<span class="kw">None</span>,
+    conversion_options=<span class="kw">None</span>,
+    fee_policy=<span class="kw">None</span>,
+)
+prepare_response = <span class="kw">await</span> client.<span class="fn">prepare_send_payment</span>(request=request)
+
+<span class="kw">if</span> <span class="fn">isinstance</span>(prepare_response.payment_method,
+    <span class="tp">SendPaymentMethod</span>.BOLT11_INVOICE):
+    fee = prepare_response.payment_method.lightning_fee_sats</pre>
+      </div>
+      <div class="lang-panel" data-lang="csharp">
+        <pre><span class="kw">var</span> request = <span class="kw">new</span> <span class="tp">PrepareSendPaymentRequest</span>(
+    paymentRequest: paymentRequest,
+    amount: <span class="nr">5_000UL</span>,
+    tokenIdentifier: <span class="kw">null</span>,
+    conversionOptions: <span class="kw">null</span>,
+    feePolicy: <span class="kw">null</span>
+);
+<span class="kw">var</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">PrepareSendPayment</span>(request: request);
+
+<span class="kw">if</span> (prepareResponse.paymentMethod
+    <span class="kw">is</span> <span class="tp">SendPaymentMethod</span>.<span class="tp">Bolt11Invoice</span> bolt11) {
+    Console.<span class="fn">WriteLine</span>(<span class="st">$"Fees: {bolt11.lightningFeeSats} sats"</span>);
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="flutter">
+        <pre><span class="kw">final</span> request = <span class="tp">PrepareSendPaymentRequest</span>(
+    paymentRequest: paymentRequest,
+    amount: <span class="tp">BigInt</span>.<span class="fn">from</span>(<span class="nr">5000</span>),
+    tokenIdentifier: <span class="kw">null</span>,
+    conversionOptions: <span class="kw">null</span>,
+    feePolicy: <span class="kw">null</span>);
+<span class="kw">final</span> response = <span class="kw">await</span> client.<span class="fn">prepareSendPayment</span>(request: request);
+
+<span class="kw">if</span> (response.paymentMethod
+    <span class="kw">is</span> <span class="tp">SendPaymentMethod_Bolt11Invoice</span>) {
+    <span class="kw">final</span> fee = response.paymentMethod.lightningFeeSats;
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="react-native">
+        <pre><span class="kw">const</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">prepareSendPayment</span>({
+  paymentRequest,
+  amount: <span class="tp">BigInt</span>(<span class="nr">5_000</span>),
+  tokenIdentifier: <span class="kw">undefined</span>,
+  conversionOptions: <span class="kw">undefined</span>,
+  feePolicy: <span class="kw">undefined</span>
+})
+
+<span class="kw">if</span> (prepareResponse.paymentMethod?.tag
+    === <span class="tp">SendPaymentMethod_Tags</span>.Bolt11Invoice) {
+  <span class="kw">const</span> fee = prepareResponse.paymentMethod.inner.lightningFeeSats
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text"><code>sdk.prepareSendPayment({paymentRequest, amount, ...})</code> <span class="arrow">&rarr;</span> <code>client.preparePayment(destination, {amountSats})</code>. For tokens: use <code>amountTokenUnits</code> + <code>tokenIdentifier</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text">Remove <code>tokenIdentifier: undefined, conversionOptions: undefined, feePolicy: undefined</code> — only pass fields you need</span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text">Fee inspection: <code>prepareResponse.paymentMethod.lightningFeeSats</code> <span class="arrow">&rarr;</span> <code>payment.feeSats</code> or <code>payment.fee</code> union</span>
+    </div>
+    <div class="step">
+      <span class="step-num">4</span>
+      <span class="step-text"><code>sdk.sendPayment({prepareResponse, options})</code> <span class="arrow">&rarr;</span> <code>payment.send({sendOptions, idempotencyKey})</code></span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 3. Receive Payment ═══════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">3</span>
+    <h2>Receive Payment — Flat Options</h2>
+    <p>Replace the nested <code>paymentMethod</code> discriminated union with flat <code>paymentType</code> + top-level fields.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p><code>ReceivePaymentMethod</code> was a nested discriminated union &mdash; callers constructed variant-specific sub-objects (<code>{ type: 'bolt11Invoice', description, amountSats, expirySecs }</code>). Fields scattered across variant arms. The same <code>amount</code> field meant sats or token units depending on context.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>Flat <code>ReceiveOptions</code> with <code>paymentType</code> discriminator and top-level fields. <code>amountSats</code> and <code>amountTokenUnits</code> are separate, explicit fields. Returns <code>ReceiveResult</code> with typed <code>feeSats</code> and <code>feeTokenUnits</code>.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>No nested construction &mdash; just set the fields you need. Denomination is always unambiguous from the field name. Consistent response shape across all payment types.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
+      <pre><span class="kw">const</span> response = <span class="kw">await</span> sdk.<span class="fn">receivePayment</span>({
+  paymentMethod: {
+    type: <span class="st">'bolt11Invoice'</span>,
+    description,
+    amountSats: optionalAmountSats,
+    expirySecs: optionalExpirySecs
+  }
+})
+
+<span class="kw">const</span> invoice = response.<span class="pr">paymentRequest</span>
+<span class="kw">const</span> fee = response.<span class="pr">fee</span></pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (modern)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+            <option value="go">Go</option>
+            <option value="python">Python</option>
+            <option value="csharp">C#</option>
+            <option value="flutter">Flutter</option>
+            <option value="react-native">React Native</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">const</span> result = <span class="kw">await</span> client.<span class="fn">receive</span>({
+  paymentType: <span class="st">'lightning'</span>,
+  amountSats: <span class="nr">5_000</span>,
+  description,
+  expiry: <span class="nr">3600</span>
+})
+
+<span class="kw">const</span> invoice = result.<span class="pr">destination</span>
+<span class="kw">const</span> feeSats = result.<span class="pr">feeSats</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> response = client
+    .<span class="fn">receive_payment</span>(<span class="tp">ReceivePaymentRequest</span> {
+        payment_method: <span class="tp">ReceivePaymentMethod</span>::<span class="tp">Bolt11Invoice</span> {
+            description,
+            amount_sats: <span class="tp">Some</span>(<span class="nr">5_000</span>),
+            expiry_secs: <span class="tp">Some</span>(<span class="nr">3600</span>),
+        },
+    }).<span class="kw">await</span>?;
+
+<span class="kw">let</span> invoice = response.payment_request;
+<span class="kw">let</span> fee = response.fee;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> response = <span class="kw">try await</span> client.<span class="fn">receivePayment</span>(
+    request: <span class="tp">ReceivePaymentRequest</span>(
+        paymentMethod: <span class="tp">ReceivePaymentMethod</span>.<span class="fn">bolt11Invoice</span>(
+            description: description,
+            amountSats: <span class="nr">5_000</span>,
+            expirySecs: <span class="nr">3600</span>
+        )))
+
+<span class="kw">let</span> invoice = response.paymentRequest
+<span class="kw">let</span> fee = response.fee</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> request = <span class="tp">ReceivePaymentRequest</span>(
+    <span class="tp">ReceivePaymentMethod</span>.<span class="tp">Bolt11Invoice</span>(
+        description, <span class="nr">5_000</span>.toULong(), <span class="nr">3600</span>.toUInt()
+    ))
+<span class="kw">val</span> response = client.<span class="fn">receivePayment</span>(request)
+
+<span class="kw">val</span> invoice = response.paymentRequest
+<span class="kw">val</span> fee = response.fee</pre>
+      </div>
+      <div class="lang-panel" data-lang="go">
+        <pre>amountSats := <span class="fn">uint64</span>(<span class="nr">5_000</span>)
+expirySecs := <span class="fn">uint32</span>(<span class="nr">3600</span>)
+request := <span class="tp">breez_sdk_spark</span>.<span class="tp">ReceivePaymentRequest</span>{
+    PaymentMethod: <span class="tp">breez_sdk_spark</span>.<span class="tp">ReceivePaymentMethodBolt11Invoice</span>{
+        Description: description,
+        AmountSats: &amp;amountSats, ExpirySecs: &amp;expirySecs,
+    },
+}
+response, err := client.<span class="fn">ReceivePayment</span>(request)
+
+invoice := response.PaymentRequest
+fee := response.Fee</pre>
+      </div>
+      <div class="lang-panel" data-lang="python">
+        <pre>payment_method = <span class="tp">ReceivePaymentMethod</span>.<span class="fn">BOLT11_INVOICE</span>(
+    description=description,
+    amount_sats=<span class="nr">5_000</span>,
+    expiry_secs=<span class="nr">3600</span>,
+)
+request = <span class="tp">ReceivePaymentRequest</span>(payment_method=payment_method)
+response = <span class="kw">await</span> client.<span class="fn">receive_payment</span>(request=request)
+
+invoice = response.payment_request
+fee = response.fee</pre>
+      </div>
+      <div class="lang-panel" data-lang="csharp">
+        <pre><span class="kw">var</span> paymentMethod = <span class="kw">new</span> <span class="tp">ReceivePaymentMethod</span>.<span class="tp">Bolt11Invoice</span>(
+    description: description,
+    amountSats: <span class="nr">5_000UL</span>,
+    expirySecs: <span class="nr">3600U</span>
+);
+<span class="kw">var</span> request = <span class="kw">new</span> <span class="tp">ReceivePaymentRequest</span>(paymentMethod: paymentMethod);
+<span class="kw">var</span> response = <span class="kw">await</span> client.<span class="fn">ReceivePayment</span>(request: request);
+
+<span class="kw">var</span> invoice = response.paymentRequest;
+<span class="kw">var</span> fee = response.fee;</pre>
+      </div>
+      <div class="lang-panel" data-lang="flutter">
+        <pre><span class="kw">final</span> request = <span class="tp">ReceivePaymentRequest</span>(
+    paymentMethod: <span class="tp">ReceivePaymentMethod</span>.<span class="fn">bolt11Invoice</span>(
+        description: description,
+        amountSats: <span class="tp">BigInt</span>.<span class="fn">from</span>(<span class="nr">5000</span>),
+        expirySecs: <span class="nr">3600</span>));
+<span class="kw">final</span> response = <span class="kw">await</span> client.<span class="fn">receivePayment</span>(request: request);
+
+<span class="kw">final</span> invoice = response.paymentRequest;
+<span class="kw">final</span> fee = response.fee;</pre>
+      </div>
+      <div class="lang-panel" data-lang="react-native">
+        <pre><span class="kw">const</span> response = <span class="kw">await</span> client.<span class="fn">receivePayment</span>({
+  paymentMethod: <span class="kw">new</span> <span class="tp">ReceivePaymentMethod</span>.<span class="tp">Bolt11Invoice</span>({
+    description,
+    amountSats: <span class="tp">BigInt</span>(<span class="nr">5_000</span>),
+    expirySecs: <span class="nr">3600</span>
+  })
+})
+
+<span class="kw">const</span> invoice = response.paymentRequest
+<span class="kw">const</span> fee = response.fee</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text"><code>sdk.receivePayment({paymentMethod: {...}})</code> <span class="arrow">&rarr;</span> <code>client.receive({paymentType, ...})</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text">Flatten: <code>paymentMethod.type</code> <span class="arrow">&rarr;</span> <code>paymentType</code>. Field names: <code>bolt11Invoice</code> <span class="arrow">&rarr;</span> <code>lightning</code>, <code>bitcoinAddress</code> <span class="arrow">&rarr;</span> <code>onchain</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text">Amount: use <code>amountSats</code> (number) for Bitcoin, <code>amountTokenUnits</code> (string) for tokens. For tokens: add <code>tokenIdentifier</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">4</span>
+      <span class="step-text">Response: <code>response.paymentRequest</code> <span class="arrow">&rarr;</span> <code>result.destination</code>. Fee: <code>response.fee</code> <span class="arrow">&rarr;</span> <code>result.feeSats</code> (or <code>result.feeTokenUnits</code> for tokens)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 4. LNURL-Pay ═════════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">4</span>
+    <h2>LNURL-Pay — Unified via preparePayment</h2>
+    <p>No more <code>parse()</code> + <code>prepareLnurlPay()</code> + <code>lnurlPay()</code>. Pass the LNURL directly to <code>preparePayment()</code> — resolution happens internally.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p>LNURL-Pay required 3 manual steps: <code>parse()</code> &rarr; check result type &rarr; extract <code>payRequest</code> &rarr; <code>prepareLnurlPay()</code> &rarr; <code>lnurlPay()</code>. Callers had to understand LNURL protocol internals and handle type-checking between steps.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p><code>preparePayment(lnurlUrl, options)</code> handles LNURL resolution internally. LNURL-specific options (<code>comment</code>, <code>validateSuccessActionUrl</code>) go in the <code>lnurl</code> sub-object. The returned <code>PaymentIntent</code> has <code>isLnurl</code> for detection.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>3 calls &rarr; 1. No manual type-checking of parse results. LNURL is just another destination string &mdash; callers don&rsquo;t need to know it&rsquo;s LNURL.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
+      <pre><span class="kw">const</span> input = <span class="kw">await</span> sdk.<span class="fn">parse</span>(lnurlPayUrl)
+<span class="kw">if</span> (input.type === <span class="st">'lightningAddress'</span>) {
+  <span class="kw">const</span> prepareResponse = <span class="kw">await</span> sdk.<span class="fn">prepareLnurlPay</span>({
+    amountSats,
+    payRequest: input.payRequest,
+    comment: optionalComment,
+    validateSuccessActionUrl: <span class="kw">true</span>,
+    conversionOptions: <span class="kw">undefined</span>,
+    feePolicy: <span class="kw">undefined</span>
+  })
+  <span class="kw">const</span> fee = prepareResponse.<span class="pr">feeSats</span>
+
+  <span class="kw">const</span> result = <span class="kw">await</span> sdk.<span class="fn">lnurlPay</span>({
+    prepareResponse,
+    idempotencyKey
+  })
+}</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (modern)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+            <option value="go">Go</option>
+            <option value="python">Python</option>
+            <option value="csharp">C#</option>
+            <option value="flutter">Flutter</option>
+            <option value="react-native">React Native</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="cm">// preparePayment handles LNURL resolution internally</span>
+<span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(lnurlPayUrl, {
+  amountSats: <span class="nr">5_000</span>,
+  lnurl: { comment: optionalComment, validateSuccessActionUrl: <span class="kw">true</span> }
+})
+
+console.log(<span class="st">`Is LNURL: </span>${payment.<span class="pr">isLnurl</span>}<span class="st">`</span>)
+console.log(<span class="st">`Fees: </span>${payment.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
+
+<span class="kw">const</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>({ idempotencyKey })</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="cm">// Rust still uses parse → prepareLnurlPay → lnurlPay</span>
+<span class="kw">if let</span> <span class="tp">Ok</span>(<span class="tp">InputType</span>::<span class="tp">LightningAddress</span>(details))
+    = client.<span class="fn">parse</span>(lnurl_pay_url).<span class="kw">await</span> {
+    <span class="kw">let</span> prepare = client.<span class="fn">prepare_lnurl_pay</span>(<span class="tp">PrepareLnurlPayRequest</span> {
+        amount_sats: <span class="nr">5_000</span>,
+        pay_request: details.pay_request,
+        comment: <span class="tp">Some</span>(<span class="st">"&lt;comment&gt;"</span>.<span class="fn">into</span>()),
+        validate_success_action_url: <span class="tp">Some</span>(<span class="kw">true</span>),
+        conversion_options: <span class="tp">None</span>,
+        fee_policy: <span class="tp">None</span>,
+    }).<span class="kw">await</span>?;
+
+    info!(<span class="st">"Fees: {} sats"</span>, prepare.fee_sats);
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> inputType = <span class="kw">try await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl)
+<span class="kw">if case</span> .lightningAddress(<span class="kw">v1: let</span> details) = inputType {
+    <span class="kw">let</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats: <span class="nr">5_000</span>,
+        payRequest: details.payRequest,
+        comment: <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl: <span class="kw">true</span>,
+        conversionOptions: <span class="kw">nil</span>, feePolicy: <span class="kw">nil</span>
+    )
+    <span class="kw">let</span> prepareResponse = <span class="kw">try await</span> client.<span class="fn">prepareLnurlPay</span>(request: req)
+    print(<span class="st">"Fees: \(prepareResponse.feeSats) sats"</span>)
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> inputType = client.<span class="fn">parse</span>(lnurlPayUrl)
+<span class="kw">if</span> (inputType <span class="kw">is</span> <span class="tp">InputType</span>.<span class="tp">LightningAddress</span>) {
+    <span class="kw">val</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats = <span class="nr">5_000</span>.toULong(),
+        payRequest = inputType.v1.payRequest,
+        comment = <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl = <span class="kw">true</span>,
+        conversionOptions = <span class="kw">null</span>, feePolicy = <span class="kw">null</span>,
+    )
+    <span class="kw">val</span> prepareResponse = client.<span class="fn">prepareLnurlPay</span>(req)
+    <span class="cm">// Log.v("Breez", "Fees: ${prepareResponse.feeSats} sats")</span>
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="go">
+        <pre>input, _ := client.<span class="fn">Parse</span>(lnurlPayUrl)
+
+<span class="kw">switch</span> inputType := input.(<span class="kw">type</span>) {
+<span class="kw">case</span> <span class="tp">breez_sdk_spark</span>.<span class="tp">InputTypeLightningAddress</span>:
+    amountSats := <span class="fn">uint64</span>(<span class="nr">5_000</span>)
+    comment := <span class="st">"&lt;comment&gt;"</span>
+    validate := <span class="kw">true</span>
+    request := <span class="tp">breez_sdk_spark</span>.<span class="tp">PrepareLnurlPayRequest</span>{
+        AmountSats: amountSats,
+        PayRequest: inputType.Field0.PayRequest,
+        Comment: &amp;comment,
+        ValidateSuccessActionUrl: &amp;validate,
+        FeePolicy: <span class="kw">nil</span>,
+    }
+    prepareResponse, _ := client.<span class="fn">PrepareLnurlPay</span>(request)
+    log.<span class="fn">Printf</span>(<span class="st">"Fees: %v sats"</span>, prepareResponse.FeeSats)
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="python">
+        <pre>parsed_input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurl_pay_url)
+<span class="kw">if</span> <span class="fn">isinstance</span>(parsed_input, <span class="tp">InputType</span>.LIGHTNING_ADDRESS):
+    details = parsed_input[<span class="nr">0</span>]
+    request = <span class="tp">PrepareLnurlPayRequest</span>(
+        amount_sats=<span class="nr">5_000</span>,
+        pay_request=details.pay_request,
+        comment=<span class="st">"&lt;comment&gt;"</span>,
+        validate_success_action_url=<span class="kw">True</span>,
+        conversion_options=<span class="kw">None</span>, fee_policy=<span class="kw">None</span>,
+    )
+    prepare_response = <span class="kw">await</span> client.<span class="fn">prepare_lnurl_pay</span>(request=request)
+    logging.<span class="fn">debug</span>(<span class="st">f"Fees: {prepare_response.fee_sats} sats"</span>)</pre>
+      </div>
+      <div class="lang-panel" data-lang="csharp">
+        <pre><span class="kw">var</span> parsedInput = <span class="kw">await</span> client.<span class="fn">Parse</span>(lnurlPayUrl);
+<span class="kw">if</span> (parsedInput <span class="kw">is</span> <span class="tp">InputType</span>.<span class="tp">LightningAddress</span> la) {
+    <span class="kw">var</span> request = <span class="kw">new</span> <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats: <span class="nr">5_000UL</span>,
+        payRequest: la.v1.payRequest,
+        comment: <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl: <span class="kw">true</span>,
+        conversionOptions: <span class="kw">null</span>, feePolicy: <span class="kw">null</span>
+    );
+    <span class="kw">var</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">PrepareLnurlPay</span>(request: request);
+    Console.<span class="fn">WriteLine</span>(<span class="st">$"Fees: {prepareResponse.feeSats} sats"</span>);
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="flutter">
+        <pre><span class="tp">InputType</span> inputType = <span class="kw">await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl);
+<span class="kw">if</span> (inputType <span class="kw">is</span> <span class="tp">InputType_LightningAddress</span>) {
+    <span class="tp">PrepareLnurlPayRequest</span> request = <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats: <span class="tp">BigInt</span>.<span class="fn">from</span>(<span class="nr">5000</span>),
+        payRequest: inputType.field0.payRequest,
+        comment: <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl: <span class="kw">true</span>,
+        conversionOptions: <span class="kw">null</span>, feePolicy: <span class="kw">null</span>,
+    );
+    <span class="kw">final</span> prepareResponse =
+        <span class="kw">await</span> client.<span class="fn">prepareLnurlPay</span>(request: request);
+    print(<span class="st">"Fees: ${prepareResponse.feeSats} sats"</span>);
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="react-native">
+        <pre><span class="kw">const</span> input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurlPayUrl)
+<span class="kw">if</span> (input.tag === <span class="tp">InputType_Tags</span>.LightningAddress) {
+  <span class="kw">const</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">prepareLnurlPay</span>({
+    amountSats: <span class="tp">BigInt</span>(<span class="nr">5_000</span>),
+    payRequest: input.inner[<span class="nr">0</span>].payRequest,
+    comment: <span class="st">'&lt;comment&gt;'</span>,
+    validateSuccessActionUrl: <span class="kw">true</span>,
+    feePolicy: <span class="kw">undefined</span>
+  })
+  console.log(<span class="st">`Fees: ${prepareResponse.feeSats} sats`</span>)
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text">Remove <code>sdk.parse(url)</code> step — pass the LNURL/Lightning address directly to <code>preparePayment()</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text"><code>prepareLnurlPay({amountSats, payRequest, comment, ...})</code> <span class="arrow">&rarr;</span> <code>preparePayment(url, {amountSats, lnurl: {comment, ...}})</code></span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text"><code>sdk.lnurlPay({prepareResponse})</code> <span class="arrow">&rarr;</span> <code>payment.send({idempotencyKey})</code></span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 5. Sub-object APIs ═══════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">5</span>
+    <h2>Sub-object API — Domain-organized Methods</h2>
+    <p>All flat <code>sdk.methodName()</code> calls are now organized under domain-specific accessors on the <code>client</code> instance.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p>25+ flat methods on <code>sdk</code> made IDE autocomplete useless &mdash; <code>sdk.</code> showed everything from <code>addEventListener</code> to <code>startLeafOptimization</code>. No logical grouping made it hard to discover related operations.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>Domain-organized sub-objects: <code>client.payments</code>, <code>client.events</code>, <code>client.lightningAddress</code>, <code>client.deposits</code>, <code>client.settings</code>, <code>client.lnurl</code>, <code>client.fiat</code>, <code>client.tokens</code>, <code>client.optimization</code>, <code>client.tokenIssuer</code>.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>IDE autocomplete shows 2&ndash;3 methods per domain instead of 25+. Logical grouping matches how developers think about features. Consistent naming across all 9 language bindings.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (flat methods)</div>
+      <pre>sdk.<span class="fn">listPayments</span>({})
+sdk.<span class="fn">getPayment</span>({ paymentId })
+sdk.<span class="fn">addEventListener</span>(listener)
+sdk.<span class="fn">removeEventListener</span>(id)
+sdk.<span class="fn">getLightningAddress</span>()
+sdk.<span class="fn">registerLightningAddress</span>({ username })
+sdk.<span class="fn">checkLightningAddressAvailable</span>({ username })
+sdk.<span class="fn">deleteLightningAddress</span>()
+sdk.<span class="fn">lnurlAuth</span>(requestData)
+sdk.<span class="fn">lnurlWithdraw</span>({ amountSats, withdrawRequest })
+sdk.<span class="fn">listFiatCurrencies</span>()
+sdk.<span class="fn">listFiatRates</span>()
+sdk.<span class="fn">recommendedFees</span>()
+sdk.<span class="fn">getUserSettings</span>()
+sdk.<span class="fn">updateUserSettings</span>({ ... })
+sdk.<span class="fn">signMessage</span>({ message })
+sdk.<span class="fn">checkMessage</span>({ message, pubkey, signature })
+sdk.<span class="fn">getTokensMetadata</span>({ tokenIdentifiers })
+sdk.<span class="fn">fetchConversionLimits</span>({ ... })
+sdk.<span class="fn">startLeafOptimization</span>()
+sdk.<span class="fn">cancelLeafOptimization</span>()
+sdk.<span class="fn">getLeafOptimizationProgress</span>()
+sdk.<span class="fn">listUnclaimedDeposits</span>()
+sdk.<span class="fn">claimDeposit</span>(request)
+sdk.<span class="fn">refundDeposit</span>(request)
+sdk.<span class="fn">getTokenIssuer</span>()</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (sub-object APIs)</div>
+      <pre>client.<span class="pr">payments</span>.<span class="fn">list</span>()
+client.<span class="pr">payments</span>.<span class="fn">get</span>(paymentId)
+client.<span class="pr">events</span>.<span class="fn">add</span>(listener)
+client.<span class="pr">events</span>.<span class="fn">remove</span>(id)
+client.<span class="pr">lightningAddress</span>.<span class="fn">get</span>()
+client.<span class="pr">lightningAddress</span>.<span class="fn">register</span>({ username })
+client.<span class="pr">lightningAddress</span>.<span class="fn">isAvailable</span>(username)
+client.<span class="pr">lightningAddress</span>.<span class="fn">delete</span>()
+client.<span class="pr">lnurl</span>.<span class="fn">auth</span>(requestData)
+client.<span class="pr">lnurl</span>.<span class="fn">withdraw</span>({ amountSats, withdrawRequest })
+client.<span class="pr">fiat</span>.<span class="fn">currencies</span>()
+client.<span class="pr">fiat</span>.<span class="fn">rates</span>()
+client.<span class="fn">recommendedFees</span>()
+client.<span class="pr">settings</span>.<span class="fn">get</span>()
+client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
+client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
+<span class="fn">verifyMessage</span>({ message, pubkey, signature })
+client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
+client.<span class="pr">tokens</span>.<span class="fn">swapLimits</span>({ ... })
+client.<span class="pr">optimization</span>.<span class="fn">start</span>()
+client.<span class="pr">optimization</span>.<span class="fn">cancel</span>()
+client.<span class="pr">optimization</span>.<span class="pr">progress</span>
+client.<span class="pr">deposits</span>.<span class="fn">listUnclaimed</span>()
+client.<span class="pr">deposits</span>.<span class="fn">claim</span>(request)
+client.<span class="pr">deposits</span>.<span class="fn">refund</span>(request)
+client.<span class="pr">tokenIssuer</span>  <span class="cm">// getter</span>
+
+
+<span class="cm">// ── New unified APIs ────────────────────</span>
+<span class="new-api">client.<span class="fn">preparePayment</span>(dest, { amountSats })</span>  <span class="cm">// ★</span>
+<span class="new-api">client.<span class="fn">receive</span>({ paymentType, amountSats })</span>   <span class="cm">// ★</span>
+<span class="new-api">client.<span class="pr">pubkey</span></span>                                <span class="cm">// ★ sync getter</span></pre>
+    </div>
+  </div>
+
+  <div class="api-map">
+    <div class="api-map-item">
+      <div class="accessor">client.payments</div>
+      <div class="methods">.list(limit?, offset?) &middot; .get(id)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.events</div>
+      <div class="methods">.add(listener) &middot; .remove(id) &middot; .on(type, cb)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.lightningAddress</div>
+      <div class="methods">.get() &middot; .register() &middot; .isAvailable() &middot; .delete()</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.lnurl</div>
+      <div class="methods">.auth(data) &middot; .withdraw(request)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.fiat</div>
+      <div class="methods">.currencies() &middot; .rates()</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.deposits</div>
+      <div class="methods">.listUnclaimed() &middot; .claim() &middot; .refund()</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.settings</div>
+      <div class="methods">.get() &middot; .update(request)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.message</div>
+      <div class="methods">.sign(request)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.tokens</div>
+      <div class="methods">.metadata(request) &middot; .swapLimits(request)</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.optimization</div>
+      <div class="methods">.start() &middot; .cancel() &middot; .progress</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.tokenIssuer</div>
+      <div class="methods">.createIssuerToken() &middot; .mintIssuerToken() &middot; ...</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">client.recommendedFees()</div>
+      <div class="methods">Top-level &mdash; Bitcoin chain fee estimates</div>
+    </div>
+    <div class="api-map-item">
+      <div class="accessor">parseInput() <span style="color:var(--text-dim)">(standalone)</span></div>
+      <div class="methods">No BreezClient instance needed &mdash; pure input parsing</div>
+    </div>
+    <div class="api-map-item" style="border-color:var(--green);background:var(--green-bg)">
+      <div class="accessor" style="color:var(--green)">client.preparePayment()</div>
+      <div class="methods">Unified send: parse + prepare &rarr; PaymentIntent &rarr; .send()</div>
+    </div>
+    <div class="api-map-item" style="border-color:var(--green);background:var(--green-bg)">
+      <div class="accessor" style="color:var(--green)">client.receive()</div>
+      <div class="methods">Unified receive: flat options &rarr; { destination, feeSats }</div>
+    </div>
+    <div class="api-map-item" style="border-color:var(--green);background:var(--green-bg)">
+      <div class="accessor" style="color:var(--green)">client.pubkey</div>
+      <div class="methods">Sync getter &mdash; identity public key (no getInfo() needed)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 6. Unified API ════════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">6</span>
+    <h2>New Unified APIs &mdash; Send &amp; Receive</h2>
+    <p>Multiple legacy methods are consolidated into <strong>two</strong> modern entry points with self-documenting fields, typed fees, and a prepare&ndash;inspect&ndash;send flow.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p>Sending required navigating between <code>prepareSendPayment</code>, <code>sendPayment</code>, <code>prepareLnurlPay</code>, <code>lnurlPay</code> &mdash; four methods with different request shapes. Receiving required constructing nested discriminated unions with variant-specific fields.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>Two universal entry points: <code>preparePayment(destination, options)</code> for sending (any destination, auto-detected) and <code>receive(options)</code> for receiving (flat options with <code>paymentType</code> discriminator).</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>6+ specialized methods &rarr; 2 universal ones. Self-documenting <code>amountSats</code> / <code>amountTokenUnits</code> field names. Same prepare&ndash;inspect&ndash;send pattern for every payment type.</p>
+    </div>
+  </div>
+
+  <!-- ── Send unification ── -->
+  <div class="unify-panel">
+    <div class="unify-old">
+      <div class="unify-label">Replaced by preparePayment()</div>
+      <code>sdk.prepareSendPayment(request)</code>
+      <code>sdk.sendPayment({prepareResponse})</code>
+      <code>sdk.prepareLnurlPay(request)</code>
+      <code>sdk.lnurlPay(request)</code>
+    </div>
+    <div class="unify-arrow-col">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+    </div>
+    <div class="unify-new">
+      <div class="unify-label">New unified send</div>
+      <div class="unify-new-api">client.preparePayment(destination, options)</div>
+      <div class="unify-new-desc">
+        Accepts any destination (invoice, spark address, LNURL, lightning address, BIP-21).
+        Returns a <strong>PaymentIntent</strong> you can inspect before sending.
+      </div>
+      <div class="unify-new-flow"><span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(dest, {
+  <span class="pr">amountSats</span>: 5_000
+})
+
+<span class="cm">// Inspect fees before committing</span>
+console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
+
+<span class="cm">// Confirm when ready</span>
+<span class="kw">const</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>()</div>
+    </div>
+  </div>
+
+  <hr class="unify-divider">
+
+  <!-- ── Receive unification ── -->
+  <div class="unify-panel">
+    <div class="unify-old">
+      <div class="unify-label">Replaced by receive()</div>
+      <code>sdk.receivePayment({paymentMethod: {type, ...}})</code>
+      <code>sdk.receiveOnchain(request)</code>
+    </div>
+    <div class="unify-arrow-col">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+    </div>
+    <div class="unify-new">
+      <div class="unify-label">New unified receive</div>
+      <div class="unify-new-api">client.receive(options)</div>
+      <div class="unify-new-desc">
+        Flat options with <strong>paymentType</strong> discriminator.
+        No nested discriminated union &mdash; just top-level fields.
+      </div>
+      <div class="unify-new-flow"><span class="cm">// Lightning invoice</span>
+<span class="kw">const</span> inv = <span class="kw">await</span> client.<span class="fn">receive</span>({
+  <span class="pr">paymentType</span>: <span class="st">'lightning'</span>,
+  <span class="pr">amountSats</span>: 5_000,
+  <span class="pr">description</span>: <span class="st">'Coffee'</span>
+})
+
+<span class="cm">// On-chain address</span>
+<span class="kw">const</span> addr = <span class="kw">await</span> client.<span class="fn">receive</span>({
+  <span class="pr">paymentType</span>: <span class="st">'onchain'</span>
+})
+
+<span class="cm">// Token invoice</span>
+<span class="kw">const</span> tok = <span class="kw">await</span> client.<span class="fn">receive</span>({
+  <span class="pr">paymentType</span>: <span class="st">'sparkInvoice'</span>,
+  <span class="pr">tokenIdentifier</span>: <span class="st">'&lt;id&gt;'</span>,
+  <span class="pr">amountTokenUnits</span>: <span class="st">'5000'</span>
+})</div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Key Differences
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text"><strong>Self-documenting amounts</strong> &mdash; <code>amountSats</code> for Bitcoin, <code>amountTokenUnits</code> for tokens (no ambiguous <code>amount</code>)</span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text"><strong>Typed fees</strong> &mdash; <code>payment.fee.type === 'sparkSats'</code> or <code>'sparkToken'</code> (no runtime guessing)</span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text"><strong>Prepare&ndash;inspect&ndash;send</strong> &mdash; always review fees before confirming; no auto-approve one-liners</span>
+    </div>
+    <div class="step">
+      <span class="step-num">4</span>
+      <span class="step-text"><strong>Any destination</strong> &mdash; <code>preparePayment</code> auto-detects invoices, spark addresses, LNURL, lightning addresses, BIP-21</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 7. Type Reference ═════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">7</span>
+    <h2>New Types &amp; Filtered Events</h2>
+    <p>Key new types, enums, and the filtered event subscription API introduced with the modernization.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p>Event listeners received all events and filtered manually (<code>if (event.type === ...)</code>). Amount fields were an ambiguous <code>u128</code>. Configuration mixed platform and wallet concerns in one flat struct.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p><code>events.on(type, callback)</code> fires only for the requested event type. Typed enums: <code>PaymentIntentType</code>, <code>ReceivePaymentType</code>, <code>PreparedPaymentFee</code>. Separated config: <code>AppConfig</code> (platform) + <code>ClientConfig</code> (wallet) + <code>ConnectConfig</code> (convenience).</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>Less boilerplate &mdash; subscribe to just <code>"payment"</code> events. Fee inspection is type-safe. Platform vs wallet config separation enables multi-wallet.</p>
+    </div>
+  </div>
+
+  <!-- ── Filtered Events ── -->
+  <h3 style="margin: 20px 0 12px; font-size: 16px; color: var(--green);">Filtered Event Subscription</h3>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">Use <code>client.events.on(type, callback)</code> to subscribe to a specific event type instead of filtering manually. Returns a listener ID for <code>.remove()</code>.</p>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (manual filtering)</div>
+      <pre><span class="kw">const</span> id = <span class="kw">await</span> sdk.<span class="fn">addEventListener</span>(<span class="kw">async</span> (event) => {
+  <span class="kw">if</span> (event.type === <span class="st">'paymentSucceeded'</span>) {
+    handlePayment(event.payment)
+  }
+})</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (filtered)</div>
+      <pre><span class="cm">// Only fires for payment events</span>
+<span class="kw">const</span> id = <span class="kw">await</span> client.<span class="pr">events</span>.<span class="fn">on</span>(<span class="st">'payment'</span>, (event) => {
+  handlePayment(event.payment)
+})
+
+<span class="cm">// Clean up</span>
+<span class="kw">await</span> client.<span class="pr">events</span>.<span class="fn">remove</span>(id)</pre>
+    </div>
+  </div>
+
+  <div style="margin-top:16px; padding: 14px 18px; background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius-sm); font-size: 13px;">
+    <strong style="color: var(--accent);">Supported event types:</strong>
+    <span style="color: var(--text-muted); margin-left: 8px;">
+      <code>"payment"</code> (all payment events) &middot;
+      <code>"paymentSucceeded"</code> &middot;
+      <code>"paymentPending"</code> &middot;
+      <code>"paymentFailed"</code> &middot;
+      <code>"synced"</code>
+    </span>
+  </div>
+
+  <hr class="unify-divider">
+
+  <!-- ── Type cards ── -->
+  <h3 style="margin: 0 0 12px; font-size: 16px; color: var(--accent);">Key Types</h3>
+
+  <div class="type-grid">
+    <div class="type-card">
+      <div class="type-card-title">PaymentIntentType</div>
+      <div class="type-card-desc">Returned by <code>payment.paymentType</code> on a <code>PaymentIntent</code>.</div>
+      <div class="type-card-variants">
+        <code>'spark'</code> <code>'lightning'</code> <code>'onchain'</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">ReceivePaymentType</div>
+      <div class="type-card-desc">Passed as <code>paymentType</code> in <code>client.receive()</code> options.</div>
+      <div class="type-card-variants">
+        <code>'lightning'</code> <code>'onchain'</code> <code>'sparkAddress'</code> <code>'sparkInvoice'</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">PreparedPaymentFee</div>
+      <div class="type-card-desc">Discriminated union returned by <code>payment.fee</code>. Check <code>fee.type</code> to determine the variant.</div>
+      <div class="type-card-variants">
+        <code>{ type: 'sparkSats', feeSats }</code><br>
+        <code>{ type: 'sparkToken', feeTokenUnits }</code><br>
+        <code>{ type: 'lightning', feeSats }</code><br>
+        <code>{ type: 'onchain', speedFast, speedMedium, speedSlow }</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">OnchainSpeedFee</div>
+      <div class="type-card-desc">Speed tier in the <code>Onchain</code> fee variant. Each tier contains a <code>totalFeeSat</code> field.</div>
+      <div class="type-card-variants">
+        <code>{ totalFeeSat: number }</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">ConnectConfig</div>
+      <div class="type-card-desc">Single-call connection: combines app + wallet config. Passed to <code>Breez.connect()</code>.</div>
+      <div class="type-card-variants">
+        <code>apiKey</code> <code>network</code> <code>seed</code><br>
+        + optional: <code>storageRoot</code> <code>storageDir</code> <code>syncIntervalSecs</code> <code>preferSpark</code> <code>privateMode</code> <code>optimization</code> <code>maxDepositClaimFee</code> <code>lnurlDomain</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">AppConfig + ClientConfig</div>
+      <div class="type-card-desc">For multi-wallet: <code>new Breez(appConfig)</code> then <code>breez.connectWallet(clientConfig)</code>. Splits network config from wallet config.</div>
+      <div class="type-card-variants">
+        <strong>AppConfig:</strong> <code>apiKey</code> <code>network</code> + optional fields<br>
+        <strong>ClientConfig:</strong> <code>seed</code> + optional: <code>storageDir</code> <code>optimization</code> <code>preferSpark</code> <code>privateMode</code> <code>maxDepositClaimFee</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">PrepareOptions</div>
+      <div class="type-card-desc">Options for <code>client.preparePayment(dest, options)</code>.</div>
+      <div class="type-card-variants">
+        <code>amountSats?: number</code><br>
+        <code>amountTokenUnits?: string</code><br>
+        <code>tokenIdentifier?: string</code><br>
+        <code>conversionOptions?: ConversionOptions</code><br>
+        <code>feePolicy?: FeePolicy</code><br>
+        <code>lnurl?: { comment?, validateSuccessActionUrl? }</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">ReceiveOptions</div>
+      <div class="type-card-desc">Options for <code>client.receive(options)</code>.</div>
+      <div class="type-card-variants">
+        <code>paymentType?: ReceivePaymentType</code><br>
+        <code>amountSats?: number</code><br>
+        <code>amountTokenUnits?: string</code><br>
+        <code>tokenIdentifier?: string</code><br>
+        <code>description?: string</code><br>
+        <code>expiry?: number</code><br>
+        <code>senderPublicKey?: string</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">ReceiveResult</div>
+      <div class="type-card-desc">Returned by <code>client.receive()</code>.</div>
+      <div class="type-card-variants">
+        <code>destination: string</code><br>
+        <code>feeSats: number</code><br>
+        <code>feeTokenUnits?: string</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">PaymentIntent</div>
+      <div class="type-card-desc">Returned by <code>client.preparePayment()</code>. Inspect, then <code>.send()</code>.</div>
+      <div class="type-card-variants">
+        <code>.paymentType</code> <code>.amountSats</code> <code>.amountTokenUnits</code><br>
+        <code>.fee</code> <code>.feeSats</code> <code>.feeTokenUnits</code><br>
+        <code>.tokenIdentifier</code> <code>.isLnurl</code><br>
+        <code>.send(options?)</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 8. Standalone Functions ═══════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">8</span>
+    <h2>Standalone Functions</h2>
+    <p>Some operations no longer require a BreezClient instance. Import and call them directly.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p><code>parse()</code> and <code>checkMessage()</code> required a <code>BreezClient</code> instance even though they use no wallet state. This forced callers to connect a wallet before parsing an input or verifying a signature &mdash; unnecessary coupling.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>Standalone <code>parseInput()</code> and <code>verifyMessage()</code> imported from the package root. Pure operations with no wallet dependency.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>Parse inputs before connecting. Verify signatures without a wallet. Cleaner API surface &mdash; explicit about what needs wallet state.</p>
+    </div>
+  </div>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (required BreezClient)</div>
+      <pre><span class="cm">// Parsing required an sdk instance</span>
+<span class="kw">const</span> parsed = <span class="kw">await</span> sdk.<span class="fn">parse</span>(input)
+
+<span class="cm">// Message verification required an sdk instance</span>
+<span class="kw">const</span> result = <span class="kw">await</span> sdk.<span class="fn">checkMessage</span>({
+  message, pubkey, signature
+})</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (standalone)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">import</span> { <span class="fn">parseInput</span>, <span class="fn">verifyMessage</span> }
+  <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="cm">// No BreezClient instance needed</span>
+<span class="kw">const</span> parsed = <span class="kw">await</span> <span class="fn">parseInput</span>(input)
+
+<span class="cm">// Pure cryptographic verification</span>
+<span class="kw">const</span> result = <span class="fn">verifyMessage</span>({
+  message, pubkey, signature
+})</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">use</span> breez_sdk_spark::{<span class="fn">parse_input</span>, <span class="fn">verify_message</span>};
+
+<span class="cm">// No BreezClient instance needed</span>
+<span class="kw">let</span> parsed = <span class="fn">parse_input</span>(input, <span class="tp">None</span>).<span class="kw">await</span>?;
+
+<span class="cm">// Pure cryptographic verification</span>
+<span class="kw">let</span> result = <span class="fn">verify_message</span>(<span class="tp">CheckMessageRequest</span> {
+    message, pubkey, signature
+})?;</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text">Import <code>parseInput</code> and <code>verifyMessage</code> from the package root</span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text"><code>sdk.parse(input)</code> <span class="arrow">&rarr;</span> <code>parseInput(input)</code> — remove BreezClient parameter from function signature</span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text"><code>sdk.checkMessage({...})</code> <span class="arrow">&rarr;</span> <code>verifyMessage({...})</code> — remove BreezClient parameter from function signature</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════════ 9. Events ═════════════════════ -->
+<section>
+  <div class="section-header">
+    <span class="section-number">9</span>
+    <h2>Events — Enriched Synced, Identity Pubkey &amp; LeafOptimization Rename</h2>
+    <p>Three event-related changes: the <code>Synced</code> event now carries granular flags, a new synchronous <code>pubkey</code> getter replaces the need to call <code>getInfo()</code>, and <code>Optimization</code> is renamed to <code>LeafOptimization</code>.</p>
+  </div>
+
+  <div class="section-context">
+    <div class="context-card">
+      <div class="context-card-label problem">Problem</div>
+      <p>(a) <code>Synced</code> event carried no detail &mdash; callers refreshed everything on every sync. (b) Identity pubkey required an async <code>getInfo()</code> call even though it&rsquo;s static per wallet. (c) <code>Optimization</code> was a vague event name.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label solution">Solution</div>
+      <p>(a) Enriched <code>Synced</code> with <code>balanceUpdated</code>, <code>paymentsUpdated</code>, <code>initialSync</code> boolean flags. (b) <code>client.pubkey</code> synchronous getter. (c) Renamed to <code>LeafOptimization</code> to specify what&rsquo;s being optimized.</p>
+    </div>
+    <div class="context-card">
+      <div class="context-card-label benefits">Benefits</div>
+      <p>(a) Targeted UI refreshes, dismiss loading spinner on first sync. (b) No async call for static data. (c) Self-documenting event name.</p>
+    </div>
+  </div>
+
+  <!-- ── Enriched Synced event ── -->
+  <h3 style="margin: 28px 0 12px; font-size: 16px; color: var(--green);">Enriched Synced Event</h3>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">The old <code>BalanceSynced</code> and <code>HistorySynced</code> events are collapsed into a single <code>Synced</code> event with boolean flags. This lets you react precisely to what changed.</p>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before (separate events)</div>
+      <pre><span class="kw">case</span> <span class="st">'synced'</span>:
+  <span class="cm">// No details — refresh everything</span>
+  refreshBalance()
+  refreshPayments()
+  <span class="kw">break</span>
+
+<span class="cm">// Separate events (removed)</span>
+<span class="kw">case</span> <span class="st">'balanceSynced'</span>:  <span class="cm">// ← gone</span>
+<span class="kw">case</span> <span class="st">'historySynced'</span>:  <span class="cm">// ← gone</span></pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After (enriched Synced)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">case</span> <span class="st">'synced'</span>: {
+  <span class="kw">const</span> { <span class="pr">balanceUpdated</span>, <span class="pr">paymentsUpdated</span>, <span class="pr">initialSync</span> } = event
+
+  <span class="kw">if</span> (balanceUpdated)  refreshBalance()
+  <span class="kw">if</span> (paymentsUpdated) refreshPayments()
+  <span class="kw">if</span> (initialSync)     dismissLoadingUI()
+  <span class="kw">break</span>
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="tp">SdkEvent</span>::<span class="tp">Synced</span> => {
+    <span class="cm">// Data has been synchronized with the network.</span>
+    <span class="cm">// Refresh the payment list and wallet balance.</span>
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">case</span> .synced:
+    <span class="cm">// Data has been synchronized with the network.</span>
+    <span class="cm">// Refresh the payment list and wallet balance.</span>
+    <span class="kw">break</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">is</span> <span class="tp">SdkEvent</span>.<span class="tp">Synced</span> -> {
+    <span class="cm">// Data has been synchronized with the network.</span>
+    <span class="cm">// Refresh the payment list and wallet balance.</span>
+}</pre>
+      </div>
+    </div>
+  </div>
+
+  <hr class="unify-divider">
+
+  <!-- ── Identity Pubkey getter ── -->
+  <h3 style="margin: 0 0 12px; font-size: 16px; color: var(--green);">Identity Pubkey — Synchronous Getter</h3>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">Previously you needed <code>getInfo()</code> to retrieve the wallet's identity public key. Now it's a synchronous property on the client — no async call or sync required.</p>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before</div>
+      <pre><span class="cm">// Required an async call + sync</span>
+<span class="kw">const</span> info = <span class="kw">await</span> sdk.<span class="fn">getInfo</span>({ ensureSynced: <span class="kw">true</span> })
+<span class="kw">const</span> pubkey = info.<span class="pr">identityPubkey</span></pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After</div>
+      <pre><span class="cm">// Synchronous — no network call needed</span>
+<span class="kw">const</span> pubkey = client.<span class="pr">pubkey</span></pre>
+    </div>
+  </div>
+
+  <hr class="unify-divider">
+
+  <!-- ── LeafOptimization rename ── -->
+  <h3 style="margin: 0 0 12px; font-size: 16px; color: var(--accent);">LeafOptimization Rename</h3>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;"><code>SdkEvent::Optimization</code> is now <code>SdkEvent::LeafOptimization</code> for clarity. The <code>OptimizationEvent</code> type becomes <code>LeafOptimizationEvent</code>.</p>
+
+  <div class="comparison">
+    <div class="card">
+      <div class="card-header old"><span class="dot"></span>Before</div>
+      <pre><span class="kw">case</span> <span class="st">'optimization'</span>: {
+  <span class="kw">const</span> evt = event.<span class="pr">optimizationEvent</span>
+  <span class="kw">break</span>
+}</pre>
+    </div>
+    <div class="card">
+      <div class="card-header new"><span class="dot"></span>After</div>
+      <pre><span class="kw">case</span> <span class="st">'leafOptimization'</span>: {
+  <span class="kw">const</span> evt = event.<span class="pr">leafOptimizationEvent</span>
+  <span class="kw">break</span>
+}</pre>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="steps-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20"/></svg>
+      Migration Steps
+    </div>
+    <div class="step">
+      <span class="step-num">1</span>
+      <span class="step-text"><strong>Synced event:</strong> Remove separate <code>'balanceSynced'</code> / <code>'historySynced'</code> handlers. Use <code>event.balanceUpdated</code>, <code>event.paymentsUpdated</code>, <code>event.initialSync</code> flags instead</span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <span class="step-text"><strong>Identity pubkey:</strong> Replace <code>sdk.getInfo().identityPubkey</code> with <code>client.pubkey</code> (synchronous, no await)</span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <span class="step-text"><strong>Optimization rename:</strong> <code>'optimization'</code> <span class="arrow">&rarr;</span> <code>'leafOptimization'</code>, <code>event.optimizationEvent</code> <span class="arrow">&rarr;</span> <code>event.leafOptimizationEvent</code>, <code>OptimizationEvent</code> <span class="arrow">&rarr;</span> <code>LeafOptimizationEvent</code></span>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="footer">
+  Breez SDK &mdash; Spark Implementation &middot; <a href="https://github.com/breez/spark-sdk">github.com/breez/spark-sdk</a>
+</div>
+
+<script>
+// Global language switcher — syncs all dropdowns on the page
+function switchLang(lang) {
+  document.querySelectorAll('.lang-switcher select').forEach(function(s) { s.value = lang; });
+  document.querySelectorAll('.lang-panel').forEach(function(p) {
+    p.classList.toggle('active', p.dataset.lang === lang);
+  });
+  try { localStorage.setItem('breez-sdk-lang', lang); } catch(e) {}
+}
+document.addEventListener('change', function(e) {
+  if (e.target.matches('.lang-switcher select')) switchLang(e.target.value);
+});
+// Restore saved language preference
+document.addEventListener('DOMContentLoaded', function() {
+  try {
+    var saved = localStorage.getItem('breez-sdk-lang');
+    if (saved) switchLang(saved);
+  } catch(e) {}
+});
+</script>
+</body>
+</html>

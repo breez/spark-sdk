@@ -111,14 +111,14 @@ pub struct AppConfig {
 /// # Examples
 ///
 /// ```ignore
-/// let wallet = app.connect_wallet(WalletConfig {
+/// let wallet = app.connect_wallet(ClientConfig {
 ///     seed: Seed::Mnemonic { mnemonic: "...".into(), passphrase: None },
 ///     ..Default::default()
 /// }).await?;
 /// ```
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct WalletConfig {
+pub struct ClientConfig {
     /// The wallet seed. Required.
     pub seed: Seed,
     /// Explicit storage directory. If `None`, a directory is auto-derived
@@ -141,7 +141,7 @@ pub struct WalletConfig {
 
 /// Flat configuration for single-step wallet connection.
 ///
-/// Combines [`AppConfig`] and [`WalletConfig`] fields into a single struct
+/// Combines [`AppConfig`] and [`ClientConfig`] fields into a single struct
 /// for the common case where only one wallet is needed.
 ///
 /// # Examples
@@ -205,15 +205,15 @@ pub struct ConnectConfig {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub optimization: Option<OptimizationConfig>,
 
-    // --- Optional (WalletConfig-level) ---
+    // --- Optional (ClientConfig-level) ---
     /// Explicit storage directory. If `None`, auto-derived from seed fingerprint.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub storage_dir: Option<String>,
 }
 
 impl ConnectConfig {
-    /// Split into `AppConfig` + `WalletConfig` for internal use.
-    pub fn into_parts(self) -> (AppConfig, WalletConfig) {
+    /// Split into `AppConfig` + `ClientConfig` for internal use.
+    pub fn into_parts(self) -> (AppConfig, ClientConfig) {
         let app_config = AppConfig {
             api_key: self.api_key,
             network: self.network,
@@ -228,7 +228,7 @@ impl ConnectConfig {
             private_mode: self.private_mode,
             optimization: self.optimization.clone(),
         };
-        let wallet_config = WalletConfig {
+        let wallet_config = ClientConfig {
             seed: self.seed,
             storage_dir: self.storage_dir,
             optimization: self.optimization,
@@ -786,7 +786,7 @@ pub struct Config {
     /// but is at the cost of privacy.
     pub prefer_spark_over_lightning: bool,
 
-    /// A set of external input parsers that are used by [`BreezSdk::parse`](crate::sdk::BreezSdk::parse) when the input
+    /// A set of external input parsers that are used by [`BreezClient::parse`](crate::sdk::BreezClient::parse) when the input
     /// is not recognized. See [`ExternalInputParser`] for more details on how to configure
     /// external parsing.
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -1715,15 +1715,25 @@ pub struct OptimizationProgress {
 ///
 /// All fields are optional – callers only need to supply the fields relevant
 /// to the destination they parsed with `parse()`.
+///
+/// For the amount, set **one** of `amount_sats` or `amount_token_units`:
+/// - `amount_sats` — for Bitcoin (satoshi) payments.
+/// - `amount_token_units` — for token payments (requires `token_identifier`).
+///
+/// Setting both is an error.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareOptions {
-    /// The amount to send.
-    /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
+    /// Amount to send, in satoshis. Use this for Bitcoin payments (Lightning,
+    /// on-chain, Spark address, Spark invoice without a token).
     /// Optional for payment requests with embedded amounts (e.g., invoices with amounts).
-    /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub amount: Option<u128>,
+    pub amount_sats: Option<u64>,
+
+    /// Amount to send, in token base units. Use this for token payments.
+    /// Requires `token_identifier` to be set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub amount_token_units: Option<u128>,
 
     /// Optional token identifier for token payments.
     /// Absence indicates a Bitcoin payment.
@@ -1738,15 +1748,51 @@ pub struct PrepareOptions {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub fee_policy: Option<FeePolicy>,
 
-    /// Comment to attach to LNURL-Pay / Lightning Address payments.
+    /// Options specific to LNURL-Pay / Lightning Address destinations.
     /// Ignored for non-LNURL destinations.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub lnurl_comment: Option<String>,
+    pub lnurl: Option<LnurlPayOptions>,
+}
+
+impl PrepareOptions {
+    /// Resolve the amount into the single `Option<u128>` expected by the
+    /// legacy `PrepareSendPaymentRequest`.
+    ///
+    /// Returns an error if both `amount_sats` and `amount_token_units` are set,
+    /// or if `amount_token_units` is set without `token_identifier`.
+    pub(crate) fn unified_amount(&self) -> Result<Option<u128>, SdkError> {
+        match (self.amount_sats, self.amount_token_units) {
+            (Some(_), Some(_)) => Err(SdkError::InvalidInput(
+                "Cannot set both amount_sats and amount_token_units".to_string(),
+            )),
+            (Some(sats), None) => Ok(Some(u128::from(sats))),
+            (None, Some(token_units)) => {
+                if self.token_identifier.is_none() {
+                    return Err(SdkError::InvalidInput(
+                        "amount_token_units requires token_identifier to be set".to_string(),
+                    ));
+                }
+                Ok(Some(token_units))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+/// Options specific to LNURL-Pay and Lightning Address payments.
+///
+/// Pass this in [`PrepareOptions::lnurl`] when the destination is an
+/// LNURL-Pay URL or Lightning address.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct LnurlPayOptions {
+    /// Comment to attach to the LNURL-Pay request.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub comment: Option<String>,
 
     /// Whether to validate the URL in an LNURL success action.
-    /// Ignored for non-LNURL destinations.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub lnurl_validate_success_action_url: Option<bool>,
+    pub validate_success_action_url: Option<bool>,
 }
 
 /// Options for confirming a prepared payment.
@@ -1767,9 +1813,10 @@ pub struct PayOptions {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PreparedPaymentFee {
-    /// Fee for a Spark transfer (address or invoice).
-    /// Denominated in sats or token base units.
-    Spark { fee: u128 },
+    /// Fee for a Spark Bitcoin transfer, denominated in satoshis.
+    SparkSats { fee_sats: u64 },
+    /// Fee for a Spark token transfer, denominated in token base units.
+    SparkToken { fee_token_units: u128 },
     /// Fee for a Lightning payment.
     Lightning { fee_sats: u64 },
     /// Fee for an on-chain (Bitcoin address) payment, with speed tiers.
@@ -1788,24 +1835,52 @@ pub struct OnchainSpeedFee {
 }
 
 impl PreparedPaymentFee {
-    /// Returns the fee in satoshis (or token base units for Spark token payments).
+    /// Returns the fee in satoshis.
     ///
+    /// For `SparkToken` payments this returns 0, since the fee is in token units.
+    /// Use [`fee_token_units()`](Self::fee_token_units) for those.
     /// For on-chain payments, returns the medium-speed tier fee by default.
     /// Use the variant fields directly if you need a specific speed tier.
     pub fn fee_sats(&self) -> u64 {
         match self {
-            Self::Spark { fee } => *fee as u64,
-            Self::Lightning { fee_sats } => *fee_sats,
+            Self::SparkSats { fee_sats } | Self::Lightning { fee_sats } => *fee_sats,
+            Self::SparkToken { .. } => 0,
             Self::Onchain { speed_medium, .. } => speed_medium.total_fee_sat,
+        }
+    }
+
+    /// Returns the fee in token base units, if this is a token payment.
+    ///
+    /// Returns `None` for non-token payments (`SparkSats`, `Lightning`, `Onchain`).
+    pub fn fee_token_units(&self) -> Option<u128> {
+        match self {
+            Self::SparkToken { fee_token_units } => Some(*fee_token_units),
+            _ => None,
         }
     }
 
     /// Extracts the fee from an existing `SendPaymentMethod`.
     pub(crate) fn from_send_payment_method(method: &SendPaymentMethod) -> Self {
         match method {
-            SendPaymentMethod::SparkAddress { fee, .. }
-            | SendPaymentMethod::SparkInvoice { fee, .. } => {
-                PreparedPaymentFee::Spark { fee: *fee }
+            SendPaymentMethod::SparkAddress {
+                fee,
+                token_identifier,
+                ..
+            }
+            | SendPaymentMethod::SparkInvoice {
+                fee,
+                token_identifier,
+                ..
+            } => {
+                if token_identifier.is_some() {
+                    PreparedPaymentFee::SparkToken {
+                        fee_token_units: *fee,
+                    }
+                } else {
+                    PreparedPaymentFee::SparkSats {
+                        fee_sats: *fee as u64,
+                    }
+                }
             }
             SendPaymentMethod::Bolt11Invoice {
                 lightning_fee_sats, ..
@@ -1869,6 +1944,12 @@ pub enum ReceivePaymentType {
 /// Simplified options for receiving a payment via the unified `receive()` API.
 ///
 /// Only supply the fields relevant to the chosen `payment_type`.
+///
+/// For the amount, set **one** of `amount_sats` or `amount_token_units`:
+/// - `amount_sats` — for Bitcoin (satoshi) payments (Lightning, on-chain, Spark address/invoice).
+/// - `amount_token_units` — for Spark invoice token payments (requires `token_identifier`).
+///
+/// Setting both is an error.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceiveOptions {
@@ -1876,13 +1957,17 @@ pub struct ReceiveOptions {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub payment_type: Option<ReceivePaymentType>,
 
-    /// Amount to receive. Denomination depends on payment type:
-    /// - Lightning/Onchain/SparkAddress: satoshis
-    /// - SparkInvoice with token: token base units
+    /// Amount to receive, in satoshis. Use this for Lightning invoices,
+    /// on-chain, Spark address, or Spark invoice (Bitcoin) payments.
     /// Optional for SparkAddress and BitcoinAddress (they don't embed amounts).
-    /// Required for Lightning. Optional for SparkInvoice (amountless invoices are allowed).
+    /// Required for Lightning.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub amount: Option<u128>,
+    pub amount_sats: Option<u64>,
+
+    /// Amount to receive, in token base units. Use this for Spark invoice
+    /// token payments. Requires `token_identifier` to be set.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub amount_token_units: Option<u128>,
 
     /// Description to embed in the invoice.
     /// Used by Lightning and SparkInvoice payment types.
@@ -1903,12 +1988,41 @@ pub struct ReceiveOptions {
     pub sender_public_key: Option<String>,
 }
 
+impl ReceiveOptions {
+    /// Resolve the amount into the single `Option<u128>` expected by the
+    /// legacy `ReceivePaymentMethod`.
+    ///
+    /// Returns an error if both `amount_sats` and `amount_token_units` are set,
+    /// or if `amount_token_units` is set without `token_identifier`.
+    pub(crate) fn unified_amount(&self) -> Result<Option<u128>, SdkError> {
+        match (self.amount_sats, self.amount_token_units) {
+            (Some(_), Some(_)) => Err(SdkError::InvalidInput(
+                "Cannot set both amount_sats and amount_token_units".to_string(),
+            )),
+            (Some(sats), None) => Ok(Some(u128::from(sats))),
+            (None, Some(token_units)) => {
+                if self.token_identifier.is_none() {
+                    return Err(SdkError::InvalidInput(
+                        "amount_token_units requires token_identifier to be set".to_string(),
+                    ));
+                }
+                Ok(Some(token_units))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+}
+
 /// The result of a `receive()` call.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceiveResult {
     /// The payment request string (invoice, address, etc.)
     pub destination: String,
-    /// Fee to pay to receive the payment (usually 0).
-    pub fee: u128,
+    /// Fee to pay to receive the payment, in satoshis (usually 0).
+    pub fee_sats: u64,
+    /// Fee to pay to receive a token payment, in token base units.
+    /// `None` for non-token payments.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub fee_token_units: Option<u128>,
 }

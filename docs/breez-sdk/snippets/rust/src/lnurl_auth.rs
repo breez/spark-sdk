@@ -2,7 +2,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn parse_lnurl_auth(sdk: &BreezSdk) -> Result<()> {
+async fn parse_lnurl_auth(client: &BreezClient) -> Result<()> {
     // ANCHOR: parse-lnurl-auth
     // LNURL-auth URL from a service
     // Can be in the form:
@@ -10,7 +10,7 @@ async fn parse_lnurl_auth(sdk: &BreezSdk) -> Result<()> {
     // - https://service.com/lnurl-auth?tag=login&k1=...
     let lnurl_auth_url = "lnurl1...";
 
-    if let Ok(InputType::LnurlAuth(request_data)) = sdk.parse(lnurl_auth_url).await {
+    if let Ok(InputType::LnurlAuth(request_data)) = client.parse(lnurl_auth_url).await {
         info!("Domain: {}", request_data.domain);
         info!("Action: {:?}", request_data.action);
 
@@ -21,10 +21,10 @@ async fn parse_lnurl_auth(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn authenticate(sdk: &BreezSdk, request_data: LnurlAuthRequestDetails) -> Result<()> {
+async fn authenticate(client: &BreezClient, request_data: LnurlAuthRequestDetails) -> Result<()> {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    let result = sdk.lnurl_auth(request_data).await?;
+    let result = client.lnurl_auth(request_data).await?;
 
     match result {
         LnurlCallbackStatus::Ok => {

@@ -1,6 +1,6 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<void> parseLnurlAuth(BreezSdk sdk) async {
+Future<void> parseLnurlAuth(BreezClient client) async {
   // ANCHOR: parse-lnurl-auth
   // LNURL-auth URL from a service
   // Can be in the form:
@@ -8,7 +8,7 @@ Future<void> parseLnurlAuth(BreezSdk sdk) async {
   // - https://service.com/lnurl-auth?tag=login&k1=...
   String lnurlAuthUrl = "lnurl1...";
 
-  InputType inputType = await sdk.parse(input: lnurlAuthUrl);
+  InputType inputType = await client.parse(input: lnurlAuthUrl);
   if (inputType is InputType_LnurlAuth) {
     LnurlAuthRequestDetails requestData = inputType.field0;
     print("Domain: ${requestData.domain}");
@@ -20,10 +20,10 @@ Future<void> parseLnurlAuth(BreezSdk sdk) async {
   // ANCHOR_END: parse-lnurl-auth
 }
 
-Future<void> authenticate(BreezSdk sdk, LnurlAuthRequestDetails requestData) async {
+Future<void> authenticate(BreezClient client, LnurlAuthRequestDetails requestData) async {
   // ANCHOR: lnurl-auth
   // Perform LNURL authentication
-  LnurlCallbackStatus result = await sdk.lnurlAuth(requestData: requestData);
+  LnurlCallbackStatus result = await client.lnurlAuth(requestData: requestData);
 
   if (result is LnurlCallbackStatus_Ok) {
     print("Authentication successful");

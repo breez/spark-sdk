@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     ExternalInputParser, MaxFee, Network, OptimizationConfig, SdkError,
-    models::{AppConfig, Config, ConnectConfig, WalletConfig},
+    models::{AppConfig, Config, ConnectConfig, ClientConfig},
     sdk::BREEZ_SYNC_SERVICE_URL,
 };
 
@@ -136,7 +136,7 @@ impl App {
 
     /// Merge app-level defaults with per-wallet overrides to produce a legacy
     /// [`Config`] for use with `SdkBuilder`.
-    pub fn to_config(&self, wallet: &WalletConfig) -> Config {
+    pub fn to_config(&self, wallet: &ClientConfig) -> Config {
         let app = &self.inner.config;
 
         Config {
@@ -162,9 +162,9 @@ impl App {
 
     /// Derive a storage directory for a wallet based on its seed fingerprint.
     ///
-    /// If `WalletConfig.storage_dir` is `Some`, uses that directly.
+    /// If `ClientConfig.storage_dir` is `Some`, uses that directly.
     /// Otherwise, derives a deterministic subdirectory under `app.storage_root`.
-    pub fn derive_storage_dir(&self, wallet: &WalletConfig) -> Result<String, SdkError> {
+    pub fn derive_storage_dir(&self, wallet: &ClientConfig) -> Result<String, SdkError> {
         if let Some(ref dir) = wallet.storage_dir {
             return Ok(dir.clone());
         }
@@ -189,15 +189,15 @@ impl App {
     ///     ..Default::default()
     /// })?;
     ///
-    /// let wallet = app.connect_wallet(WalletConfig {
+    /// let wallet = app.connect_wallet(ClientConfig {
     ///     seed: Seed::Mnemonic { mnemonic: "word1 word2 ...".into(), passphrase: None },
     ///     ..Default::default()
     /// }).await?;
     /// ```
     pub async fn connect_wallet(
         &self,
-        wallet_config: WalletConfig,
-    ) -> Result<crate::sdk::BreezSdk, SdkError> {
+        wallet_config: ClientConfig,
+    ) -> Result<crate::sdk::BreezClient, SdkError> {
         let config = self.to_config(&wallet_config);
         let storage_dir = self.derive_storage_dir(&wallet_config)?;
 
@@ -227,19 +227,11 @@ impl App {
     ///     ..Default::default()
     /// }).await?;
     /// ```
-    pub async fn connect(config: ConnectConfig) -> Result<crate::sdk::BreezSdk, SdkError> {
+    pub async fn connect(config: ConnectConfig) -> Result<crate::sdk::BreezClient, SdkError> {
         let (app_config, wallet_config) = config.into_parts();
         let app = Self::new(app_config)?;
         app.connect_wallet(wallet_config).await
     }
-}
-
-/// Free function for binding ergonomics.
-///
-/// Equivalent to `App::new(config)`.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn initialize_app(config: AppConfig) -> Result<App, SdkError> {
-    App::new(config)
 }
 
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
@@ -373,7 +365,7 @@ mod tests {
         })
         .unwrap();
 
-        let wallet = WalletConfig {
+        let wallet = ClientConfig {
             seed: Seed::Entropy(vec![0u8; 32]),
             prefer_spark: Some(true),
             optimization: Some(OptimizationConfig {
@@ -399,7 +391,7 @@ mod tests {
         })
         .unwrap();
 
-        let wallet = WalletConfig {
+        let wallet = ClientConfig {
             seed: Seed::Entropy(vec![0u8; 32]),
             ..Default::default()
         };
@@ -418,7 +410,7 @@ mod tests {
         })
         .unwrap();
 
-        let wallet = WalletConfig {
+        let wallet = ClientConfig {
             seed: Seed::Entropy(vec![0u8; 32]),
             storage_dir: Some("/explicit/path".to_string()),
             ..Default::default()
@@ -438,7 +430,7 @@ mod tests {
         })
         .unwrap();
 
-        let wallet = WalletConfig {
+        let wallet = ClientConfig {
             seed: Seed::Entropy(vec![1u8; 32]),
             ..Default::default()
         };
@@ -459,11 +451,11 @@ mod tests {
         })
         .unwrap();
 
-        let wallet1 = WalletConfig {
+        let wallet1 = ClientConfig {
             seed: Seed::Entropy(vec![1u8; 32]),
             ..Default::default()
         };
-        let wallet2 = WalletConfig {
+        let wallet2 = ClientConfig {
             seed: Seed::Entropy(vec![2u8; 32]),
             ..Default::default()
         };
@@ -496,7 +488,7 @@ mod tests {
         })
         .unwrap();
 
-        let wallet = WalletConfig {
+        let wallet = ClientConfig {
             seed: Seed::Entropy(vec![0u8; 32]),
             storage_dir: Some("test".to_string()),
             ..Default::default()

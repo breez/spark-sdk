@@ -6,7 +6,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
+func InitSdkAdvanced() (*breez_sdk_spark.BreezClient, error) {
 	// ANCHOR: init-sdk-advanced
 	// Construct the seed using mnemonic words or entropy bytes
 	mnemonic := "<mnemonic words>"
@@ -29,9 +29,9 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	// builder.WithRestClient(<your rest client implementation>)
 	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
 	// builder.WithPaymentObserver(<your payment observer implementation>)
-	sdk, err := builder.Build()
+	client, err := builder.Build()
 
-	return sdk, err
+	return client, err
 	// ANCHOR_END: init-sdk-advanced
 }
 
@@ -80,7 +80,7 @@ func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
 
 // ANCHOR_END: with-payment-observer
 
-func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
+func InitSdkPostgres() (*breez_sdk_spark.BreezClient, error) {
 	// ANCHOR: init-sdk-postgres
 	// Construct the seed using mnemonic words or entropy bytes
 	mnemonic := "<mnemonic words>"
@@ -110,11 +110,11 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	builder.WithStorage(storage)
-	sdk, err := builder.Build()
+	client, err := builder.Build()
 	if err != nil {
 		return nil, err
 	}
 	// ANCHOR_END: init-sdk-postgres
 
-	return sdk, nil
+	return client, nil
 }

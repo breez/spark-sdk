@@ -1,11 +1,11 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'helper.dart';
 
-Future<void> parseInput(BreezSdk sdk) async {
+Future<void> parseInput(BreezClient client) async {
   // ANCHOR: parse-inputs
   String input = "an input to be parsed...";
 
-  InputType inputType = await sdk.parse(input: input);
+  InputType inputType = await client.parse(input: input);
   if (inputType is InputType_BitcoinAddress) {
     print("Input is Bitcoin address ${inputType.field0.address}");
   } else if (inputType is InputType_Bolt11Invoice) {

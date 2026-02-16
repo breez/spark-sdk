@@ -3,7 +3,7 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class BuyingBitcoin {
-    suspend fun buyBitcoin(sdk: BreezSdk) {
+    suspend fun buyBitcoin(client: BreezClient) {
         // ANCHOR: buy-bitcoin
         // Optionally, lock the purchase to a specific amount
         val optionalLockedAmountSat: ULong = 100_000u
@@ -15,7 +15,7 @@ class BuyingBitcoin {
             redirectUrl = optionalRedirectUrl
         )
 
-        val response = sdk.buyBitcoin(request)
+        val response = client.buyBitcoin(request)
         // Log.v("Breez", "Open this URL in a browser to complete the purchase:")
         // Log.v("Breez", "${response.url}")
         // ANCHOR_END: buy-bitcoin

@@ -1,13 +1,13 @@
 import BigNumber
 import BreezSdkSpark
 
-func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
+func prepareSendPaymentLightningBolt11(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let paymentRequest = "<bolt11 invoice>"
     // Optionally set the amount you wish to pay the receiver
     let optionalAmountSats: BInt? = BInt(5_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: optionalAmountSats,
@@ -29,13 +29,13 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-lightning-bolt11
 }
 
-func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
+func prepareSendPaymentOnchain(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-onchain
     let paymentRequest = "<bitcoin address>"
     // Set the amount you wish to pay the receiver
     let amountSats = BInt(50_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: amountSats,
@@ -56,13 +56,13 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-onchain
 }
 
-func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
+func prepareSendPaymentSparkAddress(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-spark-address
     let paymentRequest = "<spark address>"
     // Set the amount you wish to pay the receiver
     let amountSats = BInt(50_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: amountSats,
@@ -77,13 +77,13 @@ func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-spark-address
 }
 
-func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
+func prepareSendPaymentSparkInvoice(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-spark-invoice
     let paymentRequest = "<spark invoice>"
     // Optionally set the amount you wish to pay the receiver
     let optionalAmountSats: BInt? = BInt(50_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: optionalAmountSats,
@@ -98,7 +98,7 @@ func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-spark-invoice
 }
 
-func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
+func prepareSendTokenPaymentTokenConversion(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-with-conversion
     let paymentRequest = "<payment request>"
     // Set to use token funds to pay via conversion
@@ -112,7 +112,7 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
         completionTimeoutSecs: optionalCompletionTimeoutSecs
     )
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: nil,
@@ -128,13 +128,13 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-send-payment-with-conversion
 }
 
-func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse)
+func sendPaymentLightningBolt11(client: BreezClient, prepareResponse: PrepareSendPaymentResponse)
     async throws
 {
     // ANCHOR: send-payment-lightning-bolt11
     let options = SendPaymentOptions.bolt11Invoice(preferSpark: false, completionTimeoutSecs: 10)
     let optionalIdempotencyKey = "<idempotency key uuid>"
-    let sendResponse = try await sdk.sendPayment(
+    let sendResponse = try await client.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
             options: options,
@@ -145,14 +145,14 @@ func sendPaymentLightningBolt11(sdk: BreezSdk, prepareResponse: PrepareSendPayme
     print(payment)
 }
 
-func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
+func sendPaymentOnchain(client: BreezClient, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-onchain
     // Select the confirmation speed for the on-chain transaction
     let options = SendPaymentOptions.bitcoinAddress(
         confirmationSpeed: OnchainConfirmationSpeed.medium
     )
     let optionalIdempotencyKey = "<idempotency key uuid>"
-    let sendResponse = try await sdk.sendPayment(
+    let sendResponse = try await client.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
             options: options,
@@ -163,10 +163,10 @@ func sendPaymentOnchain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentRespon
     print(payment)
 }
 
-func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws {
+func sendPaymentSpark(client: BreezClient, prepareResponse: PrepareSendPaymentResponse) async throws {
     // ANCHOR: send-payment-spark
     let optionalIdempotencyKey = "<idempotency key uuid>"
-    let sendResponse = try await sdk.sendPayment(
+    let sendResponse = try await client.sendPayment(
         request: SendPaymentRequest(
             prepareResponse: prepareResponse,
             idempotencyKey: optionalIdempotencyKey
@@ -176,7 +176,7 @@ func sendPaymentSpark(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse
     print(payment)
 }
 
-func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
+func prepareSendPaymentFeesIncluded(client: BreezClient) async throws {
     // ANCHOR: prepare-send-payment-fees-included
     // By default (.feesExcluded), fees are added on top of the amount.
     // Use .feesIncluded to deduct fees from the amount instead.
@@ -184,7 +184,7 @@ func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
     let paymentRequest = "<payment request>"
     let amountSats: BInt? = BInt(50_000)
 
-    let prepareResponse = try await sdk.prepareSendPayment(
+    let prepareResponse = try await client.prepareSendPayment(
         request: PrepareSendPaymentRequest(
             paymentRequest: paymentRequest,
             amount: amountSats,

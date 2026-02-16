@@ -12,7 +12,7 @@ Config configureLightningAddress() {
   return config;
 }
 
-Future<bool> checkLightningAddressAvailability(BreezSdk sdk) async {
+Future<bool> checkLightningAddressAvailability(BreezClient client) async {
   final username = 'myusername';
   
   // ANCHOR: check-lightning-address
@@ -20,12 +20,12 @@ Future<bool> checkLightningAddressAvailability(BreezSdk sdk) async {
     username: username,
   );
   
-  final available = await sdk.checkLightningAddressAvailable(request: request);
+  final available = await client.checkLightningAddressAvailable(request: request);
   // ANCHOR_END: check-lightning-address
   return available;
 }
 
-Future<(String, String, String)> registerLightningAddress(BreezSdk sdk) async {
+Future<(String, String, String)> registerLightningAddress(BreezClient client) async {
   final username = 'myusername';
   final description = 'My Lightning Address';
   // ANCHOR: register-lightning-address
@@ -34,7 +34,7 @@ Future<(String, String, String)> registerLightningAddress(BreezSdk sdk) async {
     description: description,
   );
 
-  final addressInfo = await sdk.registerLightningAddress(request: request);
+  final addressInfo = await client.registerLightningAddress(request: request);
   final lightningAddress = addressInfo.lightningAddress;
   final lnurlUrl = addressInfo.lnurl.url;
   final lnurlBech32 = addressInfo.lnurl.bech32;
@@ -43,9 +43,9 @@ Future<(String, String, String)> registerLightningAddress(BreezSdk sdk) async {
 }
 
 Future<(String, String, String, String, String)> getLightningAddress(
-    BreezSdk sdk) async {
+    BreezClient client) async {
   // ANCHOR: get-lightning-address
-  final addressInfoOpt = await sdk.getLightningAddress();
+  final addressInfoOpt = await client.getLightningAddress();
 
   if (addressInfoOpt == null) {
     throw Exception("No Lightning Address registered for this user.");
@@ -60,15 +60,15 @@ Future<(String, String, String, String, String)> getLightningAddress(
   return (lightningAddress, username, description, lnurlUrl, lnurlBech32);
 }
 
-Future<void> deleteLightningAddress(BreezSdk sdk) async {
+Future<void> deleteLightningAddress(BreezClient client) async {
   // ANCHOR: delete-lightning-address
-  await sdk.deleteLightningAddress();
+  await client.deleteLightningAddress();
   // ANCHOR_END: delete-lightning-address
 }
 
-Future<void> accessSenderComment(BreezSdk sdk) async {
+Future<void> accessSenderComment(BreezClient client) async {
   final paymentId = '<payment id>';
-  final response = await sdk.getPayment(
+  final response = await client.getPayment(
     request: GetPaymentRequest(paymentId: paymentId),
   );
   final payment = response.payment;
@@ -87,9 +87,9 @@ Future<void> accessSenderComment(BreezSdk sdk) async {
   // ANCHOR_END: access-sender-comment
 }
 
-Future<void> accessNostrZap(BreezSdk sdk) async {
+Future<void> accessNostrZap(BreezClient client) async {
   final paymentId = '<payment id>';
-  final response = await sdk.getPayment(
+  final response = await client.getPayment(
     request: GetPaymentRequest(paymentId: paymentId),
   );
   final payment = response.payment;

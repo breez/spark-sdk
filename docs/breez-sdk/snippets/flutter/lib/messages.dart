@@ -1,6 +1,6 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<SignMessageResponse> signMessage(BreezSdk sdk) async {
+Future<SignMessageResponse> signMessage(BreezClient client) async {
   // ANCHOR: sign-message
   // Set to true to get a compact signature rather than a DER
   bool compact = true;
@@ -10,7 +10,7 @@ Future<SignMessageResponse> signMessage(BreezSdk sdk) async {
     compact: compact,
   );
 
-  SignMessageResponse signMessageResponse = await sdk.signMessage(
+  SignMessageResponse signMessageResponse = await client.signMessage(
     request: signMessageRequest,
   );
 
@@ -23,7 +23,7 @@ Future<SignMessageResponse> signMessage(BreezSdk sdk) async {
   return signMessageResponse;
 }
 
-Future<CheckMessageResponse> checkMessage(BreezSdk sdk) async {
+Future<CheckMessageResponse> checkMessage(BreezClient client) async {
   // ANCHOR: check-message
   CheckMessageRequest checkMessageRequest = CheckMessageRequest(
     message: "<message>",
@@ -31,7 +31,7 @@ Future<CheckMessageResponse> checkMessage(BreezSdk sdk) async {
     signature: "<message signature>",
   );
 
-  CheckMessageResponse checkMessageResponse = await sdk.checkMessage(
+  CheckMessageResponse checkMessageResponse = await client.checkMessage(
     request: checkMessageRequest,
   );
 

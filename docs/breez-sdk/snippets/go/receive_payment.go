@@ -8,7 +8,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+func ReceiveLightningBolt11(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-payment-lightning-bolt11
 	description := "<invoice description>"
 	// Optionally set the invoice amount you wish the payer to send
@@ -24,7 +24,7 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 		},
 	}
 
-	response, err := sdk.ReceivePayment(request)
+	response, err := client.ReceivePayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -43,13 +43,13 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 	return &response, nil
 }
 
-func ReceiveOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+func ReceiveOnchain(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-payment-onchain
 	request := breez_sdk_spark.ReceivePaymentRequest{
 		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{},
 	}
 
-	response, err := sdk.ReceivePayment(request)
+	response, err := client.ReceivePayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -68,13 +68,13 @@ func ReceiveOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaym
 	return &response, nil
 }
 
-func ReceiveSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+func ReceiveSparkAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-payment-spark-address
 	request := breez_sdk_spark.ReceivePaymentRequest{
 		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodSparkAddress{},
 	}
 
-	response, err := sdk.ReceivePayment(request)
+	response, err := client.ReceivePayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -93,7 +93,7 @@ func ReceiveSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 	return &response, nil
 }
 
-func ReceiveSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+func ReceiveSparkInvoice(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-payment-spark-invoice
 	optionalDescription := "<invoice description>"
 	optionalAmountSats := new(big.Int).SetInt64(5_000)
@@ -110,7 +110,7 @@ func ReceiveSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Receiv
 		},
 	}
 
-	response, err := sdk.ReceivePayment(request)
+	response, err := client.ReceivePayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

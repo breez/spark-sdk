@@ -29,7 +29,7 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
-    sdk::{BreezSdk, BreezSdkParams},
+    sdk::{BreezClient, BreezSdkParams},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, nostr::NostrSigner,
         rtsync::RTSyncSigner, spark::SparkSigner,
@@ -48,7 +48,7 @@ enum SignerSource {
     External(Arc<dyn crate::signer::ExternalSigner>),
 }
 
-/// Builder for creating `BreezSdk` instances with customizable components.
+/// Builder for creating `BreezClient` instances with customizable components.
 #[derive(Clone)]
 pub struct SdkBuilder {
     config: Config,
@@ -222,9 +222,9 @@ impl SdkBuilder {
         self
     }
 
-    /// Builds the `BreezSdk` instance with the configured components.
+    /// Builds the `BreezClient` instance with the configured components.
     #[allow(clippy::too_many_lines)]
-    pub async fn build(self) -> Result<BreezSdk, SdkError> {
+    pub async fn build(self) -> Result<BreezClient, SdkError> {
         // Create the base signer based on the signer source
         let (signer, account_number) = match self.signer_source {
             SignerSource::Seed {
@@ -423,7 +423,7 @@ impl SdkBuilder {
             Arc::new(MoonpayProvider::new(breez_server.clone()));
 
         // Create the SDK instance
-        let sdk = BreezSdk::init_and_start(BreezSdkParams {
+        let sdk = BreezClient::init_and_start(BreezSdkParams {
             config: self.config,
             storage,
             chain_service,

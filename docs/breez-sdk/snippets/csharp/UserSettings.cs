@@ -4,20 +4,20 @@ namespace BreezSdkSnippets
 {
     class UserSettings
     {
-        async Task GetUserSettings(BreezSdk sdk)
+        async Task GetUserSettings(BreezClient client)
         {
             // ANCHOR: get-user-settings
-            var userSettings = await sdk.GetUserSettings();
+            var userSettings = await client.GetUserSettings();
 
             Console.WriteLine($"User settings: {userSettings}");
             // ANCHOR_END: get-user-settings
         }
 
-        async Task UpdateUserSettings(BreezSdk sdk)
+        async Task UpdateUserSettings(BreezClient client)
         {
             // ANCHOR: update-user-settings
             var sparkPrivateModeEnabled = true;
-            await sdk.UpdateUserSettings(
+            await client.UpdateUserSettings(
                 request: new UpdateUserSettingsRequest(
                     sparkPrivateModeEnabled: sparkPrivateModeEnabled
                 )

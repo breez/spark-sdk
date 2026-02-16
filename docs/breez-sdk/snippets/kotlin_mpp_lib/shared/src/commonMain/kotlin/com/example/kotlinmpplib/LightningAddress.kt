@@ -12,7 +12,7 @@ class LightningAddress {
         return config
     }
 
-    suspend fun checkLightningAddressAvailability(sdk: BreezSdk) {
+    suspend fun checkLightningAddressAvailability(client: BreezClient) {
         val username = "myusername"
         
         // ANCHOR: check-lightning-address
@@ -20,11 +20,11 @@ class LightningAddress {
             username = username
         )
         
-        val available = sdk.checkLightningAddressAvailable(request)
+        val available = client.checkLightningAddressAvailable(request)
         // ANCHOR_END: check-lightning-address
     }
 
-    suspend fun registerLightningAddress(sdk: BreezSdk) {
+    suspend fun registerLightningAddress(client: BreezClient) {
         val username = "myusername"
         val description = "My Lightning Address"
         
@@ -34,16 +34,16 @@ class LightningAddress {
             description = description
         )
         
-        val addressInfo = sdk.registerLightningAddress(request)
+        val addressInfo = client.registerLightningAddress(request)
         val lightningAddress = addressInfo.lightningAddress
         val lnurlUrl = addressInfo.lnurl.url
         val lnurlBech32 = addressInfo.lnurl.bech32
         // ANCHOR_END: register-lightning-address
     }
 
-    suspend fun getLightningAddress(sdk: BreezSdk) {
+    suspend fun getLightningAddress(client: BreezClient) {
         // ANCHOR: get-lightning-address
-        val addressInfoOpt = sdk.getLightningAddress()
+        val addressInfoOpt = client.getLightningAddress()
         
         if (addressInfoOpt != null) {
             val lightningAddress = addressInfoOpt.lightningAddress
@@ -55,15 +55,15 @@ class LightningAddress {
         // ANCHOR_END: get-lightning-address
     }
 
-    suspend fun deleteLightningAddress(sdk: BreezSdk) {
+    suspend fun deleteLightningAddress(client: BreezClient) {
         // ANCHOR: delete-lightning-address
-        sdk.deleteLightningAddress()
+        client.deleteLightningAddress()
         // ANCHOR_END: delete-lightning-address
     }
 
-    suspend fun accessSenderComment(sdk: BreezSdk) {
+    suspend fun accessSenderComment(client: BreezClient) {
         val paymentId = "<payment id>"
-        val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val response = client.getPayment(GetPaymentRequest(paymentId = paymentId))
         val payment = response.payment
         
         // ANCHOR: access-sender-comment
@@ -80,9 +80,9 @@ class LightningAddress {
         // ANCHOR_END: access-sender-comment
     }
 
-    suspend fun accessNostrZap(sdk: BreezSdk) {
+    suspend fun accessNostrZap(client: BreezClient) {
         val paymentId = "<payment id>"
-        val response = sdk.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val response = client.getPayment(GetPaymentRequest(paymentId = paymentId))
         val payment = response.payment
         
         // ANCHOR: access-nostr-zap

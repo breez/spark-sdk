@@ -4,17 +4,17 @@ namespace BreezSdkSnippets
 {
     class FiatCurrencies
     {
-        async Task ListFiatCurrencies(BreezSdk sdk)
+        async Task ListFiatCurrencies(BreezClient client)
         {
             // ANCHOR: list-fiat-currencies
-            var response = await sdk.ListFiatCurrencies();
+            var response = await client.ListFiatCurrencies();
             // ANCHOR_END: list-fiat-currencies
         }
 
-        async Task ListFiatRates(BreezSdk sdk)
+        async Task ListFiatRates(BreezClient client)
         {
             // ANCHOR: list-fiat-rates
-            var response = await sdk.ListFiatRates();
+            var response = await client.ListFiatRates();
             // ANCHOR_END: list-fiat-rates
         }
     }

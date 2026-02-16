@@ -1,15 +1,15 @@
 use anyhow::Result;
 use breez_sdk_spark::{
-    default_config, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
+    default_config, BreezClient, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
     FreezeIssuerTokenRequest, KeySetConfig, KeySetType, MintIssuerTokenRequest, Network, Payment,
     PaymentDetailsFilter, SdkBuilder, Seed, TokenIssuer, TokenMetadata, TokenTransactionType,
     UnfreezeIssuerTokenRequest,
 };
 use log::info;
 
-fn get_token_issuer(sdk: BreezSdk) {
+fn get_token_issuer(client: BreezClient) {
     // ANCHOR: get-token-issuer
-    let token_issuer = sdk.get_token_issuer();
+    let token_issuer = client.get_token_issuer();
     // ANCHOR_END: get-token-issuer
 }
 
@@ -28,7 +28,7 @@ async fn create_token(token_issuer: &TokenIssuer) -> Result<TokenMetadata> {
     Ok(token_metadata)
 }
 
-async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
+async fn create_token_with_custom_account_number() -> Result<BreezClient> {
     // ANCHOR: custom-account-number
     let account_number = 21;
 
@@ -48,9 +48,9 @@ async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
         account_number: Some(account_number),
     });
 
-    let sdk = builder.build().await?;
+    let client = builder.build().await?;
     // ANCHOR_END: custom-account-number
-    Ok(sdk)
+    Ok(client)
 }
 
 async fn mint_token(token_issuer: &TokenIssuer) -> Result<Payment> {

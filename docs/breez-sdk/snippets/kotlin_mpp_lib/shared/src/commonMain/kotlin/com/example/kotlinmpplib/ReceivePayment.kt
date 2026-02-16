@@ -4,7 +4,7 @@ import breez_sdk_spark.*
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class ReceivePayment {
-    suspend fun receiveLightning(sdk: BreezSdk) {
+    suspend fun receiveLightning(client: BreezClient) {
         // ANCHOR: receive-payment-lightning-bolt11
         try {
             val description = "<invoice description>"
@@ -16,7 +16,7 @@ class ReceivePayment {
             val request = ReceivePaymentRequest(
                 ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpirySecs)
             )
-            val response = sdk.receivePayment(request)
+            val response = client.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
@@ -28,13 +28,13 @@ class ReceivePayment {
         // ANCHOR_END: receive-payment-lightning-bolt11
     }
 
-    suspend fun receiveOnchain(sdk: BreezSdk) {
+    suspend fun receiveOnchain(client: BreezClient) {
         // ANCHOR: receive-payment-onchain
         try {
             val request = ReceivePaymentRequest(
                 ReceivePaymentMethod.BitcoinAddress
             )
-            val response = sdk.receivePayment(request)
+            val response = client.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
@@ -46,11 +46,11 @@ class ReceivePayment {
         // ANCHOR_END: receive-payment-onchain
     }
 
-    suspend fun receiveSparkAddress(sdk: BreezSdk) {
+    suspend fun receiveSparkAddress(client: BreezClient) {
         // ANCHOR: receive-payment-spark-address
         try {
             val request = ReceivePaymentRequest(ReceivePaymentMethod.SparkAddress)
-            val response = sdk.receivePayment(request)
+            val response = client.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")
@@ -62,7 +62,7 @@ class ReceivePayment {
         // ANCHOR_END: receive-payment-spark-address
     }
 
-    suspend fun receiveSparkInvoice(sdk: BreezSdk) {
+    suspend fun receiveSparkInvoice(client: BreezClient) {
         // ANCHOR: receive-payment-spark-invoice
         try {
             val optionalDescription = "<invoice description>"
@@ -84,7 +84,7 @@ class ReceivePayment {
                     senderPublicKey = optionalSenderPublicKey
                 )
             )
-            val response = sdk.receivePayment(request)
+            val response = client.receivePayment(request)
 
             val paymentRequest = response.paymentRequest
             // Log.v("Breez", "Payment Request: ${paymentRequest}")

@@ -5,7 +5,7 @@ namespace BreezSdkSnippets
 {
     class ReceivePayment
     {
-        async Task ReceiveLightning(BreezSdk sdk)
+        async Task ReceiveLightning(BreezClient client)
         {
             // ANCHOR: receive-payment-lightning-bolt11
             var description = "<invoice description>";
@@ -19,7 +19,7 @@ namespace BreezSdkSnippets
                 expirySecs: optionalExpirySecs
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);
-            var response = await sdk.ReceivePayment(request: request);
+            var response = await client.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
@@ -28,13 +28,13 @@ namespace BreezSdkSnippets
             // ANCHOR_END: receive-payment-lightning-bolt11
         }
 
-        async Task ReceiveOnchain(BreezSdk sdk)
+        async Task ReceiveOnchain(BreezClient client)
         {
             // ANCHOR: receive-payment-onchain
             var request = new ReceivePaymentRequest(
                 paymentMethod: new ReceivePaymentMethod.BitcoinAddress()
             );
-            var response = await sdk.ReceivePayment(request: request);
+            var response = await client.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
@@ -43,13 +43,13 @@ namespace BreezSdkSnippets
             // ANCHOR_END: receive-payment-onchain
         }
 
-        async Task ReceiveSparkAddress(BreezSdk sdk)
+        async Task ReceiveSparkAddress(BreezClient client)
         {
             // ANCHOR: receive-payment-spark-address
             var request = new ReceivePaymentRequest(
                 paymentMethod: new ReceivePaymentMethod.SparkAddress()
             );
-            var response = await sdk.ReceivePayment(request: request);
+            var response = await client.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");
@@ -58,7 +58,7 @@ namespace BreezSdkSnippets
             // ANCHOR_END: receive-payment-spark-address
         }
 
-        async Task ReceiveSparkInvoice(BreezSdk sdk)
+        async Task ReceiveSparkInvoice(BreezClient client)
         {
             // ANCHOR: receive-payment-spark-invoice
             var optionalDescription = "<invoice description>";
@@ -76,7 +76,7 @@ namespace BreezSdkSnippets
                     tokenIdentifier: null
                 )
             );
-            var response = await sdk.ReceivePayment(request: request);
+            var response = await client.ReceivePayment(request: request);
 
             var paymentRequest = response.paymentRequest;
             Console.WriteLine($"Payment Request: {paymentRequest}");

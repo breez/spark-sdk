@@ -15,11 +15,11 @@ use crate::{
 };
 use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 
-use super::{BreezSdk, helpers::process_success_action};
+use super::{BreezClient, helpers::process_success_action};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value, deprecated)]
-impl BreezSdk {
+impl BreezClient {
     /// # Deprecated
     ///
     /// Use [`prepare()`](Self::prepare) or [`prepare_payment()`](Self::prepare_payment) instead.
@@ -95,10 +95,10 @@ impl BreezSdk {
 
     /// # Deprecated
     ///
-    /// Use [`pay()`](Self::pay), [`pay_to_destination()`](Self::pay_to_destination),
-    /// or [`PreparedPayment::confirm()`](crate::PreparedPayment::confirm) instead.
+    /// Use [`prepare()`](Self::prepare) followed by
+    /// [`PreparedPayment::send()`](crate::PreparedPayment::send) instead.
     #[deprecated(
-        note = "Use pay(), pay_to_destination(), or PreparedPayment::confirm() instead"
+        note = "Use prepare() + PreparedPayment::send() instead"
     )]
     #[allow(clippy::too_many_lines)]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
@@ -240,7 +240,7 @@ impl BreezSdk {
 
     /// Performs an LNURL withdraw operation for the amount of satoshis to
     /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
-    /// details can be obtained from calling [`BreezSdk::parse`].
+    /// details can be obtained from calling [`BreezClient::parse`].
     ///
     /// The method generates a Lightning invoice for the withdraw amount, stores
     /// the LNURL withdraw metadata, and performs the LNURL withdraw using  the generated
@@ -371,7 +371,7 @@ impl BreezSdk {
 }
 
 // Private LNURL methods
-impl BreezSdk {
+impl BreezClient {
     /// Prepares an LNURL pay `FeesIncluded` operation using a double-query approach.
     ///
     /// This method:

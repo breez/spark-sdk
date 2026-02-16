@@ -9,13 +9,13 @@ use crate::{
 
 /// Sub-object for message signing operations.
 ///
-/// Access via `wallet.message`.
+/// Access via `client.message`.
 ///
 /// Note: `verify()` (checkMessage) is available as a standalone module-level
 /// function since it doesn't require wallet keys.
 #[wasm_bindgen(js_name = "MessageApi")]
 pub struct MessageApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "MessageApi")]

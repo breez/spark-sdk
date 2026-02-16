@@ -14,7 +14,7 @@ class GettingStarted {
 
         try {
             // Connect to the SDK using the simplified connect method
-            val sdk = connect(ConnectRequest(
+            val client = connect(ConnectRequest(
                 config = config,
                 seed = seed,
                 storageDir = "./.data"
@@ -25,12 +25,12 @@ class GettingStarted {
         // ANCHOR_END: init-sdk
     }
 
-    suspend fun fetchBalance(sdk: BreezSdk) {
+    suspend fun fetchBalance(client: BreezClient) {
         // ANCHOR: fetch-balance
         try {
             // ensureSynced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
-            val info = sdk.getInfo(GetInfoRequest(false))
+            val info = client.getInfo(GetInfoRequest(false))
             val identityPubkey = info.identityPubkey
             val balanceSats = info.balanceSats
         } catch (e: Exception) {
@@ -94,9 +94,9 @@ class GettingStarted {
         }
     }
 
-    suspend fun addEventListener(sdk: BreezSdk, listener: SdkListener): String? {
+    suspend fun addEventListener(client: BreezClient, listener: SdkListener): String? {
         try {
-            val listenerId = sdk.addEventListener(listener)
+            val listenerId = client.addEventListener(listener)
             return listenerId
         } catch (e: Exception) {
             // handle error
@@ -106,9 +106,9 @@ class GettingStarted {
     // ANCHOR_END: add-event-listener
 
     // ANCHOR: remove-event-listener
-    suspend fun removeEventListener(sdk: BreezSdk, listenerId: String)  {
+    suspend fun removeEventListener(client: BreezClient, listenerId: String)  {
         try {
-            sdk.removeEventListener(listenerId)
+            client.removeEventListener(listenerId)
         } catch (e: Exception) {
             // handle error
         }
@@ -146,9 +146,9 @@ class GettingStarted {
     // ANCHOR_END: spark-status
 
     // ANCHOR: disconnect
-    suspend fun disconnect(sdk: BreezSdk)  {
+    suspend fun disconnect(client: BreezClient)  {
         try {
-            sdk.disconnect()
+            client.disconnect()
         } catch (e: Exception) {
             // handle error
         }

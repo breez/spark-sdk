@@ -6,13 +6,13 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func GetPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error) {
+func GetPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Payment, error) {
 	// ANCHOR: get-payment
 	paymentId := "<payment id>"
 	request := breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentId,
 	}
-	response, err := sdk.GetPayment(request)
+	response, err := client.GetPayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -28,9 +28,9 @@ func GetPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, error)
 	return &payment, nil
 }
 
-func ListPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
+func ListPayments(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-payments
-	response, err := sdk.ListPayments(breez_sdk_spark.ListPaymentsRequest{})
+	response, err := client.ListPayments(breez_sdk_spark.ListPaymentsRequest{})
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -46,7 +46,7 @@ func ListPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, er
 	return &payments, nil
 }
 
-func ListPaymentsFiltered(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
+func ListPaymentsFiltered(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-payments-filtered
 	// Filter by asset (Bitcoin or Token)
 	tokenIdentifier := "token_identifier_here"
@@ -78,7 +78,7 @@ func ListPaymentsFiltered(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Pay
 		Limit:         &limit,         // Pagination
 		SortAscending: &sortAscending, // Sort order (true = oldest first, false = newest first)
 	}
-	response, err := sdk.ListPayments(request)
+	response, err := client.ListPayments(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

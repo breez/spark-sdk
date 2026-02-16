@@ -9,13 +9,13 @@ use crate::{
 
 /// Sub-object for LNURL operations.
 ///
-/// Access via `wallet.lnurl`.
+/// Access via `client.lnurl`.
 ///
-/// Note: LNURL-Pay goes through `wallet.createPayment()` (unified payment flow),
+/// Note: LNURL-Pay goes through `client.createPayment()` (unified payment flow),
 /// not through this sub-object. This contains auth and withdraw only.
 #[wasm_bindgen(js_name = "LnurlApi")]
 pub struct LnurlApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "LnurlApi")]

@@ -1,5 +1,5 @@
 use breez_sdk_spark::{
-    default_config, BreezSdk, CheckLightningAddressRequest, Config, GetPaymentRequest, Network,
+    default_config, BreezClient, CheckLightningAddressRequest, Config, GetPaymentRequest, Network,
     PaymentDetails, RegisterLightningAddressRequest,
 };
 
@@ -12,19 +12,19 @@ pub fn configure_lightning_address() -> Config {
     config
 }
 
-pub async fn check_lightning_address_availability(sdk: &BreezSdk) -> anyhow::Result<bool> {
+pub async fn check_lightning_address_availability(client: &BreezClient) -> anyhow::Result<bool> {
     // Define the username
     let username = "a username".to_string();
 
     // ANCHOR: check-lightning-address
     let request = CheckLightningAddressRequest { username };
 
-    let is_available = sdk.check_lightning_address_available(request).await?;
+    let is_available = client.check_lightning_address_available(request).await?;
     // ANCHOR_END: check-lightning-address
     Ok(is_available)
 }
 
-pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(String, String, String)> {
+pub async fn register_lightning_address(client: &BreezClient) -> anyhow::Result<(String, String, String)> {
     // Define the parameters
     let username = "a username".to_string();
     let description = Some("Lightning address description".to_string());
@@ -35,7 +35,7 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
         description,
     };
 
-    let address_info = sdk.register_lightning_address(request).await?;
+    let address_info = client.register_lightning_address(request).await?;
     let lightning_address = address_info.lightning_address;
     let lnurl_url = address_info.lnurl.url;
     let lnurl_bech32 = address_info.lnurl.bech32;
@@ -43,16 +43,16 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 
-pub async fn delete_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
+pub async fn delete_lightning_address(client: &BreezClient) -> anyhow::Result<()> {
     // ANCHOR: delete-lightning-address
-    sdk.delete_lightning_address().await?;
+    client.delete_lightning_address().await?;
     // ANCHOR_END: delete-lightning-address
     Ok(())
 }
 
-pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
+pub async fn get_lightning_address(client: &BreezClient) -> anyhow::Result<()> {
     // ANCHOR: get-lightning-address
-    let address_info_opt = sdk.get_lightning_address().await?;
+    let address_info_opt = client.get_lightning_address().await?;
 
     if let Some(info) = address_info_opt {
         let lightning_address = &info.lightning_address;
@@ -65,9 +65,9 @@ pub async fn get_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn access_sender_comment(sdk: &BreezSdk) -> anyhow::Result<()> {
+pub async fn access_sender_comment(client: &BreezClient) -> anyhow::Result<()> {
     let payment_id = "<payment id>".to_string();
-    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
 
     // ANCHOR: access-sender-comment
@@ -86,9 +86,9 @@ pub async fn access_sender_comment(sdk: &BreezSdk) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn access_nostr_zap(sdk: &BreezSdk) -> anyhow::Result<()> {
+pub async fn access_nostr_zap(client: &BreezClient) -> anyhow::Result<()> {
     let payment_id = "<payment id>".to_string();
-    let response = sdk.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
 
     // ANCHOR: access-nostr-zap

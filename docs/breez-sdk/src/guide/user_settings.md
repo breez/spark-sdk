@@ -15,14 +15,14 @@ The following user settings are available:
 
 <h2 id="getting-the-current-user-settings">
     <a class="header" href="#getting-the-current-user-settings">Getting the current user settings</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_user_settings">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.get_user_settings">API docs</a>
 </h2>
 
 {{#tabs user_settings:get-user-settings}}
 
 <h2 id="updating-the-user-settings">
     <a class="header" href="#updating-the-user-settings">Updating the user settings</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_user_settings">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.update_user_settings">API docs</a>
 </h2>
 
 {{#tabs user_settings:update-user-settings}}

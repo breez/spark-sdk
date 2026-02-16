@@ -8,10 +8,10 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func FetchTokenBalances(sdk *breez_sdk_spark.BreezSdk) error {
+func FetchTokenBalances(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-token-balances
 	ensureSynced := false
-	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
+	info, err := client.GetInfo(breez_sdk_spark.GetInfoRequest{
 		// EnsureSynced: true will ensure the SDK is synced with the Spark network
 		// before returning the balance
 		EnsureSynced: &ensureSynced,
@@ -39,10 +39,10 @@ func FetchTokenBalances(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func FetchTokenMetadata(sdk *breez_sdk_spark.BreezSdk) error {
+func FetchTokenMetadata(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-token-metadata
 	tokenIdentifiers := []string{"<token identifier 1>", "<token identifier 2>"}
-	response, err := sdk.GetTokensMetadata(breez_sdk_spark.GetTokensMetadataRequest{
+	response, err := client.GetTokensMetadata(breez_sdk_spark.GetTokensMetadataRequest{
 		TokenIdentifiers: tokenIdentifiers,
 	})
 
@@ -68,7 +68,7 @@ func FetchTokenMetadata(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
+func ReceiveTokenPaymentSparkInvoice(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-token-payment-spark-invoice
 	tokenIdentifier := "<token identifier>"
 	optionalDescription := "<invoice description>"
@@ -87,7 +87,7 @@ func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_
 		},
 	}
 
-	response, err := sdk.ReceivePayment(request)
+	response, err := client.ReceivePayment(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -106,7 +106,7 @@ func ReceiveTokenPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_
 	return &response, nil
 }
 
-func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
+func SendTokenPayment(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: send-token-payment
 	paymentRequest := "<spark address or invoice>"
 	// Token identifier must match the invoice in case it specifies one.
@@ -114,7 +114,7 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	// Set the amount of tokens you wish to send.
 	amount := new(big.Int).SetInt64(1_000)
 
-	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
+	prepareResponse, err := client.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest:    paymentRequest,
 		Amount:            &amount,
 		TokenIdentifier:   &tokenIdentifier,
@@ -142,7 +142,7 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	}
 
 	// Send the token payment
-	sendResponse, err := sdk.SendPayment(breez_sdk_spark.SendPaymentRequest{
+	sendResponse, err := client.SendPayment(breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
 		Options:         nil,
 	})
@@ -162,11 +162,11 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
+func FetchConversionLimits(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-conversion-limits
 	// Fetch limits for converting Bitcoin to a token
 	tokenIdentifier := "<token identifier>"
-	fromBitcoinResponse, err := sdk.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	fromBitcoinResponse, err := client.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
 		ConversionType:  breez_sdk_spark.ConversionTypeFromBitcoin{},
 		TokenIdentifier: &tokenIdentifier,
 	})
@@ -189,7 +189,7 @@ func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
 
 	// Fetch limits for converting a token to Bitcoin
 	fromTokenIdentifier := "<token identifier>"
-	toBitcoinResponse, err := sdk.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	toBitcoinResponse, err := client.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
 		ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
 			FromTokenIdentifier: fromTokenIdentifier,
 		},
@@ -215,7 +215,7 @@ func FetchConversionLimits(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error {
+func PrepareSendTokenPaymentTokenConversion(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: prepare-send-payment-with-conversion
 	paymentRequest := "<spark address or invoice>"
 	// Token identifier must match the invoice in case it specifies one.
@@ -232,7 +232,7 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 		CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
 	}
 
-	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
+	prepareResponse, err := client.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
 		PaymentRequest:    paymentRequest,
 		Amount:            &amount,
 		TokenIdentifier:   &tokenIdentifier,

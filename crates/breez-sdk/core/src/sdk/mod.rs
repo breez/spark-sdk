@@ -90,25 +90,14 @@ impl SyncRequest {
     }
 }
 
-/// A per-seed wallet instance.
+/// The primary SDK type — a connected client holding live state and all
+/// payment/query operations.
 ///
 /// Created via [`App::connect_wallet`](crate::App::connect_wallet) (new API)
 /// or [`connect`] (legacy API).
-///
-/// Holds live wallet state and all payment/query operations.
-///
-/// This is a type alias for backward compatibility — [`BreezSdk`] and `Wallet`
-/// are the same type.
-pub type Wallet = BreezSdk;
-
-/// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
-/// with request/response objects and comprehensive error handling.
-///
-/// **Note:** For new code, prefer using [`Wallet`] (which is just an alias for this type)
-/// obtained via [`App::connect_wallet`](crate::App::connect_wallet).
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct BreezSdk {
+pub struct BreezClient {
     pub(crate) config: Config,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) storage: Arc<dyn Storage>,
@@ -128,6 +117,14 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
 }
+
+/// Backward-compatible alias for [`BreezClient`].
+#[deprecated(note = "Use `BreezClient` instead.")]
+pub type BreezSdk = BreezClient;
+
+/// Backward-compatible alias for [`BreezClient`].
+#[deprecated(note = "Use `BreezClient` instead.")]
+pub type Wallet = BreezClient;
 
 pub(crate) struct BreezSdkParams {
     pub config: Config,
@@ -202,7 +199,7 @@ pub fn init_logging(
 ///
 /// ```ignore
 /// let app = App::new(AppConfig { api_key: "..".into(), network: Network::Mainnet, ..Default::default() })?;
-/// let wallet = app.connect_wallet(WalletConfig { seed, ..Default::default() }).await?;
+/// let wallet = app.connect_wallet(ClientConfig { seed, ..Default::default() }).await?;
 /// ```
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[deprecated(note = "Use App::new() + app.connect_wallet() instead")]

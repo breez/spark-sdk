@@ -1,6 +1,6 @@
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     connect,
     ConnectRequest,
     default_config,
@@ -27,22 +27,22 @@ async def init_sdk():
     config.api_key = "<breez api key>"
     try:
         # Connect to the SDK using the simplified connect method
-        sdk = await connect(
+        client = await connect(
             request=ConnectRequest(config=config, seed=seed, storage_dir="./.data")
         )
-        return sdk
+        return client
     except Exception as error:
         logging.error(error)
         raise
     # ANCHOR_END: init-sdk
 
 
-async def fetch_balance(sdk: BreezSdk):
+async def fetch_balance(client: BreezClient):
     # ANCHOR: fetch-balance
     try:
         # ensure_synced: True will ensure the SDK is synced with the Spark network
         # before returning the balance
-        info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
+        info = await client.get_info(request=GetInfoRequest(ensure_synced=False))
         identity_pubkey = info.identity_pubkey
         balance_sats = info.balance_sats
     except Exception as error:
@@ -98,9 +98,9 @@ class SdkListener(EventListener):
             pass
 
 
-async def add_event_listener(sdk: BreezSdk, listener: SdkListener):
+async def add_event_listener(client: BreezClient, listener: SdkListener):
     try:
-        listener_id = await sdk.add_event_listener(listener=listener)
+        listener_id = await client.add_event_listener(listener=listener)
         return listener_id
     except Exception as error:
         logging.error(error)
@@ -111,9 +111,9 @@ async def add_event_listener(sdk: BreezSdk, listener: SdkListener):
 
 
 # ANCHOR: remove-event-listener
-async def remove_event_listener(sdk: BreezSdk, listener_id: str):
+async def remove_event_listener(client: BreezClient, listener_id: str):
     try:
-        await sdk.remove_event_listener(id=listener_id)
+        await client.remove_event_listener(id=listener_id)
     except Exception as error:
         logging.error(error)
         raise
@@ -148,9 +148,9 @@ async def getting_started_spark_status():
 
 
 # ANCHOR: disconnect
-async def disconnect(sdk: BreezSdk):
+async def disconnect(client: BreezClient):
     try:
-        await sdk.disconnect()
+        await client.disconnect()
     except Exception as error:
         logging.error(error)
         raise

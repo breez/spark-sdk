@@ -1,22 +1,22 @@
-import type { Payment, Wallet, AssetFilter } from '@breeztech/breez-sdk-spark'
+import type { Payment, BreezClient, AssetFilter } from '@breeztech/breez-sdk-spark'
 
-const exampleGetPayment = async (wallet: Wallet): Promise<Payment> => {
+const exampleGetPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: get-payment
   const paymentId = '<payment id>'
-  const response = await wallet.payments.get(paymentId)
+  const response = await client.payments.get(paymentId)
   const payment = response.payment
   // ANCHOR_END: get-payment
   return payment
 }
 
-const exampleListPayments = async (wallet: Wallet): Promise<Payment[]> => {
+const exampleListPayments = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-payments
-  const payments = await wallet.payments.list()
+  const payments = await client.payments.list()
   // ANCHOR_END: list-payments
   return payments
 }
 
-const exampleListPaymentsFiltered = async (wallet: Wallet): Promise<Payment[]> => {
+const exampleListPaymentsFiltered = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-payments-filtered
   // For filtered listing, use the full listPayments method which supports
   // type, status, asset, time range filters and sorting.
@@ -26,7 +26,7 @@ const exampleListPaymentsFiltered = async (wallet: Wallet): Promise<Payment[]> =
   // To filter by Bitcoin instead:
   // const assetFilter: AssetFilter = { type: 'bitcoin' }
 
-  const response = await wallet.listPayments({
+  const response = await client.listPayments({
     // Filter by payment type
     typeFilter: ['send', 'receive'],
     // Filter by status

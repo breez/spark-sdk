@@ -1,8 +1,8 @@
 import logging
-from breez_sdk_spark import BreezSdk, CheckMessageRequest, SignMessageRequest
+from breez_sdk_spark import BreezClient, CheckMessageRequest, SignMessageRequest
 
 
-async def sign_message(sdk: BreezSdk):
+async def sign_message(client: BreezClient):
     # ANCHOR: sign-message
     message = "<message to sign>"
     # Set to true to get a compact signature rather than a DER
@@ -11,7 +11,7 @@ async def sign_message(sdk: BreezSdk):
         sign_message_request = SignMessageRequest(
             message=message, compact=compact
         )
-        sign_message_response = await sdk.sign_message(request=sign_message_request)
+        sign_message_response = await client.sign_message(request=sign_message_request)
 
         signature = sign_message_response.signature
         pubkey = sign_message_response.pubkey
@@ -24,7 +24,7 @@ async def sign_message(sdk: BreezSdk):
     # ANCHOR_END: sign-message
 
 
-async def check_message(sdk: BreezSdk):
+async def check_message(client: BreezClient):
     # ANCHOR: check-message
     message = "<message>"
     pubkey = "<pubkey of signer>"
@@ -33,7 +33,7 @@ async def check_message(sdk: BreezSdk):
         check_message_request = CheckMessageRequest(
             message=message, pubkey=pubkey, signature=signature
         )
-        check_message_response = await sdk.check_message(request=check_message_request)
+        check_message_response = await client.check_message(request=check_message_request)
 
         is_valid = check_message_response.is_valid
 

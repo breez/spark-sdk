@@ -1,20 +1,20 @@
-import { type LeafOptimizationEvent, LeafOptimizationEvent_Tags, type BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import { type LeafOptimizationEvent, LeafOptimizationEvent_Tags, type BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleStartOptimization = async (sdk: BreezSdk) => {
+const exampleStartOptimization = async (client: BreezClient) => {
   // ANCHOR: start-optimization
-  sdk.startLeafOptimization()
+  client.startLeafOptimization()
   // ANCHOR_END: start-optimization
 }
 
-const exampleCancelOptimization = async (sdk: BreezSdk) => {
+const exampleCancelOptimization = async (client: BreezClient) => {
   // ANCHOR: cancel-optimization
-  await sdk.cancelLeafOptimization()
+  await client.cancelLeafOptimization()
   // ANCHOR_END: cancel-optimization
 }
 
-const exampleGetOptimizationProgress = async (sdk: BreezSdk) => {
+const exampleGetOptimizationProgress = async (client: BreezClient) => {
   // ANCHOR: get-optimization-progress
-  const progress = sdk.getLeafOptimizationProgress()
+  const progress = client.getLeafOptimizationProgress()
 
   console.log(`Optimization is running: ${progress.isRunning}`)
   console.log(`Current round: ${progress.currentRound}`)

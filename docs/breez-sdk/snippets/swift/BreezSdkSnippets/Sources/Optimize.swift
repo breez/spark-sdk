@@ -1,24 +1,24 @@
 import BreezSdkSpark
 
-func startOptimization(sdk: BreezSdk) {
+func startOptimization(client: BreezClient) {
     // ANCHOR: start-optimization
-    sdk.startLeafOptimization()
+    client.startLeafOptimization()
     // ANCHOR_END: start-optimization
 }
 
-func cancelOptimization(sdk: BreezSdk) async throws {
+func cancelOptimization(client: BreezClient) async throws {
     // ANCHOR: cancel-optimization
     do {
-        try await sdk.cancelLeafOptimization()
+        try await client.cancelLeafOptimization()
     } catch {
         print("Failed to cancel optimization: \(error)")
     }
     // ANCHOR_END: cancel-optimization
 }
 
-func getOptimizationProgress(sdk: BreezSdk) {
+func getOptimizationProgress(client: BreezClient) {
     // ANCHOR: get-optimization-progress
-    let progress = sdk.getLeafOptimizationProgress()
+    let progress = client.getLeafOptimizationProgress()
 
     print("Optimization is running: \(progress.isRunning)")
     print("Current round: \(progress.currentRound)")

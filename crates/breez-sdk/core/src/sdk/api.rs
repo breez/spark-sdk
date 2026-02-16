@@ -16,11 +16,11 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
-use super::{BreezSdk, helpers::get_or_create_deposit_address, parse_input};
+use super::{BreezClient, helpers::get_or_create_deposit_address, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
+impl BreezClient {
     /// Registers a listener to receive SDK events
     ///
     /// # Arguments
@@ -45,52 +45,6 @@ impl BreezSdk {
     /// `true` if the listener was found and removed, `false` otherwise
     pub async fn remove_event_listener(&self, id: &str) -> bool {
         self.event_emitter.remove_listener(id).await
-    }
-
-    // -- Typed event listener helpers ------------------------------------------
-
-    /// Listen for payment events (succeeded, pending, or failed).
-    ///
-    /// The callback receives the full [`SdkEvent`] — use
-    /// [`SdkEvent::payment()`] to extract the [`Payment`].
-    ///
-    /// Returns a listener ID that can be passed to [`remove_event_listener`](Self::remove_event_listener).
-    ///
-    /// # Example (Rust)
-    /// ```ignore
-    /// let id = sdk.on_payment(|event| {
-    ///     if let Some(payment) = event.payment() {
-    ///         println!("Payment: {:?}", payment);
-    ///     }
-    /// }).await;
-    /// ```
-    pub async fn on_payment(
-        &self,
-        callback: impl Fn(SdkEvent) + Send + Sync + 'static,
-    ) -> String {
-        let listener = FilteredEventListener::new(SdkEvent::is_payment, callback);
-        self.event_emitter.add_listener(Box::new(listener)).await
-    }
-
-    /// Listen for sync events.
-    ///
-    /// The callback receives the full [`SdkEvent::Synced`] variant with
-    /// `balance_updated`, `payments_updated`, and `initial_sync` flags.
-    ///
-    /// Returns a listener ID that can be passed to [`remove_event_listener`](Self::remove_event_listener).
-    ///
-    /// # Example (Rust)
-    /// ```ignore
-    /// let id = sdk.on_sync(|event| {
-    ///     println!("Synced: {event}");
-    /// }).await;
-    /// ```
-    pub async fn on_sync(
-        &self,
-        callback: impl Fn(SdkEvent) + Send + Sync + 'static,
-    ) -> String {
-        let listener = FilteredEventListener::new(SdkEvent::is_synced, callback);
-        self.event_emitter.add_listener(Box::new(listener)).await
     }
 
     /// Stops the SDK's background tasks
@@ -361,5 +315,56 @@ impl BreezSdk {
             .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+// -- Typed event listener helpers ------------------------------------------
+//
+// These live outside the `#[uniffi::export]` impl block because UniFFI does
+// not support `impl Trait` in method signatures.
+
+impl BreezClient {
+    /// Listen for payment events (succeeded, pending, or failed).
+    ///
+    /// The callback receives the full [`SdkEvent`] — use
+    /// [`SdkEvent::payment()`] to extract the [`Payment`].
+    ///
+    /// Returns a listener ID that can be passed to [`remove_event_listener`](Self::remove_event_listener).
+    ///
+    /// # Example (Rust)
+    /// ```ignore
+    /// let id = sdk.on_payment(|event| {
+    ///     if let Some(payment) = event.payment() {
+    ///         println!("Payment: {:?}", payment);
+    ///     }
+    /// }).await;
+    /// ```
+    pub async fn on_payment(
+        &self,
+        callback: impl Fn(SdkEvent) + Send + Sync + 'static,
+    ) -> String {
+        let listener = FilteredEventListener::new(SdkEvent::is_payment, callback);
+        self.event_emitter.add_listener(Box::new(listener)).await
+    }
+
+    /// Listen for sync events.
+    ///
+    /// The callback receives the full [`SdkEvent::Synced`] variant with
+    /// `balance_updated`, `payments_updated`, and `initial_sync` flags.
+    ///
+    /// Returns a listener ID that can be passed to [`remove_event_listener`](Self::remove_event_listener).
+    ///
+    /// # Example (Rust)
+    /// ```ignore
+    /// let id = sdk.on_sync(|event| {
+    ///     println!("Synced: {event}");
+    /// }).await;
+    /// ```
+    pub async fn on_sync(
+        &self,
+        callback: impl Fn(SdkEvent) + Send + Sync + 'static,
+    ) -> String {
+        let listener = FilteredEventListener::new(SdkEvent::is_synced, callback);
+        self.event_emitter.add_listener(Box::new(listener)).await
     }
 }

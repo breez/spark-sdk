@@ -1,6 +1,6 @@
-import { type Wallet, parseInput } from '@breeztech/breez-sdk-spark'
+import { type BreezClient, parseInput } from '@breeztech/breez-sdk-spark'
 
-const exampleLnurlWithdraw = async (wallet: Wallet) => {
+const exampleLnurlWithdraw = async (client: BreezClient) => {
   // ANCHOR: lnurl-withdraw
   // Endpoint can also be of the form:
   // lnurlw://domain.com/lnurl-withdraw?key=val
@@ -14,7 +14,7 @@ const exampleLnurlWithdraw = async (wallet: Wallet) => {
     const withdrawRequest = input
     const optionalCompletionTimeoutSecs = 30
 
-    const response = await wallet.lnurl.withdraw({
+    const response = await client.lnurl.withdraw({
       amountSats,
       withdrawRequest,
       completionTimeoutSecs: optionalCompletionTimeoutSecs

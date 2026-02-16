@@ -12,10 +12,10 @@ use crate::{
 
 /// Sub-object for deposit operations.
 ///
-/// Access via `wallet.deposits`.
+/// Access via `client.deposits`.
 #[wasm_bindgen(js_name = "DepositsApi")]
 pub struct DepositsApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "DepositsApi")]

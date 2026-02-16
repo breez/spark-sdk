@@ -1,10 +1,10 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'helper.dart';
 
-Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
+Future<void> listUnclaimedDeposits(BreezClient client) async {
   // ANCHOR: list-unclaimed-deposits
   final request = ListUnclaimedDepositsRequest();
-  final response = await sdk.listUnclaimedDeposits(request: request);
+  final response = await client.listUnclaimedDeposits(request: request);
 
   for (DepositInfo deposit in response.deposits) {
     print("Unclaimed deposit: ${deposit.txid}:${deposit.vout}");
@@ -28,7 +28,7 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR_END: list-unclaimed-deposits
 }
 
-Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
+Future<void> handleFeeExceeded(BreezClient client, DepositInfo deposit) async {
   // ANCHOR: handle-fee-exceeded
   final claimError = deposit.claimError;
   if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
@@ -43,20 +43,20 @@ Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
         vout: deposit.vout,
         maxFee: MaxFee.fixed(amount: requiredFee),
       );
-      await sdk.claimDeposit(request: claimRequest);
+      await client.claimDeposit(request: claimRequest);
     }
   }
   // ANCHOR_END: handle-fee-exceeded
 }
 
-Future<void> refundDeposit(BreezSdk sdk) async {
+Future<void> refundDeposit(BreezClient client) async {
   // ANCHOR: refund-deposit
   String txid = "your_deposit_txid";
   int vout = 0;
   String destinationAddress = "bc1qexample..."; // Your Bitcoin address
 
   // Set the fee for the refund transaction using the half-hour feerate
-  final recommendedFees = await sdk.recommendedFees();
+  final recommendedFees = await client.recommendedFees();
   Fee fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee);
   // or using a fixed amount
   //Fee fee = Fee.fixed(amount: BigInt.from(500));
@@ -69,7 +69,7 @@ Future<void> refundDeposit(BreezSdk sdk) async {
     fee: fee,
   );
 
-  final response = await sdk.refundDeposit(request: request);
+  final response = await client.refundDeposit(request: request);
   print("Refund transaction created:");
   print("Transaction ID: ${response.txId}");
   print("Transaction hex: ${response.txHex}");
@@ -91,13 +91,13 @@ Future<void> setMaxFeeToRecommendedFees() async {
   print("Config: $config");
 }
 
-Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
+Future<void> customClaimLogic(BreezClient client, DepositInfo deposit) async {
   // ANCHOR: custom-claim-logic
   final claimError = deposit.claimError;
   if (claimError is DepositClaimError_MaxDepositClaimFeeExceeded) {
     final requiredFeeRate = claimError.requiredFeeRateSatPerVbyte;
 
-    final recommendedFees = await sdk.recommendedFees();
+    final recommendedFees = await client.recommendedFees();
 
     if (requiredFeeRate <= recommendedFees.fastestFee) {
       final claimRequest = ClaimDepositRequest(
@@ -105,15 +105,15 @@ Future<void> customClaimLogic(BreezSdk sdk, DepositInfo deposit) async {
         vout: deposit.vout,
         maxFee: MaxFee.rate(satPerVbyte: requiredFeeRate),
       );
-      await sdk.claimDeposit(request: claimRequest);
+      await client.claimDeposit(request: claimRequest);
     }
   }
   // ANCHOR_END: custom-claim-logic
 }
 
-Future<void> recommendedFees(BreezSdk sdk) async {
+Future<void> recommendedFees(BreezClient client) async {
   // ANCHOR: recommended-fees
-  final response = await sdk.recommendedFees();
+  final response = await client.recommendedFees();
   print("Fastest fee: ${response.fastestFee} sats/vByte");
   print("Half-hour fee: ${response.halfHourFee} sats/vByte");
   print("Hour fee: ${response.hourFee} sats/vByte");

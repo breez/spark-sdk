@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use breez_sdk_spark::*;
 use log::info;
 
-pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk_advanced() -> Result<BreezClient> {
     // ANCHOR: init-sdk-advanced
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -26,10 +26,10 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // let builder = builder.with_rest_client(<your rest client implementation>)
     // let builder = builder.with_key_set(KeySetConfig { key_set_type: <your key set type>, use_address_index: <use address index>, account_number: <account number> })
     // let builder = builder.with_payment_observer(<your payment observer implementation>);
-    let sdk = builder.build().await?;
+    let client = builder.build().await?;
 
     // ANCHOR_END: init-sdk-advanced
-    Ok(sdk)
+    Ok(client)
 }
 
 pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
@@ -82,7 +82,7 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
 }
 // ANCHOR_END: with-payment-observer
 
-pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk_postgres() -> Result<BreezClient> {
     // ANCHOR: init-sdk-postgres
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -106,11 +106,11 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
 
     // Create the storage and build the SDK
     let storage = create_postgres_storage(postgres_config).await?;
-    let sdk = SdkBuilder::new(config, seed)
+    let client = SdkBuilder::new(config, seed)
         .with_storage(storage)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres
 
-    Ok(sdk)
+    Ok(client)
 }

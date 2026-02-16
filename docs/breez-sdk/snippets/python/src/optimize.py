@@ -1,19 +1,19 @@
 import logging
-from breez_sdk_spark import BreezSdk, LeafOptimizationEvent
+from breez_sdk_spark import BreezClient, LeafOptimizationEvent
 
-async def start_optimization(sdk: BreezSdk):
+async def start_optimization(client: BreezClient):
     # ANCHOR: start-optimization
-    sdk.start_leaf_optimization()
+    client.start_leaf_optimization()
     # ANCHOR_END: start-optimization
 
-async def cancel_optimization(sdk: BreezSdk):
+async def cancel_optimization(client: BreezClient):
     # ANCHOR: cancel-optimization
-    await sdk.cancel_leaf_optimization()
+    await client.cancel_leaf_optimization()
     # ANCHOR_END: cancel-optimization
 
-async def get_optimization_progress(sdk: BreezSdk):
+async def get_optimization_progress(client: BreezClient):
     # ANCHOR: get-optimization-progress
-    progress = sdk.get_leaf_optimization_progress()
+    progress = client.get_leaf_optimization_progress()
 
     logging.debug(f"Optimization is running: {progress.is_running}")
     logging.debug(f"Current round: {progress.current_round}")

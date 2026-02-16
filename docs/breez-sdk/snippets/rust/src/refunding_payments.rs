@@ -2,10 +2,10 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
+async fn list_unclaimed_deposits(client: &BreezClient) -> Result<()> {
     // ANCHOR: list-unclaimed-deposits
     let request = ListUnclaimedDepositsRequest {};
-    let response = sdk.list_unclaimed_deposits(request).await?;
+    let response = client.list_unclaimed_deposits(request).await?;
 
     for deposit in response.deposits {
         info!("Unclaimed deposit: {}:{}", deposit.txid, deposit.vout);
@@ -37,7 +37,7 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+async fn handle_fee_exceeded(client: &BreezClient, deposit: &DepositInfo) -> Result<()> {
     // ANCHOR: handle-fee-exceeded
     if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
         required_fee_sats, ..
@@ -54,21 +54,21 @@ async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()
                     amount: *required_fee_sats,
                 }),
             };
-            sdk.claim_deposit(request).await?;
+            client.claim_deposit(request).await?;
         }
     }
     // ANCHOR_END: handle-fee-exceeded
     Ok(())
 }
 
-async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
+async fn refund_deposit(client: &BreezClient) -> Result<()> {
     // ANCHOR: refund-deposit
     let txid = "your_deposit_txid".to_string();
     let vout = 0;
     let destination_address = "bc1qexample...".to_string(); // Your Bitcoin address
 
     // Set the fee for the refund transaction using the half-hour feerate
-    let recommended_fees = sdk.recommended_fees().await?;
+    let recommended_fees = client.recommended_fees().await?;
     let fee = Fee::Rate {
         sat_per_vbyte: recommended_fees.half_hour_fee,
     };
@@ -83,7 +83,7 @@ async fn refund_deposit(sdk: &BreezSdk) -> Result<()> {
         fee,
     };
 
-    let response = sdk.refund_deposit(request).await?;
+    let response = client.refund_deposit(request).await?;
     info!("Refund transaction created:");
     info!("Transaction ID: {}", response.tx_id);
     info!("Transaction hex: {}", response.tx_hex);
@@ -107,14 +107,14 @@ async fn set_max_fee_to_recommended_fees() -> Result<()> {
     Ok(())
 }
 
-async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
+async fn custom_claim_logic(client: &BreezClient, deposit: &DepositInfo) -> Result<()> {
     // ANCHOR: custom-claim-logic
     if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {
         required_fee_rate_sat_per_vbyte,
         ..
     }) = &deposit.claim_error
     {
-        let recommended_fees = sdk.recommended_fees().await?;
+        let recommended_fees = client.recommended_fees().await?;
 
         if *required_fee_rate_sat_per_vbyte <= recommended_fees.fastest_fee {
             let request = ClaimDepositRequest {
@@ -124,16 +124,16 @@ async fn custom_claim_logic(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()>
                     sat_per_vbyte: *required_fee_rate_sat_per_vbyte,
                 }),
             };
-            sdk.claim_deposit(request).await?;
+            client.claim_deposit(request).await?;
         }
     }
     // ANCHOR_END: custom-claim-logic
     Ok(())
 }
 
-async fn recommended_fees(sdk: &BreezSdk) -> Result<()> {
+async fn recommended_fees(client: &BreezClient) -> Result<()> {
     // ANCHOR: recommended-fees
-    let response = sdk.recommended_fees().await?;
+    let response = client.recommended_fees().await?;
     info!("Fastest fee: {} sats/vByte", response.fastest_fee);
     info!("Half-hour fee: {} sats/vByte", response.half_hour_fee);
     info!("Hour fee: {} sats/vByte", response.hour_fee);

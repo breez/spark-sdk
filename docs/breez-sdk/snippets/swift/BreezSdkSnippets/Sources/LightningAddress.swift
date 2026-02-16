@@ -10,38 +10,38 @@ func configureLightningAddress() -> Config {
     return config
 }
 
-func checkLightningAddressAvailability(sdk: BreezSdk) async throws {
+func checkLightningAddressAvailability(client: BreezClient) async throws {
     let username = "myusername"
-    
+
     // ANCHOR: check-lightning-address
     let request = CheckLightningAddressRequest(
         username: username
     )
-    
-    let available = try await sdk.checkLightningAddressAvailable(req: request)
+
+    let available = try await client.checkLightningAddressAvailable(req: request)
     // ANCHOR_END: check-lightning-address
 }
 
-func registerLightningAddress(sdk: BreezSdk) async throws {
+func registerLightningAddress(client: BreezClient) async throws {
     let username = "myusername"
     let description = "My Lightning Address"
-    
+
     // ANCHOR: register-lightning-address
     let request = RegisterLightningAddressRequest(
         username: username,
         description: description
     )
-    
-    let addressInfo = try await sdk.registerLightningAddress(request: request)
+
+    let addressInfo = try await client.registerLightningAddress(request: request)
     let lightningAddress = addressInfo.lightningAddress
     let lnurlUrl = addressInfo.lnurl.url
     let lnurlBech32 = addressInfo.lnurl.bech32
     // ANCHOR_END: register-lightning-address
 }
 
-func getLightningAddress(sdk: BreezSdk) async throws {
+func getLightningAddress(client: BreezClient) async throws {
     // ANCHOR: get-lightning-address
-    if let addressInfo = try await sdk.getLightningAddress() {
+    if let addressInfo = try await client.getLightningAddress() {
         let lightningAddress = addressInfo.lightningAddress
         let username = addressInfo.username
         let description = addressInfo.description
@@ -51,15 +51,15 @@ func getLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: get-lightning-address
 }
 
-func deleteLightningAddress(sdk: BreezSdk) async throws {
+func deleteLightningAddress(client: BreezClient) async throws {
     // ANCHOR: delete-lightning-address
-    try await sdk.deleteLightningAddress()
+    try await client.deleteLightningAddress()
     // ANCHOR_END: delete-lightning-address
 }
 
-func accessSenderComment(sdk: BreezSdk) async throws {
+func accessSenderComment(client: BreezClient) async throws {
     let paymentId = "<payment id>"
-    let response = try await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId))
+    let response = try await client.getPayment(request: GetPaymentRequest(paymentId: paymentId))
     let payment = response.payment
     
     // ANCHOR: access-sender-comment
@@ -74,9 +74,9 @@ func accessSenderComment(sdk: BreezSdk) async throws {
     // ANCHOR_END: access-sender-comment
 }
 
-func accessNostrZap(sdk: BreezSdk) async throws {
+func accessNostrZap(client: BreezClient) async throws {
     let paymentId = "<payment id>"
-    let response = try await sdk.getPayment(request: GetPaymentRequest(paymentId: paymentId))
+    let response = try await client.getPayment(request: GetPaymentRequest(paymentId: paymentId))
     let payment = response.payment
     
     // ANCHOR: access-nostr-zap

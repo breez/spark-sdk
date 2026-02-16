@@ -6,7 +6,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
+func BuyBitcoin(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: buy-bitcoin
 	// Optionally, lock the purchase to a specific amount
 	optionalLockedAmountSat := uint64(100_000)
@@ -18,7 +18,7 @@ func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 		RedirectUrl:     &optionalRedirectUrl,
 	}
 
-	response, err := sdk.BuyBitcoin(request)
+	response, err := client.BuyBitcoin(request)
 	if err != nil {
 		return err
 	}

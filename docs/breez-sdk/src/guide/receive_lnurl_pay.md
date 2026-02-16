@@ -48,7 +48,7 @@ Configure your domain in the SDK by passing the {{#name lnurl_domain}} parameter
 
 <h2 id="managing-lightning-address">
     <a class="header" href="#managing-lightning-address">Managing Lightning addresses</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.check_lightning_address_available">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.check_lightning_address_available">API docs</a>
 </h2>
 
 The SDK provides several functions to manage Lightning addresses:

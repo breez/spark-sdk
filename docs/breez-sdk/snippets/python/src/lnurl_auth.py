@@ -1,13 +1,13 @@
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     InputType,
     LnurlAuthRequestDetails,
     LnurlCallbackStatus,
 )
 
 
-async def parse_lnurl_auth(sdk: BreezSdk):
+async def parse_lnurl_auth(client: BreezClient):
     # ANCHOR: parse-lnurl-auth
     # LNURL-auth URL from a service
     # Can be in the form:
@@ -16,7 +16,7 @@ async def parse_lnurl_auth(sdk: BreezSdk):
     lnurl_auth_url = "lnurl1..."
 
     try:
-        input_type = await sdk.parse(lnurl_auth_url)
+        input_type = await client.parse(lnurl_auth_url)
         if isinstance(input_type, InputType.LNURL_AUTH):
             request_data = input_type[0]
             logging.debug(f"Domain: {request_data.domain}")
@@ -30,11 +30,11 @@ async def parse_lnurl_auth(sdk: BreezSdk):
     # ANCHOR_END: parse-lnurl-auth
 
 
-async def authenticate(sdk: BreezSdk, request_data: LnurlAuthRequestDetails):
+async def authenticate(client: BreezClient, request_data: LnurlAuthRequestDetails):
     # ANCHOR: lnurl-auth
     # Perform LNURL authentication
     try:
-        result = await sdk.lnurl_auth(request_data=request_data)
+        result = await client.lnurl_auth(request_data=request_data)
 
         if isinstance(result, LnurlCallbackStatus.OK):
             logging.debug("Authentication successful")

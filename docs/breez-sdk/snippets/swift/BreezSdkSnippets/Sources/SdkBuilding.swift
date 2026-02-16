@@ -1,6 +1,6 @@
 import BreezSdkSpark
 
-func initSdkAdvanced() async throws -> BreezSdk {
+func initSdkAdvanced() async throws -> BreezClient {
     // ANCHOR: init-sdk-advanced
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>"
@@ -19,10 +19,10 @@ func initSdkAdvanced() async throws -> BreezSdk {
     // await builder.withRestClient(<your rest client implementation>)
     // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
     // await builder.withPaymentObserver(<your payment observer implementation>)
-    let sdk = try await builder.build()
+    let client = try await builder.build()
     // ANCHOR_END: init-sdk-advanced
 
-    return sdk
+    return client
 }
 
 func withRestChainService(builder: SdkBuilder) async {
@@ -72,7 +72,7 @@ func withPaymentObserver(builder: SdkBuilder) async {
 }
 // ANCHOR_END: with-payment-observer
 
-func initSdkPostgres() async throws -> BreezSdk {
+func initSdkPostgres() async throws -> BreezClient {
     // ANCHOR: init-sdk-postgres
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>"
@@ -96,8 +96,8 @@ func initSdkPostgres() async throws -> BreezSdk {
     let storage = try await createPostgresStorage(config: postgresConfig)
     let builder = SdkBuilder(config: config, seed: seed)
     await builder.withStorage(storage: storage)
-    let sdk = try await builder.build()
+    let client = try await builder.build()
     // ANCHOR_END: init-sdk-postgres
 
-    return sdk
+    return client
 }

@@ -7,16 +7,16 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func StartOptimization(sdk *breez_sdk_spark.BreezSdk) error {
+func StartOptimization(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: start-optimization
-	sdk.StartLeafOptimization()
+	client.StartLeafOptimization()
 	// ANCHOR_END: start-optimization
 	return nil
 }
 
-func CancelOptimization(sdk *breez_sdk_spark.BreezSdk) error {
+func CancelOptimization(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: cancel-optimization
-	err := sdk.CancelLeafOptimization()
+	err := client.CancelLeafOptimization()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -29,9 +29,9 @@ func CancelOptimization(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
-func GetOptimizationProgress(sdk *breez_sdk_spark.BreezSdk) error {
+func GetOptimizationProgress(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: get-optimization-progress
-	progress := sdk.GetLeafOptimizationProgress()
+	progress := client.GetLeafOptimizationProgress()
 
 	log.Printf("Optimization is running: %v\n", progress.IsRunning)
 	log.Printf("Current round: %v\n", progress.CurrentRound)

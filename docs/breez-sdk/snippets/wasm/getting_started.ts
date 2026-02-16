@@ -1,5 +1,5 @@
 import {
-  type Wallet,
+  type BreezClient,
   Breez,
   getSparkStatus,
   initLogging,
@@ -24,7 +24,7 @@ const exampleGettingStarted = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Connect to the SDK using the simplified connect method
-  const wallet = await Breez.connect({
+  const client = await Breez.connect({
     apiKey: '<breez api key>',
     network: 'mainnet',
     seed
@@ -32,9 +32,9 @@ const exampleGettingStarted = async () => {
   // ANCHOR_END: init-sdk
 }
 
-const exampleFetchNodeInfo = async (wallet: Wallet) => {
+const exampleFetchNodeInfo = async (client: BreezClient) => {
   // ANCHOR: fetch-balance
-  const info = await wallet.getInfo({
+  const info = await client.getInfo({
     // ensureSynced: true will ensure the SDK is synced with the Spark network
     // before returning the balance
     ensureSynced: false
@@ -57,14 +57,14 @@ const exampleLogging = async () => {
   // ANCHOR_END: logging
 }
 
-const exampleAddEventListener = async (wallet: Wallet) => {
+const exampleAddEventListener = async (client: BreezClient) => {
   // ANCHOR: add-event-listener
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
       switch (event.type) {
         case 'synced': {
           // Data has been synchronized with the network. When this event is received,
-          // it is recommended to refresh the payment list and wallet balance.
+          // it is recommended to refresh the payment list and client balance.
           break
         }
         case 'unclaimedDeposits': {
@@ -107,13 +107,13 @@ const exampleAddEventListener = async (wallet: Wallet) => {
 
   const eventListener = new JsEventListener()
 
-  const listenerId = await wallet.events.add(eventListener)
+  const listenerId = await client.events.add(eventListener)
   // ANCHOR_END: add-event-listener
 }
 
-const exampleRemoveEventListener = async (wallet: Wallet, listenerId: string) => {
+const exampleRemoveEventListener = async (client: BreezClient, listenerId: string) => {
   // ANCHOR: remove-event-listener
-  await wallet.events.remove(listenerId)
+  await client.events.remove(listenerId)
   // ANCHOR_END: remove-event-listener
 }
 
@@ -148,8 +148,8 @@ const exampleGetSparkStatus = async () => {
   // ANCHOR_END: spark-status
 }
 
-const exampleDisconnect = async (wallet: Wallet) => {
+const exampleDisconnect = async (client: BreezClient) => {
   // ANCHOR: disconnect
-  await wallet.disconnect()
+  await client.disconnect()
   // ANCHOR_END: disconnect
 }

@@ -1,10 +1,10 @@
-import type { Payment, BreezSdk } from '@breeztech/breez-sdk-spark-react-native'
+import type { Payment, BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 import { PaymentType, PaymentStatus, AssetFilter } from '@breeztech/breez-sdk-spark-react-native'
 
-const exampleGetPayment = async (sdk: BreezSdk): Promise<Payment> => {
+const exampleGetPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: get-payment
   const paymentId = '<payment id>'
-  const response = await sdk.getPayment({
+  const response = await client.getPayment({
     paymentId
   })
   const payment = response.payment
@@ -12,9 +12,9 @@ const exampleGetPayment = async (sdk: BreezSdk): Promise<Payment> => {
   return payment
 }
 
-const exampleListPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
+const exampleListPayments = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-payments
-  const response = await sdk.listPayments({
+  const response = await client.listPayments({
     typeFilter: undefined,
     statusFilter: undefined,
     assetFilter: undefined,
@@ -30,14 +30,14 @@ const exampleListPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
   return payments
 }
 
-const exampleListPaymentsFiltered = async (sdk: BreezSdk): Promise<Payment[]> => {
+const exampleListPaymentsFiltered = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-payments-filtered
   // Filter by asset (Bitcoin or Token)
   const assetFilter = new AssetFilter.Token({ tokenIdentifier: 'token_identifier_here' })
   // To filter by Bitcoin instead:
   // const assetFilter = new AssetFilter.Bitcoin()
 
-  const response = await sdk.listPayments({
+  const response = await client.listPayments({
     // Filter by payment type
     typeFilter: [PaymentType.Send, PaymentType.Receive],
     // Filter by status

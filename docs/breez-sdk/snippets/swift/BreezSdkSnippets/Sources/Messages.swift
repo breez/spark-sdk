@@ -1,6 +1,6 @@
 import BreezSdkSpark
 
-func signMessage(sdk: BreezSdk) async throws -> SignMessageResponse {
+func signMessage(client: BreezClient) async throws -> SignMessageResponse {
     // ANCHOR: sign-message
     // Set to true to get a compact signature rather than a DER
     let compact = true
@@ -9,7 +9,7 @@ func signMessage(sdk: BreezSdk) async throws -> SignMessageResponse {
         message: "<message to sign>",
         compact: compact
     )
-    let signMessageResponse = try await sdk
+    let signMessageResponse = try await client
         .signMessage(request: signMessageRequest)
 
     let signature = signMessageResponse.signature
@@ -21,14 +21,14 @@ func signMessage(sdk: BreezSdk) async throws -> SignMessageResponse {
     return signMessageResponse
 }
 
-func checkMessage(sdk: BreezSdk) async throws -> CheckMessageResponse {
+func checkMessage(client: BreezClient) async throws -> CheckMessageResponse {
     // ANCHOR: check-message
     let checkMessageRequest = CheckMessageRequest(
         message: "<message>",
         pubkey: "<pubkey of signer>",
         signature: "<message signature>"
     )
-    let checkMessageResponse = try await sdk
+    let checkMessageResponse = try await client
         .checkMessage(request: checkMessageRequest)
 
     let isValid = checkMessageResponse.isValid

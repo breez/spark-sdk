@@ -5,7 +5,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-pub(crate) async fn init_sdk() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk() -> Result<BreezClient> {
     // ANCHOR: init-sdk
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -19,7 +19,7 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     config.api_key = Some("<breez api key>".to_string());
 
     // Connect to the SDK using the simplified connect method
-    let sdk = connect(ConnectRequest {
+    let client = connect(ConnectRequest {
         config,
         seed,
         storage_dir: "./.data".to_string(),
@@ -27,12 +27,12 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     .await?;
 
     // ANCHOR_END: init-sdk
-    Ok(sdk)
+    Ok(client)
 }
 
-pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
+pub(crate) async fn getting_started_node_info(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-balance
-    let info = sdk
+    let info = client
         .get_info(GetInfoRequest {
             // ensure_synced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
@@ -90,17 +90,17 @@ impl EventListener for SdkEventListener {
 }
 
 pub(crate) async fn add_event_listener(
-    sdk: &BreezSdk,
+    client: &BreezClient,
     listener: Box<SdkEventListener>,
 ) -> Result<String> {
-    let listener_id = sdk.add_event_listener(listener).await;
+    let listener_id = client.add_event_listener(listener).await;
     Ok(listener_id)
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> Result<()> {
-    sdk.remove_event_listener(listener_id).await;
+pub(crate) async fn remove_event_listener(client: &BreezClient, listener_id: &str) -> Result<()> {
+    client.remove_event_listener(listener_id).await;
     Ok(())
 }
 // ANCHOR_END: remove-event-listener
@@ -133,8 +133,8 @@ pub(crate) async fn getting_started_spark_status() -> Result<()> {
 // ANCHOR_END: spark-status
 
 // ANCHOR: disconnect
-pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
-    sdk.disconnect().await?;
+pub(crate) async fn disconnect(client: &BreezClient) -> Result<()> {
+    client.disconnect().await?;
     Ok(())
 }
 // ANCHOR_END: disconnect

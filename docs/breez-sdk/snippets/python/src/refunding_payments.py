@@ -1,6 +1,6 @@
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     ListUnclaimedDepositsRequest,
     ClaimDepositRequest,
     RefundDepositRequest,
@@ -12,11 +12,11 @@ from breez_sdk_spark import (
 )
 
 
-async def list_unclaimed_deposits(sdk: BreezSdk):
+async def list_unclaimed_deposits(client: BreezClient):
     # ANCHOR: list-unclaimed-deposits
     try:
         request = ListUnclaimedDepositsRequest()
-        response = await sdk.list_unclaimed_deposits(request=request)
+        response = await client.list_unclaimed_deposits(request=request)
 
         for deposit in response.deposits:
             logging.info(f"Unclaimed deposit: {deposit.txid}:{deposit.vout}")
@@ -47,7 +47,7 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
     # ANCHOR_END: list-unclaimed-deposits
 
 
-async def handle_fee_exceeded(sdk: BreezSdk, deposit):
+async def handle_fee_exceeded(client: BreezClient, deposit):
     # ANCHOR: handle-fee-exceeded
     try:
         if isinstance(
@@ -64,13 +64,13 @@ async def handle_fee_exceeded(sdk: BreezSdk, deposit):
                     vout=deposit.vout,
                     max_fee=Fee.FIXED(amount=required_fee),
                 )
-                await sdk.claim_deposit(request=claim_request)
+                await client.claim_deposit(request=claim_request)
     except Exception as error:
         logging.error(error)
         raise
     # ANCHOR_END: handle-fee-exceeded
 
-async def refund_deposit(sdk: BreezSdk):
+async def refund_deposit(client: BreezClient):
     # ANCHOR: refund-deposit
     try:
         txid = "your_deposit_txid"
@@ -78,7 +78,7 @@ async def refund_deposit(sdk: BreezSdk):
         destination_address = "bc1qexample..."  # Your Bitcoin address
 
         # Set the fee for the refund transaction using the half-hour feerate
-        recommended_fees = await sdk.recommended_fees()
+        recommended_fees = await client.recommended_fees()
         fee = Fee.RATE(sat_per_vbyte=recommended_fees.half_hour_fee)
         # or using a fixed amount
         #fee = Fee.FIXED(amount=500)
@@ -88,7 +88,7 @@ async def refund_deposit(sdk: BreezSdk):
             txid=txid, vout=vout, destination_address=destination_address, fee=fee
         )
 
-        response = await sdk.refund_deposit(request=request)
+        response = await client.refund_deposit(request=request)
         logging.info("Refund transaction created:")
         logging.info(f"Transaction ID: {response.tx_id}")
         logging.info(f"Transaction hex: {response.tx_hex}")
@@ -110,7 +110,7 @@ async def set_max_fee_to_recommended_fees():
     logging.info(f"Config: {config}")
 
 
-async def custom_claim_logic(sdk: BreezSdk, deposit):
+async def custom_claim_logic(client: BreezClient, deposit):
     # ANCHOR: custom-claim-logic
     try:
         if isinstance(
@@ -118,7 +118,7 @@ async def custom_claim_logic(sdk: BreezSdk, deposit):
         ):
             required_fee_rate = deposit.claim_error.required_fee_rate_sat_per_vbyte
 
-            recommended_fees = await sdk.recommended_fees()
+            recommended_fees = await client.recommended_fees()
 
             if required_fee_rate <= recommended_fees.fastest_fee:
                 claim_request = ClaimDepositRequest(
@@ -126,16 +126,16 @@ async def custom_claim_logic(sdk: BreezSdk, deposit):
                     vout=deposit.vout,
                     max_fee=MaxFee.RATE(sat_per_vbyte=required_fee_rate),
                 )
-                await sdk.claim_deposit(request=claim_request)
+                await client.claim_deposit(request=claim_request)
     except Exception as error:
         logging.error(error)
         raise
     # ANCHOR_END: custom-claim-logic
 
 
-async def recommended_feeds(sdk: BreezSdk):
+async def recommended_feeds(client: BreezClient):
     # ANCHOR: recommended-fees
-    response = await sdk.recommended_fees()
+    response = await client.recommended_fees()
     logging.info(f"Fastest fee: {response.fastest_fee} sats/vByte")
     logging.info(f"Half-hour fee: {response.half_hour_fee} sats/vByte")
     logging.info(f"Hour fee: {response.hour_fee} sats/vByte")

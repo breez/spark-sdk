@@ -23,19 +23,19 @@ fn create_signer() -> Result<Arc<dyn ExternalSigner>, SdkError> {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async fn connect_example(signer: Arc<dyn ExternalSigner>) -> Result<BreezSdk, SdkError> {
+async fn connect_example(signer: Arc<dyn ExternalSigner>) -> Result<BreezClient, SdkError> {
     // Create the config
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
     
     // Connect using the external signer
-    let sdk = connect_with_signer(ConnectWithSignerRequest {
+    let client = connect_with_signer(ConnectWithSignerRequest {
         config,
         signer,
         storage_dir: "./.data".to_string(),
     })
     .await?;
     
-    Ok(sdk)
+    Ok(client)
 }
 // ANCHOR_END: connect-with-signer

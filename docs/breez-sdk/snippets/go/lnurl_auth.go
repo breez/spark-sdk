@@ -7,7 +7,7 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func parseLnurlAuth(sdk *breez_sdk_spark.BreezSdk) {
+func parseLnurlAuth(client *breez_sdk_spark.BreezClient) {
 	// ANCHOR: parse-lnurl-auth
 	// LNURL-auth URL from a service
 	// Can be in the form:
@@ -15,7 +15,7 @@ func parseLnurlAuth(sdk *breez_sdk_spark.BreezSdk) {
 	// - https://service.com/lnurl-auth?tag=login&k1=...
 	lnurlAuthUrl := "lnurl1..."
 
-	inputType, err := sdk.Parse(lnurlAuthUrl)
+	inputType, err := client.Parse(lnurlAuthUrl)
 	if err == nil {
 		if lnurlAuth, ok := inputType.(breez_sdk_spark.InputTypeLnurlAuth); ok {
 			requestData := lnurlAuth.Field0
@@ -29,10 +29,10 @@ func parseLnurlAuth(sdk *breez_sdk_spark.BreezSdk) {
 	// ANCHOR_END: parse-lnurl-auth
 }
 
-func authenticate(sdk *breez_sdk_spark.BreezSdk, requestData breez_sdk_spark.LnurlAuthRequestDetails) {
+func authenticate(client *breez_sdk_spark.BreezClient, requestData breez_sdk_spark.LnurlAuthRequestDetails) {
 	// ANCHOR: lnurl-auth
 	// Perform LNURL authentication
-	result, err := sdk.LnurlAuth(requestData)
+	result, err := client.LnurlAuth(requestData)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

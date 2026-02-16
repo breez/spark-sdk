@@ -17,7 +17,7 @@ Preimages are required to be unique and are not managed by the SDK. It is your r
 
 <h2 id="listing-claimable-htlc-payments">
     <a class="header" href="#listing-claimable-htlc-payments">Listing claimable HTLC payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_payments">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.list_payments">API docs</a>
 </h2>
 
 Once detected, claimable HTLC payments are immediately listed as pending in the [list of payments](/guide/list_payments.md). Additionally, a {{#enum SdkEvent::PaymentPending}} event is emitted to notify your application. See [Listening to events](/guide/events.md) for more details.
@@ -28,7 +28,7 @@ To list only claimable HTLC payments, you can filter by HTLC status.
 
 <h2 id="claiming-htlc-payments">
     <a class="header" href="#claiming-htlc-payments">Claiming HTLC Payments</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.claim_htlc_payment">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.claim_htlc_payment">API docs</a>
 </h2>
 
 To claim an HTLC payment, provide the preimage that matches the payment hash.

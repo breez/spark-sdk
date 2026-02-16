@@ -3,12 +3,12 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class ParsingInputs {
-    suspend fun parseInput(sdk: BreezSdk) {
+    suspend fun parseInput(client: BreezClient) {
         // ANCHOR: parse-inputs
         val input = "an input to be parsed..."
 
         try {
-            val inputType = sdk.parse(input)
+            val inputType = client.parse(input)
             when (inputType) {
                 is InputType.BitcoinAddress -> {
                     println("Input is Bitcoin address ${inputType.v1.address}")

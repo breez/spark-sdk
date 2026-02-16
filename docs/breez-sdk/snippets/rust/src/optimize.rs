@@ -2,22 +2,22 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-fn start_optimization(sdk: &BreezSdk) {
+fn start_optimization(client: &BreezClient) {
     // ANCHOR: start-optimization
-    sdk.start_leaf_optimization();
+    client.start_leaf_optimization();
     // ANCHOR_END: start-optimization
 }
 
-async fn cancel_optimization(sdk: &BreezSdk) -> Result<()> {
+async fn cancel_optimization(client: &BreezClient) -> Result<()> {
     // ANCHOR: cancel-optimization
-    sdk.cancel_leaf_optimization().await?;
+    client.cancel_leaf_optimization().await?;
     // ANCHOR_END: cancel-optimization
     Ok(())
 }
 
-fn get_optimization_progress(sdk: &BreezSdk) {
+fn get_optimization_progress(client: &BreezClient) {
     // ANCHOR: get-optimization-progress
-    let progress = sdk.get_leaf_optimization_progress();
+    let progress = client.get_leaf_optimization_progress();
 
     info!("Optimization is running: {}", progress.is_running);
     info!("Current round: {}", progress.current_round);

@@ -1,4 +1,4 @@
-import { type BreezSdk, defaultConfig, Network, PaymentDetails_Tags } from '@breeztech/breez-sdk-spark-react-native'
+import { type BreezClient, defaultConfig, Network, PaymentDetails_Tags } from '@breeztech/breez-sdk-spark-react-native'
 
 const configureLightningAddress = () => {
   // ANCHOR: config-lightning-address
@@ -9,7 +9,7 @@ const configureLightningAddress = () => {
   return config
 }
 
-const exampleCheckLightningAddressAvailability = async (sdk: BreezSdk) => {
+const exampleCheckLightningAddressAvailability = async (client: BreezClient) => {
   const username = 'myusername'
 
   // ANCHOR: check-lightning-address
@@ -17,11 +17,11 @@ const exampleCheckLightningAddressAvailability = async (sdk: BreezSdk) => {
     username
   }
 
-  const available = await sdk.checkLightningAddressAvailable(request)
+  const available = await client.checkLightningAddressAvailable(request)
   // ANCHOR_END: check-lightning-address
 }
 
-const exampleRegisterLightningAddress = async (sdk: BreezSdk) => {
+const exampleRegisterLightningAddress = async (client: BreezClient) => {
   const username = 'myusername'
   const description = 'My Lightning Address'
 
@@ -31,16 +31,16 @@ const exampleRegisterLightningAddress = async (sdk: BreezSdk) => {
     description
   }
 
-  const addressInfo = await sdk.registerLightningAddress(request)
+  const addressInfo = await client.registerLightningAddress(request)
   const lightningAddress = addressInfo.lightningAddress
   const lnurlUrl = addressInfo.lnurl.url
   const lnurlBech32 = addressInfo.lnurl.bech32
   // ANCHOR_END: register-lightning-address
 }
 
-const exampleGetLightningAddress = async (sdk: BreezSdk) => {
+const exampleGetLightningAddress = async (client: BreezClient) => {
   // ANCHOR: get-lightning-address
-  const addressInfoOpt = await sdk.getLightningAddress()
+  const addressInfoOpt = await client.getLightningAddress()
 
   if (addressInfoOpt != null) {
     const lightningAddress = addressInfoOpt.lightningAddress
@@ -52,15 +52,15 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: get-lightning-address
 }
 
-const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {
+const exampleDeleteLightningAddress = async (client: BreezClient) => {
   // ANCHOR: delete-lightning-address
-  await sdk.deleteLightningAddress()
+  await client.deleteLightningAddress()
   // ANCHOR_END: delete-lightning-address
 }
 
-const exampleAccessSenderComment = async (sdk: BreezSdk) => {
+const exampleAccessSenderComment = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await sdk.getPayment({ paymentId })
+  const response = await client.getPayment({ paymentId })
   const payment = response.payment
 
   // ANCHOR: access-sender-comment
@@ -76,9 +76,9 @@ const exampleAccessSenderComment = async (sdk: BreezSdk) => {
   // ANCHOR_END: access-sender-comment
 }
 
-const exampleAccessNostrZap = async (sdk: BreezSdk) => {
+const exampleAccessNostrZap = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await sdk.getPayment({ paymentId })
+  const response = await client.getPayment({ paymentId })
   const payment = response.payment
 
   // ANCHOR: access-nostr-zap

@@ -13,7 +13,7 @@ use thiserror::Error;
 use tracing_subscriber::util::TryInitError;
 use web_time::SystemTimeError;
 
-/// Error type for the `BreezSdk`
+/// Error type for the [`BreezClient`](crate::BreezClient)
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum SdkError {

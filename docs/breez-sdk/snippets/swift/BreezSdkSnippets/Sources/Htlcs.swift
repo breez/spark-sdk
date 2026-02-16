@@ -23,7 +23,7 @@ extension Data {
     }
 }
 
-func sendHtlcPayment(sdk: BreezSdk) async throws -> Payment {
+func sendHtlcPayment(client: BreezClient) async throws -> Payment {
     // ANCHOR: send-htlc-payment
     let paymentRequest = "<spark address>"
     // Set the amount you wish to pay the receiver
@@ -35,7 +35,7 @@ func sendHtlcPayment(sdk: BreezSdk) async throws -> Payment {
         conversionOptions: nil,
         feePolicy: nil
     )
-    let prepareResponse = try await sdk.prepareSendPayment(request: prepareRequest)
+    let prepareResponse = try await client.prepareSendPayment(request: prepareRequest)
 
     // If the fees are acceptable, continue to create the HTLC Payment
     if case let .sparkAddress(_, fee, _) = prepareResponse.paymentMethod {
@@ -58,13 +58,13 @@ func sendHtlcPayment(sdk: BreezSdk) async throws -> Payment {
         prepareResponse: prepareResponse,
         options: options
     )
-    let sendResponse = try await sdk.sendPayment(request: request)
+    let sendResponse = try await client.sendPayment(request: request)
     let payment = sendResponse.payment
     // ANCHOR_END: send-htlc-payment
     return payment
 }
 
-func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
+func listClaimableHtlcPayments(client: BreezClient) async throws -> [Payment] {
     // ANCHOR: list-claimable-htlc-payments
     let request = ListPaymentsRequest(
         typeFilter: [PaymentType.receive],
@@ -75,16 +75,16 @@ func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
         )]
     )
 
-    let response = try await sdk.listPayments(request: request)
+    let response = try await client.listPayments(request: request)
     let payments = response.payments
     // ANCHOR_END: list-claimable-htlc-payments
     return payments
 }
 
-func claimHtlcPayment(sdk: BreezSdk) async throws -> Payment {
+func claimHtlcPayment(client: BreezClient) async throws -> Payment {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>"
-    let response = try await sdk.claimHtlcPayment(
+    let response = try await client.claimHtlcPayment(
         request: ClaimHtlcPaymentRequest(preimage: preimage)
     )
     let payment = response.payment

@@ -1,17 +1,17 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
-Future<void> getUserSettings(BreezSdk sdk) async {
+Future<void> getUserSettings(BreezClient client) async {
   // ANCHOR: get-user-settings
-  final userSettings = await sdk.getUserSettings();
+  final userSettings = await client.getUserSettings();
   print('User settings: $userSettings');
   // ANCHOR_END: get-user-settings
 }
 
-Future<void> updateUserSettings(BreezSdk sdk) async {
+Future<void> updateUserSettings(BreezClient client) async {
   // ANCHOR: update-user-settings
   final bool sparkPrivateModeEnabled = true;
 
-  await sdk.updateUserSettings(
+  await client.updateUserSettings(
       request: UpdateUserSettingsRequest(
           sparkPrivateModeEnabled: sparkPrivateModeEnabled));
   // ANCHOR_END: update-user-settings

@@ -4,7 +4,7 @@ namespace BreezSdkSnippets;
 
 public static class LnurlAuth
 {
-    public static async Task ParseLnurlAuth(BreezSdk sdk)
+    public static async Task ParseLnurlAuth(BreezClient client)
     {
         // ANCHOR: parse-lnurl-auth
         // LNURL-auth URL from a service
@@ -13,7 +13,7 @@ public static class LnurlAuth
         // - https://service.com/lnurl-auth?tag=login&k1=...
         var lnurlAuthUrl = "lnurl1...";
 
-        var inputType = await sdk.Parse(lnurlAuthUrl);
+        var inputType = await client.Parse(lnurlAuthUrl);
         if (inputType is InputType.LnurlAuth lnurlAuth)
         {
             var requestData = lnurlAuth.v1;
@@ -26,11 +26,11 @@ public static class LnurlAuth
         // ANCHOR_END: parse-lnurl-auth
     }
 
-    public static async Task Authenticate(BreezSdk sdk, LnurlAuthRequestDetails requestData)
+    public static async Task Authenticate(BreezClient client, LnurlAuthRequestDetails requestData)
     {
         // ANCHOR: lnurl-auth
         // Perform LNURL authentication
-        var result = await sdk.LnurlAuth(requestData);
+        var result = await client.LnurlAuth(requestData);
 
         if (result is LnurlCallbackStatus.Ok)
         {

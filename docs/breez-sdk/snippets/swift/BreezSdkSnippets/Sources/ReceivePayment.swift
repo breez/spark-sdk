@@ -1,7 +1,7 @@
 import BigNumber
 import BreezSdkSpark
 
-func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+func receiveLightning(client: BreezClient) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-lightning-bolt11
     let description = "<invoice description>"
     // Optionally set the invoice amount you wish the payer to send
@@ -9,7 +9,7 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     // Optionally set the expiry duration in seconds
     let optionalExpirySecs: UInt32 = 3600
     let response =
-        try await sdk
+        try await client
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.bolt11Invoice(
@@ -28,10 +28,10 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     return response
 }
 
-func receiveOnchain(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+func receiveOnchain(client: BreezClient) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-onchain
     let response =
-        try await sdk
+        try await client
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.bitcoinAddress
@@ -46,10 +46,10 @@ func receiveOnchain(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     return response
 }
 
-func receiveSparkAddress(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+func receiveSparkAddress(client: BreezClient) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-spark-address
     let response =
-        try await sdk
+        try await client
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.sparkAddress
@@ -64,7 +64,7 @@ func receiveSparkAddress(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     return response
 }
 
-func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
+func receiveSparkInvoice(client: BreezClient) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-spark-invoice
     let optionalDescription = "<invoice description>"
     let optionalAmountSats = BInt(5_000)
@@ -73,7 +73,7 @@ func receiveSparkInvoice(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     let optionalSenderPublicKey = "<sender public key>"
 
     let response =
-        try await sdk
+        try await client
         .receivePayment(
             request: ReceivePaymentRequest(
                 paymentMethod: ReceivePaymentMethod.sparkInvoice(

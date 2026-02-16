@@ -2,13 +2,13 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_lightning_bolt11(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-lightning-bolt11
     let payment_request = "<bolt11 invoice>".to_string();
     // Optionally set the amount you wish to pay the receiver
     let optional_amount_sats = Some(5_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: optional_amount_sats,
@@ -34,13 +34,13 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_onchain(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-onchain
     let payment_request = "<bitcoin address>".to_string();
     // Set the amount you wish to pay the receiver
     let amount_sats = Some(50_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: amount_sats,
@@ -60,13 +60,13 @@ async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_spark_address(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-address
     let payment_request = "<spark address>".to_string();
     // Set the amount you wish to pay the receiver
     let amount_sats = Some(50_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: amount_sats,
@@ -84,13 +84,13 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_spark_invoice(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-spark-invoice
     let payment_request = "<spark invoice>".to_string();
     // Optionally set the amount you wish to pay the receiver
     let optional_amount_sats = Some(50_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: optional_amount_sats,
@@ -108,7 +108,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_token_conversion(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-with-conversion
     let payment_request = "<payment request>".to_string();
     // Set to use token funds to pay via conversion
@@ -122,7 +122,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
         completion_timeout_secs: optional_completion_timeout_secs,
     });
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: None,
@@ -142,7 +142,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
 }
 
 async fn send_payment_lightning_bolt11(
-    sdk: &BreezSdk,
+    client: &BreezClient,
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-lightning-bolt11
@@ -151,7 +151,7 @@ async fn send_payment_lightning_bolt11(
         completion_timeout_secs: Some(10),
     });
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
-    let send_response = sdk
+    let send_response = client
         .send_payment(SendPaymentRequest {
             prepare_response,
             options,
@@ -165,7 +165,7 @@ async fn send_payment_lightning_bolt11(
 }
 
 async fn send_payment_onchain(
-    sdk: &BreezSdk,
+    client: &BreezClient,
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-onchain
@@ -174,7 +174,7 @@ async fn send_payment_onchain(
         confirmation_speed: OnchainConfirmationSpeed::Medium,
     });
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
-    let send_response = sdk
+    let send_response = client
         .send_payment(SendPaymentRequest {
             prepare_response,
             options,
@@ -188,12 +188,12 @@ async fn send_payment_onchain(
 }
 
 async fn send_payment_spark(
-    sdk: &BreezSdk,
+    client: &BreezClient,
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: send-payment-spark
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
-    let send_response = sdk
+    let send_response = client
         .send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
@@ -206,7 +206,7 @@ async fn send_payment_spark(
     Ok(())
 }
 
-async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_fees_included(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-fees-included
     // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.
     // Use FeePolicy::FeesIncluded to deduct fees from the amount instead.
@@ -214,7 +214,7 @@ async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
     let payment_request = "<payment request>".to_string();
     let amount_sats = Some(50_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount: amount_sats,

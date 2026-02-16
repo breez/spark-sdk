@@ -1,12 +1,12 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     BuyBitcoinRequest,
 )
 
 
-async def buy_bitcoin(sdk: BreezSdk):
+async def buy_bitcoin(client: BreezClient):
     # ANCHOR: buy-bitcoin
     # Optionally, lock the purchase to a specific amount
     optional_locked_amount_sat = 100_000
@@ -19,7 +19,7 @@ async def buy_bitcoin(sdk: BreezSdk):
             redirect_url=optional_redirect_url,
         )
 
-        response = await sdk.buy_bitcoin(request=request)
+        response = await client.buy_bitcoin(request=request)
         logging.debug("Open this URL in a browser to complete the purchase:")
         logging.debug(response.url)
     except Exception as error:

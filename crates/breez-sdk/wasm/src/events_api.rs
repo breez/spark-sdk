@@ -9,10 +9,10 @@ use crate::{
 
 /// Sub-object for event listener management.
 ///
-/// Access via `wallet.events`.
+/// Access via `client.events`.
 #[wasm_bindgen(js_name = "EventsApi")]
 pub struct EventsApi {
-    pub(crate) sdk: Rc<breez_sdk_spark::BreezSdk>,
+    pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,
 }
 
 #[wasm_bindgen(js_class = "EventsApi")]
@@ -41,7 +41,7 @@ impl EventsApi {
     /// `"paymentPending"`, `"paymentFailed"`, `"synced"`.
     ///
     /// ```js
-    /// const id = await wallet.events.on("payment", (event) => {
+    /// const id = await client.events.on("payment", (event) => {
     ///   console.log("Payment event:", event);
     /// });
     /// ```

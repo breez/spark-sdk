@@ -1,9 +1,9 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'helper.dart';
 
-TokenIssuer getTokenIssuer(BreezSdk sdk) {
+TokenIssuer getTokenIssuer(BreezClient client) {
   // ANCHOR: get-token-issuer
-  TokenIssuer tokenIssuer = sdk.getTokenIssuer();
+  TokenIssuer tokenIssuer = client.getTokenIssuer();
   // ANCHOR_END: get-token-issuer
   return tokenIssuer;
 }
@@ -24,7 +24,7 @@ Future<TokenMetadata> createToken(TokenIssuer tokenIssuer) async {
   return tokenMetadata;
 }
 
-Future<BreezSdk> createTokenWithCustomAccountNumber() async {
+Future<BreezClient> createTokenWithCustomAccountNumber() async {
   // ANCHOR: custom-account-number
   var accountNumber = 21;
 
@@ -44,9 +44,9 @@ Future<BreezSdk> createTokenWithCustomAccountNumber() async {
     ),
   );
 
-  var sdk = await builder.build();
+  var client = await builder.build();
   // ANCHOR_END: custom-account-number
-  return sdk;
+  return client;
 }
 
 Future<Payment> mintTokens(TokenIssuer tokenIssuer) async {
@@ -69,7 +69,7 @@ Future<Payment> burnTokens(TokenIssuer tokenIssuer) async {
   return payment;
 }
 
-Future<List<PaymentDetailsFilter>> listMintBurnPayments(BreezSdk sdk) async {
+Future<List<PaymentDetailsFilter>> listMintBurnPayments(BreezClient client) async {
   // ANCHOR: list-mint-burn-payments
   // Provide one or multiple of the following filters to
   // the `paymentDetailsFilter` field when listing payments

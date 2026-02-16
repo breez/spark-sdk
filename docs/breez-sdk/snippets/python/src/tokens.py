@@ -1,7 +1,7 @@
 # pylint: disable=duplicate-code
 import logging
 from breez_sdk_spark import (
-    BreezSdk,
+    BreezClient,
     FetchConversionLimitsRequest,
     GetInfoRequest,
     GetTokensMetadataRequest,
@@ -15,12 +15,12 @@ from breez_sdk_spark import (
 )
 
 
-async def fetch_token_balances(sdk: BreezSdk):
+async def fetch_token_balances(client: BreezClient):
     # ANCHOR: fetch-token-balances
     try:
         # ensure_synced: True will ensure the SDK is synced with the Spark network
         # before returning the balance
-        info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
+        info = await client.get_info(request=GetInfoRequest(ensure_synced=False))
 
         # Token balances are a map of token identifier to balance
         token_balances = info.token_balances
@@ -35,10 +35,10 @@ async def fetch_token_balances(sdk: BreezSdk):
         raise
     # ANCHOR_END: fetch-token-balances
 
-async def fetch_token_metadata(sdk: BreezSdk):
+async def fetch_token_metadata(client: BreezClient):
     # ANCHOR: fetch-token-metadata
     try:
-        response = await sdk.get_tokens_metadata(
+        response = await client.get_tokens_metadata(
             request=GetTokensMetadataRequest(
                 token_identifiers=["<token identifier 1>", "<token identifier 2>"]
                 )
@@ -58,7 +58,7 @@ async def fetch_token_metadata(sdk: BreezSdk):
     # ANCHOR_END: fetch-token-metadata
 
 
-async def receive_token_payment_spark_invoice(sdk: BreezSdk):
+async def receive_token_payment_spark_invoice(client: BreezClient):
     # ANCHOR: receive-token-payment-spark-invoice
     try:
         token_identifier = "<token identifier>"
@@ -77,7 +77,7 @@ async def receive_token_payment_spark_invoice(sdk: BreezSdk):
                 sender_public_key=optional_sender_public_key,
             )
         )
-        response = await sdk.receive_payment(request=request)
+        response = await client.receive_payment(request=request)
 
         payment_request = response.payment_request
         print(f"Payment request: {payment_request}")
@@ -90,14 +90,14 @@ async def receive_token_payment_spark_invoice(sdk: BreezSdk):
     # ANCHOR_END: receive-token-payment-spark-invoice
 
 
-async def send_token_payment(sdk: BreezSdk):
+async def send_token_payment(client: BreezClient):
     # ANCHOR: send-token-payment
     try:
         payment_request = "<spark address or invoice>"
         token_identifier = "<token identifier>"
         amount = 1_000
 
-        prepare_response = await sdk.prepare_send_payment(
+        prepare_response = await client.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
                 amount=amount,
@@ -116,7 +116,7 @@ async def send_token_payment(sdk: BreezSdk):
             print(f"Fees: {prepare_response.payment_method.fee} token base units")
 
         # Send the token payment
-        send_response = await sdk.send_payment(
+        send_response = await client.send_payment(
             request=SendPaymentRequest(
                 prepare_response=prepare_response,
                 options=None,
@@ -130,11 +130,11 @@ async def send_token_payment(sdk: BreezSdk):
     # ANCHOR_END: send-token-payment
 
 
-async def fetch_conversion_limits(sdk: BreezSdk):
+async def fetch_conversion_limits(client: BreezClient):
     # ANCHOR: fetch-conversion-limits
     try:
         # Fetch limits for converting Bitcoin to a token
-        from_bitcoin_response = await sdk.fetch_conversion_limits(
+        from_bitcoin_response = await client.fetch_conversion_limits(
             request=FetchConversionLimitsRequest(
                 conversion_type=ConversionType.FROM_BITCOIN(),
                 token_identifier="<token identifier>",
@@ -147,7 +147,7 @@ async def fetch_conversion_limits(sdk: BreezSdk):
             print(f"Minimum tokens to receive: {from_bitcoin_response.min_to_amount} base units")
 
         # Fetch limits for converting a token to Bitcoin
-        to_bitcoin_response = await sdk.fetch_conversion_limits(
+        to_bitcoin_response = await client.fetch_conversion_limits(
             request=FetchConversionLimitsRequest(
                 conversion_type=ConversionType.TO_BITCOIN(
                     from_token_identifier="<token identifier>"
@@ -166,7 +166,7 @@ async def fetch_conversion_limits(sdk: BreezSdk):
     # ANCHOR_END: fetch-conversion-limits
 
 
-async def prepare_send_payment_token_conversion(sdk: BreezSdk):
+async def prepare_send_payment_token_conversion(client: BreezClient):
     # ANCHOR: prepare-send-payment-with-conversion
     try:
         payment_request = "<spark address or invoice>"
@@ -181,7 +181,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
             completion_timeout_secs=optional_completion_timeout_secs,
         )
 
-        prepare_response = await sdk.prepare_send_payment(
+        prepare_response = await client.prepare_send_payment(
             request=PrepareSendPaymentRequest(
                 payment_request=payment_request,
                 amount=amount,

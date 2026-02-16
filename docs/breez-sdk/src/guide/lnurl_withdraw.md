@@ -1,6 +1,6 @@
 <h1 id="lnurl-withdraw">
     <a class="header" href="#lnurl-withdraw">Receiving payments using LNURL-Withdraw</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_withdraw">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezClient.html#method.lnurl_withdraw">API docs</a>
 </h1>
 
 After [parsing](parse.md) an LNURL-Withdraw input, you can use the resulting input data to initiate a withdrawal from an LNURL service.

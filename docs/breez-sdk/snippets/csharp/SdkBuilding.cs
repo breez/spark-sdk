@@ -24,7 +24,7 @@ namespace BreezSdkSnippets
             // await builder.WithRestClient(<your rest client implementation>)
             // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
             // await builder.WithPaymentObserver(<your payment observer implementation>);
-            var sdk = await builder.Build();
+            var client = await builder.Build();
             // ANCHOR_END: init-sdk-advanced
         }
 
@@ -111,7 +111,7 @@ namespace BreezSdkSnippets
             var storage = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithStorage(storage);
-            var sdk = await builder.Build();
+            var client = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }
     }

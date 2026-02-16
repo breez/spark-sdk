@@ -2,14 +2,14 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_pay(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-lnurl-pay
     // Endpoint can also be of the form:
     // lnurlp://domain.com/lnurl-pay?key=val
     // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
     let lnurl_pay_url = "lightning@address.com";
 
-    if let Ok(InputType::LightningAddress(details)) = sdk.parse(lnurl_pay_url).await {
+    if let Ok(InputType::LightningAddress(details)) = client.parse(lnurl_pay_url).await {
         let amount_sats = 5_000;
         let optional_comment = Some("<comment>".to_string());
         let optional_validate_success_action_url = Some(true);
@@ -24,7 +24,7 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
             completion_timeout_secs: optional_completion_timeout_secs,
         });
 
-        let prepare_response = sdk
+        let prepare_response = client
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
                 amount_sats,
                 pay_request: details.pay_request,
@@ -48,10 +48,10 @@ async fn prepare_pay(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Result<()> {
+async fn pay(client: &BreezClient, prepare_response: PrepareLnurlPayResponse) -> Result<()> {
     // ANCHOR: lnurl-pay
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
-    let response = sdk
+    let response = client
         .lnurl_pay(LnurlPayRequest {
             prepare_response,
             idempotency_key: optional_idempotency_key,
@@ -62,7 +62,7 @@ async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Resul
     Ok(())
 }
 
-async fn prepare_pay_fees_included(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) -> Result<()> {
+async fn prepare_pay_fees_included(client: &BreezClient, pay_request: LnurlPayRequestDetails) -> Result<()> {
     // ANCHOR: prepare-lnurl-pay-fees-included
     // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.
     // Use FeePolicy::FeesIncluded to deduct fees from the amount instead.
@@ -71,7 +71,7 @@ async fn prepare_pay_fees_included(sdk: &BreezSdk, pay_request: LnurlPayRequestD
     let optional_validate_success_action_url = Some(true);
     let amount_sats = 5_000;
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
             amount_sats,
             pay_request,

@@ -1,14 +1,14 @@
 import BreezSdkSpark
 import Foundation
 
-func preparePay(sdk: BreezSdk) async throws {
+func preparePay(client: BreezClient) async throws {
     // ANCHOR: prepare-lnurl-pay
     // Endpoint can also be of the form:
     // lnurlp://domain.com/lnurl-pay?key=val
     // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
     let lnurlPayUrl = "lightning@address.com"
 
-    let inputType = try await sdk.parse(input: lnurlPayUrl)
+    let inputType = try await client.parse(input: lnurlPayUrl)
     if case .lightningAddress(v1: let details) = inputType {
         let amountSats: UInt64 = 5_000
         let optionalComment = "<comment>"
@@ -33,7 +33,7 @@ func preparePay(sdk: BreezSdk) async throws {
             conversionOptions: conversionOptions,
             feePolicy: nil
         )
-        let prepareResponse = try await sdk.prepareLnurlPay(request: request)
+        let prepareResponse = try await client.prepareLnurlPay(request: request)
 
         // If the fees are acceptable, continue to create the LNURL Pay
         if let conversionEstimate = prepareResponse.conversionEstimate {
@@ -48,7 +48,7 @@ func preparePay(sdk: BreezSdk) async throws {
     // ANCHOR_END: prepare-lnurl-pay
 }
 
-func prepareLnurlPayFeesIncluded(sdk: BreezSdk, payRequest: LnurlPayRequestDetails) async throws {
+func prepareLnurlPayFeesIncluded(client: BreezClient, payRequest: LnurlPayRequestDetails) async throws {
     // ANCHOR: prepare-lnurl-pay-fees-included
     // By default (.feesExcluded), fees are added on top of the amount.
     // Use .feesIncluded to deduct fees from the amount instead.
@@ -65,7 +65,7 @@ func prepareLnurlPayFeesIncluded(sdk: BreezSdk, payRequest: LnurlPayRequestDetai
         conversionOptions: nil,
         feePolicy: .feesIncluded
     )
-    let response = try await sdk.prepareLnurlPay(request: request)
+    let response = try await client.prepareLnurlPay(request: request)
 
     // If the fees are acceptable, continue to create the LNURL Pay
     let feeSats = response.feeSats
@@ -74,10 +74,10 @@ func prepareLnurlPayFeesIncluded(sdk: BreezSdk, payRequest: LnurlPayRequestDetai
     // ANCHOR_END: prepare-lnurl-pay-fees-included
 }
 
-func pay(sdk: BreezSdk, prepareResponse: PrepareLnurlPayResponse) async throws {
+func pay(client: BreezClient, prepareResponse: PrepareLnurlPayResponse) async throws {
     // ANCHOR: lnurl-pay
     let optionalIdempotencyKey = "<idempotency key uuid>"
-    let response = try await sdk.lnurlPay(
+    let response = try await client.lnurlPay(
         request: LnurlPayRequest(
             prepareResponse: prepareResponse,
             idempotencyKey: optionalIdempotencyKey

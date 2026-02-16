@@ -2,9 +2,9 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-pub(crate) async fn fetch_token_balances(sdk: &BreezSdk) -> Result<()> {
+pub(crate) async fn fetch_token_balances(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-token-balances
-    let info = sdk
+    let info = client
         .get_info(GetInfoRequest {
             // ensure_synced: true will ensure the SDK is synced with the Spark network
             // before returning the balance
@@ -25,9 +25,9 @@ pub(crate) async fn fetch_token_balances(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
+async fn fetch_token_metadata(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-token-metadata
-    let response = sdk
+    let response = client
         .get_tokens_metadata(GetTokensMetadataRequest {
             token_identifiers: vec![
                 String::from("<token identifier 1>"),
@@ -49,7 +49,7 @@ async fn fetch_token_metadata(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
+async fn receive_token_payment_spark_invoice(client: &BreezClient) -> Result<()> {
     // ANCHOR: receive-token-payment-spark-invoice
     let token_identifier = Some("<token identifier>".to_string());
     let optional_description = Some("<invoice description>".to_string());
@@ -58,7 +58,7 @@ async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     let optional_expiry_time_seconds = Some(1716691200);
     let optional_sender_public_key = Some("<sender public key>".to_string());
 
-    let response = sdk
+    let response = client
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::SparkInvoice {
                 token_identifier,
@@ -78,7 +78,7 @@ async fn receive_token_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
+async fn send_token_payment(client: &BreezClient) -> Result<()> {
     // ANCHOR: send-token-payment
     let payment_request = "<spark address or invoice>".to_string();
     // Token identifier must match the invoice in case it specifies one.
@@ -86,7 +86,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     // Set the amount of tokens you wish to send (in token base units).
     let amount = Some(1_000);
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount,
@@ -118,7 +118,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     }
 
     // Send the token payment
-    let send_response = sdk
+    let send_response = client
         .send_payment(SendPaymentRequest {
             prepare_response,
             options: None,
@@ -131,10 +131,10 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_conversion_limits(sdk: &BreezSdk) -> Result<()> {
+async fn fetch_conversion_limits(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token
-    let response = sdk
+    let response = client
         .fetch_conversion_limits(FetchConversionLimitsRequest {
             conversion_type: ConversionType::FromBitcoin,
             token_identifier: Some("<token identifier>".to_string()),
@@ -149,7 +149,7 @@ async fn fetch_conversion_limits(sdk: &BreezSdk) -> Result<()> {
     }
 
     // Fetch limits for converting a token to Bitcoin
-    let response = sdk
+    let response = client
         .fetch_conversion_limits(FetchConversionLimitsRequest {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "<token identifier>".to_string(),
@@ -168,7 +168,7 @@ async fn fetch_conversion_limits(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
+async fn prepare_send_payment_token_conversion(client: &BreezClient) -> Result<()> {
     // ANCHOR: prepare-send-payment-with-conversion
     let payment_request = "<spark address or invoice>".to_string();
     // Token identifier must match the invoice in case it specifies one.
@@ -184,7 +184,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
         completion_timeout_secs: optional_completion_timeout_secs,
     });
 
-    let prepare_response = sdk
+    let prepare_response = client
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request,
             amount,
