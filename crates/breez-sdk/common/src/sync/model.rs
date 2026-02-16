@@ -66,7 +66,7 @@ impl std::str::FromStr for SchemaVersion {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct RecordId {
     pub r#type: String,
     pub data_id: String,

@@ -7,8 +7,8 @@ use std::{
 
 use breez_sdk_common::sync::{
     IncomingChange as CommonIncomingChange, NewRecordHandler,
-    OutgoingChange as CommonOutgoingChange, OutgoingPrepareOutcome, PreparedOutgoingPush,
-    RecordChangeRequest, RecordId, RecordOutcome, SchemaVersion, SyncService,
+    OutgoingChange as CommonOutgoingChange, RecordChangeRequest, RecordId, RecordOutcome,
+    SchemaVersion, SyncService,
 };
 use serde_json::Value;
 use tracing::{debug, error, warn};
@@ -66,13 +66,6 @@ impl NewRecordHandler for SyncedStorage {
 
     async fn on_replay_outgoing_change(&self, change: CommonOutgoingChange) -> anyhow::Result<()> {
         self.handle_outgoing_change(change).await
-    }
-
-    async fn prepare_outgoing_push(
-        &self,
-        change: CommonOutgoingChange,
-    ) -> anyhow::Result<OutgoingPrepareOutcome> {
-        Self::handle_prepare_outgoing_push(change)
     }
 
     async fn on_sync_completed(
@@ -243,62 +236,6 @@ impl SyncedStorage {
                 .await
             }
         }
-    }
-
-    fn handle_prepare_outgoing_push(
-        change: CommonOutgoingChange,
-    ) -> anyhow::Result<OutgoingPrepareOutcome> {
-        if !change
-            .change
-            .schema_version
-            .is_supported_by(&CURRENT_SCHEMA_VERSION)
-        {
-            anyhow::bail!(
-                "Unsupported outgoing record type '{}' with local change schema version {} (supported up to major version {}). This should not happen for locally created outgoing rows.",
-                change.change.id.r#type,
-                change.change.schema_version,
-                CURRENT_SCHEMA_VERSION.major,
-            );
-        }
-
-        if let Some(parent) = &change.parent
-            && !parent
-                .schema_version
-                .is_supported_by(&CURRENT_SCHEMA_VERSION)
-        {
-            warn!(
-                "Deferring outgoing record type '{}' with unsupported parent schema version {} (supported up to major version {})",
-                parent.id.r#type, parent.schema_version, CURRENT_SCHEMA_VERSION.major,
-            );
-            return Ok(OutgoingPrepareOutcome::Deferred);
-        }
-
-        let record_type = RecordType::from_str(&change.change.id.r#type).map_err(|e| {
-            anyhow::anyhow!(
-                "Unknown outgoing record type '{}' at schema version {}: {e}",
-                change.change.id.r#type,
-                change.change.schema_version
-            )
-        })?;
-
-        let local_revision = change.change.local_revision;
-        let prepared_record = change.merge();
-
-        match record_type {
-            RecordType::PaymentMetadata => {
-                // Validate that the merged payload is still parseable for the domain.
-                let _: PaymentMetadata = serde_json::from_value(
-                    serde_json::to_value(&prepared_record.data)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                )
-                .map_err(|e| StorageError::Serialization(e.to_string()))?;
-            }
-        }
-
-        Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
-            record: prepared_record,
-            local_revision,
-        }))
     }
 
     async fn handle_payment_metadata_update(

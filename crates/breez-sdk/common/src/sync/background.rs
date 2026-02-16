@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, warn};
@@ -16,10 +16,6 @@ use crate::sync::{
 pub trait NewRecordHandler: Send + Sync {
     async fn on_incoming_change(&self, change: IncomingChange) -> anyhow::Result<RecordOutcome>;
     async fn on_replay_outgoing_change(&self, change: OutgoingChange) -> anyhow::Result<()>;
-    async fn prepare_outgoing_push(
-        &self,
-        change: OutgoingChange,
-    ) -> anyhow::Result<OutgoingPrepareOutcome>;
     async fn on_sync_completed(
         &self,
         incoming_count: Option<u32>,
@@ -31,21 +27,6 @@ pub trait NewRecordHandler: Send + Sync {
 #[must_use]
 pub enum RecordOutcome {
     Completed,
-    Deferred,
-}
-
-#[derive(Debug)]
-pub struct PreparedOutgoingPush {
-    /// Materialized record ready to be sent to the server.
-    pub record: crate::sync::model::Record,
-    /// Local queue id of the pending outgoing row to complete after push success.
-    pub local_revision: u64,
-}
-
-#[derive(Debug)]
-#[must_use]
-pub enum OutgoingPrepareOutcome {
-    Ready(PreparedOutgoingPush),
     Deferred,
 }
 
@@ -444,34 +425,29 @@ impl SyncProcessor {
             changes.len()
         );
 
+        let incoming = self.storage.get_incoming_records(u32::MAX).await?;
+        let pending_ids: HashSet<RecordId> = incoming.into_iter().map(|r| r.new_state.id).collect();
+
         let mut pushed_count: u32 = 0;
         for storage_change in changes {
-            let outgoing_id = storage_change.change.id.clone();
-            let change = storage_change.try_into()?;
-            match self
-                .new_record_handler
-                .prepare_outgoing_push(change)
-                .await?
-            {
-                OutgoingPrepareOutcome::Ready(prepared) => {
-                    self.push_sync_record(prepared).await?;
-                    pushed_count = pushed_count.saturating_add(1);
-                }
-                OutgoingPrepareOutcome::Deferred => {
-                    debug!(
-                        "Deferring outgoing push for record {:?} due to prepare outcome",
-                        outgoing_id
-                    );
-                }
+            if pending_ids.contains(&storage_change.change.id) {
+                debug!(
+                    "Deferring outgoing push for record {:?} — pending incoming change exists",
+                    storage_change.change.id
+                );
+                continue;
             }
+            let change: OutgoingChange = storage_change.try_into()?;
+            self.push_sync_record(change).await?;
+            pushed_count = pushed_count.saturating_add(1);
         }
 
         Ok(pushed_count)
     }
 
-    async fn push_sync_record(&self, prepared: PreparedOutgoingPush) -> anyhow::Result<()> {
-        let local_revision = prepared.local_revision;
-        let mut record = prepared.record;
+    async fn push_sync_record(&self, change: OutgoingChange) -> anyhow::Result<()> {
+        let local_revision = change.change.local_revision;
+        let mut record = change.merge();
         debug!(
             "Pushing outgoing record {:?} to remote with parent revision {} (local queue id {})",
             record.id, record.revision, local_revision
@@ -629,8 +605,8 @@ mod tests {
     use crate::sync::proto::SetRecordReply;
     use crate::sync::storage::{self, MockSyncStorage};
     use crate::sync::{
-        MockNewRecordHandler, MockSyncSigner, MockSyncerClient, OutgoingPrepareOutcome,
-        PreparedOutgoingPush, RecordId, RecordOutcome, SigningClient, SyncProcessor,
+        MockNewRecordHandler, MockSyncSigner, MockSyncerClient, RecordId, RecordOutcome,
+        SigningClient, SyncProcessor,
     };
 
     use anyhow::anyhow;
@@ -726,20 +702,6 @@ mod tests {
             Arc::new(signer),
             "test-client-id".to_string(),
         )
-    }
-
-    fn expect_prepare_outgoing_ready(mock_handler: &mut MockNewRecordHandler, times: usize) {
-        mock_handler
-            .expect_prepare_outgoing_push()
-            .times(times)
-            .returning(|change| {
-                let local_revision = change.change.local_revision;
-                let record = change.merge();
-                Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
-                    record,
-                    local_revision,
-                }))
-            });
     }
 
     #[macros::async_test_all]
@@ -873,10 +835,14 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         let (_tx, rx) = broadcast::channel(10);
-        let mut mock_handler = MockNewRecordHandler::new();
-        expect_prepare_outgoing_ready(&mut mock_handler, 1);
-        let mock_handler = Arc::new(mock_handler);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
         let client = create_signing_client(mock_client, MockSyncSigner::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
@@ -900,6 +866,12 @@ mod tests {
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         let mut mock_client = MockSyncerClient::new();
         mock_client
             .expect_set_record()
@@ -907,9 +879,7 @@ mod tests {
             .returning(|_| Err(anyhow!("Network error")));
 
         let (_tx, rx) = broadcast::channel(10);
-        let mut mock_handler = MockNewRecordHandler::new();
-        expect_prepare_outgoing_ready(&mut mock_handler, 1);
-        let mock_handler = Arc::new(mock_handler);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
         let client = create_signing_client(mock_client, MockSyncSigner::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
@@ -1159,8 +1129,8 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_push_sync_once_skips_only_records_deferred_by_prepare() {
-        // Setup
+    async fn test_push_sync_once_defers_records_with_pending_incoming() {
+        // Setup: two outgoing changes, one has a matching pending incoming record
         let deferred_change = create_outgoing_change("test", "123", 1);
         let pushable_change = create_outgoing_change("test", "456", 2);
 
@@ -1170,6 +1140,25 @@ mod tests {
             .times(1)
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![deferred_change.clone(), pushable_change.clone()]));
+
+        // Return a pending incoming record for "test"/"123" — this should cause
+        // the outgoing push for that record to be deferred.
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| {
+                Ok(vec![storage::IncomingChange {
+                    new_state: storage::Record {
+                        id: RecordId::new("test", "123"),
+                        revision: 5,
+                        schema_version: "0.2.6".to_string(),
+                        data: HashMap::new(),
+                    },
+                    old_state: None,
+                }])
+            });
+
         mock_storage
             .expect_complete_outgoing_sync()
             .times(1)
@@ -1186,33 +1175,17 @@ mod tests {
             })
         });
 
-        let mut mock_handler = MockNewRecordHandler::new();
-        mock_handler
-            .expect_prepare_outgoing_push()
-            .times(2)
-            .returning(|change| {
-                if change.change.id.data_id == "123" {
-                    return Ok(OutgoingPrepareOutcome::Deferred);
-                }
-                let local_revision = change.change.local_revision;
-                let record = change.merge();
-                Ok(OutgoingPrepareOutcome::Ready(PreparedOutgoingPush {
-                    record,
-                    local_revision,
-                }))
-            });
-
         let sync_processor = SyncProcessor::new(
             create_signing_client(mock_client, MockSyncSigner::new()),
             broadcast::channel(10).1,
-            Arc::new(mock_handler),
+            Arc::new(MockNewRecordHandler::new()),
             Arc::new(mock_storage),
         );
 
         // Execute
         let result = sync_processor.push_sync_once().await;
 
-        // Verify
+        // Verify: only the non-conflicting record was pushed
         assert_eq!(result.unwrap(), Some(1));
     }
 
@@ -1570,9 +1543,14 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         let (tx, rx) = broadcast::channel::<RecordId>(10);
         let mut mock_handler = MockNewRecordHandler::new();
-        expect_prepare_outgoing_ready(&mut mock_handler, 1);
         mock_handler
             .expect_on_sync_completed()
             .times(1)
@@ -1691,6 +1669,12 @@ mod tests {
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         let mock_client = MockSyncerClient::new();
 
         // Create mock signer that fails on encryption
@@ -1707,9 +1691,7 @@ mod tests {
         let client = create_signing_client(mock_client, mock_signer);
 
         let (_tx, rx) = broadcast::channel(10);
-        let mut mock_handler = MockNewRecordHandler::new();
-        expect_prepare_outgoing_ready(&mut mock_handler, 1);
-        let mock_handler = Arc::new(mock_handler);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
 
@@ -1841,6 +1823,12 @@ mod tests {
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![test_change.clone()]));
 
+        mock_storage
+            .expect_get_incoming_records()
+            .times(1)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         let mock_client = MockSyncerClient::new();
 
         // Create mock signer that fails on signing
@@ -1855,9 +1843,7 @@ mod tests {
         let client = create_signing_client(mock_client, mock_signer);
 
         let (_tx, rx) = broadcast::channel(10);
-        let mut mock_handler = MockNewRecordHandler::new();
-        expect_prepare_outgoing_ready(&mut mock_handler, 1);
-        let mock_handler = Arc::new(mock_handler);
+        let mock_handler = Arc::new(MockNewRecordHandler::new());
 
         let sync_processor = SyncProcessor::new(client, rx, mock_handler, Arc::new(mock_storage));
 
