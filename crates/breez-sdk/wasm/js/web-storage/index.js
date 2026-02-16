@@ -1806,14 +1806,15 @@ class IndexedDBStorage {
       // Filter by payment details. If any filter matches, we include the payment
       let paymentDetailsFilterMatches = false;
       for (const paymentDetailsFilter of request.paymentDetailsFilter) {
-        // Filter by Spark HTLC status
+        // Filter by HTLC status (Spark or Lightning)
         if (
-          paymentDetailsFilter.type === "spark" &&
+          (paymentDetailsFilter.type === "spark" ||
+            paymentDetailsFilter.type === "lightning") &&
           paymentDetailsFilter.htlcStatus != null &&
           paymentDetailsFilter.htlcStatus.length > 0
         ) {
           if (
-            details.type !== "spark" ||
+            details.type !== paymentDetailsFilter.type ||
             !details.htlcDetails ||
             !paymentDetailsFilter.htlcStatus.includes(
               details.htlcDetails.status
@@ -1867,22 +1868,6 @@ class IndexedDBStorage {
           }
         }
 
-        // Filter by Lightning HTLC status
-        if (
-          paymentDetailsFilter.type === "lightning" &&
-          paymentDetailsFilter.htlcStatus != null &&
-          paymentDetailsFilter.htlcStatus.length > 0
-        ) {
-          if (
-            details.type !== "lightning" ||
-            !details.htlcDetails ||
-            !paymentDetailsFilter.htlcStatus.includes(
-              details.htlcDetails.status
-            )
-          ) {
-            continue;
-          }
-        }
 
         paymentDetailsFilterMatches = true;
         break;

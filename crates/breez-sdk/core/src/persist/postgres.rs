@@ -844,13 +844,18 @@ impl Storage for PostgresStorage {
             let mut all_payment_details_clauses = Vec::new();
             for payment_details_filter in payment_details_filter {
                 let mut payment_details_clauses = Vec::new();
-                // Filter by Spark HTLC status
-                if let PaymentDetailsFilter::Spark {
-                    htlc_status: Some(htlc_statuses),
-                    ..
-                } = payment_details_filter
-                    && !htlc_statuses.is_empty()
-                {
+                // Filter by HTLC status (Spark or Lightning)
+                let htlc_filter = match payment_details_filter {
+                    PaymentDetailsFilter::Spark {
+                        htlc_status: Some(s),
+                        ..
+                    } if !s.is_empty() => Some(("s", s)),
+                    PaymentDetailsFilter::Lightning {
+                        htlc_status: Some(s),
+                    } if !s.is_empty() => Some(("l", s)),
+                    _ => None,
+                };
+                if let Some((alias, htlc_statuses)) = htlc_filter {
                     let placeholders: Vec<String> = htlc_statuses
                         .iter()
                         .map(|_| {
@@ -860,7 +865,7 @@ impl Storage for PostgresStorage {
                         })
                         .collect();
                     payment_details_clauses.push(format!(
-                        "s.htlc_details::jsonb->>'status' IN ({})",
+                        "{alias}.htlc_details::jsonb->>'status' IN ({})",
                         placeholders.join(", ")
                     ));
                     for htlc_status in htlc_statuses {
@@ -909,29 +914,6 @@ impl Storage for PostgresStorage {
                     payment_details_clauses.push(format!("t.tx_type = ${param_idx}"));
                     param_idx += 1;
                     params.push(Box::new(tx_type.to_string()));
-                }
-
-                // Filter by Lightning HTLC status
-                if let PaymentDetailsFilter::Lightning {
-                    htlc_status: Some(htlc_statuses),
-                } = payment_details_filter
-                    && !htlc_statuses.is_empty()
-                {
-                    let placeholders: Vec<String> = htlc_statuses
-                        .iter()
-                        .map(|_| {
-                            let placeholder = format!("${param_idx}");
-                            param_idx += 1;
-                            placeholder
-                        })
-                        .collect();
-                    payment_details_clauses.push(format!(
-                        "l.htlc_details::jsonb->>'status' IN ({})",
-                        placeholders.join(", ")
-                    ));
-                    for htlc_status in htlc_statuses {
-                        params.push(Box::new(htlc_status.to_string()));
-                    }
                 }
 
                 if !payment_details_clauses.is_empty() {

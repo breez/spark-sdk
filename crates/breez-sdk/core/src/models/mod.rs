@@ -1195,7 +1195,7 @@ pub enum PaymentDetailsFilter {
         tx_type: Option<TokenTransactionType>,
     },
     Lightning {
-        /// Filter specific Spark HTLC statuses (Spark HTLCs are used to fulfil Lightning invoices)
+        /// Filter specific Spark HTLC statuses
         htlc_status: Option<Vec<SparkHtlcStatus>>,
     },
 }

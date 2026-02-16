@@ -137,6 +137,7 @@ pub enum CurrencyUnit {
     Rwf,
     Zmw,
     Aed,
+    Gtq,
     Usdt,
     Usdc,
     #[serde(other, skip_serializing)]
@@ -205,7 +206,7 @@ pub enum LightningReceiveRequestStatus {
     TransferCompleted,
     RefundSigningCommitmentsQueryingFailed,
     RefundSigningFailed,
-    #[serde(other)]
+    #[serde(other, skip_serializing)]
     Unknown,
 }
 

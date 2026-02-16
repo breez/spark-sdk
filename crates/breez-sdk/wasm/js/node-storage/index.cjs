@@ -201,9 +201,13 @@ class SqliteStorage {
         const allPaymentDetailsClauses = [];
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
-          // Filter by Spark HTLC status
+          // Filter by HTLC status (Spark or Lightning)
+          const htlcAlias =
+            paymentDetailsFilter.type === "spark" ? "s"
+              : paymentDetailsFilter.type === "lightning" ? "l"
+                : null;
           if (
-            paymentDetailsFilter.type === "spark" &&
+            htlcAlias &&
             paymentDetailsFilter.htlcStatus !== undefined &&
             paymentDetailsFilter.htlcStatus.length > 0
           ) {
@@ -211,7 +215,7 @@ class SqliteStorage {
               .map(() => "?")
               .join(", ");
             paymentDetailsClauses.push(
-              `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+              `json_extract(${htlcAlias}.htlc_details, '$.status') IN (${placeholders})`
             );
             params.push(...paymentDetailsFilter.htlcStatus);
           }
@@ -247,20 +251,6 @@ class SqliteStorage {
             params.push(paymentDetailsFilter.txType);
           }
 
-          // Filter by Lightning HTLC status
-          if (
-            paymentDetailsFilter.type === "lightning" &&
-            paymentDetailsFilter.htlcStatus !== undefined &&
-            paymentDetailsFilter.htlcStatus.length > 0
-          ) {
-            const placeholders = paymentDetailsFilter.htlcStatus
-              .map(() => "?")
-              .join(", ");
-            paymentDetailsClauses.push(
-              `json_extract(l.htlc_details, '$.status') IN (${placeholders})`
-            );
-            params.push(...paymentDetailsFilter.htlcStatus);
-          }
 
           if (paymentDetailsClauses.length > 0) {
             allPaymentDetailsClauses.push(`(${paymentDetailsClauses.join(" AND ")})`);
