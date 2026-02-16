@@ -31,11 +31,11 @@ pub struct _Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
-    pub optimization_config: OptimizationConfig,
+    pub optimization_config: LeafOptimizationConfig,
 }
 
-#[frb(mirror(OptimizationConfig))]
-pub struct _OptimizationConfig {
+#[frb(mirror(LeafOptimizationConfig))]
+pub struct _LeafOptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
 }

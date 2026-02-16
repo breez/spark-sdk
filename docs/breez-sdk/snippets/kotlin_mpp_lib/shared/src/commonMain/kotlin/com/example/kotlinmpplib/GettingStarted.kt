@@ -96,7 +96,7 @@ class GettingStarted {
 
     suspend fun addEventListener(client: BreezClient, listener: SdkListener): String? {
         try {
-            val listenerId = client.addEventListener(listener)
+            val listenerId = client.events().add(listener)
             return listenerId
         } catch (e: Exception) {
             // handle error
@@ -108,7 +108,7 @@ class GettingStarted {
     // ANCHOR: remove-event-listener
     suspend fun removeEventListener(client: BreezClient, listenerId: String)  {
         try {
-            client.removeEventListener(listenerId)
+            client.events().remove(listenerId)
         } catch (e: Exception) {
             // handle error
         }

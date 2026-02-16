@@ -25,7 +25,7 @@ func CheckLightningAddressAvailability(client *breez_sdk_spark.BreezClient) (boo
 		Username: username,
 	}
 
-	isAvailable, err := client.CheckLightningAddressAvailable(request)
+	isAvailable, err := client.LightningAddress().IsAvailable(request)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -49,7 +49,7 @@ func RegisterLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_s
 		Description: &description,
 	}
 
-	addressInfo, err := client.RegisterLightningAddress(request)
+	addressInfo, err := client.LightningAddress().Register(request)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -69,7 +69,7 @@ func RegisterLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_s
 
 func GetLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.LightningAddressInfo, error) {
 	// ANCHOR: get-lightning-address
-	addressInfoOpt, err := client.GetLightningAddress()
+	addressInfoOpt, err := client.LightningAddress().Get()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -93,7 +93,7 @@ func GetLightningAddress(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.
 
 func DeleteLightningAddress(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: delete-lightning-address
-	err := client.DeleteLightningAddress()
+	err := client.LightningAddress().Delete()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -109,7 +109,7 @@ func DeleteLightningAddress(client *breez_sdk_spark.BreezClient) error {
 
 func AccessSenderComment(client *breez_sdk_spark.BreezClient) error {
 	paymentID := "<payment id>"
-	response, err := client.GetPayment(breez_sdk_spark.GetPaymentRequest{
+	response, err := client.Payments().Get(breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentID,
 	})
 	if err != nil {
@@ -138,7 +138,7 @@ func AccessSenderComment(client *breez_sdk_spark.BreezClient) error {
 
 func AccessNostrZap(client *breez_sdk_spark.BreezClient) error {
 	paymentID := "<payment id>"
-	response, err := client.GetPayment(breez_sdk_spark.GetPaymentRequest{
+	response, err := client.Payments().Get(breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentID,
 	})
 	if err != nil {

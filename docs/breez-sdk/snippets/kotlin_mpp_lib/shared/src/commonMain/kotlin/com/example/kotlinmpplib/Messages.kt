@@ -10,7 +10,7 @@ class Messages {
         val compact = true
         try {
             val signMessageRequest = SignMessageRequest(message, compact)
-            val signMessageResponse = client.signMessage(signMessageRequest)
+            val signMessageResponse = client.message().sign(signMessageRequest)
 
             val signature = signMessageResponse?.signature
             val pubkey = signMessageResponse?.pubkey
@@ -30,7 +30,7 @@ class Messages {
         val signature = "<message signature>"
         try {
             val checkMessageRequest = CheckMessageRequest(message, pubkey, signature)
-            val checkMessageResponse = client.checkMessage(checkMessageRequest)
+            val checkMessageResponse = client.message().check(checkMessageRequest)
 
             val isValid = checkMessageResponse?.isValid
 

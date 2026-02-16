@@ -93,14 +93,14 @@ pub(crate) async fn add_event_listener(
     client: &BreezClient,
     listener: Box<SdkEventListener>,
 ) -> Result<String> {
-    let listener_id = client.add_event_listener(listener).await;
+    let listener_id = client.events().add(listener).await;
     Ok(listener_id)
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
 pub(crate) async fn remove_event_listener(client: &BreezClient, listener_id: &str) -> Result<()> {
-    client.remove_event_listener(listener_id).await;
+    client.events().remove(listener_id).await;
     Ok(())
 }
 // ANCHOR_END: remove-event-listener

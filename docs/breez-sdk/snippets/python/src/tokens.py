@@ -38,7 +38,7 @@ async def fetch_token_balances(client: BreezClient):
 async def fetch_token_metadata(client: BreezClient):
     # ANCHOR: fetch-token-metadata
     try:
-        response = await client.get_tokens_metadata(
+        response = await client.tokens().metadata(
             request=GetTokensMetadataRequest(
                 token_identifiers=["<token identifier 1>", "<token identifier 2>"]
                 )
@@ -134,7 +134,7 @@ async def fetch_conversion_limits(client: BreezClient):
     # ANCHOR: fetch-conversion-limits
     try:
         # Fetch limits for converting Bitcoin to a token
-        from_bitcoin_response = await client.fetch_conversion_limits(
+        from_bitcoin_response = await client.tokens().fetch_conversion_limits(
             request=FetchConversionLimitsRequest(
                 conversion_type=ConversionType.FROM_BITCOIN(),
                 token_identifier="<token identifier>",
@@ -147,7 +147,7 @@ async def fetch_conversion_limits(client: BreezClient):
             print(f"Minimum tokens to receive: {from_bitcoin_response.min_to_amount} base units")
 
         # Fetch limits for converting a token to Bitcoin
-        to_bitcoin_response = await client.fetch_conversion_limits(
+        to_bitcoin_response = await client.tokens().fetch_conversion_limits(
             request=FetchConversionLimitsRequest(
                 conversion_type=ConversionType.TO_BITCOIN(
                     from_token_identifier="<token identifier>"

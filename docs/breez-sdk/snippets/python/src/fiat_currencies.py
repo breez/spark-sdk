@@ -3,7 +3,7 @@ from breez_sdk_spark import BreezClient
 async def list_fiat_currencies(client: BreezClient):
     # ANCHOR: list-fiat-currencies
     try:
-        response = await client.list_fiat_currencies()
+        response = await client.fiat().currencies()
     except Exception as error:
         print(error)
         raise
@@ -12,7 +12,7 @@ async def list_fiat_currencies(client: BreezClient):
 async def list_fiat_rates(client: BreezClient):
     # ANCHOR: list-fiat-rates
     try:
-        response = await client.list_fiat_rates()
+        response = await client.fiat().rates()
     except Exception as error:
         print(error)
         raise

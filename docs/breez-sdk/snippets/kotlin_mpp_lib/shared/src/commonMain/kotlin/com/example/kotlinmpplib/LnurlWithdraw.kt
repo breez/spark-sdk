@@ -20,7 +20,7 @@ class LnurlWithdraw {
                     withdrawRequest,
                     optionalCompletionTimeoutSecs
                 )
-                val response = client.lnurlWithdraw(request)
+                val response = client.lnurl().withdraw(request)
 
                 val payment = response.payment
                 // Log.v("Breez", "Payment: $payment")

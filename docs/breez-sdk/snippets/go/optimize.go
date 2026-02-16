@@ -9,14 +9,14 @@ import (
 
 func StartOptimization(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: start-optimization
-	client.StartLeafOptimization()
+	client.Optimization().Start()
 	// ANCHOR_END: start-optimization
 	return nil
 }
 
 func CancelOptimization(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: cancel-optimization
-	err := client.CancelLeafOptimization()
+	err := client.Optimization().Cancel()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -31,7 +31,7 @@ func CancelOptimization(client *breez_sdk_spark.BreezClient) error {
 
 func GetOptimizationProgress(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: get-optimization-progress
-	progress := client.GetLeafOptimizationProgress()
+	progress := client.Optimization().Progress()
 
 	log.Printf("Optimization is running: %v\n", progress.IsRunning)
 	log.Printf("Current round: %v\n", progress.CurrentRound)

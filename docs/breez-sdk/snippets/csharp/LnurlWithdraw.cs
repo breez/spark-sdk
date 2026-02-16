@@ -26,7 +26,7 @@ namespace BreezSdkSnippets
                     withdrawRequest: withdrawRequest,
                     completionTimeoutSecs: optionalCompletionTimeoutSecs
                 );
-                var response = await client.LnurlWithdraw(request: request);
+                var response = await client.Lnurl().Withdraw(request: request);
 
                 var payment = response.payment;
                 Console.WriteLine($"Payment: {payment}");

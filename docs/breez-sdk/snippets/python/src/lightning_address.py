@@ -21,7 +21,7 @@ async def check_lightning_address_availability(client: BreezClient, username: st
 
     # ANCHOR: check-lightning-address
     request = CheckLightningAddressRequest(username=username)
-    is_available = await client.check_lightning_address_available(request)
+    is_available = await client.lightning_address().is_available(request)
     # ANCHOR_END: check-lightning-address
     return is_available
 
@@ -36,7 +36,7 @@ async def register_lightning_address(client: BreezClient, username: str, descrip
         description=description
     )
 
-    address_info = await client.register_lightning_address(request)
+    address_info = await client.lightning_address().register(request)
     lightning_address = address_info.lightning_address
     lnurl_url = address_info.lnurl.url
     lnurl_bech32 = address_info.lnurl.bech32
@@ -46,7 +46,7 @@ async def register_lightning_address(client: BreezClient, username: str, descrip
 
 async def get_lightning_address(client: BreezClient):
     # ANCHOR: get-lightning-address
-    address_info_opt = await client.get_lightning_address()
+    address_info_opt = await client.lightning_address().get()
 
     if address_info_opt is not None:
         lightning_address = address_info_opt.lightning_address
@@ -59,13 +59,13 @@ async def get_lightning_address(client: BreezClient):
 
 async def delete_lightning_address(client: BreezClient):
     # ANCHOR: delete-lightning-address
-    await client.delete_lightning_address()
+    await client.lightning_address().delete()
     # ANCHOR_END: delete-lightning-address
 
 
 async def access_sender_comment(client: BreezClient):
     payment_id = "<payment id>"
-    response = await client.get_payment(GetPaymentRequest(payment_id=payment_id))
+    response = await client.payments().get(GetPaymentRequest(payment_id=payment_id))
     payment = response.payment
 
     # ANCHOR: access-sender-comment
@@ -81,7 +81,7 @@ async def access_sender_comment(client: BreezClient):
 
 async def access_nostr_zap(client: BreezClient):
     payment_id = "<payment id>"
-    response = await client.get_payment(GetPaymentRequest(payment_id=payment_id))
+    response = await client.payments().get(GetPaymentRequest(payment_id=payment_id))
     payment = response.payment
 
     # ANCHOR: access-nostr-zap

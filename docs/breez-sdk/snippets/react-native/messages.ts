@@ -5,7 +5,7 @@ const exampleSignMessage = async (client: BreezClient) => {
   // Set to true to get a compact signature rather than a DER
   const compact = true
 
-  const signMessageResponse = await client.signMessage({
+  const signMessageResponse = await client.message().sign({
     message: '<message to sign>',
     compact
   })
@@ -20,7 +20,7 @@ const exampleSignMessage = async (client: BreezClient) => {
 
 const exampleCheckMessage = async (client: BreezClient) => {
   // ANCHOR: check-message
-  const checkMessageResponse = await client.checkMessage({
+  const checkMessageResponse = await client.message().check({
     message: '<message>',
     pubkey: '<pubkey of signer>',
     signature: '<message signature>'

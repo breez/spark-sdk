@@ -4,20 +4,20 @@ use log::info;
 
 fn start_optimization(client: &BreezClient) {
     // ANCHOR: start-optimization
-    client.start_leaf_optimization();
+    client.optimization().start();
     // ANCHOR_END: start-optimization
 }
 
 async fn cancel_optimization(client: &BreezClient) -> Result<()> {
     // ANCHOR: cancel-optimization
-    client.cancel_leaf_optimization().await?;
+    client.optimization().cancel().await?;
     // ANCHOR_END: cancel-optimization
     Ok(())
 }
 
 fn get_optimization_progress(client: &BreezClient) {
     // ANCHOR: get-optimization-progress
-    let progress = client.get_leaf_optimization_progress();
+    let progress = client.optimization().progress();
 
     info!("Optimization is running: {}", progress.is_running);
     info!("Current round: {}", progress.current_round);

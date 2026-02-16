@@ -10,7 +10,7 @@ func signMessage(client: BreezClient) async throws -> SignMessageResponse {
         compact: compact
     )
     let signMessageResponse = try await client
-        .signMessage(request: signMessageRequest)
+        .message().sign(request: signMessageRequest)
 
     let signature = signMessageResponse.signature
     let pubkey = signMessageResponse.pubkey
@@ -29,7 +29,7 @@ func checkMessage(client: BreezClient) async throws -> CheckMessageResponse {
         signature: "<message signature>"
     )
     let checkMessageResponse = try await client
-        .checkMessage(request: checkMessageRequest)
+        .message().check(request: checkMessageRequest)
 
     let isValid = checkMessageResponse.isValid
 

@@ -2,19 +2,19 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> startOptimization(BreezClient client) async {
   // ANCHOR: start-optimization
-  client.startLeafOptimization();
+  client.optimization().start();
   // ANCHOR_END: start-optimization
 }
 
 Future<void> cancelOptimization(BreezClient client) async {
   // ANCHOR: cancel-optimization
-  await client.cancelLeafOptimization();
+  await client.optimization().cancel();
   // ANCHOR_END: cancel-optimization
 }
 
 Future<void> getOptimizationProgress(BreezClient client) async {
   // ANCHOR: get-optimization-progress
-  var progress = client.getLeafOptimizationProgress();
+  var progress = client.optimization().progress();
 
   print("Optimization is running: ${progress.isRunning}");
   print("Current round: ${progress.currentRound}");

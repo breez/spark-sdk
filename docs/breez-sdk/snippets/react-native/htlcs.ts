@@ -70,7 +70,7 @@ const exampleListClaimableHtlcPayments = async (client: BreezClient): Promise<Pa
     sortAscending: undefined
   }
 
-  const response = await client.listPayments(request)
+  const response = await client.payments().list(request)
   const payments = response.payments
   // ANCHOR_END: list-claimable-htlc-payments
   return payments
@@ -79,7 +79,7 @@ const exampleListClaimableHtlcPayments = async (client: BreezClient): Promise<Pa
 const exampleClaimHtlcPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: claim-htlc-payment
   const preimage = '<preimage hex>'
-  const response = await client.claimHtlcPayment(
+  const response = await client.payments().claimHtlc(
     { preimage }
   )
   const payment = response.payment

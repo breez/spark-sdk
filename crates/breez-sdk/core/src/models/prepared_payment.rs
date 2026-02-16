@@ -17,23 +17,20 @@ pub enum PaymentIntentType {
     /// A Spark transfer (address or invoice).
     Spark,
     /// A Lightning payment (Bolt11 invoice or LNURL-Pay).
-    Lightning,
+    Bolt11Invoice,
     /// An on-chain Bitcoin address payment.
-    Onchain,
+    BitcoinAddress,
 }
 
 /// A payment that has been prepared and is ready to be confirmed.
 ///
-/// Created by [`BreezClient::prepare`](crate::BreezClient::prepare). Holds a reference
-/// back to the SDK so that the caller can simply call [`confirm`](Self::confirm)
-/// to execute the payment.
+/// Created by [`BreezClient::prepare_payment`](crate::BreezClient::prepare_payment).
+/// Holds a reference back to the SDK so that the caller can simply call
+/// [`send`](Self::send) to execute the payment.
 ///
 /// The generic parameter `S` is the smart-pointer type wrapping [`BreezClient`](crate::BreezClient):
-/// - `Arc<BreezClient>` for native (`UniFFI`) bindings
-/// - `Rc<BreezClient>` for WASM bindings
-///
-/// Most consumers will never see the generic parameter since the SDK's
-/// `prepare()` method returns a concrete `PreparedPayment<Arc<BreezClient>>`.
+/// - `Arc<BreezClient>` for native (`UniFFI`) bindings (via [`PreparedPaymentHandle`])
+/// - `Rc<BreezClient>` for WASM bindings (via `PaymentIntent`)
 pub struct PreparedPayment<S>
 where
     S: Deref<Target = crate::BreezClient> + Clone,
@@ -83,19 +80,19 @@ impl<S> PreparedPayment<S>
 where
     S: Deref<Target = crate::BreezClient> + Clone,
 {
-    /// The type of payment (Spark, Lightning, or Onchain).
+    /// The type of payment (Spark, Bolt11Invoice, or BitcoinAddress).
     ///
     /// Determined from the prepared payment data so that callers don't need to
     /// inspect the fee variant or cross-reference the original input type.
     pub fn payment_type(&self) -> PaymentIntentType {
         match &self.data {
             PreparedPaymentData::Standard(resp) => match &resp.payment_method {
-                SendPaymentMethod::BitcoinAddress { .. } => PaymentIntentType::Onchain,
-                SendPaymentMethod::Bolt11Invoice { .. } => PaymentIntentType::Lightning,
+                SendPaymentMethod::BitcoinAddress { .. } => PaymentIntentType::BitcoinAddress,
+                SendPaymentMethod::Bolt11Invoice { .. } => PaymentIntentType::Bolt11Invoice,
                 SendPaymentMethod::SparkAddress { .. }
                 | SendPaymentMethod::SparkInvoice { .. } => PaymentIntentType::Spark,
             },
-            PreparedPaymentData::Lnurl(_) => PaymentIntentType::Lightning,
+            PreparedPaymentData::Lnurl(_) => PaymentIntentType::Bolt11Invoice,
         }
     }
 
@@ -176,9 +173,8 @@ where
 
     /// Send the prepared payment.
     ///
-    /// This is the single method callers need after `prepare()`:
     /// ```ignore
-    /// let prepared = client.prepare("lnbc1...", None).await?;
+    /// let prepared = client.prepare_payment("lnbc1...".into(), None).await?;
     /// println!("Fee: {:?}", prepared.fee());
     /// let result = prepared.send(None).await?;
     /// ```
@@ -246,7 +242,7 @@ impl PreparedPaymentHandle {
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(deprecated)]
 impl PreparedPaymentHandle {
-    /// The type of payment (Spark, Lightning, or Onchain).
+    /// The type of payment (Spark, Bolt11Invoice, or BitcoinAddress).
     pub fn payment_type(&self) -> PaymentIntentType {
         self.inner.payment_type()
     }

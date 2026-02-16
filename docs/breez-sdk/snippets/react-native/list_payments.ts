@@ -4,7 +4,7 @@ import { PaymentType, PaymentStatus, AssetFilter } from '@breeztech/breez-sdk-sp
 const exampleGetPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: get-payment
   const paymentId = '<payment id>'
-  const response = await client.getPayment({
+  const response = await client.payments().get({
     paymentId
   })
   const payment = response.payment
@@ -14,7 +14,7 @@ const exampleGetPayment = async (client: BreezClient): Promise<Payment> => {
 
 const exampleListPayments = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-payments
-  const response = await client.listPayments({
+  const response = await client.payments().list({
     typeFilter: undefined,
     statusFilter: undefined,
     assetFilter: undefined,
@@ -37,7 +37,7 @@ const exampleListPaymentsFiltered = async (client: BreezClient): Promise<Payment
   // To filter by Bitcoin instead:
   // const assetFilter = new AssetFilter.Bitcoin()
 
-  const response = await client.listPayments({
+  const response = await client.payments().list({
     // Filter by payment type
     typeFilter: [PaymentType.Send, PaymentType.Receive],
     // Filter by status

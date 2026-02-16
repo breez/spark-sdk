@@ -17,7 +17,7 @@ const exampleCheckLightningAddressAvailability = async (client: BreezClient) => 
     username
   }
 
-  const available = await client.checkLightningAddressAvailable(request)
+  const available = await client.lightningAddress().isAvailable(request)
   // ANCHOR_END: check-lightning-address
 }
 
@@ -31,7 +31,7 @@ const exampleRegisterLightningAddress = async (client: BreezClient) => {
     description
   }
 
-  const addressInfo = await client.registerLightningAddress(request)
+  const addressInfo = await client.lightningAddress().register(request)
   const lightningAddress = addressInfo.lightningAddress
   const lnurlUrl = addressInfo.lnurl.url
   const lnurlBech32 = addressInfo.lnurl.bech32
@@ -40,7 +40,7 @@ const exampleRegisterLightningAddress = async (client: BreezClient) => {
 
 const exampleGetLightningAddress = async (client: BreezClient) => {
   // ANCHOR: get-lightning-address
-  const addressInfoOpt = await client.getLightningAddress()
+  const addressInfoOpt = await client.lightningAddress().get()
 
   if (addressInfoOpt != null) {
     const lightningAddress = addressInfoOpt.lightningAddress
@@ -54,13 +54,13 @@ const exampleGetLightningAddress = async (client: BreezClient) => {
 
 const exampleDeleteLightningAddress = async (client: BreezClient) => {
   // ANCHOR: delete-lightning-address
-  await client.deleteLightningAddress()
+  await client.lightningAddress().delete()
   // ANCHOR_END: delete-lightning-address
 }
 
 const exampleAccessSenderComment = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await client.getPayment({ paymentId })
+  const response = await client.payments().get({ paymentId })
   const payment = response.payment
 
   // ANCHOR: access-sender-comment
@@ -78,7 +78,7 @@ const exampleAccessSenderComment = async (client: BreezClient) => {
 
 const exampleAccessNostrZap = async (client: BreezClient) => {
   const paymentId = '<payment id>'
-  const response = await client.getPayment({ paymentId })
+  const response = await client.payments().get({ paymentId })
   const payment = response.payment
 
   // ANCHOR: access-nostr-zap

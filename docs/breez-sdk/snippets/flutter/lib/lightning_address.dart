@@ -20,7 +20,7 @@ Future<bool> checkLightningAddressAvailability(BreezClient client) async {
     username: username,
   );
   
-  final available = await client.checkLightningAddressAvailable(request: request);
+  final available = await client.lightningAddress().isAvailable(request: request);
   // ANCHOR_END: check-lightning-address
   return available;
 }
@@ -34,7 +34,7 @@ Future<(String, String, String)> registerLightningAddress(BreezClient client) as
     description: description,
   );
 
-  final addressInfo = await client.registerLightningAddress(request: request);
+  final addressInfo = await client.lightningAddress().register(request: request);
   final lightningAddress = addressInfo.lightningAddress;
   final lnurlUrl = addressInfo.lnurl.url;
   final lnurlBech32 = addressInfo.lnurl.bech32;
@@ -45,7 +45,7 @@ Future<(String, String, String)> registerLightningAddress(BreezClient client) as
 Future<(String, String, String, String, String)> getLightningAddress(
     BreezClient client) async {
   // ANCHOR: get-lightning-address
-  final addressInfoOpt = await client.getLightningAddress();
+  final addressInfoOpt = await client.lightningAddress().get();
 
   if (addressInfoOpt == null) {
     throw Exception("No Lightning Address registered for this user.");
@@ -62,13 +62,13 @@ Future<(String, String, String, String, String)> getLightningAddress(
 
 Future<void> deleteLightningAddress(BreezClient client) async {
   // ANCHOR: delete-lightning-address
-  await client.deleteLightningAddress();
+  await client.lightningAddress().delete();
   // ANCHOR_END: delete-lightning-address
 }
 
 Future<void> accessSenderComment(BreezClient client) async {
   final paymentId = '<payment id>';
-  final response = await client.getPayment(
+  final response = await client.payments().get(
     request: GetPaymentRequest(paymentId: paymentId),
   );
   final payment = response.payment;
@@ -89,7 +89,7 @@ Future<void> accessSenderComment(BreezClient client) async {
 
 Future<void> accessNostrZap(BreezClient client) async {
   final paymentId = '<payment id>';
-  final response = await client.getPayment(
+  final response = await client.payments().get(
     request: GetPaymentRequest(paymentId: paymentId),
   );
   final payment = response.payment;

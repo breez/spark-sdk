@@ -34,7 +34,7 @@ async def authenticate(client: BreezClient, request_data: LnurlAuthRequestDetail
     # ANCHOR: lnurl-auth
     # Perform LNURL authentication
     try:
-        result = await client.lnurl_auth(request_data=request_data)
+        result = await client.lnurl().auth(request_data=request_data)
 
         if isinstance(result, LnurlCallbackStatus.OK):
             logging.debug("Authentication successful")

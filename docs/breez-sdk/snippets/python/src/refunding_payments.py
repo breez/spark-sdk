@@ -16,7 +16,7 @@ async def list_unclaimed_deposits(client: BreezClient):
     # ANCHOR: list-unclaimed-deposits
     try:
         request = ListUnclaimedDepositsRequest()
-        response = await client.list_unclaimed_deposits(request=request)
+        response = await client.deposits().list_unclaimed(request=request)
 
         for deposit in response.deposits:
             logging.info(f"Unclaimed deposit: {deposit.txid}:{deposit.vout}")
@@ -64,7 +64,7 @@ async def handle_fee_exceeded(client: BreezClient, deposit):
                     vout=deposit.vout,
                     max_fee=Fee.FIXED(amount=required_fee),
                 )
-                await client.claim_deposit(request=claim_request)
+                await client.deposits().claim(request=claim_request)
     except Exception as error:
         logging.error(error)
         raise
@@ -78,7 +78,7 @@ async def refund_deposit(client: BreezClient):
         destination_address = "bc1qexample..."  # Your Bitcoin address
 
         # Set the fee for the refund transaction using the half-hour feerate
-        recommended_fees = await client.recommended_fees()
+        recommended_fees = await client.deposits().recommended_fees()
         fee = Fee.RATE(sat_per_vbyte=recommended_fees.half_hour_fee)
         # or using a fixed amount
         #fee = Fee.FIXED(amount=500)
@@ -88,7 +88,7 @@ async def refund_deposit(client: BreezClient):
             txid=txid, vout=vout, destination_address=destination_address, fee=fee
         )
 
-        response = await client.refund_deposit(request=request)
+        response = await client.deposits().refund(request=request)
         logging.info("Refund transaction created:")
         logging.info(f"Transaction ID: {response.tx_id}")
         logging.info(f"Transaction hex: {response.tx_hex}")
@@ -118,7 +118,7 @@ async def custom_claim_logic(client: BreezClient, deposit):
         ):
             required_fee_rate = deposit.claim_error.required_fee_rate_sat_per_vbyte
 
-            recommended_fees = await client.recommended_fees()
+            recommended_fees = await client.deposits().recommended_fees()
 
             if required_fee_rate <= recommended_fees.fastest_fee:
                 claim_request = ClaimDepositRequest(
@@ -126,7 +126,7 @@ async def custom_claim_logic(client: BreezClient, deposit):
                     vout=deposit.vout,
                     max_fee=MaxFee.RATE(sat_per_vbyte=required_fee_rate),
                 )
-                await client.claim_deposit(request=claim_request)
+                await client.deposits().claim(request=claim_request)
     except Exception as error:
         logging.error(error)
         raise
@@ -135,7 +135,7 @@ async def custom_claim_logic(client: BreezClient, deposit):
 
 async def recommended_feeds(client: BreezClient):
     # ANCHOR: recommended-fees
-    response = await client.recommended_fees()
+    response = await client.deposits().recommended_fees()
     logging.info(f"Fastest fee: {response.fastest_fee} sats/vByte")
     logging.info(f"Half-hour fee: {response.half_hour_fee} sats/vByte")
     logging.info(f"Hour fee: {response.hour_fee} sats/vByte")

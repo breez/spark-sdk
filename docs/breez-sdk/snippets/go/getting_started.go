@@ -111,14 +111,14 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 }
 
 func AddEventListener(client *breez_sdk_spark.BreezClient, listener SdkListener) string {
-	return client.AddEventListener(listener)
+	return client.Events().Add(listener)
 }
 
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
 func RemoveEventListener(client *breez_sdk_spark.BreezClient, listenerId string) bool {
-	return client.RemoveEventListener(listenerId)
+	return client.Events().Remove(listenerId)
 }
 
 // ANCHOR_END: remove-event-listener

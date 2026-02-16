@@ -2,88 +2,100 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
-    models::{AppConfig, ConnectConfig, ClientConfig},
+    models::ClientConfig,
     sdk::BreezClient,
     sdk_builder::SdkBuilder,
 };
 
-/// Breez SDK entry point — holds validated, immutable configuration.
+/// Breez SDK entry point.
 ///
-/// # Quick Start (single wallet)
+/// Provides a static [`connect`](Self::connect) method that takes a
+/// [`ClientConfig`] and returns a connected [`BreezClient`].
+///
+/// # Quick Start
 ///
 /// ```js
-/// const wallet = await Breez.connect({
+/// const client = await Breez.connect({
 ///   apiKey: "brz_test_...",
 ///   network: "mainnet",
 ///   seed: { type: "mnemonic", mnemonic: "..." },
 /// });
 /// ```
 ///
-/// # Advanced (multi-wallet)
+/// # Advanced (custom components)
 ///
 /// ```js
-/// const breez = new Breez({ apiKey: "brz_test_...", network: "mainnet" });
-/// const wallet1 = await breez.connectWallet({ seed: seed1 });
-/// const wallet2 = await breez.connectWallet({ seed: seed2 });
+/// const builder = await Breez.builder({
+///   apiKey: "brz_test_...",
+///   network: "mainnet",
+///   seed: { type: "mnemonic", mnemonic: "..." },
+/// });
+/// builder.withStorage(myCustomStorage);
+/// const client = await builder.build();
 /// ```
 #[wasm_bindgen(js_name = "Breez")]
-pub struct Breez {
-    inner: breez_sdk_spark::App,
-}
+pub struct Breez;
 
 #[wasm_bindgen(js_class = "Breez")]
 impl Breez {
-    /// Create a new `Breez` instance with the given configuration.
+    /// Connect to the Breez SDK.
     ///
-    /// Resolves all optional fields to sensible defaults. Validates required fields.
-    #[wasm_bindgen(constructor)]
-    pub fn new(config: AppConfig) -> WasmResult<Breez> {
-        let core_config: breez_sdk_spark::AppConfig = config.into();
-        let inner = breez_sdk_spark::App::new(core_config)?;
-        Ok(Breez { inner })
-    }
-
-    /// Connect a wallet using this instance's configuration.
-    ///
-    /// For the common single-wallet case, use the static `Breez.connect()` instead.
-    #[wasm_bindgen(js_name = "connectWallet")]
-    pub async fn connect_wallet(&self, wallet_config: ClientConfig) -> WasmResult<BreezClient> {
-        let core_wallet_config: breez_sdk_spark::ClientConfig = wallet_config.into();
-
-        let config = self.inner.to_config(&core_wallet_config);
-        let storage_dir = self.inner.derive_storage_dir(&core_wallet_config)?;
-
-        let builder = SdkBuilder::new(config.into(), core_wallet_config.seed.into())
-            .with_default_storage(storage_dir)
-            .await?;
-        let sdk = builder.build().await?;
-        Ok(sdk)
-    }
-
-    /// Single-step wallet connection for the common case.
-    ///
-    /// Combines configuration and wallet setup into one call:
+    /// Validates the configuration, resolves defaults, auto-derives the
+    /// storage directory from the seed fingerprint (if not provided),
+    /// and initializes the client.
     ///
     /// ```js
-    /// const wallet = await Breez.connect({
+    /// const client = await Breez.connect({
     ///   apiKey: "brz_test_...",
     ///   network: "mainnet",
     ///   seed: { type: "mnemonic", mnemonic: "..." },
     /// });
     /// ```
-    pub async fn connect(config: ConnectConfig) -> WasmResult<BreezClient> {
-        let core_config: breez_sdk_spark::ConnectConfig = config.into();
-        let (app_config, wallet_config) = core_config.into_parts();
+    pub async fn connect(config: ClientConfig) -> WasmResult<BreezClient> {
+        let core_config: breez_sdk_spark::ClientConfig = config.into();
+        let resolved = breez_sdk_spark::app::resolve_config(&core_config)?;
+        let storage_dir = breez_sdk_spark::app::derive_storage_dir(&core_config)?;
 
-        let app = breez_sdk_spark::App::new(app_config)?;
-        let merged_config = app.to_config(&wallet_config);
-        let storage_dir = app.derive_storage_dir(&wallet_config)?;
+        // Convert core types back to WASM wrapper types for SdkBuilder
+        let wasm_config: crate::models::Config = resolved.into();
+        let wasm_seed: crate::models::Seed = core_config.seed.into();
 
-        let builder = SdkBuilder::new(merged_config.into(), wallet_config.seed.into())
+        let builder = SdkBuilder::new(wasm_config, wasm_seed)
             .with_default_storage(storage_dir)
             .await?;
         let sdk = builder.build().await?;
         Ok(sdk)
     }
-}
 
+    /// Create an [`SdkBuilder`] from a [`ClientConfig`].
+    ///
+    /// Use this when you need to customize low-level components (storage,
+    /// chain service, fiat service, LNURL client, payment observer, key set)
+    /// before connecting.
+    ///
+    /// The returned builder has the resolved config and default storage
+    /// directory already configured. You can override individual components
+    /// via the builder's fluent methods before calling `.build()`.
+    ///
+    /// ```js
+    /// const builder = await Breez.builder({
+    ///   apiKey: "brz_test_...",
+    ///   network: "mainnet",
+    ///   seed: { type: "mnemonic", mnemonic: "..." },
+    /// });
+    /// builder.withStorage(myCustomStorage);
+    /// const client = await builder.build();
+    /// ```
+    pub async fn builder(config: ClientConfig) -> WasmResult<SdkBuilder> {
+        let core_config: breez_sdk_spark::ClientConfig = config.into();
+        let resolved = breez_sdk_spark::app::resolve_config(&core_config)?;
+        let storage_dir = breez_sdk_spark::app::derive_storage_dir(&core_config)?;
+
+        let wasm_config: crate::models::Config = resolved.into();
+        let wasm_seed: crate::models::Seed = core_config.seed.into();
+
+        Ok(SdkBuilder::new(wasm_config, wasm_seed)
+            .with_default_storage(storage_dir)
+            .await?)
+    }
+}

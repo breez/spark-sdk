@@ -72,7 +72,7 @@ const refundDeposit = async (client: BreezClient) => {
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
   // Set the fee for the refund transaction using the half-hour feerate
-  const recommendedFees = await client.recommendedFees()
+  const recommendedFees = await client.deposits().recommendedFees()
   const fee: Fee = { type: 'rate', satPerVbyte: recommendedFees.halfHourFee }
   // or using a fixed amount
   // const fee: Fee = { type: 'fixed', amount: 500 }
@@ -110,7 +110,7 @@ const customClaimLogic = async (client: BreezClient, deposit: DepositInfo) => {
   if (deposit.claimError?.type === 'maxDepositClaimFeeExceeded') {
     const requiredFeeRate = deposit.claimError.requiredFeeRateSatPerVbyte
 
-    const recommendedFees = await client.recommendedFees()
+    const recommendedFees = await client.deposits().recommendedFees()
 
     if (requiredFeeRate <= recommendedFees.fastestFee) {
       const claimRequest: ClaimDepositRequest = {
@@ -126,7 +126,7 @@ const customClaimLogic = async (client: BreezClient, deposit: DepositInfo) => {
 
 const exampleRecommendedFees = async (client: BreezClient) => {
   // ANCHOR: recommended-fees
-  const response = await client.recommendedFees()
+  const response = await client.deposits().recommendedFees()
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')

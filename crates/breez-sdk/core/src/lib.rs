@@ -1,4 +1,4 @@
-mod app;
+pub mod app;
 #[cfg(feature = "uniffi")]
 pub mod bindings;
 mod chain;
@@ -37,11 +37,15 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
-pub use app::App;
+pub use app::Breez;
 #[allow(deprecated)] // Re-export deprecated items for backward compatibility
 pub use sdk::{
     BreezClient, BreezSdk, Wallet, default_config, get_spark_status, init_logging, parse_input,
     verify_message,
+};
+pub use sdk::sub_objects::{
+    DepositsApi, EventsApi, FiatCurrencyApi, LightningAddressApi, LnurlApi, MessageApi,
+    OptimizationApi, PaymentsApi, SettingsApi, TokensApi,
 };
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;

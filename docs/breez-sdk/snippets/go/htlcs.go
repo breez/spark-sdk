@@ -99,7 +99,7 @@ func ListClaimableHtlcPayments(client *breez_sdk_spark.BreezClient) (*[]breez_sd
 		PaymentDetailsFilter:  &paymentDetailsFilter,
 	}
 
-	response, err := client.ListPayments(request)
+	response, err := client.Payments().List(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -121,7 +121,7 @@ func ClaimHtlcPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Pay
 	request := breez_sdk_spark.ClaimHtlcPaymentRequest{
 		Preimage: preimage,
 	}
-	response, err := client.ClaimHtlcPayment(request)
+	response, err := client.Payments().ClaimHtlc(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

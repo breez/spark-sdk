@@ -103,7 +103,7 @@ namespace BreezSdkSnippets
 
         async Task<string> AddEventListener(BreezClient client, SdkListener listener)
         {
-            var listenerId = await client.AddEventListener(listener: listener);
+            var listenerId = await client.Events().Add(listener: listener);
             return listenerId;
         }
         // ANCHOR_END: add-event-listener
@@ -111,7 +111,7 @@ namespace BreezSdkSnippets
         // ANCHOR: remove-event-listener
         async Task RemoveEventListener(BreezClient client, string listenerId)
         {
-            await client.RemoveEventListener(id: listenerId);
+            await client.Events().Remove(id: listenerId);
         }
         // ANCHOR_END: remove-event-listener
 

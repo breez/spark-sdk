@@ -30,7 +30,7 @@ class Tokens {
         // ANCHOR: fetch-token-metadata
         try {
             val response = 
-                client.getTokensMetadata(
+                client.tokens().metadata(
                     GetTokensMetadataRequest(
                         tokenIdentifiers = listOf("<token identifier 1>", "<token identifier 2>")
                 )
@@ -139,7 +139,7 @@ class Tokens {
         // ANCHOR: fetch-conversion-limits
         try {
             // Fetch limits for converting Bitcoin to a token
-            val fromBitcoinResponse = client.fetchConversionLimits(
+            val fromBitcoinResponse = client.tokens().fetchConversionLimits(
                 FetchConversionLimitsRequest(
                     conversionType = ConversionType.FromBitcoin,
                     tokenIdentifier = "<token identifier>"
@@ -154,7 +154,7 @@ class Tokens {
             }
 
             // Fetch limits for converting a token to Bitcoin
-            val toBitcoinResponse = client.fetchConversionLimits(
+            val toBitcoinResponse = client.tokens().fetchConversionLimits(
                 FetchConversionLimitsRequest(
                     conversionType = ConversionType.ToBitcoin(
                         fromTokenIdentifier = "<token identifier>"

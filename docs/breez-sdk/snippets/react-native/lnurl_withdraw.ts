@@ -14,7 +14,7 @@ const exampleLnurlWithdraw = async (client: BreezClient) => {
     const withdrawRequest = input.inner[0]
     const optionalCompletionTimeoutSecs = 30
 
-    const response = await client.lnurlWithdraw({
+    const response = await client.lnurl().withdraw({
       amountSats,
       withdrawRequest,
       completionTimeoutSecs: optionalCompletionTimeoutSecs

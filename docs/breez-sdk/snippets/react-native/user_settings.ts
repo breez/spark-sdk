@@ -2,7 +2,7 @@ import { type BreezClient } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleGetUserSettings = async (client: BreezClient) => {
   // ANCHOR: get-user-settings
-  const userSettings = await client.getUserSettings()
+  const userSettings = await client.settings().get()
   console.log(`User settings: ${JSON.stringify(userSettings)}`)
   // ANCHOR_END: get-user-settings
 }
@@ -10,7 +10,7 @@ const exampleGetUserSettings = async (client: BreezClient) => {
 const exampleUpdateUserSettings = async (client: BreezClient) => {
   // ANCHOR: update-user-settings
   const sparkPrivateModeEnabled = true
-  await client.updateUserSettings({
+  await client.settings().update({
     sparkPrivateModeEnabled
   })
   // ANCHOR_END: update-user-settings

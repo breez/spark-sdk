@@ -30,7 +30,7 @@ public static class LnurlAuth
     {
         // ANCHOR: lnurl-auth
         // Perform LNURL authentication
-        var result = await client.LnurlAuth(requestData);
+        var result = await client.Lnurl().Auth(requestData);
 
         if (result is LnurlCallbackStatus.Ok)
         {

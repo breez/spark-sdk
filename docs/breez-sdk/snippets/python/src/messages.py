@@ -11,7 +11,7 @@ async def sign_message(client: BreezClient):
         sign_message_request = SignMessageRequest(
             message=message, compact=compact
         )
-        sign_message_response = await client.sign_message(request=sign_message_request)
+        sign_message_response = await client.message().sign(request=sign_message_request)
 
         signature = sign_message_response.signature
         pubkey = sign_message_response.pubkey
@@ -33,7 +33,7 @@ async def check_message(client: BreezClient):
         check_message_request = CheckMessageRequest(
             message=message, pubkey=pubkey, signature=signature
         )
-        check_message_response = await client.check_message(request=check_message_request)
+        check_message_response = await client.message().check(request=check_message_request)
 
         is_valid = check_message_response.is_valid
 

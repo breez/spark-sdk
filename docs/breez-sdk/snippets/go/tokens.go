@@ -42,7 +42,7 @@ func FetchTokenBalances(client *breez_sdk_spark.BreezClient) error {
 func FetchTokenMetadata(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-token-metadata
 	tokenIdentifiers := []string{"<token identifier 1>", "<token identifier 2>"}
-	response, err := client.GetTokensMetadata(breez_sdk_spark.GetTokensMetadataRequest{
+	response, err := client.Tokens().Metadata(breez_sdk_spark.GetTokensMetadataRequest{
 		TokenIdentifiers: tokenIdentifiers,
 	})
 
@@ -166,7 +166,7 @@ func FetchConversionLimits(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: fetch-conversion-limits
 	// Fetch limits for converting Bitcoin to a token
 	tokenIdentifier := "<token identifier>"
-	fromBitcoinResponse, err := client.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	fromBitcoinResponse, err := client.Tokens().FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
 		ConversionType:  breez_sdk_spark.ConversionTypeFromBitcoin{},
 		TokenIdentifier: &tokenIdentifier,
 	})
@@ -189,7 +189,7 @@ func FetchConversionLimits(client *breez_sdk_spark.BreezClient) error {
 
 	// Fetch limits for converting a token to Bitcoin
 	fromTokenIdentifier := "<token identifier>"
-	toBitcoinResponse, err := client.FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
+	toBitcoinResponse, err := client.Tokens().FetchConversionLimits(breez_sdk_spark.FetchConversionLimitsRequest{
 		ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
 			FromTokenIdentifier: fromTokenIdentifier,
 		},

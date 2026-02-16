@@ -20,7 +20,7 @@ Future<void> lnurlWithdraw(BreezClient client) async {
       completionTimeoutSecs: optionalCompletionTimeoutSecs,
     );
 
-    LnurlWithdrawResponse response = await client.lnurlWithdraw(request: request);
+    LnurlWithdrawResponse response = await client.lnurl().withdraw(request: request);
 
     Payment? payment = response.payment;
     print('Payment: $payment');

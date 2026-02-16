@@ -3,7 +3,7 @@ import BreezSdkSpark
 func listUnclaimedDeposits(client: BreezClient) async throws {
     // ANCHOR: list-unclaimed-deposits
     let request = ListUnclaimedDepositsRequest()
-    let response = try await client.listUnclaimedDeposits(request: request)
+    let response = try await client.deposits().listUnclaimed(request: request)
 
     for deposit in response.deposits {
         print("Unclaimed deposit: \(deposit.txid):\(deposit.vout)")
@@ -49,7 +49,7 @@ func handleFeeExceeded(client: BreezClient, deposit: DepositInfo) async throws {
                 vout: deposit.vout,
                 maxFee: MaxFee.fixed(amount: requiredFeeSats)
             )
-            try await client.claimDeposit(request: claimRequest)
+            try await client.deposits().claim(request: claimRequest)
         }
     }
     // ANCHOR_END: handle-fee-exceeded
@@ -62,7 +62,7 @@ func refundDeposit(client: BreezClient) async throws {
     let destinationAddress = "bc1qexample..."  // Your Bitcoin address
 
     // Set the fee for the refund transaction using the half-hour feerate
-    let recommendedFees = try await client.recommendedFees()
+    let recommendedFees = try await client.deposits().recommendedFees()
     let fee = Fee.rate(satPerVbyte: recommendedFees.halfHourFee)
     // or using a fixed amount
     //let fee = Fee.fixed(amount: 500) // 500 sats
@@ -75,7 +75,7 @@ func refundDeposit(client: BreezClient) async throws {
         fee: fee
     )
 
-    let response = try await client.refundDeposit(request: request)
+    let response = try await client.deposits().refund(request: request)
     print("Refund transaction created:")
     print("Transaction ID: \(response.txId)")
     print("Transaction hex: \(response.txHex)")
@@ -98,7 +98,7 @@ func setMaxFeeToRecommendedFees() async throws {
 func customClaimLogic(client: BreezClient, deposit: DepositInfo) async throws {
     // ANCHOR: custom-claim-logic
     if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) = deposit.claimError {
-        let recommendedFees = try await client.recommendedFees()
+        let recommendedFees = try await client.deposits().recommendedFees()
 
         if requiredFeeRateSatPerVbyte <= recommendedFees.fastestFee {
             let claimRequest = ClaimDepositRequest(
@@ -106,7 +106,7 @@ func customClaimLogic(client: BreezClient, deposit: DepositInfo) async throws {
                 vout: deposit.vout,
                 maxFee: MaxFee.rate(satPerVbyte: requiredFeeRateSatPerVbyte)
             )
-            try await client.claimDeposit(request: claimRequest)
+            try await client.deposits().claim(request: claimRequest)
         }
     }
     // ANCHOR_END: custom-claim-logic
@@ -114,7 +114,7 @@ func customClaimLogic(client: BreezClient, deposit: DepositInfo) async throws {
 
 func recommendedFees(client: BreezClient) async throws {
     // ANCHOR: recommended-fees
-    let response = try await client.recommendedFees()
+    let response = try await client.deposits().recommendedFees()
     print("Fastest fee: \(response.fastestFee) sats/vByte")
     print("Half-hour fee: \(response.halfHourFee) sats/vByte")
     print("Hour fee: \(response.hourFee) sats/vByte")

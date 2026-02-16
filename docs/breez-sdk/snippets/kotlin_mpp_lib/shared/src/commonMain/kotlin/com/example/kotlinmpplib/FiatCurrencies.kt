@@ -6,7 +6,7 @@ class FiatCurrencies {
     suspend fun listFiatCurrencies(client: BreezClient) {
         // ANCHOR: list-fiat-currencies
         try {
-            val response = client.listFiatCurrencies()
+            val response = client.fiat().currencies()
         } catch (e: Exception) {
             // handle error
         }
@@ -16,7 +16,7 @@ class FiatCurrencies {
     suspend fun listFiatRates(client: BreezClient) {
         // ANCHOR: list-fiat-rates
         try {
-            val response = client.listFiatRates()
+            val response = client.fiat().rates()
         } catch (e: Exception) {
             // handle error
         }

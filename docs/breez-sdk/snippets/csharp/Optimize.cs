@@ -7,21 +7,21 @@ namespace BreezSdkSnippets
         void StartOptimization(BreezClient client)
         {
             // ANCHOR: start-optimization
-            client.StartLeafOptimization();
+            client.Optimization().Start();
             // ANCHOR_END: start-optimization
         }
 
         async Task CancelOptimization(BreezClient client)
         {
             // ANCHOR: cancel-optimization
-            await client.CancelLeafOptimization();
+            await client.Optimization().Cancel();
             // ANCHOR_END: cancel-optimization
         }
 
         void GetOptimizationProgress(BreezClient client)
         {
             // ANCHOR: get-optimization-progress
-            var progress = client.GetLeafOptimizationProgress();
+            var progress = client.Optimization().Progress();
 
             Console.WriteLine($"Optimization is running: {progress.isRunning}");
             Console.WriteLine($"Current round: {progress.currentRound}");

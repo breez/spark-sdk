@@ -29,7 +29,7 @@ async def withdraw(client: BreezClient):
                 withdraw_request=withdraw_request,
                 completion_timeout_secs=optional_completion_timeout_secs,
             )
-            response = await client.lnurl_withdraw(request=request)
+            response = await client.lnurl().withdraw(request=request)
 
 
             payment = response.payment

@@ -12,25 +12,18 @@ use crate::{
 
 use super::BreezClient;
 
-// prepare() and pay() return PreparedPayment<S> which is generic and cannot be
-// exported through UniFFI.  WASM bindings wrap these in crates/breez-sdk/wasm/src/sdk.rs.
-// UniFFI bindings will be added in Phase 6 (language binding idiomaticity).
+// Internal implementation: returns PreparedPayment<S> which is generic and cannot be
+// exported through UniFFI. Public API is `prepare_payment()` (UniFFI) and
+// `preparePayment()` (WASM, which calls this internally).
 #[allow(deprecated)] // New unified API delegates to legacy methods internally
 impl BreezClient {
-    /// Parse the destination and prepare a payment in one step.
+    /// Internal implementation of `prepare_payment()`.
     ///
-    /// This is the main entry point for the unified payment API.
-    /// It accepts any destination string (Spark address, Spark invoice,
-    /// Bolt11 invoice, Bitcoin address, LNURL-Pay URL, Lightning address)
-    /// and returns a `PreparedPayment` that can be inspected (amount, fee)
-    /// and then confirmed.
+    /// Returns a generic `PreparedPayment<Arc<BreezClient>>` that is then
+    /// wrapped by `prepare_payment()` (UniFFI) or `preparePayment()` (WASM).
     ///
-    /// # Example (Rust)
-    /// ```ignore
-    /// let prepared = sdk.prepare("lnbc1...", None).await?;
-    /// println!("Fee: {:?}", prepared.fee());
-    /// let result = prepared.confirm(None).await?;
-    /// ```
+    /// Not part of the public API — use [`prepare_payment()`](Self::prepare_payment) instead.
+    #[doc(hidden)]
     pub async fn prepare(
         &self,
         destination: &str,
@@ -136,10 +129,10 @@ impl BreezClient {
 impl BreezClient {
     /// Parse the destination and prepare a payment in one step.
     ///
-    /// Returns a [`PreparedPaymentHandle`] that can be inspected (amount, fee)
-    /// and then confirmed with [`PreparedPaymentHandle::confirm`].
-    ///
-    /// This is the UniFFI-exported version of [`prepare`](Self::prepare).
+    /// Accepts any destination string (Spark address, Spark invoice,
+    /// Bolt11 invoice, Bitcoin address, LNURL-Pay URL, Lightning address)
+    /// and returns a [`PreparedPaymentHandle`] that can be inspected (amount, fee)
+    /// and then confirmed with [`PreparedPaymentHandle::send`].
     pub async fn prepare_payment(
         &self,
         destination: String,
@@ -169,10 +162,10 @@ impl BreezClient {
         let has_token = options.token_identifier.is_some();
 
         let payment_method = match payment_type {
-            ReceivePaymentType::Lightning => {
+            ReceivePaymentType::Bolt11Invoice => {
                 if options.amount_token_units.is_some() {
                     return Err(SdkError::InvalidInput(
-                        "Lightning receive only supports amount_sats, not amount_token_units"
+                        "Bolt11Invoice receive only supports amount_sats, not amount_token_units"
                             .to_string(),
                     ));
                 }
@@ -182,10 +175,10 @@ impl BreezClient {
                     expiry_secs: options.expiry.map(|e| e.try_into().unwrap_or(u32::MAX)),
                 }
             }
-            ReceivePaymentType::Onchain => {
+            ReceivePaymentType::BitcoinAddress => {
                 if options.amount_token_units.is_some() {
                     return Err(SdkError::InvalidInput(
-                        "Onchain receive only supports amount_sats, not amount_token_units"
+                        "BitcoinAddress receive only supports amount_sats, not amount_token_units"
                             .to_string(),
                     ));
                 }

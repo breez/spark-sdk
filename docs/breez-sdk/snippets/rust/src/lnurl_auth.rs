@@ -24,7 +24,7 @@ async fn parse_lnurl_auth(client: &BreezClient) -> Result<()> {
 async fn authenticate(client: &BreezClient, request_data: LnurlAuthRequestDetails) -> Result<()> {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    let result = client.lnurl_auth(request_data).await?;
+    let result = client.lnurl().auth(request_data).await?;
 
     match result {
         LnurlCallbackStatus::Ok => {

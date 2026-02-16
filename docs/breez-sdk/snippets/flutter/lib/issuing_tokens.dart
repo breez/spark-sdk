@@ -3,7 +3,7 @@ import 'helper.dart';
 
 TokenIssuer getTokenIssuer(BreezClient client) {
   // ANCHOR: get-token-issuer
-  TokenIssuer tokenIssuer = client.getTokenIssuer();
+  TokenIssuer tokenIssuer = client.tokens().issuer();
   // ANCHOR_END: get-token-issuer
   return tokenIssuer;
 }

@@ -7,7 +7,7 @@ class RefundingPayments {
         // ANCHOR: list-unclaimed-deposits
         try {
             val request = ListUnclaimedDepositsRequest
-            val response = client.listUnclaimedDeposits(request)
+            val response = client.deposits().listUnclaimed(request)
             
             for (deposit in response.deposits) {
                 // Log.v("Breez", "Unclaimed deposit: ${deposit.txid}:${deposit.vout}")
@@ -55,7 +55,7 @@ class RefundingPayments {
                         vout = deposit.vout,
                         maxFee = MaxFee.Fixed(requiredFee)
                     )
-                    client.claimDeposit(claimRequest)
+                    client.deposits().claim(claimRequest)
                 }
             }
         } catch (e: Exception) {
@@ -72,7 +72,7 @@ class RefundingPayments {
             val destinationAddress = "bc1qexample..." // Your Bitcoin address
             
             // Set the fee for the refund transaction using the half-hour feerate
-            val recommendedFees = client.recommendedFees()
+            val recommendedFees = client.deposits().recommendedFees()
             val fee = Fee.Rate(recommendedFees.halfHourFee)
             // or using a fixed amount
             //val fee = Fee.Fixed(500u)
@@ -85,7 +85,7 @@ class RefundingPayments {
                 fee = fee
             )
             
-            val response = client.refundDeposit(request)
+            val response = client.deposits().refund(request)
             // Log.v("Breez", "Refund transaction created:")
             // Log.v("Breez", "Transaction ID: ${response.txId}")
             // Log.v("Breez", "Transaction hex: ${response.txHex}")
@@ -115,7 +115,7 @@ class RefundingPayments {
             if (claimError is DepositClaimError.MaxDepositClaimFeeExceeded) {
                 val requiredFeeRate = claimError.requiredFeeRateSatPerVbyte
 
-                val recommendedFees = client.recommendedFees()
+                val recommendedFees = client.deposits().recommendedFees()
 
                 if (requiredFeeRate <= recommendedFees.fastestFee) {
                     val claimRequest = ClaimDepositRequest(
@@ -123,7 +123,7 @@ class RefundingPayments {
                         vout = deposit.vout,
                         maxFee = MaxFee.Rate(requiredFeeRate)
                     )
-                    client.claimDeposit(claimRequest)
+                    client.deposits().claim(claimRequest)
                 }
             }
         } catch (e: Exception) {
@@ -135,7 +135,7 @@ class RefundingPayments {
 
 suspend fun recommendedFees(client: BreezClient) {
     // ANCHOR: recommended-fees
-    val response = client.recommendedFees()
+    val response = client.deposits().recommendedFees()
     println("Fastest fee: ${response.fastestFee} sats/vByte")
     println("Half-hour fee: ${response.halfHourFee} sats/vByte")
     println("Hour fee: ${response.hourFee} sats/vByte")

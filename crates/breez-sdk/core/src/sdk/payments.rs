@@ -153,8 +153,8 @@ impl BreezClient {
 
     /// # Deprecated
     ///
-    /// Use [`prepare()`](Self::prepare) or [`prepare_payment()`](Self::prepare_payment) instead.
-    #[deprecated(note = "Use prepare() or prepare_payment() instead")]
+    /// Use [`prepare_payment()`](Self::prepare_payment) instead.
+    #[deprecated(note = "Use prepare_payment() instead")]
     #[allow(clippy::too_many_lines)]
     pub async fn prepare_send_payment(
         &self,
@@ -351,10 +351,10 @@ impl BreezClient {
 
     /// # Deprecated
     ///
-    /// Use [`prepare()`](Self::prepare) followed by
-    /// [`PreparedPayment::send()`](crate::PreparedPayment::send) instead.
+    /// Use [`prepare_payment()`](Self::prepare_payment) followed by
+    /// [`PreparedPaymentHandle::send()`](crate::PreparedPaymentHandle::send) instead.
     #[deprecated(
-        note = "Use prepare() + PreparedPayment::send() instead"
+        note = "Use prepare_payment() + PreparedPaymentHandle::send() instead"
     )]
     pub async fn send_payment(
         &self,

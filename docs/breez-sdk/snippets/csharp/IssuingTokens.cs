@@ -8,7 +8,7 @@ namespace BreezSdkSnippets
         void GetTokenIssuer(BreezClient client)
         {
             // ANCHOR: get-token-issuer
-            var tokenIssuer = client.GetTokenIssuer();
+            var tokenIssuer = client.Tokens().Issuer();
             // ANCHOR_END: get-token-issuer
         }
 

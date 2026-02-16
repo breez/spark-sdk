@@ -9,7 +9,7 @@ use log::info;
 
 fn get_token_issuer(client: BreezClient) {
     // ANCHOR: get-token-issuer
-    let token_issuer = client.get_token_issuer();
+    let token_issuer = client.tokens().issuer();
     // ANCHOR_END: get-token-issuer
 }
 

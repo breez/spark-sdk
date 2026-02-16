@@ -14,7 +14,7 @@ namespace BreezSdkSnippets
                 message: message,
                 compact: compact
             );
-            var signMessageResponse = await client.SignMessage(request: signMessageRequest);
+            var signMessageResponse = await client.Message().Sign(request: signMessageRequest);
 
             var signature = signMessageResponse.signature;
             var pubkey = signMessageResponse.pubkey;
@@ -35,7 +35,7 @@ namespace BreezSdkSnippets
                 pubkey: pubkey,
                 signature: signature
             );
-            var checkMessageResponse = await client.CheckMessage(request: checkMessageRequest);
+            var checkMessageResponse = await client.Message().Check(request: checkMessageRequest);
 
             var isValid = checkMessageResponse.isValid;
 

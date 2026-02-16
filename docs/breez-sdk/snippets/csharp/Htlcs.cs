@@ -64,7 +64,7 @@ namespace BreezSdkSnippets
                 }
             );
 
-            var response = await client.ListPayments(request: request);
+            var response = await client.Payments().List(request: request);
             var payments = response.payments;
             // ANCHOR_END: list-claimable-htlc-payments
         }
@@ -73,7 +73,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: claim-htlc-payment
             var preimage = "<preimage hex>";
-            var response = await client.ClaimHtlcPayment(
+            var response = await client.Payments().ClaimHtlc(
                 request: new ClaimHtlcPaymentRequest(preimage: preimage)
             );
             var payment = response.payment;

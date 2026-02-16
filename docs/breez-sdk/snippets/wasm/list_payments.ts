@@ -26,7 +26,7 @@ const exampleListPaymentsFiltered = async (client: BreezClient): Promise<Payment
   // To filter by Bitcoin instead:
   // const assetFilter: AssetFilter = { type: 'bitcoin' }
 
-  const response = await client.listPayments({
+  const response = await client.payments.list({
     // Filter by payment type
     typeFilter: ['send', 'receive'],
     // Filter by status

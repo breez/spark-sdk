@@ -23,7 +23,7 @@ pub struct PaymentIntent {
 #[wasm_bindgen(js_class = "PaymentIntent")]
 #[allow(deprecated)]
 impl PaymentIntent {
-    /// The type of payment: `'spark'`, `'lightning'`, or `'onchain'`.
+    /// The type of payment: `'spark'`, `'bolt11Invoice'`, or `'bitcoinAddress'`.
     #[wasm_bindgen(getter, js_name = "paymentType")]
     pub fn payment_type(&self) -> PaymentIntentType {
         self.inner.payment_type().into()

@@ -17,7 +17,7 @@ func SignMessage(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.SignMess
 		Message: message,
 		Compact: compact,
 	}
-	signMessageResponse, err := client.SignMessage(signMessageRequest)
+	signMessageResponse, err := client.Message().Sign(signMessageRequest)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -47,7 +47,7 @@ func CheckMessage(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.CheckMe
 		Pubkey:    pubkey,
 		Signature: signature,
 	}
-	checkMessageResponse, err := client.CheckMessage(checkMessageRequest)
+	checkMessageResponse, err := client.Message().Check(checkMessageRequest)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

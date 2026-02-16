@@ -13,7 +13,7 @@ async def get_payment(client: BreezClient):
     try:
         # ANCHOR: get-payment
         payment_id = "<payment id>"
-        response = await client.get_payment(
+        response = await client.payments().get(
             request=GetPaymentRequest(payment_id=payment_id)
         )
         payment = response.payment
@@ -26,7 +26,7 @@ async def get_payment(client: BreezClient):
 async def list_payments(client: BreezClient):
     try:
         # ANCHOR: list-payments
-        response = await client.list_payments(request=ListPaymentsRequest())
+        response = await client.payments().list(request=ListPaymentsRequest())
         payments = response.payments
         # ANCHOR_END: list-payments
     except Exception as error:
@@ -57,7 +57,7 @@ async def list_payments_filtered(client: BreezClient):
             # Sort order (true = oldest first, false = newest first)
             sort_ascending=False
         )
-        response = await client.list_payments(request=request)
+        response = await client.payments().list(request=request)
         payments = response.payments
         # ANCHOR_END: list-payments-filtered
     except Exception as error:

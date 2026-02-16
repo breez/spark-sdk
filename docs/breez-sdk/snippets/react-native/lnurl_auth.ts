@@ -28,7 +28,7 @@ const parseLnurlAuth = async (client: BreezClient) => {
 const authenticate = async (client: BreezClient, requestData: LnurlAuthRequestDetails) => {
   // ANCHOR: lnurl-auth
   // Perform LNURL authentication
-  const result = await client.lnurlAuth(requestData)
+  const result = await client.lnurl().auth(requestData)
 
   if (result.tag === LnurlCallbackStatus_Tags.Ok) {
     console.log('Authentication successful')

@@ -21,7 +21,7 @@ from breez_sdk_spark import (
 
 def get_token_issuer(client: BreezClient):
     # ANCHOR: get-token-issuer
-    token_issuer = client.get_token_issuer()
+    token_issuer = client.tokens().issuer()
     # ANCHOR_END: get-token-issuer
 
 

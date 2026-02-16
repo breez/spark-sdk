@@ -75,7 +75,7 @@ func listClaimableHtlcPayments(client: BreezClient) async throws -> [Payment] {
         )]
     )
 
-    let response = try await client.listPayments(request: request)
+    let response = try await client.payments().list(request: request)
     let payments = response.payments
     // ANCHOR_END: list-claimable-htlc-payments
     return payments
@@ -84,7 +84,7 @@ func listClaimableHtlcPayments(client: BreezClient) async throws -> [Payment] {
 func claimHtlcPayment(client: BreezClient) async throws -> Payment {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>"
-    let response = try await client.claimHtlcPayment(
+    let response = try await client.payments().claimHtlc(
         request: ClaimHtlcPaymentRequest(preimage: preimage)
     )
     let payment = response.payment

@@ -6,7 +6,7 @@ class UserSettings {
     suspend fun getUserSettings(client: BreezClient) {
         // ANCHOR: get-user-settings
         try {
-            val userSettings = client.getUserSettings()
+            val userSettings = client.settings().get()
             println("User settings: $userSettings")
         } catch (e: Exception) {
             // handle error
@@ -18,7 +18,7 @@ class UserSettings {
         // ANCHOR: update-user-settings
         try {
             val sparkPrivateModeEnabled = true
-            client.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
+            client.settings().update(UpdateUserSettingsRequest(sparkPrivateModeEnabled))
         } catch (e: Exception) {
             // handle error
         }

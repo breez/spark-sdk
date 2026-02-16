@@ -5,6 +5,7 @@ mod init;
 mod lightning_address;
 mod lnurl;
 mod payments;
+pub mod sub_objects;
 mod sync;
 mod unified_payment;
 
@@ -16,7 +17,7 @@ use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 use tokio_with_wasm::alias as tokio;
 
 use crate::{
-    BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
+    BitcoinChainService, ExternalInputParser, InputType, Logger, Network, LeafOptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
     nostr::NostrClient, persist::Storage, token_conversion::TokenConverter,
 };
@@ -93,7 +94,7 @@ impl SyncRequest {
 /// The primary SDK type — a connected client holding live state and all
 /// payment/query operations.
 ///
-/// Created via [`App::connect_wallet`](crate::App::connect_wallet) (new API)
+/// Created via [`Breez::connect`](crate::Breez::connect) (new API)
 /// or [`connect`] (legacy API).
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -195,14 +196,18 @@ pub fn init_logging(
 ///
 /// # Deprecated
 ///
-/// Use [`App::new`](crate::App::new) + [`App::connect_wallet`](crate::App::connect_wallet) instead:
+/// Use [`Breez::connect`](crate::Breez::connect) instead:
 ///
 /// ```ignore
-/// let app = App::new(AppConfig { api_key: "..".into(), network: Network::Mainnet, ..Default::default() })?;
-/// let wallet = app.connect_wallet(ClientConfig { seed, ..Default::default() }).await?;
+/// let client = Breez::connect(ClientConfig {
+///     api_key: "..".into(),
+///     network: Network::Mainnet,
+///     seed,
+///     ..Default::default()
+/// }).await?;
 /// ```
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[deprecated(note = "Use App::new() + app.connect_wallet() instead")]
+#[deprecated(note = "Use Breez::connect() instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
@@ -215,9 +220,9 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 ///
 /// # Deprecated
 ///
-/// Use [`App::new`](crate::App::new) + [`App::connect_wallet`](crate::App::connect_wallet) instead.
+/// Use [`Breez::connect`](crate::Breez::connect) instead.
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[deprecated(note = "Use App::new() + app.connect_wallet() instead")]
+#[deprecated(note = "Use Breez::connect() instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,
@@ -230,8 +235,8 @@ pub async fn connect_with_signer(
 
 /// # Deprecated
 ///
-/// Use [`AppConfig`](crate::AppConfig) with `..Default::default()` instead.
-#[deprecated(note = "Use AppConfig with defaults instead")]
+/// Use [`ClientConfig`](crate::ClientConfig) with `..Default::default()` instead.
+#[deprecated(note = "Use ClientConfig with defaults instead")]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {
@@ -249,7 +254,7 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
-        optimization_config: OptimizationConfig {
+        optimization_config: LeafOptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
         },

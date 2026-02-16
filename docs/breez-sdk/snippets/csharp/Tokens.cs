@@ -30,7 +30,7 @@ namespace BreezSdkSnippets
         async Task FetchTokenMetadata(BreezClient client)
         {
             // ANCHOR: fetch-token-metadata
-            var response = await client.GetTokensMetadata(
+            var response = await client.Tokens().Metadata(
                 request: new GetTokensMetadataRequest(
                     tokenIdentifiers: new List<string> { "<token identifier 1>", "<token identifier 2>" }
                 )
@@ -124,7 +124,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: fetch-conversion-limits
             // Fetch limits for converting Bitcoin to a token
-            var fromBitcoinResponse = await client.FetchConversionLimits(
+            var fromBitcoinResponse = await client.Tokens().FetchConversionLimits(
                 request: new FetchConversionLimitsRequest(
                     conversionType: new ConversionType.FromBitcoin(),
                     tokenIdentifier: "<token identifier>"
@@ -141,7 +141,7 @@ namespace BreezSdkSnippets
             }
 
             // Fetch limits for converting a token to Bitcoin
-            var toBitcoinResponse = await client.FetchConversionLimits(
+            var toBitcoinResponse = await client.Tokens().FetchConversionLimits(
                 request: new FetchConversionLimitsRequest(
                     conversionType: new ConversionType.ToBitcoin(
                         fromTokenIdentifier: "<token identifier>"

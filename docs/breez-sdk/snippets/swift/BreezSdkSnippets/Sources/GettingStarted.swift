@@ -82,14 +82,14 @@ class SdkEventListener: EventListener {
 }
 
 func addEventListener(client: BreezClient, listener: SdkEventListener) async -> String {
-    let listenerId = await client.addEventListener(listener: listener)
+    let listenerId = await client.events().add(listener: listener)
     return listenerId
 }
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
 func removeEventListener(client: BreezClient, listenerId: String) async {
-    await client.removeEventListener(id: listenerId)
+    await client.events().remove(id: listenerId)
 }
 // ANCHOR_END: remove-event-listener
 

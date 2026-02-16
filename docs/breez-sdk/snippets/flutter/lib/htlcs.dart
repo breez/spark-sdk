@@ -50,7 +50,7 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezClient client) async {
     )],
   );
 
-  final response = await client.listPayments(request: request);
+  final response = await client.payments().list(request: request);
   final payments = response.payments;
   // ANCHOR_END: list-claimable-htlc-payments
   return payments;
@@ -59,7 +59,7 @@ Future<List<Payment>> listClaimableHtlcPayments(BreezClient client) async {
 Future<Payment> claimHtlcPayment(BreezClient client) async {
   // ANCHOR: claim-htlc-payment
   String preimage = "<preimage hex>";
-  final response = await client.claimHtlcPayment(
+  final response = await client.payments().claimHtlc(
       request: ClaimHtlcPaymentRequest(preimage: preimage));
   final payment = response.payment;
   // ANCHOR_END: claim-htlc-payment

@@ -4,7 +4,7 @@ import Foundation
 func getPayment(client: BreezClient) async throws -> Payment {
     // ANCHOR: get-payment
     let paymentId = "<payment id>"
-    let response = try await client.getPayment(
+    let response = try await client.payments().get(
         request: GetPaymentRequest(paymentId: paymentId)
     )
     let payment = response.payment
@@ -14,7 +14,7 @@ func getPayment(client: BreezClient) async throws -> Payment {
 
 func listPayments(client: BreezClient) async throws -> [Payment] {
     // ANCHOR: list-payments
-    let response = try await client.listPayments(
+    let response = try await client.payments().list(
         request: ListPaymentsRequest())
     let payments = response.payments
     // ANCHOR_END: list-payments
@@ -28,7 +28,7 @@ func listPaymentsFiltered(client: BreezClient) async throws -> [Payment] {
     // To filter by Bitcoin instead:
     // let assetFilter = AssetFilter.bitcoin
 
-    let response = try await client.listPayments(
+    let response = try await client.payments().list(
         request: ListPaymentsRequest(
             // Filter by payment type
             typeFilter: [PaymentType.send, PaymentType.receive],

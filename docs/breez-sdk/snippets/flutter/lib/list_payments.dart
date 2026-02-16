@@ -4,7 +4,7 @@ Future<Payment> getPayment(BreezClient client) async {
   // ANCHOR: get-payment
   String paymentId = "<payment id>";
   GetPaymentRequest request = GetPaymentRequest(paymentId: paymentId);
-  GetPaymentResponse response = await client.getPayment(request: request);
+  GetPaymentResponse response = await client.payments().get(request: request);
   Payment payment = response.payment;
   // ANCHOR_END: get-payment
   return payment;
@@ -13,7 +13,7 @@ Future<Payment> getPayment(BreezClient client) async {
 Future<List<Payment>> listPayments(BreezClient client) async {
   // ANCHOR: list-payments
   ListPaymentsRequest request = ListPaymentsRequest();
-  ListPaymentsResponse response = await client.listPayments(request: request);
+  ListPaymentsResponse response = await client.payments().list(request: request);
   List<Payment> payments = response.payments;
   // ANCHOR_END: list-payments
   return payments;
@@ -41,7 +41,7 @@ Future<List<Payment>> listPaymentsFiltered(BreezClient client) async {
     // Sort order (true = oldest first, false = newest first)
     sortAscending: false,
   );
-  ListPaymentsResponse response = await client.listPayments(request: request);
+  ListPaymentsResponse response = await client.payments().list(request: request);
   List<Payment> payments = response.payments;
   // ANCHOR_END: list-payments-filtered
   return payments;

@@ -12,7 +12,7 @@ func GetPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Payment, 
 	request := breez_sdk_spark.GetPaymentRequest{
 		PaymentId: paymentId,
 	}
-	response, err := client.GetPayment(request)
+	response, err := client.Payments().Get(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -30,7 +30,7 @@ func GetPayment(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.Payment, 
 
 func ListPayments(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-payments
-	response, err := client.ListPayments(breez_sdk_spark.ListPaymentsRequest{})
+	response, err := client.Payments().List(breez_sdk_spark.ListPaymentsRequest{})
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -78,7 +78,7 @@ func ListPaymentsFiltered(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spa
 		Limit:         &limit,         // Pagination
 		SortAscending: &sortAscending, // Sort order (true = oldest first, false = newest first)
 	}
-	response, err := client.ListPayments(request)
+	response, err := client.Payments().List(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

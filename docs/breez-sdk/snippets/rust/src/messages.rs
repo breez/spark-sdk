@@ -9,7 +9,7 @@ async fn sign_message(client: &BreezClient) -> Result<()> {
     let compact = true;
 
     let sign_message_request = SignMessageRequest { message, compact };
-    let sign_message_response = client.sign_message(sign_message_request).await?;
+    let sign_message_response = client.message().sign(sign_message_request).await?;
 
     let signature = sign_message_response.signature;
     let pubkey = sign_message_response.pubkey;
@@ -27,7 +27,7 @@ async fn check_message(client: &BreezClient) -> Result<()> {
         pubkey: "<pubkey of signer>".to_string(),
         signature: "<message signature>".to_string(),
     };
-    let check_message_response = client.check_message(check_message_request).await?;
+    let check_message_response = client.message().check(check_message_request).await?;
 
     let is_valid = check_message_response.is_valid;
 

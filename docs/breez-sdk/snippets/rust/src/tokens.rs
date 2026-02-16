@@ -28,7 +28,7 @@ pub(crate) async fn fetch_token_balances(client: &BreezClient) -> Result<()> {
 async fn fetch_token_metadata(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-token-metadata
     let response = client
-        .get_tokens_metadata(GetTokensMetadataRequest {
+        .tokens().metadata(GetTokensMetadataRequest {
             token_identifiers: vec![
                 String::from("<token identifier 1>"),
                 String::from("<token identifier 2>"),
@@ -135,7 +135,7 @@ async fn fetch_conversion_limits(client: &BreezClient) -> Result<()> {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token
     let response = client
-        .fetch_conversion_limits(FetchConversionLimitsRequest {
+        .tokens().fetch_conversion_limits(FetchConversionLimitsRequest {
             conversion_type: ConversionType::FromBitcoin,
             token_identifier: Some("<token identifier>".to_string()),
         })
@@ -150,7 +150,7 @@ async fn fetch_conversion_limits(client: &BreezClient) -> Result<()> {
 
     // Fetch limits for converting a token to Bitcoin
     let response = client
-        .fetch_conversion_limits(FetchConversionLimitsRequest {
+        .tokens().fetch_conversion_limits(FetchConversionLimitsRequest {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "<token identifier>".to_string(),
             },

@@ -6,7 +6,7 @@ class ListPayments {
         // ANCHOR: get-payment
         try {
             val paymentId = "<payment id>";
-            val response = client.getPayment(GetPaymentRequest(paymentId))
+            val response = client.payments().get(GetPaymentRequest(paymentId))
             val payment = response.payment
         } catch (e: Exception) {
             // handle error
@@ -17,7 +17,7 @@ class ListPayments {
     suspend fun listPayments(client: BreezClient) {
         // ANCHOR: list-payments
         try {
-            val response = client.listPayments(ListPaymentsRequest())
+            val response = client.payments().list(ListPaymentsRequest())
             val payments = response.payments
         } catch (e: Exception) {
             // handle error
@@ -33,7 +33,7 @@ class ListPayments {
             // To filter by Bitcoin instead:
             // val assetFilter = AssetFilter.Bitcoin
 
-            val response = client.listPayments(
+            val response = client.payments().list(
                 ListPaymentsRequest(
                     // Filter by payment type
                     typeFilter = listOf(PaymentType.SEND, PaymentType.RECEIVE),

@@ -32,7 +32,7 @@ func parseLnurlAuth(client *breez_sdk_spark.BreezClient) {
 func authenticate(client *breez_sdk_spark.BreezClient, requestData breez_sdk_spark.LnurlAuthRequestDetails) {
 	// ANCHOR: lnurl-auth
 	// Perform LNURL authentication
-	result, err := client.LnurlAuth(requestData)
+	result, err := client.Lnurl().Auth(requestData)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

@@ -64,8 +64,8 @@ impl BreezClient {
     }
 
     /// User settings API.
-    #[wasm_bindgen(getter)]
-    pub fn settings(&self) -> SettingsApi {
+    #[wasm_bindgen(getter, js_name = "userSettings")]
+    pub fn user_settings(&self) -> SettingsApi {
         SettingsApi {
             sdk: self.sdk.clone(),
         }
@@ -153,7 +153,7 @@ pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<
     Ok(())
 }
 
-/// @deprecated Use `new Breez()` + `breez.connectWallet()` or `Breez.connect()` instead.
+/// @deprecated Use `Breez.connect()` instead.
 #[wasm_bindgen(js_name = "connect")]
 pub async fn connect(request: ConnectRequest) -> WasmResult<BreezClient> {
     let builder = SdkBuilder::new(request.config, request.seed)
@@ -163,7 +163,7 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezClient> {
     Ok(sdk)
 }
 
-/// @deprecated Use `new Breez()` + `breez.connectWallet()` or `Breez.connect()` instead.
+/// @deprecated Use `Breez.connect()` instead.
 #[wasm_bindgen(js_name = "connectWithSigner")]
 pub async fn connect_with_signer(
     config: Config,
@@ -177,7 +177,7 @@ pub async fn connect_with_signer(
     Ok(sdk)
 }
 
-/// @deprecated Use `AppConfig` with defaults instead.
+/// @deprecated Use `ClientConfig` with defaults instead.
 #[allow(deprecated)]
 #[wasm_bindgen(js_name = "defaultConfig")]
 pub fn default_config(network: Network) -> Config {
@@ -279,25 +279,6 @@ impl BreezClient {
         Ok(PaymentIntent { inner })
     }
 
-    /// @deprecated Use `preparePayment()` instead.
-    #[wasm_bindgen(js_name = "createPayment")]
-    pub async fn create_payment(
-        &self,
-        destination: &str,
-        options: Option<PrepareOptions>,
-    ) -> WasmResult<PaymentIntent> {
-        self.prepare_payment(destination, options).await
-    }
-
-    /// @deprecated Use `preparePayment()` instead.
-    #[wasm_bindgen(js_name = "prepare")]
-    pub async fn prepare(
-        &self,
-        destination: &str,
-        options: Option<PrepareOptions>,
-    ) -> WasmResult<PaymentIntent> {
-        self.prepare_payment(destination, options).await
-    }
 
     /// Generate a payment request (invoice, address) to receive funds.
     #[wasm_bindgen(js_name = "receive")]
@@ -345,7 +326,7 @@ impl BreezClient {
         Ok(self.sdk.claim_htlc_payment(request.into()).await?.into())
     }
 
-    /// @deprecated Use `prepare()` instead.
+    /// @deprecated Use `preparePayment()` instead.
     #[wasm_bindgen(js_name = "prepareSendPayment")]
     pub async fn prepare_send_payment(
         &self,
@@ -354,7 +335,7 @@ impl BreezClient {
         Ok(self.sdk.prepare_send_payment(request.into()).await?.into())
     }
 
-    /// @deprecated Use `prepare()` instead.
+    /// @deprecated Use `preparePayment()` instead.
     #[wasm_bindgen(js_name = "prepareLnurlPay")]
     pub async fn prepare_lnurl_pay(
         &self,
@@ -363,7 +344,7 @@ impl BreezClient {
         Ok(self.sdk.prepare_lnurl_pay(request.into()).await?.into())
     }
 
-    /// @deprecated Use `pay()` or `prepare()` + `confirm()` instead.
+    /// @deprecated Use `preparePayment()` + `PaymentIntent.send()` instead.
     #[wasm_bindgen(js_name = "lnurlPay")]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> WasmResult<LnurlPayResponse> {
         Ok(self.sdk.lnurl_pay(request.into()).await?.into())
@@ -535,13 +516,13 @@ impl BreezClient {
         Ok(self.sdk.check_message(request.into()).await?.into())
     }
 
-    /// @deprecated Use `client.settings.get()` instead.
+    /// @deprecated Use `client.userSettings.get()` instead.
     #[wasm_bindgen(js_name = "getUserSettings")]
     pub async fn get_user_settings(&self) -> WasmResult<UserSettings> {
         Ok(self.sdk.get_user_settings().await?.into())
     }
 
-    /// @deprecated Use `client.settings.update()` instead.
+    /// @deprecated Use `client.userSettings.update()` instead.
     #[wasm_bindgen(js_name = "updateUserSettings")]
     pub async fn update_user_settings(&self, request: UpdateUserSettingsRequest) -> WasmResult<()> {
         Ok(self.sdk.update_user_settings(request.into()).await?)

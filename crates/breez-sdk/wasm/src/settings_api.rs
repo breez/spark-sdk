@@ -9,7 +9,7 @@ use crate::{
 
 /// Sub-object for user settings.
 ///
-/// Access via `client.settings`.
+/// Access via `client.userSettings`.
 #[wasm_bindgen(js_name = "SettingsApi")]
 pub struct SettingsApi {
     pub(crate) sdk: Rc<breez_sdk_spark::BreezClient>,

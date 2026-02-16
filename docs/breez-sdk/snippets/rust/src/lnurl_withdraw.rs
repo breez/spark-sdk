@@ -14,7 +14,7 @@ async fn withdraw(client: &BreezClient) -> Result<()> {
         let optional_completion_timeout_secs = Some(30);
 
         let response = client
-            .lnurl_withdraw(LnurlWithdrawRequest {
+            .lnurl().withdraw(LnurlWithdrawRequest {
                 amount_sats,
                 withdraw_request,
                 completion_timeout_secs: optional_completion_timeout_secs,

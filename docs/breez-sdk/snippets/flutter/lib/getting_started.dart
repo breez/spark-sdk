@@ -105,7 +105,7 @@ class BreezSdkSpark {
   // or singleton SDK service. It is recommended to use a single instance
   // of the SDK across your Flutter app.
   void initializeEventsStream(BreezClient client) {
-    _eventStream ??= client.addEventListener().asBroadcastStream();
+    _eventStream ??= client.events().add().asBroadcastStream();
   }
 
   final _eventStreamController = StreamController<SdkEvent>.broadcast();

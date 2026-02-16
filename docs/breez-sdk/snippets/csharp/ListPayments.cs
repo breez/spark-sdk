@@ -8,7 +8,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: get-payment
             var paymentId = "<payment id>";
-            var response = await client.GetPayment(
+            var response = await client.Payments().Get(
                 request: new GetPaymentRequest(paymentId: paymentId)
             );
             var payment = response.payment;
@@ -18,7 +18,7 @@ namespace BreezSdkSnippets
         async Task ListAllPayments(BreezClient client)
         {
             // ANCHOR: list-payments
-            var response = await client.ListPayments(request: new ListPaymentsRequest());
+            var response = await client.Payments().List(request: new ListPaymentsRequest());
             var payments = response.payments;
             // ANCHOR_END: list-payments
         }
@@ -47,7 +47,7 @@ namespace BreezSdkSnippets
                 sortAscending: false
             );
 
-            var response = await client.ListPayments(request: request);
+            var response = await client.Payments().List(request: request);
             var payments = response.payments;
             // ANCHOR_END: list-payments-filtered
         }

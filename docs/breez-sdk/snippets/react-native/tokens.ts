@@ -27,7 +27,7 @@ const exampleFetchTokenBalances = async (client: BreezClient) => {
 
 const exampleFetchTokenMetadata = async (client: BreezClient) => {
   // ANCHOR: fetch-token-metadata
-  const response = await client.getTokensMetadata({
+  const response = await client.tokens().metadata({
     tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
   })
 
@@ -109,7 +109,7 @@ const exampleSendTokenPayment = async (client: BreezClient) => {
 const exampleFetchConversionLimits = async (client: BreezClient) => {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  const fromBitcoinResponse = await client.fetchConversionLimits({
+  const fromBitcoinResponse = await client.tokens().fetchConversionLimits({
     conversionType: new ConversionType.FromBitcoin(),
     tokenIdentifier: '<token identifier>'
   })
@@ -122,7 +122,7 @@ const exampleFetchConversionLimits = async (client: BreezClient) => {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  const toBitcoinResponse = await client.fetchConversionLimits({
+  const toBitcoinResponse = await client.tokens().fetchConversionLimits({
     conversionType: new ConversionType.ToBitcoin({
       fromTokenIdentifier: '<token identifier>'
     }),

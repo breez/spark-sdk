@@ -8,7 +8,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: list-unclaimed-deposits
             var request = new ListUnclaimedDepositsRequest();
-            var response = await client.ListUnclaimedDeposits(request: request);
+            var response = await client.Deposits().ListUnclaimed(request: request);
 
             foreach (var deposit in response.deposits)
             {
@@ -64,7 +64,7 @@ namespace BreezSdkSnippets
                         vout: deposit.vout,
                         maxFee: new MaxFee.Fixed(amount: requiredFee)
                     );
-                    await client.ClaimDeposit(request: claimRequest);
+                    await client.Deposits().Claim(request: claimRequest);
                 }
             }
             // ANCHOR_END: handle-fee-exceeded
@@ -78,7 +78,7 @@ namespace BreezSdkSnippets
             var destinationAddress = "bc1qexample...";  // Your Bitcoin address
 
             // Set the fee for the refund transaction using the half-hour feerate
-            var recommendedFees = await client.RecommendedFees();
+            var recommendedFees = await client.Deposits().RecommendedFees();
             var fee = new Fee.Rate(satPerVbyte: recommendedFees.halfHourFee);
             // or using a fixed amount
             //var fee = new Fee.Fixed(amount: 500);
@@ -91,7 +91,7 @@ namespace BreezSdkSnippets
                 fee: fee
             );
 
-            var response = await client.RefundDeposit(request: request);
+            var response = await client.Deposits().Refund(request: request);
             Console.WriteLine("Refund transaction created:");
             Console.WriteLine($"Transaction ID: {response.txId}");
             Console.WriteLine($"Transaction hex: {response.txHex}");
@@ -121,7 +121,7 @@ namespace BreezSdkSnippets
             {
                 var requiredFeeRate = exceeded.requiredFeeRateSatPerVbyte;
 
-                var recommendedFees = await client.RecommendedFees();
+                var recommendedFees = await client.Deposits().RecommendedFees();
 
                 if (requiredFeeRate <= recommendedFees.fastestFee)
                 {
@@ -130,7 +130,7 @@ namespace BreezSdkSnippets
                         vout: deposit.vout,
                         maxFee: new MaxFee.Rate(satPerVbyte: requiredFeeRate)
                     );
-                    await client.ClaimDeposit(request: claimRequest);
+                    await client.Deposits().Claim(request: claimRequest);
                 }
             }
             // ANCHOR_END: custom-claim-logic
@@ -139,7 +139,7 @@ namespace BreezSdkSnippets
         async Task RecommendedFees(BreezClient client)
         {
             // ANCHOR: recommended-fees
-            var response = await client.RecommendedFees();
+            var response = await client.Deposits().RecommendedFees();
             Console.WriteLine($"Fastest fee: {response.fastestFee} sats/vByte");
             Console.WriteLine($"Half-hour fee: {response.halfHourFee} sats/vByte");
             Console.WriteLine($"Hour fee: {response.hourFee} sats/vByte");

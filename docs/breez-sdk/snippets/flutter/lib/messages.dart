@@ -10,7 +10,7 @@ Future<SignMessageResponse> signMessage(BreezClient client) async {
     compact: compact,
   );
 
-  SignMessageResponse signMessageResponse = await client.signMessage(
+  SignMessageResponse signMessageResponse = await client.message().sign(
     request: signMessageRequest,
   );
 
@@ -31,7 +31,7 @@ Future<CheckMessageResponse> checkMessage(BreezClient client) async {
     signature: "<message signature>",
   );
 
-  CheckMessageResponse checkMessageResponse = await client.checkMessage(
+  CheckMessageResponse checkMessageResponse = await client.message().check(
     request: checkMessageRequest,
   );
 

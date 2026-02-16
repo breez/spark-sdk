@@ -508,6 +508,102 @@
     color: var(--text);
   }
 
+  /* ── Origin story ───────────────────────────────────── */
+  .origin-story {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  .origin-story .section-header {
+    border-left: 3px solid var(--accent);
+    padding-left: 16px;
+    margin-bottom: 20px;
+  }
+  .origin-story h2 { margin-top: 0; }
+  .origin-story p { color: var(--text-muted); font-size: 14px; line-height: 1.65; margin: 0 0 14px; }
+  .origin-story .lead { font-size: 15px; color: var(--text); line-height: 1.7; }
+  .origin-story ul:not(.insight-list) {
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1.65;
+    margin: 0 0 14px;
+    padding-left: 20px;
+  }
+  .origin-story ul:not(.insight-list) li { margin-bottom: 4px; }
+  .origin-story ul:not(.insight-list) li::marker { color: var(--accent); }
+  .origin-story .naming-note {
+    font-size: 13px;
+    color: var(--text-muted);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    margin: 14px 0;
+    line-height: 1.55;
+  }
+  .origin-story .insight-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .origin-story .insight-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .origin-story .insight-list li::before {
+    content: '';
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    margin-top: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .design-principles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+  }
+  .design-principles .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    transition: border-color .15s;
+  }
+  .design-principles .card:hover {
+    border-color: var(--border-accent);
+    border-left-color: var(--accent);
+  }
+  .design-principles .card strong {
+    color: var(--text);
+    font-size: 13.5px;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .design-principles .card p {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .design-principles .card code {
+    font-size: 12px;
+  }
+
   /* ── Footer ─────────────────────────────────────────── */
   .footer {
     text-align: center;
@@ -527,7 +623,122 @@
 <div class="hero">
   <div class="hero-badge">Migration Guide</div>
   <h1>Breez SDK <span>API Modernization</span></h1>
-  <p>From flat <code>sdk.method()</code> calls to a structured <code>client.domain.action()</code> sub-object API with a unified payment flow.</p>
+</div>
+
+<!-- ═══════════════════════════ Origin Story ═══════════════════ -->
+<div class="origin-story">
+  <section>
+    <div class="section-header" style="border-left-color:var(--accent)">
+      <h2 style="margin-top:0">Background</h2>
+    </div>
+
+    <p class="lead">While Danny was working on the new SDK page, we put together a code snippet to showcase how easy it is to get started with the Breez SDK. As we iterated, we kept simplifying it by removing configuration and implementation details.</p>
+
+    <div class="comparison" style="margin: 20px 0">
+      <div class="card">
+        <div class="card-header old"><span class="dot"></span>SDK page snippet (old API)</div>
+        <pre><span class="kw">import</span> { connect, defaultConfig } <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="kw">const</span> config = <span class="fn">defaultConfig</span>(<span class="st">'mainnet'</span>)
+config.apiKey = <span class="st">YOUR_API_KEY</span>
+
+<span class="kw">const</span> sdk = <span class="kw">await</span> <span class="fn">connect</span>({ config, seed, storageDir: <span class="st">'./.data'</span> })
+
+<span class="kw">const</span> prep = <span class="kw">await</span> sdk.<span class="fn">prepareSendPayment</span>({
+  paymentRequest: <span class="st">'lnbc50u1p...'</span>
+})
+<span class="kw">await</span> sdk.<span class="fn">sendPayment</span>({ prepareResponse: prep })</pre>
+      </div>
+      <div class="card">
+        <div class="card-header old"><span class="dot"></span>SDK page snippet (old API): Cleaned-up version</div>
+        <pre><span class="kw">import</span> { connect } <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="kw">const</span> sdk = <span class="kw">await</span> <span class="fn">connect</span>({ config, seed })
+
+<span class="kw">const</span> prep = <span class="kw">await</span> sdk.<span class="fn">prepareSendPayment</span>({
+  paymentRequest: <span class="st">'lnbc50u1p...'</span>
+})
+<span class="kw">await</span> sdk.<span class="fn">sendPayment</span>({ prepareResponse: prep })</pre>
+      </div>
+    </div>
+
+    <p>Even after the clean-up, the code was <i>subjectively</i> not very self-explanatory &amp; hard to read in plain English. Which raised two questions:</p>
+
+    <ul class="insight-list">
+      <li>How can we make our API's more self-explanatory & read like natural English?</li>
+      <li>How can we make our actual onboarding logic match the cleaned-up version?</li>
+    </ul>
+
+    <p>So I looked into how other SDKs with similar concerns to ours address these questions. Some offload configuration to a web dashboard or CLI tool, both not feasible in the short term. Others go with set-and-forget defaults, which would work great for single API key & network setups, but doesn't fully apply to users that have multi-client setups with different networks, storage directories, and API key configurations.</p>
+
+    <p>Still, there were useful takeaways:</p>
+    <ul>
+      <li>Make the simple path genuinely simple</li>
+      <li>Separate what configuration is shared across clients (API key, network) from what's unique to each one (seed, storage)</li>
+      <li>Keep advanced options accessible, but only surface them when needed</li>
+    </ul>
+
+    <div class="comparison" style="margin: 20px 0">
+      <div class="card">
+        <div class="card-header new"><span class="dot"></span>Simple path (new API)</div>
+        <pre><span class="kw">import</span> { Breez } <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="kw">const</span> client = <span class="kw">await</span> Breez.<span class="fn">connect</span>({ apiKey, network, seed })
+
+<span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(<span class="st">'lnbc50u1p...'</span>)
+<span class="kw">await</span> payment.<span class="fn">send</span>()</pre>
+      </div>
+      <div class="card">
+        <div class="card-header new"><span class="dot"></span>Advanced (new API)</div>
+        <pre><span class="kw">import</span> { Breez } <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
+
+<span class="cm">// Point-of-sale app</span>
+<span class="kw">const</span> merchant = <span class="kw">await</span> Breez.<span class="fn">connect</span>({
+  apiKey: merchantKey, network: <span class="st">'mainnet'</span>, seed: merchantSeed
+})
+
+<span class="cm">// Consumer app</span>
+<span class="kw">const</span> customer = <span class="kw">await</span> Breez.<span class="fn">connect</span>({
+  apiKey: customerKey, network: <span class="st">'mainnet'</span>, seed: customerSeed
+})
+
+<span class="cm">// Merchant creates invoice, customer pays</span>
+<span class="kw">const</span> invoice = <span class="kw">await</span> merchant.<span class="fn">receive</span>({ amountSats: <span class="nr">1000</span> })
+<span class="kw">const</span> payment = <span class="kw">await</span> customer.<span class="fn">preparePayment</span>(invoice.destination)
+<span class="kw">await</span> payment.<span class="fn">send</span>()</pre>
+      </div>
+    </div>
+
+    <p class="naming-note">Also worth noting: none of the SDKs I looked at used an "SDK" suffix. They use their brand name as the main entry point. Instances are typically suffixed with <code>App</code> or <code>Client</code> (e.g. <code>FirebaseApp</code>, <code>StripeClient</code>). Our old API just exported <code>connect()</code> as a standalone function, with no namespace.</p>
+
+    <p class="naming-note">The old API already supported multiple clients, but each <code>connect()</code> call needed its own full config object. <code>Breez.connect()</code> takes a single <code>ClientConfig</code> with everything needed. For advanced customization, use <code>Breez.builder(clientConfig)</code> to get an <code>SdkBuilder</code> for overriding storage, chain service, etc.</p>
+
+    <div class="design-principles">
+      <div class="card">
+        <strong>Progressive disclosure</strong>
+        <p><code>Breez.connect(clientConfig)</code> for simple cases. <code>Breez.builder(clientConfig)</code> for advanced customization (custom storage, chain service, etc.).</p>
+      </div>
+      <div class="card">
+        <strong>Resource-oriented design</strong>
+        <p>Operations grouped by what they operate on: <code>client.payments</code>, <code>client.events</code>, <code>client.lightningAddress</code>. Type <code>client.</code> and your IDE shows a handful of resource groups, not 30+ flat methods. Each group has only the methods that make sense for it.</p>
+      </div>
+      <div class="card">
+        <strong>Idiomatic naming</strong>
+        <p>New API: <code>client.preparePayment({destination})</code> then <code>payment.send()</code>. Reads as: "prepare a payment, then send it."</p>
+        <p>Old API: <code>sdk.prepareSendPayment({destination})</code> then <code>sdk.sendPayment({prepareResponse})</code>. Reads as: "prepare a payment, then send the prepared payment." The object already knows it's prepared, you shouldn't have to re-state it.</p>
+      </div>
+      <div class="card">
+        <strong>Hard to misuse</strong>
+        <p><code>amountSats</code> and <code>feeTokenUnits</code> instead of <code>amount: u128</code>. Prepare, inspect fees, then send. No room for denomination bugs.</p>
+      </div>
+      <div class="card">
+        <strong>7-line rule</strong>
+        <p>A developer should be able to go from zero to a working payment in about 7 lines of code: import the SDK, connect, prepare a payment, and send it. The fewer lines to first success, the faster someone can evaluate whether the SDK fits their needs.</p>
+      </div>
+    </div>
+
+    <p>That's where this effort started, and the result is this modernization. It's a strict superset of the existing API. Every deprecated method keeps working, so nothing breaks.</p>
+  </section>
 </div>
 
 <!-- ═══════════════════════════ Why Migrate? ═══════════════════ -->
@@ -609,22 +820,37 @@
   <div class="section-context">
     <div class="context-card">
       <div class="context-card-label problem">Problem</div>
-      <p><code>defaultConfig()</code> creates a throwaway config every time. No way to share platform config across multiple wallets. Storage directory must be manually specified. Invalid API keys only fail at connection time, not at configuration.</p>
+      <p><code>defaultConfig()</code> creates a throwaway config every time. No way to share platform config across multiple clients. Storage directory must be manually specified. Invalid API keys only fail at connection time, not at configuration.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p><code>Breez</code> (WASM) / <code>App</code> (Rust) holds validated, immutable platform config (API key, network). <code>ClientConfig</code> holds wallet-level overrides (seed, storage). <code>connectWallet()</code> merges them. For single-wallet, <code>Breez.connect()</code> combines both in one call.</p>
+      <p><code>Breez.connect(clientConfig)</code> validates configuration, resolves defaults, and initializes the client in one call. <code>ClientConfig</code> holds all fields (API key, network, seed, storage, etc.). For advanced customization, <code>Breez.builder(clientConfig)</code> returns an <code>SdkBuilder</code> for overriding storage, chain service, etc.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
-      <p>Multi-wallet apps share one <code>Breez</code> instance. Deterministic storage directories keyed to seed fingerprint. Fail-fast validation at creation time. One-call convenience for the common case.</p>
+      <p>Deterministic storage directories keyed to seed fingerprint. Fail-fast validation at creation time. One-call convenience for the common case. Builder pattern for advanced customization.</p>
     </div>
   </div>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
-      <pre><span class="kw">import</span> { <span class="tp">BreezSdk</span>, <span class="fn">connect</span>, <span class="fn">defaultConfig</span> }
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+            <option value="go">Go</option>
+            <option value="python">Python</option>
+            <option value="csharp">C#</option>
+            <option value="flutter">Flutter</option>
+            <option value="react-native">React Native</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">import</span> { <span class="tp">BreezSdk</span>, <span class="fn">connect</span>, <span class="fn">defaultConfig</span> }
   <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark'</span>
 
 <span class="kw">const</span> config = <span class="fn">defaultConfig</span>(<span class="st">'mainnet'</span>)
@@ -635,6 +861,95 @@ config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
   seed,
   storageDir: <span class="st">'./.data'</span>
 })</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> seed = <span class="tp">Seed</span>::<span class="tp">Mnemonic</span> { mnemonic, passphrase: <span class="tp">None</span> };
+
+<span class="kw">let mut</span> config = <span class="fn">default_config</span>(<span class="tp">Network</span>::<span class="tp">Mainnet</span>);
+config.api_key = <span class="tp">Some</span>(<span class="st">"&lt;breez api key&gt;"</span>.<span class="fn">to_string</span>());
+
+<span class="kw">let</span> sdk = <span class="fn">connect</span>(<span class="tp">ConnectRequest</span> {
+    config,
+    seed,
+    storage_dir: <span class="st">"./.data"</span>.<span class="fn">to_string</span>(),
+}).<span class="kw">await</span>?;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> seed = <span class="tp">Seed</span>.<span class="fn">mnemonic</span>(mnemonic: mnemonic, passphrase: <span class="kw">nil</span>)
+
+<span class="kw">var</span> config = <span class="fn">defaultConfig</span>(network: <span class="tp">Network</span>.mainnet)
+config.apiKey = <span class="st">"&lt;breez api key&gt;"</span>
+
+<span class="kw">let</span> sdk = <span class="kw">try await</span> <span class="fn">connect</span>(
+    request: <span class="tp">ConnectRequest</span>(
+        config: config, seed: seed, storageDir: <span class="st">"./.data"</span>
+    ))</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> seed = <span class="tp">Seed</span>.<span class="tp">Mnemonic</span>(mnemonic, <span class="kw">null</span>)
+
+<span class="kw">val</span> config = <span class="fn">defaultConfig</span>(<span class="tp">Network</span>.MAINNET)
+config.apiKey = <span class="st">"&lt;breez api key&gt;"</span>
+
+<span class="kw">val</span> sdk = <span class="fn">connect</span>(<span class="tp">ConnectRequest</span>(
+    config = config, seed = seed, storageDir = <span class="st">"./.data"</span>
+))</pre>
+      </div>
+      <div class="lang-panel" data-lang="go">
+        <pre>seed := <span class="tp">breez_sdk_spark</span>.<span class="tp">SeedMnemonic</span>{
+    Mnemonic: mnemonic, Passphrase: <span class="kw">nil</span>,
+}
+
+apiKey := <span class="st">"&lt;breez api key&gt;"</span>
+config := <span class="tp">breez_sdk_spark</span>.<span class="fn">DefaultConfig</span>(<span class="tp">breez_sdk_spark</span>.<span class="tp">NetworkMainnet</span>)
+config.ApiKey = &amp;apiKey
+
+sdk, err := <span class="tp">breez_sdk_spark</span>.<span class="fn">Connect</span>(<span class="tp">breez_sdk_spark</span>.<span class="tp">ConnectRequest</span>{
+    Config: config, Seed: seed, StorageDir: <span class="st">"./.data"</span>,
+})</pre>
+      </div>
+      <div class="lang-panel" data-lang="python">
+        <pre>seed = <span class="tp">Seed</span>.<span class="fn">MNEMONIC</span>(mnemonic=mnemonic, passphrase=<span class="kw">None</span>)
+
+config = <span class="fn">default_config</span>(network=<span class="tp">Network</span>.MAINNET)
+config.api_key = <span class="st">"&lt;breez api key&gt;"</span>
+
+sdk = <span class="kw">await</span> <span class="fn">connect</span>(
+    request=<span class="tp">ConnectRequest</span>(config=config, seed=seed, storage_dir=<span class="st">"./.data"</span>)
+)</pre>
+      </div>
+      <div class="lang-panel" data-lang="csharp">
+        <pre><span class="kw">var</span> seed = <span class="kw">new</span> <span class="tp">Seed</span>.<span class="tp">Mnemonic</span>(mnemonic, <span class="kw">null</span>);
+
+<span class="kw">var</span> config = <span class="tp">BreezSdkSpark</span>.<span class="fn">DefaultConfig</span>(<span class="tp">Network</span>.Mainnet);
+config.ApiKey = <span class="st">"&lt;breez api key&gt;"</span>;
+
+<span class="kw">var</span> sdk = <span class="kw">await</span> <span class="tp">BreezSdkSpark</span>.<span class="fn">Connect</span>(
+    <span class="kw">new</span> <span class="tp">ConnectRequest</span>(config, seed, <span class="st">"./.data"</span>));</pre>
+      </div>
+      <div class="lang-panel" data-lang="flutter">
+        <pre><span class="kw">final</span> seed = <span class="tp">Seed</span>.<span class="fn">mnemonic</span>(mnemonic: mnemonic, passphrase: <span class="kw">null</span>);
+
+<span class="kw">final</span> config = <span class="fn">defaultConfig</span>(network: <span class="tp">Network</span>.mainnet);
+config.apiKey = <span class="st">"&lt;breez api key&gt;"</span>;
+
+<span class="kw">final</span> sdk = <span class="kw">await</span> <span class="fn">connect</span>(
+    request: <span class="tp">ConnectRequest</span>(
+        config: config, seed: seed, storageDir: <span class="st">"./.data"</span>));</pre>
+      </div>
+      <div class="lang-panel" data-lang="react-native">
+        <pre><span class="kw">import</span> { <span class="fn">connect</span>, <span class="fn">defaultConfig</span> }
+  <span class="kw">from</span> <span class="st">'@breeztech/breez-sdk-spark-react-native'</span>
+
+<span class="kw">const</span> config = <span class="fn">defaultConfig</span>(<span class="st">'mainnet'</span>)
+config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
+
+<span class="kw">const</span> sdk = <span class="kw">await</span> <span class="fn">connect</span>({
+  config,
+  seed,
+  storageDir: <span class="st">'./.data'</span>
+})</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (modern)
@@ -799,8 +1114,18 @@ config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
-      <pre><span class="kw">const</span> prepareResponse = <span class="kw">await</span> sdk.<span class="fn">prepareSendPayment</span>({
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">const</span> prepareResponse = <span class="kw">await</span> sdk.<span class="fn">prepareSendPayment</span>({
   paymentRequest,
   amount: amountSats,
   tokenIdentifier: <span class="kw">undefined</span>,
@@ -817,6 +1142,47 @@ config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
   prepareResponse,
   options: <span class="kw">undefined</span>
 })</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> prepare_response = sdk
+    .<span class="fn">prepare_send_payment</span>(<span class="tp">PrepareSendPaymentRequest</span> {
+        payment_request,
+        amount: optional_amount_sats,
+        token_identifier: <span class="tp">None</span>,
+        conversion_options: <span class="tp">None</span>,
+        fee_policy: <span class="tp">None</span>,
+    }).<span class="kw">await</span>?;
+
+<span class="cm">// Inspect fees through nested enum</span>
+<span class="kw">if let</span> <span class="tp">SendPaymentMethod</span>::<span class="tp">Bolt11Invoice</span> { lightning_fee_sats, .. }
+    = prepare_response.payment_method {
+    <span class="fn">info!</span>(<span class="st">"Lightning Fees: {lightning_fee_sats} sats"</span>);
+}
+
+<span class="kw">let</span> result = sdk.<span class="fn">send_payment</span>(<span class="tp">SendPaymentRequest</span> {
+    prepare_response, idempotency_key: <span class="tp">None</span>,
+}).<span class="kw">await</span>?;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> prepareResponse = <span class="kw">try await</span> sdk.<span class="fn">prepareSendPayment</span>(
+    request: <span class="tp">PrepareSendPaymentRequest</span>(
+        paymentRequest: paymentRequest, amount: amountSats,
+        tokenIdentifier: <span class="kw">nil</span>, conversionOptions: <span class="kw">nil</span>, feePolicy: <span class="kw">nil</span>))
+
+<span class="kw">let</span> result = <span class="kw">try await</span> sdk.<span class="fn">sendPayment</span>(
+    request: <span class="tp">SendPaymentRequest</span>(
+        prepareResponse: prepareResponse, idempotencyKey: <span class="kw">nil</span>))</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> req = <span class="tp">PrepareSendPaymentRequest</span>(
+    paymentRequest, amount = amountSats,
+    tokenIdentifier = <span class="kw">null</span>, conversionOptions = <span class="kw">null</span>, feePolicy = <span class="kw">null</span>,
+)
+<span class="kw">val</span> prepareResponse = sdk.<span class="fn">prepareSendPayment</span>(req)
+
+<span class="kw">val</span> result = sdk.<span class="fn">sendPayment</span>(
+    <span class="tp">SendPaymentRequest</span>(prepareResponse, idempotencyKey = <span class="kw">null</span>))</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (modern)
@@ -842,7 +1208,7 @@ config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
 console.log(<span class="st">`Amount: </span>${payment.<span class="pr">amountSats</span>}<span class="st"> sats`</span>)
 console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
 
-<span class="kw">if</span> (payment.fee.type === <span class="st">'lightning'</span>) {
+<span class="kw">if</span> (payment.fee.type === <span class="st">'bolt11Invoice'</span>) {
   console.log(<span class="st">`Lightning fee: </span>${payment.fee.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
 }
 
@@ -1017,8 +1383,18 @@ prepare_response = <span class="kw">await</span> client.<span class="fn">prepare
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
-      <pre><span class="kw">const</span> response = <span class="kw">await</span> sdk.<span class="fn">receivePayment</span>({
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">const</span> response = <span class="kw">await</span> sdk.<span class="fn">receivePayment</span>({
   paymentMethod: {
     type: <span class="st">'bolt11Invoice'</span>,
     description,
@@ -1029,6 +1405,40 @@ prepare_response = <span class="kw">await</span> client.<span class="fn">prepare
 
 <span class="kw">const</span> invoice = response.<span class="pr">paymentRequest</span>
 <span class="kw">const</span> fee = response.<span class="pr">fee</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">let</span> response = sdk
+    .<span class="fn">receive_payment</span>(<span class="tp">ReceivePaymentRequest</span> {
+        payment_method: <span class="tp">ReceivePaymentMethod</span>::<span class="tp">Bolt11Invoice</span> {
+            description,
+            amount_sats: optional_amount_sats,
+            expiry_secs: optional_expiry_secs,
+        },
+    }).<span class="kw">await</span>?;
+
+<span class="kw">let</span> invoice = response.payment_request;
+<span class="kw">let</span> fee = response.fee;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> response = <span class="kw">try await</span> sdk.<span class="fn">receivePayment</span>(
+    request: <span class="tp">ReceivePaymentRequest</span>(
+        paymentMethod: <span class="tp">ReceivePaymentMethod</span>.<span class="fn">bolt11Invoice</span>(
+            description: description,
+            amountSats: <span class="nr">5_000</span>,
+            expirySecs: <span class="nr">3600</span>)))
+
+<span class="kw">let</span> invoice = response.paymentRequest
+<span class="kw">let</span> fee = response.fee</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> request = <span class="tp">ReceivePaymentRequest</span>(
+    <span class="tp">ReceivePaymentMethod</span>.<span class="tp">Bolt11Invoice</span>(
+        description, <span class="nr">5_000</span>.toULong(), <span class="nr">3600</span>.toUInt()))
+<span class="kw">val</span> response = sdk.<span class="fn">receivePayment</span>(request)
+
+<span class="kw">val</span> invoice = response.paymentRequest
+<span class="kw">val</span> fee = response.fee</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (modern)
@@ -1048,7 +1458,7 @@ prepare_response = <span class="kw">await</span> client.<span class="fn">prepare
       </div>
       <div class="lang-panel active" data-lang="typescript">
         <pre><span class="kw">const</span> result = <span class="kw">await</span> client.<span class="fn">receive</span>({
-  paymentType: <span class="st">'lightning'</span>,
+  paymentType: <span class="st">'bolt11Invoice'</span>,
   amountSats: <span class="nr">5_000</span>,
   description,
   expiry: <span class="nr">3600</span>
@@ -1205,8 +1615,18 @@ fee = response.fee</pre>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (deprecated)</div>
-      <pre><span class="kw">const</span> input = <span class="kw">await</span> sdk.<span class="fn">parse</span>(lnurlPayUrl)
+      <div class="card-header old"><span class="dot"></span>Before (deprecated)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">const</span> input = <span class="kw">await</span> sdk.<span class="fn">parse</span>(lnurlPayUrl)
 <span class="kw">if</span> (input.type === <span class="st">'lightningAddress'</span>) {
   <span class="kw">const</span> prepareResponse = <span class="kw">await</span> sdk.<span class="fn">prepareLnurlPay</span>({
     amountSats,
@@ -1223,6 +1643,62 @@ fee = response.fee</pre>
     idempotencyKey
   })
 }</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="kw">if let</span> <span class="tp">Ok</span>(<span class="tp">InputType</span>::<span class="tp">LightningAddress</span>(details))
+    = sdk.<span class="fn">parse</span>(lnurl_pay_url).<span class="kw">await</span> {
+    <span class="kw">let</span> prepare_response = sdk.<span class="fn">prepare_lnurl_pay</span>(
+        <span class="tp">PrepareLnurlPayRequest</span> {
+            amount_sats: <span class="nr">5_000</span>,
+            pay_request: details.pay_request,
+            comment: <span class="tp">Some</span>(<span class="st">"&lt;comment&gt;"</span>.<span class="fn">into</span>()),
+            validate_success_action_url: <span class="tp">Some</span>(<span class="kw">true</span>),
+            conversion_options: <span class="tp">None</span>,
+            fee_policy: <span class="tp">None</span>,
+        }).<span class="kw">await</span>?;
+
+    <span class="kw">let</span> fee_sats = prepare_response.fee_sats;
+
+    <span class="kw">let</span> response = sdk.<span class="fn">lnurl_pay</span>(<span class="tp">LnurlPayRequest</span> {
+        prepare_response,
+        idempotency_key,
+    }).<span class="kw">await</span>?;
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">let</span> inputType = <span class="kw">try await</span> sdk.<span class="fn">parse</span>(input: lnurlPayUrl)
+<span class="kw">if case</span> .lightningAddress(<span class="kw">v1: let</span> details) = inputType {
+    <span class="kw">let</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats: <span class="nr">5_000</span>,
+        payRequest: details.payRequest,
+        comment: <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl: <span class="kw">true</span>,
+        conversionOptions: <span class="kw">nil</span>, feePolicy: <span class="kw">nil</span>
+    )
+    <span class="kw">let</span> prepareResponse = <span class="kw">try await</span> sdk.<span class="fn">prepareLnurlPay</span>(request: req)
+    <span class="kw">let</span> feeSats = prepareResponse.feeSats
+
+    <span class="kw">let</span> response = <span class="kw">try await</span> sdk.<span class="fn">lnurlPay</span>(
+        request: <span class="tp">LnurlPayRequest</span>(prepareResponse, idempotencyKey))
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">val</span> inputType = sdk.<span class="fn">parse</span>(lnurlPayUrl)
+<span class="kw">if</span> (inputType <span class="kw">is</span> <span class="tp">InputType</span>.<span class="tp">LightningAddress</span>) {
+    <span class="kw">val</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
+        amountSats = <span class="nr">5_000</span>.toULong(),
+        payRequest = inputType.v1.payRequest,
+        comment = <span class="st">"&lt;comment&gt;"</span>,
+        validateSuccessActionUrl = <span class="kw">true</span>,
+        conversionOptions = <span class="kw">null</span>, feePolicy = <span class="kw">null</span>,
+    )
+    <span class="kw">val</span> prepareResponse = sdk.<span class="fn">prepareLnurlPay</span>(req)
+    <span class="kw">val</span> feeSats = prepareResponse.feeSats
+
+    <span class="kw">val</span> response = sdk.<span class="fn">lnurlPay</span>(
+        <span class="tp">LnurlPayRequest</span>(prepareResponse, idempotencyKey))
+}</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (modern)
@@ -1409,7 +1885,7 @@ console.log(<span class="st">`Fees: </span>${payment.<span class="pr">feeSats</s
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p>Domain-organized sub-objects: <code>client.payments</code>, <code>client.events</code>, <code>client.lightningAddress</code>, <code>client.deposits</code>, <code>client.settings</code>, <code>client.lnurl</code>, <code>client.fiat</code>, <code>client.tokens</code>, <code>client.optimization</code>, <code>client.tokenIssuer</code>.</p>
+      <p>Domain-organized sub-objects: <code>client.payments</code>, <code>client.events</code>, <code>client.lightningAddress</code>, <code>client.deposits</code>, <code>client.userSettings</code>, <code>client.lnurl</code>, <code>client.fiat</code>, <code>client.tokens</code>, <code>client.optimization</code>, <code>client.message</code>. Token issuer is accessed via <code>client.tokens.issuer</code>.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
@@ -1448,9 +1924,22 @@ sdk.<span class="fn">refundDeposit</span>(request)
 sdk.<span class="fn">getTokenIssuer</span>()</pre>
     </div>
     <div class="card">
-      <div class="card-header new"><span class="dot"></span>After (sub-object APIs)</div>
-      <pre>client.<span class="pr">payments</span>.<span class="fn">list</span>()
+      <div class="card-header new"><span class="dot"></span>After (sub-object APIs) <span class="lang-switcher" style="margin-left:auto"><select>
+        <option value="typescript" selected>TypeScript</option>
+        <option value="rust">Rust</option>
+        <option value="swift">Swift</option>
+        <option value="kotlin">Kotlin</option>
+        <option value="go">Go</option>
+        <option value="python">Python</option>
+        <option value="csharp">C#</option>
+        <option value="flutter">Flutter</option>
+        <option value="react-native">React Native</option>
+      </select></span></div>
+
+      <div class="lang-panel active" data-lang="typescript">
+<pre>client.<span class="pr">payments</span>.<span class="fn">list</span>()
 client.<span class="pr">payments</span>.<span class="fn">get</span>(paymentId)
+client.<span class="pr">payments</span>.<span class="fn">claimHtlc</span>({ preimage })
 client.<span class="pr">events</span>.<span class="fn">add</span>(listener)
 client.<span class="pr">events</span>.<span class="fn">remove</span>(id)
 client.<span class="pr">lightningAddress</span>.<span class="fn">get</span>()
@@ -1461,33 +1950,278 @@ client.<span class="pr">lnurl</span>.<span class="fn">auth</span>(requestData)
 client.<span class="pr">lnurl</span>.<span class="fn">withdraw</span>({ amountSats, withdrawRequest })
 client.<span class="pr">fiat</span>.<span class="fn">currencies</span>()
 client.<span class="pr">fiat</span>.<span class="fn">rates</span>()
-client.<span class="fn">recommendedFees</span>()
-client.<span class="pr">settings</span>.<span class="fn">get</span>()
-client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
-client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
-<span class="fn">verifyMessage</span>({ message, pubkey, signature })
-client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
-client.<span class="pr">tokens</span>.<span class="fn">swapLimits</span>({ ... })
-client.<span class="pr">optimization</span>.<span class="fn">start</span>()
-client.<span class="pr">optimization</span>.<span class="fn">cancel</span>()
-client.<span class="pr">optimization</span>.<span class="pr">progress</span>
 client.<span class="pr">deposits</span>.<span class="fn">listUnclaimed</span>()
 client.<span class="pr">deposits</span>.<span class="fn">claim</span>(request)
 client.<span class="pr">deposits</span>.<span class="fn">refund</span>(request)
-client.<span class="pr">tokenIssuer</span>  <span class="cm">// getter</span>
-
+client.<span class="pr">deposits</span>.<span class="fn">recommendedFees</span>()
+client.<span class="pr">settings</span>.<span class="fn">get</span>()
+client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
+client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
+client.<span class="pr">message</span>.<span class="fn">check</span>({ message, pubkey, signature })
+client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
+client.<span class="pr">tokens</span>.<span class="fn">fetchConversionLimits</span>({ ... })
+client.<span class="pr">tokens</span>.<span class="pr">issuer</span>  <span class="cm">// TokenIssuer instance</span>
+client.<span class="pr">optimization</span>.<span class="fn">start</span>()
+client.<span class="pr">optimization</span>.<span class="fn">cancel</span>()
+client.<span class="pr">optimization</span>.<span class="pr">progress</span>
 
 <span class="cm">// ── New unified APIs ────────────────────</span>
 <span class="new-api">client.<span class="fn">preparePayment</span>(dest, { amountSats })</span>  <span class="cm">// ★</span>
 <span class="new-api">client.<span class="fn">receive</span>({ paymentType, amountSats })</span>   <span class="cm">// ★</span>
 <span class="new-api">client.<span class="pr">pubkey</span></span>                                <span class="cm">// ★ sync getter</span></pre>
+      </div>
+
+      <div class="lang-panel" data-lang="rust">
+<pre>client.<span class="fn">payments</span>().<span class="fn">list</span>(request)
+client.<span class="fn">payments</span>().<span class="fn">get</span>(request)
+client.<span class="fn">payments</span>().<span class="fn">claim_htlc</span>(request)
+client.<span class="fn">events</span>().<span class="fn">add</span>(listener)
+client.<span class="fn">events</span>().<span class="fn">remove</span>(id)
+client.<span class="fn">lightning_address</span>().<span class="fn">get</span>()
+client.<span class="fn">lightning_address</span>().<span class="fn">register</span>(request)
+client.<span class="fn">lightning_address</span>().<span class="fn">is_available</span>(request)
+client.<span class="fn">lightning_address</span>().<span class="fn">delete</span>()
+client.<span class="fn">lnurl</span>().<span class="fn">auth</span>(request_data)
+client.<span class="fn">lnurl</span>().<span class="fn">withdraw</span>(request)
+client.<span class="fn">fiat</span>().<span class="fn">currencies</span>()
+client.<span class="fn">fiat</span>().<span class="fn">rates</span>()
+client.<span class="fn">deposits</span>().<span class="fn">list_unclaimed</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">recommended_fees</span>()
+client.<span class="fn">settings</span>().<span class="fn">get</span>()
+client.<span class="fn">settings</span>().<span class="fn">update</span>(request)
+client.<span class="fn">message</span>().<span class="fn">sign</span>(request)
+client.<span class="fn">message</span>().<span class="fn">check</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">fetch_conversion_limits</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">optimization</span>().<span class="fn">start</span>()
+client.<span class="fn">optimization</span>().<span class="fn">cancel</span>()
+client.<span class="fn">optimization</span>().<span class="fn">progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="swift">
+<pre>client.<span class="fn">payments</span>().<span class="fn">list</span>(request: request)
+client.<span class="fn">payments</span>().<span class="fn">get</span>(request: request)
+client.<span class="fn">payments</span>().<span class="fn">claimHtlc</span>(request: request)
+client.<span class="fn">events</span>().<span class="fn">add</span>(listener: listener)
+client.<span class="fn">events</span>().<span class="fn">remove</span>(id: id)
+client.<span class="fn">lightningAddress</span>().<span class="fn">get</span>()
+client.<span class="fn">lightningAddress</span>().<span class="fn">register</span>(request: request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">isAvailable</span>(request: request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">delete</span>()
+client.<span class="fn">lnurl</span>().<span class="fn">auth</span>(requestData: requestData)
+client.<span class="fn">lnurl</span>().<span class="fn">withdraw</span>(request: request)
+client.<span class="fn">fiat</span>().<span class="fn">currencies</span>()
+client.<span class="fn">fiat</span>().<span class="fn">rates</span>()
+client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
+client.<span class="fn">settings</span>().<span class="fn">get</span>()
+client.<span class="fn">settings</span>().<span class="fn">update</span>(request: request)
+client.<span class="fn">message</span>().<span class="fn">sign</span>(request: request)
+client.<span class="fn">message</span>().<span class="fn">check</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">fetchConversionLimits</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">optimization</span>().<span class="fn">start</span>()
+client.<span class="fn">optimization</span>().<span class="fn">cancel</span>()
+client.<span class="fn">optimization</span>().<span class="fn">progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="kotlin">
+<pre>client.<span class="fn">payments</span>().<span class="fn">list</span>(request)
+client.<span class="fn">payments</span>().<span class="fn">get</span>(request)
+client.<span class="fn">payments</span>().<span class="fn">claimHtlc</span>(request)
+client.<span class="fn">events</span>().<span class="fn">add</span>(listener)
+client.<span class="fn">events</span>().<span class="fn">remove</span>(id)
+client.<span class="fn">lightningAddress</span>().<span class="fn">get</span>()
+client.<span class="fn">lightningAddress</span>().<span class="fn">register</span>(request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">isAvailable</span>(request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">delete</span>()
+client.<span class="fn">lnurl</span>().<span class="fn">auth</span>(requestData)
+client.<span class="fn">lnurl</span>().<span class="fn">withdraw</span>(request)
+client.<span class="fn">fiat</span>().<span class="fn">currencies</span>()
+client.<span class="fn">fiat</span>().<span class="fn">rates</span>()
+client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request)
+client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
+client.<span class="fn">settings</span>().<span class="fn">get</span>()
+client.<span class="fn">settings</span>().<span class="fn">update</span>(request)
+client.<span class="fn">message</span>().<span class="fn">sign</span>(request)
+client.<span class="fn">message</span>().<span class="fn">check</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">fetchConversionLimits</span>(request)
+client.<span class="fn">tokens</span>().<span class="fn">issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">optimization</span>().<span class="fn">start</span>()
+client.<span class="fn">optimization</span>().<span class="fn">cancel</span>()
+client.<span class="fn">optimization</span>().<span class="fn">progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="go">
+<pre>client.<span class="fn">Payments</span>().<span class="fn">List</span>(request)
+client.<span class="fn">Payments</span>().<span class="fn">Get</span>(request)
+client.<span class="fn">Payments</span>().<span class="fn">ClaimHtlc</span>(request)
+client.<span class="fn">Events</span>().<span class="fn">Add</span>(listener)
+client.<span class="fn">Events</span>().<span class="fn">Remove</span>(id)
+client.<span class="fn">LightningAddress</span>().<span class="fn">Get</span>()
+client.<span class="fn">LightningAddress</span>().<span class="fn">Register</span>(request)
+client.<span class="fn">LightningAddress</span>().<span class="fn">IsAvailable</span>(request)
+client.<span class="fn">LightningAddress</span>().<span class="fn">Delete</span>()
+client.<span class="fn">Lnurl</span>().<span class="fn">Auth</span>(requestData)
+client.<span class="fn">Lnurl</span>().<span class="fn">Withdraw</span>(request)
+client.<span class="fn">Fiat</span>().<span class="fn">Currencies</span>()
+client.<span class="fn">Fiat</span>().<span class="fn">Rates</span>()
+client.<span class="fn">Deposits</span>().<span class="fn">ListUnclaimed</span>(request)
+client.<span class="fn">Deposits</span>().<span class="fn">Claim</span>(request)
+client.<span class="fn">Deposits</span>().<span class="fn">Refund</span>(request)
+client.<span class="fn">Deposits</span>().<span class="fn">RecommendedFees</span>()
+client.<span class="fn">Settings</span>().<span class="fn">Get</span>()
+client.<span class="fn">Settings</span>().<span class="fn">Update</span>(request)
+client.<span class="fn">Message</span>().<span class="fn">Sign</span>(request)
+client.<span class="fn">Message</span>().<span class="fn">Check</span>(request)
+client.<span class="fn">Tokens</span>().<span class="fn">Metadata</span>(request)
+client.<span class="fn">Tokens</span>().<span class="fn">FetchConversionLimits</span>(request)
+client.<span class="fn">Tokens</span>().<span class="fn">Issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">Optimization</span>().<span class="fn">Start</span>()
+client.<span class="fn">Optimization</span>().<span class="fn">Cancel</span>()
+client.<span class="fn">Optimization</span>().<span class="fn">Progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="python">
+<pre>client.<span class="fn">payments</span>().<span class="fn">list</span>(request=request)
+client.<span class="fn">payments</span>().<span class="fn">get</span>(request=request)
+client.<span class="fn">payments</span>().<span class="fn">claim_htlc</span>(request=request)
+client.<span class="fn">events</span>().<span class="fn">add</span>(listener=listener)
+client.<span class="fn">events</span>().<span class="fn">remove</span>(id=id)
+client.<span class="fn">lightning_address</span>().<span class="fn">get</span>()
+client.<span class="fn">lightning_address</span>().<span class="fn">register</span>(request=request)
+client.<span class="fn">lightning_address</span>().<span class="fn">is_available</span>(request=request)
+client.<span class="fn">lightning_address</span>().<span class="fn">delete</span>()
+client.<span class="fn">lnurl</span>().<span class="fn">auth</span>(request_data=request_data)
+client.<span class="fn">lnurl</span>().<span class="fn">withdraw</span>(request=request)
+client.<span class="fn">fiat</span>().<span class="fn">currencies</span>()
+client.<span class="fn">fiat</span>().<span class="fn">rates</span>()
+client.<span class="fn">deposits</span>().<span class="fn">list_unclaimed</span>(request=request)
+client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request=request)
+client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request=request)
+client.<span class="fn">deposits</span>().<span class="fn">recommended_fees</span>()
+client.<span class="fn">settings</span>().<span class="fn">get</span>()
+client.<span class="fn">settings</span>().<span class="fn">update</span>(request=request)
+client.<span class="fn">message</span>().<span class="fn">sign</span>(request=request)
+client.<span class="fn">message</span>().<span class="fn">check</span>(request=request)
+client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request=request)
+client.<span class="fn">tokens</span>().<span class="fn">fetch_conversion_limits</span>(request=request)
+client.<span class="fn">tokens</span>().<span class="fn">issuer</span>()  <span class="cm"># TokenIssuer instance</span>
+client.<span class="fn">optimization</span>().<span class="fn">start</span>()
+client.<span class="fn">optimization</span>().<span class="fn">cancel</span>()
+client.<span class="fn">optimization</span>().<span class="fn">progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="csharp">
+<pre>client.<span class="fn">Payments</span>().<span class="fn">List</span>(request: request)
+client.<span class="fn">Payments</span>().<span class="fn">Get</span>(request: request)
+client.<span class="fn">Payments</span>().<span class="fn">ClaimHtlc</span>(request: request)
+client.<span class="fn">Events</span>().<span class="fn">Add</span>(listener: listener)
+client.<span class="fn">Events</span>().<span class="fn">Remove</span>(id: id)
+client.<span class="fn">LightningAddress</span>().<span class="fn">Get</span>()
+client.<span class="fn">LightningAddress</span>().<span class="fn">Register</span>(request: request)
+client.<span class="fn">LightningAddress</span>().<span class="fn">IsAvailable</span>(request: request)
+client.<span class="fn">LightningAddress</span>().<span class="fn">Delete</span>()
+client.<span class="fn">Lnurl</span>().<span class="fn">Auth</span>(requestData: requestData)
+client.<span class="fn">Lnurl</span>().<span class="fn">Withdraw</span>(request: request)
+client.<span class="fn">Fiat</span>().<span class="fn">Currencies</span>()
+client.<span class="fn">Fiat</span>().<span class="fn">Rates</span>()
+client.<span class="fn">Deposits</span>().<span class="fn">ListUnclaimed</span>(request: request)
+client.<span class="fn">Deposits</span>().<span class="fn">Claim</span>(request: request)
+client.<span class="fn">Deposits</span>().<span class="fn">Refund</span>(request: request)
+client.<span class="fn">Deposits</span>().<span class="fn">RecommendedFees</span>()
+client.<span class="fn">Settings</span>().<span class="fn">Get</span>()
+client.<span class="fn">Settings</span>().<span class="fn">Update</span>(request: request)
+client.<span class="fn">Message</span>().<span class="fn">Sign</span>(request: request)
+client.<span class="fn">Message</span>().<span class="fn">Check</span>(request: request)
+client.<span class="fn">Tokens</span>().<span class="fn">Metadata</span>(request: request)
+client.<span class="fn">Tokens</span>().<span class="fn">FetchConversionLimits</span>(request: request)
+client.<span class="fn">Tokens</span>().<span class="fn">Issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">Optimization</span>().<span class="fn">Start</span>()
+client.<span class="fn">Optimization</span>().<span class="fn">Cancel</span>()
+client.<span class="fn">Optimization</span>().<span class="fn">Progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="flutter">
+<pre>client.<span class="fn">payments</span>().<span class="fn">list</span>(request: request)
+client.<span class="fn">payments</span>().<span class="fn">get</span>(request: request)
+client.<span class="fn">payments</span>().<span class="fn">claimHtlc</span>(request: request)
+client.<span class="fn">events</span>().<span class="fn">add</span>(listener: listener)
+client.<span class="fn">events</span>().<span class="fn">remove</span>(id: id)
+client.<span class="fn">lightningAddress</span>().<span class="fn">get</span>()
+client.<span class="fn">lightningAddress</span>().<span class="fn">register</span>(request: request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">isAvailable</span>(request: request)
+client.<span class="fn">lightningAddress</span>().<span class="fn">delete</span>()
+client.<span class="fn">lnurl</span>().<span class="fn">auth</span>(requestData: requestData)
+client.<span class="fn">lnurl</span>().<span class="fn">withdraw</span>(request: request)
+client.<span class="fn">fiat</span>().<span class="fn">currencies</span>()
+client.<span class="fn">fiat</span>().<span class="fn">rates</span>()
+client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request: request)
+client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
+client.<span class="fn">settings</span>().<span class="fn">get</span>()
+client.<span class="fn">settings</span>().<span class="fn">update</span>(request: request)
+client.<span class="fn">message</span>().<span class="fn">sign</span>(request: request)
+client.<span class="fn">message</span>().<span class="fn">check</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">fetchConversionLimits</span>(request: request)
+client.<span class="fn">tokens</span>().<span class="fn">issuer</span>()  <span class="cm">// TokenIssuer instance</span>
+client.<span class="fn">optimization</span>().<span class="fn">start</span>()
+client.<span class="fn">optimization</span>().<span class="fn">cancel</span>()
+client.<span class="fn">optimization</span>().<span class="fn">progress</span>()</pre>
+      </div>
+
+      <div class="lang-panel" data-lang="react-native">
+<pre>client.<span class="pr">payments</span>.<span class="fn">list</span>()
+client.<span class="pr">payments</span>.<span class="fn">get</span>(paymentId)
+client.<span class="pr">payments</span>.<span class="fn">claimHtlc</span>({ preimage })
+client.<span class="pr">events</span>.<span class="fn">add</span>(listener)
+client.<span class="pr">events</span>.<span class="fn">remove</span>(id)
+client.<span class="pr">lightningAddress</span>.<span class="fn">get</span>()
+client.<span class="pr">lightningAddress</span>.<span class="fn">register</span>({ username })
+client.<span class="pr">lightningAddress</span>.<span class="fn">isAvailable</span>(username)
+client.<span class="pr">lightningAddress</span>.<span class="fn">delete</span>()
+client.<span class="pr">lnurl</span>.<span class="fn">auth</span>(requestData)
+client.<span class="pr">lnurl</span>.<span class="fn">withdraw</span>({ amountSats, withdrawRequest })
+client.<span class="pr">fiat</span>.<span class="fn">currencies</span>()
+client.<span class="pr">fiat</span>.<span class="fn">rates</span>()
+client.<span class="pr">deposits</span>.<span class="fn">listUnclaimed</span>()
+client.<span class="pr">deposits</span>.<span class="fn">claim</span>(request)
+client.<span class="pr">deposits</span>.<span class="fn">refund</span>(request)
+client.<span class="pr">deposits</span>.<span class="fn">recommendedFees</span>()
+client.<span class="pr">settings</span>.<span class="fn">get</span>()
+client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
+client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
+client.<span class="pr">message</span>.<span class="fn">check</span>({ message, pubkey, signature })
+client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
+client.<span class="pr">tokens</span>.<span class="fn">fetchConversionLimits</span>({ ... })
+client.<span class="pr">tokens</span>.<span class="pr">issuer</span>  <span class="cm">// TokenIssuer instance</span>
+client.<span class="pr">optimization</span>.<span class="fn">start</span>()
+client.<span class="pr">optimization</span>.<span class="fn">cancel</span>()
+client.<span class="pr">optimization</span>.<span class="pr">progress</span>
+
+<span class="cm">// ── New unified APIs ────────────────────</span>
+<span class="new-api">client.<span class="fn">preparePayment</span>(dest, { amountSats })</span>  <span class="cm">// ★</span>
+<span class="new-api">client.<span class="fn">receive</span>({ paymentType, amountSats })</span>   <span class="cm">// ★</span>
+<span class="new-api">client.<span class="pr">pubkey</span></span>                                <span class="cm">// ★ sync getter</span></pre>
+      </div>
     </div>
   </div>
 
   <div class="api-map">
     <div class="api-map-item">
       <div class="accessor">client.payments</div>
-      <div class="methods">.list(limit?, offset?) &middot; .get(id)</div>
+      <div class="methods">.list(limit?, offset?) &middot; .get(id) &middot; .claimHtlc(request)</div>
     </div>
     <div class="api-map-item">
       <div class="accessor">client.events</div>
@@ -1507,31 +2241,23 @@ client.<span class="pr">tokenIssuer</span>  <span class="cm">// getter</span>
     </div>
     <div class="api-map-item">
       <div class="accessor">client.deposits</div>
-      <div class="methods">.listUnclaimed() &middot; .claim() &middot; .refund()</div>
+      <div class="methods">.listUnclaimed() &middot; .claim() &middot; .refund() &middot; .recommendedFees()</div>
     </div>
     <div class="api-map-item">
-      <div class="accessor">client.settings</div>
+      <div class="accessor">client.userSettings</div>
       <div class="methods">.get() &middot; .update(request)</div>
     </div>
     <div class="api-map-item">
       <div class="accessor">client.message</div>
-      <div class="methods">.sign(request)</div>
+      <div class="methods">.sign(request) &middot; .check(request)</div>
     </div>
     <div class="api-map-item">
       <div class="accessor">client.tokens</div>
-      <div class="methods">.metadata(request) &middot; .swapLimits(request)</div>
+      <div class="methods">.metadata(request) &middot; .fetchConversionLimits(request) &middot; .issuer()</div>
     </div>
     <div class="api-map-item">
       <div class="accessor">client.optimization</div>
       <div class="methods">.start() &middot; .cancel() &middot; .progress</div>
-    </div>
-    <div class="api-map-item">
-      <div class="accessor">client.tokenIssuer</div>
-      <div class="methods">.createIssuerToken() &middot; .mintIssuerToken() &middot; ...</div>
-    </div>
-    <div class="api-map-item">
-      <div class="accessor">client.recommendedFees()</div>
-      <div class="methods">Top-level &mdash; Bitcoin chain fee estimates</div>
     </div>
     <div class="api-map-item">
       <div class="accessor">parseInput() <span style="color:var(--text-dim)">(standalone)</span></div>
@@ -1627,14 +2353,14 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       </div>
       <div class="unify-new-flow"><span class="cm">// Lightning invoice</span>
 <span class="kw">const</span> inv = <span class="kw">await</span> client.<span class="fn">receive</span>({
-  <span class="pr">paymentType</span>: <span class="st">'lightning'</span>,
+  <span class="pr">paymentType</span>: <span class="st">'bolt11Invoice'</span>,
   <span class="pr">amountSats</span>: 5_000,
   <span class="pr">description</span>: <span class="st">'Coffee'</span>
 })
 
 <span class="cm">// On-chain address</span>
 <span class="kw">const</span> addr = <span class="kw">await</span> client.<span class="fn">receive</span>({
-  <span class="pr">paymentType</span>: <span class="st">'onchain'</span>
+  <span class="pr">paymentType</span>: <span class="st">'bitcoinAddress'</span>
 })
 
 <span class="cm">// Token invoice</span>
@@ -1681,15 +2407,15 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
   <div class="section-context">
     <div class="context-card">
       <div class="context-card-label problem">Problem</div>
-      <p>Event listeners received all events and filtered manually (<code>if (event.type === ...)</code>). Amount fields were an ambiguous <code>u128</code>. Configuration mixed platform and wallet concerns in one flat struct.</p>
+      <p>Event listeners received all events and filtered manually (<code>if (event.type === ...)</code>). Amount fields were an ambiguous <code>u128</code>. Configuration mixed platform and client concerns in one flat struct.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p><code>events.on(type, callback)</code> fires only for the requested event type. Typed enums: <code>PaymentIntentType</code>, <code>ReceivePaymentType</code>, <code>PreparedPaymentFee</code>. Separated config: <code>AppConfig</code> (platform) + <code>ClientConfig</code> (wallet) + <code>ConnectConfig</code> (convenience).</p>
+      <p><code>events.on(type, callback)</code> fires only for the requested event type. Typed enums: <code>PaymentIntentType</code>, <code>ReceivePaymentType</code>, <code>PreparedPaymentFee</code>. Single <code>ClientConfig</code> struct for all configuration.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
-      <p>Less boilerplate &mdash; subscribe to just <code>"payment"</code> events. Fee inspection is type-safe. Platform vs wallet config separation enables multi-wallet.</p>
+      <p>Less boilerplate &mdash; subscribe to just <code>"payment"</code> events. Fee inspection is type-safe. Single <code>ClientConfig</code> with sensible defaults.</p>
     </div>
   </div>
 
@@ -1725,7 +2451,10 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <code>"paymentSucceeded"</code> &middot;
       <code>"paymentPending"</code> &middot;
       <code>"paymentFailed"</code> &middot;
-      <code>"synced"</code>
+      <code>"synced"</code> &middot;
+      <code>"deposit"</code> (all deposit events) &middot;
+      <code>"claimedDeposits"</code> &middot;
+      <code>"unclaimedDeposits"</code>
     </span>
   </div>
 
@@ -1739,7 +2468,7 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <div class="type-card-title">PaymentIntentType</div>
       <div class="type-card-desc">Returned by <code>payment.paymentType</code> on a <code>PaymentIntent</code>.</div>
       <div class="type-card-variants">
-        <code>'spark'</code> <code>'lightning'</code> <code>'onchain'</code>
+        <code>'spark'</code> <code>'bolt11Invoice'</code> <code>'bitcoinAddress'</code>
       </div>
     </div>
 
@@ -1747,7 +2476,7 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <div class="type-card-title">ReceivePaymentType</div>
       <div class="type-card-desc">Passed as <code>paymentType</code> in <code>client.receive()</code> options.</div>
       <div class="type-card-variants">
-        <code>'lightning'</code> <code>'onchain'</code> <code>'sparkAddress'</code> <code>'sparkInvoice'</code>
+        <code>'bolt11Invoice'</code> <code>'bitcoinAddress'</code> <code>'sparkAddress'</code> <code>'sparkInvoice'</code>
       </div>
     </div>
 
@@ -1757,34 +2486,25 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <div class="type-card-variants">
         <code>{ type: 'sparkSats', feeSats }</code><br>
         <code>{ type: 'sparkToken', feeTokenUnits }</code><br>
-        <code>{ type: 'lightning', feeSats }</code><br>
-        <code>{ type: 'onchain', speedFast, speedMedium, speedSlow }</code>
+        <code>{ type: 'bolt11Invoice', feeSats }</code><br>
+        <code>{ type: 'bitcoinAddress', speedFast, speedMedium, speedSlow }</code>
       </div>
     </div>
 
     <div class="type-card">
-      <div class="type-card-title">OnchainSpeedFee</div>
-      <div class="type-card-desc">Speed tier in the <code>Onchain</code> fee variant. Each tier contains a <code>totalFeeSat</code> field.</div>
+      <div class="type-card-title">BitcoinAddressSpeedFee</div>
+      <div class="type-card-desc">Speed tier in the <code>BitcoinAddress</code> fee variant. Each tier contains a <code>totalFeeSat</code> field.</div>
       <div class="type-card-variants">
         <code>{ totalFeeSat: number }</code>
       </div>
     </div>
 
     <div class="type-card">
-      <div class="type-card-title">ConnectConfig</div>
-      <div class="type-card-desc">Single-call connection: combines app + wallet config. Passed to <code>Breez.connect()</code>.</div>
+      <div class="type-card-title">ClientConfig</div>
+      <div class="type-card-desc">Single config struct passed to <code>Breez.connect()</code> or <code>Breez.builder()</code>.</div>
       <div class="type-card-variants">
         <code>apiKey</code> <code>network</code> <code>seed</code><br>
-        + optional: <code>storageRoot</code> <code>storageDir</code> <code>syncIntervalSecs</code> <code>preferSpark</code> <code>privateMode</code> <code>optimization</code> <code>maxDepositClaimFee</code> <code>lnurlDomain</code>
-      </div>
-    </div>
-
-    <div class="type-card">
-      <div class="type-card-title">AppConfig + ClientConfig</div>
-      <div class="type-card-desc">For multi-wallet: <code>new Breez(appConfig)</code> then <code>breez.connectWallet(clientConfig)</code>. Splits network config from wallet config.</div>
-      <div class="type-card-variants">
-        <strong>AppConfig:</strong> <code>apiKey</code> <code>network</code> + optional fields<br>
-        <strong>ClientConfig:</strong> <code>seed</code> + optional: <code>storageDir</code> <code>optimization</code> <code>preferSpark</code> <code>privateMode</code> <code>maxDepositClaimFee</code>
+        + optional: <code>storageRoot</code> <code>storageDir</code> <code>syncIntervalSecs</code> <code>preferSparkOverLightning</code> <code>privateMode</code> <code>leafOptimizationConfig</code> <code>maxDepositClaimFee</code> <code>lnurlDomain</code> <code>realTimeSyncServerUrl</code> <code>useDefaultExternalInputParsers</code> <code>externalInputParsers</code>
       </div>
     </div>
 
@@ -1798,6 +2518,15 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
         <code>conversionOptions?: ConversionOptions</code><br>
         <code>feePolicy?: FeePolicy</code><br>
         <code>lnurl?: { comment?, validateSuccessActionUrl? }</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">LnurlPayOptions</div>
+      <div class="type-card-desc">LNURL-specific options, passed via <code>PrepareOptions.lnurl</code>.</div>
+      <div class="type-card-variants">
+        <code>comment?: string</code><br>
+        <code>validateSuccessActionUrl?: boolean</code>
       </div>
     </div>
 
@@ -1849,28 +2578,66 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
   <div class="section-context">
     <div class="context-card">
       <div class="context-card-label problem">Problem</div>
-      <p><code>parse()</code> and <code>checkMessage()</code> required a <code>BreezClient</code> instance even though they use no wallet state. This forced callers to connect a wallet before parsing an input or verifying a signature &mdash; unnecessary coupling.</p>
+      <p><code>parse()</code> and <code>checkMessage()</code> required a <code>BreezClient</code> instance even though they use no client state. This forced callers to connect a client before parsing an input or verifying a signature &mdash; unnecessary coupling.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p>Standalone <code>parseInput()</code> and <code>verifyMessage()</code> imported from the package root. Pure operations with no wallet dependency.</p>
+      <p>Standalone <code>parseInput()</code> and <code>verifyMessage()</code> imported from the package root. Pure operations with no client dependency.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
-      <p>Parse inputs before connecting. Verify signatures without a wallet. Cleaner API surface &mdash; explicit about what needs wallet state.</p>
+      <p>Parse inputs before connecting. Verify signatures without a client. Cleaner API surface &mdash; explicit about what needs client state.</p>
     </div>
   </div>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (required BreezClient)</div>
-      <pre><span class="cm">// Parsing required an sdk instance</span>
+      <div class="card-header old"><span class="dot"></span>Before (required BreezSdk)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="cm">// Parsing required an sdk instance</span>
 <span class="kw">const</span> parsed = <span class="kw">await</span> sdk.<span class="fn">parse</span>(input)
 
 <span class="cm">// Message verification required an sdk instance</span>
 <span class="kw">const</span> result = <span class="kw">await</span> sdk.<span class="fn">checkMessage</span>({
   message, pubkey, signature
 })</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="cm">// Parsing required an sdk instance</span>
+<span class="kw">let</span> parsed = sdk.<span class="fn">parse</span>(input).<span class="kw">await</span>?;
+
+<span class="cm">// Message verification required an sdk instance</span>
+<span class="kw">let</span> result = sdk.<span class="fn">check_message</span>(<span class="tp">CheckMessageRequest</span> {
+    message, pubkey, signature
+})?;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="cm">// Parsing required an sdk instance</span>
+<span class="kw">let</span> parsed = <span class="kw">try await</span> sdk.<span class="fn">parse</span>(input: input)
+
+<span class="cm">// Message verification required an sdk instance</span>
+<span class="kw">let</span> result = <span class="kw">try await</span> sdk.<span class="fn">checkMessage</span>(
+    request: <span class="tp">CheckMessageRequest</span>(
+        message: message, pubkey: pubkey,
+        signature: signature))</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="cm">// Parsing required an sdk instance</span>
+<span class="kw">val</span> parsed = sdk.<span class="fn">parse</span>(input)
+
+<span class="cm">// Message verification required an sdk instance</span>
+<span class="kw">val</span> result = sdk.<span class="fn">checkMessage</span>(
+    <span class="tp">CheckMessageRequest</span>(message, pubkey, signature))</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (standalone)
@@ -1878,6 +2645,8 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
           <select>
             <option value="typescript" selected>TypeScript</option>
             <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
           </select>
         </span>
       </div>
@@ -1903,6 +2672,28 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
 <span class="kw">let</span> result = <span class="fn">verify_message</span>(<span class="tp">CheckMessageRequest</span> {
     message, pubkey, signature
 })?;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">import</span> BreezSdkSpark
+
+<span class="cm">// No BreezClient instance needed</span>
+<span class="kw">let</span> parsed = <span class="kw">try await</span> <span class="fn">parseInput</span>(input: input)
+
+<span class="cm">// Pure cryptographic verification</span>
+<span class="kw">let</span> result = <span class="kw">try</span> <span class="fn">verifyMessage</span>(
+    request: <span class="tp">CheckMessageRequest</span>(
+        message: message, pubkey: pubkey,
+        signature: signature))</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">import</span> breez_sdk_spark.*
+
+<span class="cm">// No BreezClient instance needed</span>
+<span class="kw">val</span> parsed = <span class="fn">parseInput</span>(input)
+
+<span class="cm">// Pure cryptographic verification</span>
+<span class="kw">val</span> result = <span class="fn">verifyMessage</span>(
+    <span class="tp">CheckMessageRequest</span>(message, pubkey, signature))</pre>
       </div>
     </div>
   </div>
@@ -1938,7 +2729,7 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
   <div class="section-context">
     <div class="context-card">
       <div class="context-card-label problem">Problem</div>
-      <p>(a) <code>Synced</code> event carried no detail &mdash; callers refreshed everything on every sync. (b) Identity pubkey required an async <code>getInfo()</code> call even though it&rsquo;s static per wallet. (c) <code>Optimization</code> was a vague event name.</p>
+      <p>(a) The SDK emits <code>Synced</code> only after full synchronization, even though balance and transaction data are available earlier. On first restores with large transaction history, this means apps have to wait minutes before showing a balance, even though the data is already there. (b) Identity pubkey required an async <code>getInfo()</code> call even though it&rsquo;s static per client. (c) <code>Optimization</code> was a vague event name.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
@@ -1946,26 +2737,54 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
-      <p>(a) Targeted UI refreshes, dismiss loading spinner on first sync. (b) No async call for static data. (c) Self-documenting event name.</p>
+      <p>(a) Targeted UI refreshes: show balance as soon as it's available, load transaction history in the background. Dismiss loading spinner on <code>initialSync</code> instead of waiting for full sync. (b) No async call for static data. (c) Self-documenting event name.</p>
     </div>
   </div>
 
   <!-- ── Enriched Synced event ── -->
   <h3 style="margin: 28px 0 12px; font-size: 16px; color: var(--green);">Enriched Synced Event</h3>
-  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">The old <code>BalanceSynced</code> and <code>HistorySynced</code> events are collapsed into a single <code>Synced</code> event with boolean flags. This lets you react precisely to what changed.</p>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">The <code>Synced</code> event now carries boolean flags (<code>balanceUpdated</code>, <code>paymentsUpdated</code>, <code>initialSync</code>). This lets you show the balance as soon as it's available and load history in the background, instead of waiting for full sync before rendering anything.</p>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before (separate events)</div>
-      <pre><span class="kw">case</span> <span class="st">'synced'</span>:
+      <div class="card-header old"><span class="dot"></span>Before (no detail)
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">case</span> <span class="st">'synced'</span>:
   <span class="cm">// No details — refresh everything</span>
   refreshBalance()
   refreshPayments()
-  <span class="kw">break</span>
-
-<span class="cm">// Separate events (removed)</span>
-<span class="kw">case</span> <span class="st">'balanceSynced'</span>:  <span class="cm">// ← gone</span>
-<span class="kw">case</span> <span class="st">'historySynced'</span>:  <span class="cm">// ← gone</span></pre>
+  <span class="kw">break</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="tp">SdkEvent</span>::<span class="tp">Synced</span> => {
+    <span class="cm">// No details — refresh everything</span>
+    refresh_balance();
+    refresh_payments();
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">case</span> .synced:
+    <span class="cm">// No details — refresh everything</span>
+    refreshBalance()
+    refreshPayments()
+    <span class="kw">break</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">is</span> <span class="tp">SdkEvent</span>.<span class="tp">Synced</span> -> {
+    <span class="cm">// No details — refresh everything</span>
+    refreshBalance()
+    refreshPayments()
+}</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After (enriched Synced)
@@ -1991,19 +2810,19 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <div class="lang-panel" data-lang="rust">
         <pre><span class="tp">SdkEvent</span>::<span class="tp">Synced</span> => {
     <span class="cm">// Data has been synchronized with the network.</span>
-    <span class="cm">// Refresh the payment list and wallet balance.</span>
+    <span class="cm">// Refresh the payment list and balance.</span>
 }</pre>
       </div>
       <div class="lang-panel" data-lang="swift">
         <pre><span class="kw">case</span> .synced:
     <span class="cm">// Data has been synchronized with the network.</span>
-    <span class="cm">// Refresh the payment list and wallet balance.</span>
+    <span class="cm">// Refresh the payment list and balance.</span>
     <span class="kw">break</span></pre>
       </div>
       <div class="lang-panel" data-lang="kotlin">
         <pre><span class="kw">is</span> <span class="tp">SdkEvent</span>.<span class="tp">Synced</span> -> {
     <span class="cm">// Data has been synchronized with the network.</span>
-    <span class="cm">// Refresh the payment list and wallet balance.</span>
+    <span class="cm">// Refresh the payment list and balance.</span>
 }</pre>
       </div>
     </div>
@@ -2013,14 +2832,44 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
 
   <!-- ── Identity Pubkey getter ── -->
   <h3 style="margin: 0 0 12px; font-size: 16px; color: var(--green);">Identity Pubkey — Synchronous Getter</h3>
-  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">Previously you needed <code>getInfo()</code> to retrieve the wallet's identity public key. Now it's a synchronous property on the client — no async call or sync required.</p>
+  <p style="margin-bottom: 14px; color: var(--text-muted); font-size: 14px;">Previously you needed <code>getInfo()</code> to retrieve the client's identity public key. Now it's a synchronous property on the client — no async call or sync required.</p>
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before</div>
-      <pre><span class="cm">// Required an async call + sync</span>
+      <div class="card-header old"><span class="dot"></span>Before
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="cm">// Required an async call + sync</span>
 <span class="kw">const</span> info = <span class="kw">await</span> sdk.<span class="fn">getInfo</span>({ ensureSynced: <span class="kw">true</span> })
 <span class="kw">const</span> pubkey = info.<span class="pr">identityPubkey</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="cm">// Required an async call + sync</span>
+<span class="kw">let</span> info = sdk.<span class="fn">get_info</span>(<span class="tp">GetInfoRequest</span> {
+    ensure_synced: <span class="tp">Some</span>(<span class="kw">true</span>),
+}).<span class="kw">await</span>?;
+<span class="kw">let</span> pubkey = &amp;info.identity_pubkey;</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="cm">// Required an async call + sync</span>
+<span class="kw">let</span> info = <span class="kw">try await</span> sdk.<span class="fn">getInfo</span>(
+    request: <span class="tp">GetInfoRequest</span>(ensureSynced: <span class="kw">true</span>))
+<span class="kw">let</span> pubkey = info.identityPubkey</pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="cm">// Required an async call + sync</span>
+<span class="kw">val</span> info = sdk.<span class="fn">getInfo</span>(
+    <span class="tp">GetInfoRequest</span>(ensureSynced = <span class="kw">true</span>))
+<span class="kw">val</span> pubkey = info.identityPubkey</pre>
+      </div>
     </div>
     <div class="card">
       <div class="card-header new"><span class="dot"></span>After</div>
@@ -2037,18 +2886,70 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
 
   <div class="comparison">
     <div class="card">
-      <div class="card-header old"><span class="dot"></span>Before</div>
-      <pre><span class="kw">case</span> <span class="st">'optimization'</span>: {
+      <div class="card-header old"><span class="dot"></span>Before
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">case</span> <span class="st">'optimization'</span>: {
   <span class="kw">const</span> evt = event.<span class="pr">optimizationEvent</span>
   <span class="kw">break</span>
 }</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="tp">SdkEvent</span>::<span class="tp">Optimization</span> { optimization_event } => {
+    <span class="cm">// An optimization event occurred</span>
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">case</span> .optimization(<span class="kw">let</span> optimizationEvent):
+    <span class="cm">// An optimization event occurred</span>
+    <span class="kw">break</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">is</span> <span class="tp">SdkEvent</span>.<span class="tp">Optimization</span> -> {
+    <span class="cm">// An optimization event occurred</span>
+}</pre>
+      </div>
     </div>
     <div class="card">
-      <div class="card-header new"><span class="dot"></span>After</div>
-      <pre><span class="kw">case</span> <span class="st">'leafOptimization'</span>: {
+      <div class="card-header new"><span class="dot"></span>After
+        <span class="lang-switcher" style="margin-left:auto">
+          <select>
+            <option value="typescript" selected>TypeScript</option>
+            <option value="rust">Rust</option>
+            <option value="swift">Swift</option>
+            <option value="kotlin">Kotlin</option>
+          </select>
+        </span>
+      </div>
+      <div class="lang-panel active" data-lang="typescript">
+        <pre><span class="kw">case</span> <span class="st">'leafOptimization'</span>: {
   <span class="kw">const</span> evt = event.<span class="pr">leafOptimizationEvent</span>
   <span class="kw">break</span>
 }</pre>
+      </div>
+      <div class="lang-panel" data-lang="rust">
+        <pre><span class="tp">SdkEvent</span>::<span class="tp">LeafOptimization</span> { leaf_optimization_event } => {
+    <span class="cm">// A leaf optimization event occurred</span>
+}</pre>
+      </div>
+      <div class="lang-panel" data-lang="swift">
+        <pre><span class="kw">case</span> .leafOptimization(<span class="kw">let</span> leafOptimizationEvent):
+    <span class="cm">// A leaf optimization event occurred</span>
+    <span class="kw">break</span></pre>
+      </div>
+      <div class="lang-panel" data-lang="kotlin">
+        <pre><span class="kw">is</span> <span class="tp">SdkEvent</span>.<span class="tp">LeafOptimization</span> -> {
+    <span class="cm">// A leaf optimization event occurred</span>
+}</pre>
+      </div>
     </div>
   </div>
 

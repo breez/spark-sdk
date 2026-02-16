@@ -35,7 +35,7 @@ const exampleSendHtlcPayment = async (client: BreezClient): Promise<Payment> => 
 
 const exampleListClaimableHtlcPayments = async (client: BreezClient): Promise<Payment[]> => {
   // ANCHOR: list-claimable-htlc-payments
-  const response = await client.listPayments({
+  const response = await client.payments.list({
     typeFilter: ['receive'],
     statusFilter: ['pending'],
     paymentDetailsFilter: [{
@@ -52,7 +52,7 @@ const exampleListClaimableHtlcPayments = async (client: BreezClient): Promise<Pa
 const exampleClaimHtlcPayment = async (client: BreezClient): Promise<Payment> => {
   // ANCHOR: claim-htlc-payment
   const preimage = '<preimage hex>'
-  const response = await client.claimHtlcPayment({
+  const response = await client.payments.claimHtlc({
     preimage
   })
   const payment = response.payment

@@ -10,7 +10,7 @@ import (
 
 func GetTokenIssuer(client *breez_sdk_spark.BreezClient) *breez_sdk_spark.TokenIssuer {
 	// ANCHOR: get-token-issuer
-	tokenIssuer := client.GetTokenIssuer()
+	tokenIssuer := client.Tokens().Issuer()
 	// ANCHOR_END: get-token-issuer
 	return tokenIssuer
 }

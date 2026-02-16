@@ -20,7 +20,7 @@ class LightningAddress {
             username = username
         )
         
-        val available = client.checkLightningAddressAvailable(request)
+        val available = client.lightningAddress().isAvailable(request)
         // ANCHOR_END: check-lightning-address
     }
 
@@ -34,7 +34,7 @@ class LightningAddress {
             description = description
         )
         
-        val addressInfo = client.registerLightningAddress(request)
+        val addressInfo = client.lightningAddress().register(request)
         val lightningAddress = addressInfo.lightningAddress
         val lnurlUrl = addressInfo.lnurl.url
         val lnurlBech32 = addressInfo.lnurl.bech32
@@ -43,7 +43,7 @@ class LightningAddress {
 
     suspend fun getLightningAddress(client: BreezClient) {
         // ANCHOR: get-lightning-address
-        val addressInfoOpt = client.getLightningAddress()
+        val addressInfoOpt = client.lightningAddress().get()
         
         if (addressInfoOpt != null) {
             val lightningAddress = addressInfoOpt.lightningAddress
@@ -57,13 +57,13 @@ class LightningAddress {
 
     suspend fun deleteLightningAddress(client: BreezClient) {
         // ANCHOR: delete-lightning-address
-        client.deleteLightningAddress()
+        client.lightningAddress().delete()
         // ANCHOR_END: delete-lightning-address
     }
 
     suspend fun accessSenderComment(client: BreezClient) {
         val paymentId = "<payment id>"
-        val response = client.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val response = client.payments().get(GetPaymentRequest(paymentId = paymentId))
         val payment = response.payment
         
         // ANCHOR: access-sender-comment
@@ -82,7 +82,7 @@ class LightningAddress {
 
     suspend fun accessNostrZap(client: BreezClient) {
         val paymentId = "<payment id>"
-        val response = client.getPayment(GetPaymentRequest(paymentId = paymentId))
+        val response = client.payments().get(GetPaymentRequest(paymentId = paymentId))
         val payment = response.payment
         
         // ANCHOR: access-nostr-zap

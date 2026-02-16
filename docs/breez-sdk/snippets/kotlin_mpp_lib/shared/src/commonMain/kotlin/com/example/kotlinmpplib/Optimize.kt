@@ -5,14 +5,14 @@ import breez_sdk_spark.*
 class Optimize {
     fun startOptimization(client: BreezClient) {
         // ANCHOR: start-optimization
-        client.startLeafOptimization()
+        client.optimization().start()
         // ANCHOR_END: start-optimization
     }
 
     suspend fun cancelOptimization(client: BreezClient) {
         // ANCHOR: cancel-optimization
         try {
-            client.cancelLeafOptimization()
+            client.optimization().cancel()
         } catch (e: Exception) {
             // handle error
         }
@@ -21,7 +21,7 @@ class Optimize {
 
     fun getOptimizationProgress(client: BreezClient) {
         // ANCHOR: get-optimization-progress
-        val progress = client.getLeafOptimizationProgress()
+        val progress = client.optimization().progress()
 
         println("Optimization is running: ${progress.isRunning}")
         println("Current round: ${progress.currentRound}")

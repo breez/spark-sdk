@@ -38,7 +38,7 @@ func LnurlWithdraw(client *breez_sdk_spark.BreezClient) (*breez_sdk_spark.LnurlW
 			CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
 		}
 
-		response, err := client.LnurlWithdraw(request)
+		response, err := client.Lnurl().Withdraw(request)
 
 		if err != nil {
 			var sdkErr *breez_sdk_spark.SdkError

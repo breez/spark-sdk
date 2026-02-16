@@ -4,7 +4,7 @@ import Foundation
 
 func getTokenIssuer(client: BreezClient) -> TokenIssuer {
     // ANCHOR: get-token-issuer
-    let tokenIssuer = client.getTokenIssuer()
+    let tokenIssuer = client.tokens().issuer()
     // ANCHOR_END: get-token-issuer
     return tokenIssuer
 }

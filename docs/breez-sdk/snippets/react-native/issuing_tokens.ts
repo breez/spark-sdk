@@ -16,7 +16,7 @@ import RNFS from 'react-native-fs'
 
 const getTokenIssuer = (client: BreezClient) => {
   // ANCHOR: get-token-issuer
-  const tokenIssuer = client.getTokenIssuer()
+  const tokenIssuer = client.tokens().issuer()
   // ANCHOR_END: get-token-issuer
 }
 

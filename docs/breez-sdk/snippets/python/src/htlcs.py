@@ -66,7 +66,7 @@ async def list_claimable_htlc_payments(client: BreezClient):
         ))],
     )
 
-    response = await client.list_payments(request=request)
+    response = await client.payments().list(request=request)
     payments = response.payments
     # ANCHOR_END: list-claimable-htlc-payments
 
@@ -74,7 +74,7 @@ async def list_claimable_htlc_payments(client: BreezClient):
 async def claim_htlc_payment(client: BreezClient):
     # ANCHOR: claim-htlc-payment
     preimage = "<preimage hex>"
-    response = await client.claim_htlc_payment(
+    response = await client.payments().claim_htlc(
         request=ClaimHtlcPaymentRequest(preimage=preimage)
     )
     payment = response.payment

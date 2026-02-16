@@ -23,7 +23,7 @@ Future<void> parseLnurlAuth(BreezClient client) async {
 Future<void> authenticate(BreezClient client, LnurlAuthRequestDetails requestData) async {
   // ANCHOR: lnurl-auth
   // Perform LNURL authentication
-  LnurlCallbackStatus result = await client.lnurlAuth(requestData: requestData);
+  LnurlCallbackStatus result = await client.lnurl().auth(requestData: requestData);
 
   if (result is LnurlCallbackStatus_Ok) {
     print("Authentication successful");

@@ -15,7 +15,7 @@ import {
 const listUnclaimedDeposits = async (client: BreezClient) => {
   // ANCHOR: list-unclaimed-deposits
   const request: ListUnclaimedDepositsRequest = {}
-  const response = await client.listUnclaimedDeposits(request)
+  const response = await client.deposits().listUnclaimed(request)
 
   for (const deposit of response.deposits) {
     console.log(`Unclaimed deposit: ${deposit.txid}:${deposit.vout}`)
@@ -60,7 +60,7 @@ const handleFeeExceeded = async (client: BreezClient, deposit: DepositInfo) => {
         vout: deposit.vout,
         maxFee: new MaxFee.Fixed({ amount: requiredFee })
       }
-      await client.claimDeposit(claimRequest)
+      await client.deposits().claim(claimRequest)
     }
   }
   // ANCHOR_END: handle-fee-exceeded
@@ -73,7 +73,7 @@ const refundDeposit = async (client: BreezClient) => {
   const destinationAddress = 'bc1qexample...' // Your Bitcoin address
 
   // Set the fee for the refund transaction using the half-hour feerate
-  const recommendedFees = await client.recommendedFees()
+  const recommendedFees = await client.deposits().recommendedFees()
   const fee = new Fee.Rate({ satPerVbyte: recommendedFees.halfHourFee })
   // or using a fixed amount
   // const fee = new Fee.Fixed({ amount: BigInt(500) })
@@ -86,7 +86,7 @@ const refundDeposit = async (client: BreezClient) => {
     fee
   }
 
-  const response = await client.refundDeposit(request)
+  const response = await client.deposits().refund(request)
   console.log('Refund transaction created:')
   console.log('Transaction ID:', response.txId)
   console.log('Transaction hex:', response.txHex)
@@ -111,7 +111,7 @@ const customClaimLogic = async (client: BreezClient, deposit: DepositInfo) => {
   if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {
     const requiredFeeRate = deposit.claimError.inner.requiredFeeRateSatPerVbyte
 
-    const recommendedFees = await client.recommendedFees()
+    const recommendedFees = await client.deposits().recommendedFees()
 
     if (requiredFeeRate <= recommendedFees.fastestFee) {
       const claimRequest: ClaimDepositRequest = {
@@ -119,7 +119,7 @@ const customClaimLogic = async (client: BreezClient, deposit: DepositInfo) => {
         vout: deposit.vout,
         maxFee: new MaxFee.Rate({ satPerVbyte: requiredFeeRate })
       }
-      await client.claimDeposit(claimRequest)
+      await client.deposits().claim(claimRequest)
     }
   }
   // ANCHOR_END: custom-claim-logic
@@ -127,7 +127,7 @@ const customClaimLogic = async (client: BreezClient, deposit: DepositInfo) => {
 
 const recommendedFees = async (client: BreezClient) => {
   // ANCHOR: recommended-fees
-  const response = await client.recommendedFees()
+  const response = await client.deposits().recommendedFees()
   console.log('Fastest fee:', response.fastestFee, 'sats/vByte')
   console.log('Half-hour fee:', response.halfHourFee, 'sats/vByte')
   console.log('Hour fee:', response.hourFee, 'sats/vByte')

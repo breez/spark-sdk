@@ -18,7 +18,7 @@ func checkLightningAddressAvailability(client: BreezClient) async throws {
         username: username
     )
 
-    let available = try await client.checkLightningAddressAvailable(req: request)
+    let available = try await client.lightningAddress().isAvailable(request: request)
     // ANCHOR_END: check-lightning-address
 }
 
@@ -32,7 +32,7 @@ func registerLightningAddress(client: BreezClient) async throws {
         description: description
     )
 
-    let addressInfo = try await client.registerLightningAddress(request: request)
+    let addressInfo = try await client.lightningAddress().register(request: request)
     let lightningAddress = addressInfo.lightningAddress
     let lnurlUrl = addressInfo.lnurl.url
     let lnurlBech32 = addressInfo.lnurl.bech32
@@ -41,7 +41,7 @@ func registerLightningAddress(client: BreezClient) async throws {
 
 func getLightningAddress(client: BreezClient) async throws {
     // ANCHOR: get-lightning-address
-    if let addressInfo = try await client.getLightningAddress() {
+    if let addressInfo = try await client.lightningAddress().get() {
         let lightningAddress = addressInfo.lightningAddress
         let username = addressInfo.username
         let description = addressInfo.description
@@ -53,13 +53,13 @@ func getLightningAddress(client: BreezClient) async throws {
 
 func deleteLightningAddress(client: BreezClient) async throws {
     // ANCHOR: delete-lightning-address
-    try await client.deleteLightningAddress()
+    try await client.lightningAddress().delete()
     // ANCHOR_END: delete-lightning-address
 }
 
 func accessSenderComment(client: BreezClient) async throws {
     let paymentId = "<payment id>"
-    let response = try await client.getPayment(request: GetPaymentRequest(paymentId: paymentId))
+    let response = try await client.payments().get(request: GetPaymentRequest(paymentId: paymentId))
     let payment = response.payment
     
     // ANCHOR: access-sender-comment
@@ -76,7 +76,7 @@ func accessSenderComment(client: BreezClient) async throws {
 
 func accessNostrZap(client: BreezClient) async throws {
     let paymentId = "<payment id>"
-    let response = try await client.getPayment(request: GetPaymentRequest(paymentId: paymentId))
+    let response = try await client.payments().get(request: GetPaymentRequest(paymentId: paymentId))
     let payment = response.payment
     
     // ANCHOR: access-nostr-zap

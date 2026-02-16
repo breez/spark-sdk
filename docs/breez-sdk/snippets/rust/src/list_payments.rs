@@ -4,7 +4,7 @@ use breez_sdk_spark::*;
 async fn get_payment(client: &BreezClient) -> Result<Payment> {
     // ANCHOR: get-payment
     let payment_id = "<payment id>".to_string();
-    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.payments().get(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
     // ANCHOR_END: get-payment
 
@@ -13,7 +13,7 @@ async fn get_payment(client: &BreezClient) -> Result<Payment> {
 
 async fn list_payments(client: &BreezClient) -> Result<Vec<Payment>> {
     // ANCHOR: list-payments
-    let response = client.list_payments(ListPaymentsRequest::default()).await?;
+    let response = client.payments().list(ListPaymentsRequest::default()).await?;
     let payments = response.payments;
     // ANCHOR_END: list-payments
 
@@ -30,7 +30,7 @@ async fn list_payments_filtered(client: &BreezClient) -> Result<Vec<Payment>> {
     // let asset_filter = AssetFilter::Bitcoin;
 
     let response = client
-        .list_payments(ListPaymentsRequest {
+        .payments().list(ListPaymentsRequest {
             // Filter by payment type
             type_filter: Some(vec![PaymentType::Send, PaymentType::Receive]),
             // Filter by status

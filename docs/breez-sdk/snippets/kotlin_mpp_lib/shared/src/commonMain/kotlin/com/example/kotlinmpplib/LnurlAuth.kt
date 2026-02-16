@@ -27,7 +27,7 @@ suspend fun parseLnurlAuth(client: BreezClient) {
 suspend fun authenticate(client: BreezClient, requestData: LnurlAuthRequestDetails) {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    when (val result = client.lnurlAuth(requestData)) {
+    when (val result = client.lnurl().auth(requestData)) {
         is LnurlCallbackStatus.Ok -> {
             println("Authentication successful")
         }

@@ -22,7 +22,7 @@ func parseLnurlAuth(client: BreezClient) async throws {
 func authenticate(client: BreezClient, requestData: LnurlAuthRequestDetails) async throws {
     // ANCHOR: lnurl-auth
     // Perform LNURL authentication
-    let result = try await client.lnurlAuth(requestData: requestData)
+    let result = try await client.lnurl().auth(requestData: requestData)
 
     switch result {
     case .ok:

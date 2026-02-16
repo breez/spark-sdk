@@ -3,17 +3,17 @@ from breez_sdk_spark import BreezClient, LeafOptimizationEvent
 
 async def start_optimization(client: BreezClient):
     # ANCHOR: start-optimization
-    client.start_leaf_optimization()
+    client.optimization().start()
     # ANCHOR_END: start-optimization
 
 async def cancel_optimization(client: BreezClient):
     # ANCHOR: cancel-optimization
-    await client.cancel_leaf_optimization()
+    await client.optimization().cancel()
     # ANCHOR_END: cancel-optimization
 
 async def get_optimization_progress(client: BreezClient):
     # ANCHOR: get-optimization-progress
-    progress = client.get_leaf_optimization_progress()
+    progress = client.optimization().progress()
 
     logging.debug(f"Optimization is running: {progress.is_running}")
     logging.debug(f"Current round: {progress.current_round}")

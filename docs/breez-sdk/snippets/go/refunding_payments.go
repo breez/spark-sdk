@@ -11,7 +11,7 @@ import (
 func ListUnclaimedDeposits(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: list-unclaimed-deposits
 	request := breez_sdk_spark.ListUnclaimedDepositsRequest{}
-	response, err := client.ListUnclaimedDeposits(request)
+	response, err := client.Deposits().ListUnclaimed(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -66,7 +66,7 @@ func HandleFeeExceeded(client *breez_sdk_spark.BreezClient, deposit breez_sdk_sp
 					Vout:   deposit.Vout,
 					MaxFee: &maxFee,
 				}
-				_, err := client.ClaimDeposit(claimRequest)
+				_, err := client.Deposits().Claim(claimRequest)
 				if err != nil {
 					var sdkErr *breez_sdk_spark.SdkError
 					if errors.As(err, &sdkErr) {
@@ -89,7 +89,7 @@ func RefundDeposit(client *breez_sdk_spark.BreezClient) error {
 	destinationAddress := "bc1qexample..." // Your Bitcoin address
 
 	// Set the fee for the refund transaction using the half-hour feerate
-	recommendedFees, err := client.RecommendedFees()
+	recommendedFees, err := client.Deposits().RecommendedFees()
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func RefundDeposit(client *breez_sdk_spark.BreezClient) error {
 		DestinationAddress: destinationAddress,
 		Fee:                fee,
 	}
-	response, err := client.RefundDeposit(request)
+	response, err := client.Deposits().Refund(request)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -144,7 +144,7 @@ func CustomClaimLogic(client *breez_sdk_spark.BreezClient, deposit breez_sdk_spa
 		if exceeded, ok := claimErr.(breez_sdk_spark.DepositClaimErrorMaxDepositClaimFeeExceeded); ok {
 			requiredFeeRate := exceeded.RequiredFeeRateSatPerVbyte
 
-			recommendedFees, err := client.RecommendedFees()
+			recommendedFees, err := client.Deposits().RecommendedFees()
 			if err != nil {
 				return err
 			}
@@ -156,7 +156,7 @@ func CustomClaimLogic(client *breez_sdk_spark.BreezClient, deposit breez_sdk_spa
 					Vout:   deposit.Vout,
 					MaxFee: &maxFee,
 				}
-				_, err := client.ClaimDeposit(claimRequest)
+				_, err := client.Deposits().Claim(claimRequest)
 				if err != nil {
 					var sdkErr *breez_sdk_spark.SdkError
 					if errors.As(err, &sdkErr) {
@@ -174,7 +174,7 @@ func CustomClaimLogic(client *breez_sdk_spark.BreezClient, deposit breez_sdk_spa
 
 func RecommendedFees(client *breez_sdk_spark.BreezClient) error {
 	// ANCHOR: recommended-fees
-	response, err := client.RecommendedFees()
+	response, err := client.Deposits().RecommendedFees()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

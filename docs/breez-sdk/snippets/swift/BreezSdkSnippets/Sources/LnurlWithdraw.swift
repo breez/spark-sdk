@@ -18,7 +18,7 @@ func withdraw(client: BreezClient) async throws {
             withdrawRequest: withdrawRequest,
             completionTimeoutSecs: optionalCompletionTimeoutSecs
         )
-        let response = try await client.lnurlWithdraw(request: request)
+        let response = try await client.lnurl().withdraw(request: request)
 
         let payment = response.payment
         print("Payment: \(payment)")

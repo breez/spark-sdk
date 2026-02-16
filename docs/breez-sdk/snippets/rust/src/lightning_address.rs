@@ -19,7 +19,7 @@ pub async fn check_lightning_address_availability(client: &BreezClient) -> anyho
     // ANCHOR: check-lightning-address
     let request = CheckLightningAddressRequest { username };
 
-    let is_available = client.check_lightning_address_available(request).await?;
+    let is_available = client.lightning_address().is_available(request).await?;
     // ANCHOR_END: check-lightning-address
     Ok(is_available)
 }
@@ -35,7 +35,7 @@ pub async fn register_lightning_address(client: &BreezClient) -> anyhow::Result<
         description,
     };
 
-    let address_info = client.register_lightning_address(request).await?;
+    let address_info = client.lightning_address().register(request).await?;
     let lightning_address = address_info.lightning_address;
     let lnurl_url = address_info.lnurl.url;
     let lnurl_bech32 = address_info.lnurl.bech32;
@@ -45,14 +45,14 @@ pub async fn register_lightning_address(client: &BreezClient) -> anyhow::Result<
 
 pub async fn delete_lightning_address(client: &BreezClient) -> anyhow::Result<()> {
     // ANCHOR: delete-lightning-address
-    client.delete_lightning_address().await?;
+    client.lightning_address().delete().await?;
     // ANCHOR_END: delete-lightning-address
     Ok(())
 }
 
 pub async fn get_lightning_address(client: &BreezClient) -> anyhow::Result<()> {
     // ANCHOR: get-lightning-address
-    let address_info_opt = client.get_lightning_address().await?;
+    let address_info_opt = client.lightning_address().get().await?;
 
     if let Some(info) = address_info_opt {
         let lightning_address = &info.lightning_address;
@@ -67,7 +67,7 @@ pub async fn get_lightning_address(client: &BreezClient) -> anyhow::Result<()> {
 
 pub async fn access_sender_comment(client: &BreezClient) -> anyhow::Result<()> {
     let payment_id = "<payment id>".to_string();
-    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.payments().get(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
 
     // ANCHOR: access-sender-comment
@@ -88,7 +88,7 @@ pub async fn access_sender_comment(client: &BreezClient) -> anyhow::Result<()> {
 
 pub async fn access_nostr_zap(client: &BreezClient) -> anyhow::Result<()> {
     let payment_id = "<payment id>".to_string();
-    let response = client.get_payment(GetPaymentRequest { payment_id }).await?;
+    let response = client.payments().get(GetPaymentRequest { payment_id }).await?;
     let payment = response.payment;
 
     // ANCHOR: access-nostr-zap

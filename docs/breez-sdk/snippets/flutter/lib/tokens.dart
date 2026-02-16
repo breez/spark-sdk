@@ -20,7 +20,7 @@ Future<void> fetchTokenBalances(BreezClient client) async {
 
 Future<void> fetchTokenMetadata(BreezClient client) async {
   // ANCHOR: fetch-token-metadata
-  final response = await client.getTokensMetadata(
+  final response = await client.tokens().metadata(
     request: GetTokensMetadataRequest(
       tokenIdentifiers: ['<token identifier 1>', '<token identifier 2>']
       )
@@ -112,7 +112,7 @@ Future<void> sendTokenPayment(BreezClient client) async {
 Future<void> fetchConversionLimits(BreezClient client) async {
   // ANCHOR: fetch-conversion-limits
   // Fetch limits for converting Bitcoin to a token
-  final fromBitcoinResponse = await client.fetchConversionLimits(
+  final fromBitcoinResponse = await client.tokens().fetchConversionLimits(
     request: FetchConversionLimitsRequest(
       conversionType: ConversionType.fromBitcoin(),
       tokenIdentifier: '<token identifier>',
@@ -127,7 +127,7 @@ Future<void> fetchConversionLimits(BreezClient client) async {
   }
 
   // Fetch limits for converting a token to Bitcoin
-  final toBitcoinResponse = await client.fetchConversionLimits(
+  final toBitcoinResponse = await client.tokens().fetchConversionLimits(
     request: FetchConversionLimitsRequest(
       conversionType: ConversionType.toBitcoin(
         fromTokenIdentifier: '<token identifier>',

@@ -100,7 +100,7 @@ class SdkListener(EventListener):
 
 async def add_event_listener(client: BreezClient, listener: SdkListener):
     try:
-        listener_id = await client.add_event_listener(listener=listener)
+        listener_id = await client.events().add(listener=listener)
         return listener_id
     except Exception as error:
         logging.error(error)
@@ -113,7 +113,7 @@ async def add_event_listener(client: BreezClient, listener: SdkListener):
 # ANCHOR: remove-event-listener
 async def remove_event_listener(client: BreezClient, listener_id: str):
     try:
-        await client.remove_event_listener(id=listener_id)
+        await client.events().remove(id=listener_id)
     except Exception as error:
         logging.error(error)
         raise

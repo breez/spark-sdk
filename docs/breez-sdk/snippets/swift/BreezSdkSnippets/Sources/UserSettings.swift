@@ -2,7 +2,7 @@ import BreezSdkSpark
 
 func getUserSettings(client: BreezClient) async throws {
     // ANCHOR: get-user-settings
-    let userSettings = try await client.getUserSettings()
+    let userSettings = try await client.settings().get()
     print("User settings: \(userSettings)")
     // ANCHOR_END: get-user-settings
 }
@@ -10,7 +10,7 @@ func getUserSettings(client: BreezClient) async throws {
 func updateUserSettings(client: BreezClient) async throws {
     // ANCHOR: update-user-settings
     let sparkPrivateModeEnabled = true
-    try await client.updateUserSettings(
+    try await client.settings().update(
         request: UpdateUserSettingsRequest(
             sparkPrivateModeEnabled: sparkPrivateModeEnabled
         ))

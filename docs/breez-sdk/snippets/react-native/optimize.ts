@@ -2,19 +2,19 @@ import { type LeafOptimizationEvent, LeafOptimizationEvent_Tags, type BreezClien
 
 const exampleStartOptimization = async (client: BreezClient) => {
   // ANCHOR: start-optimization
-  client.startLeafOptimization()
+  client.optimization().start()
   // ANCHOR_END: start-optimization
 }
 
 const exampleCancelOptimization = async (client: BreezClient) => {
   // ANCHOR: cancel-optimization
-  await client.cancelLeafOptimization()
+  await client.optimization().cancel()
   // ANCHOR_END: cancel-optimization
 }
 
 const exampleGetOptimizationProgress = async (client: BreezClient) => {
   // ANCHOR: get-optimization-progress
-  const progress = client.getLeafOptimizationProgress()
+  const progress = client.optimization().progress()
 
   console.log(`Optimization is running: ${progress.isRunning}`)
   console.log(`Current round: ${progress.currentRound}`)

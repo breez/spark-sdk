@@ -8,7 +8,7 @@ import (
 
 func ListFiatCurrencies(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.FiatCurrency, error) {
 	// ANCHOR: list-fiat-currencies
-	response, err := client.ListFiatCurrencies()
+	response, err := client.Fiat().Currencies()
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
@@ -24,7 +24,7 @@ func ListFiatCurrencies(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark
 
 func ListFiatRates(client *breez_sdk_spark.BreezClient) (*[]breez_sdk_spark.Rate, error) {
 	// ANCHOR: list-fiat-rates
-	response, err := client.ListFiatRates()
+	response, err := client.Fiat().Rates()
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

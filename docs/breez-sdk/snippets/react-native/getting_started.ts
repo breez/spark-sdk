@@ -90,13 +90,13 @@ const exampleAddEventListener = async (client: BreezClient) => {
 
   const eventListener = new JsEventListener()
 
-  const listenerId = await client.addEventListener(eventListener)
+  const listenerId = await client.events().add(eventListener)
   // ANCHOR_END: add-event-listener
 }
 
 const exampleRemoveEventListener = async (client: BreezClient, listenerId: string) => {
   // ANCHOR: remove-event-listener
-  await client.removeEventListener(listenerId)
+  await client.events().remove(listenerId)
   // ANCHOR_END: remove-event-listener
 }
 

@@ -72,7 +72,7 @@ class Htlcs {
                 )
             )
 
-            val response = client.listPayments(request)
+            val response = client.payments().list(request)
             val payments = response.payments
         } catch (e: Exception) {
             // handle error
@@ -86,7 +86,7 @@ class Htlcs {
         try {
             val preimage = "<preimage hex>"
             val request = ClaimHtlcPaymentRequest(preimage = preimage)
-            val response = client.claimHtlcPayment(request)
+            val response = client.payments().claimHtlc(request)
             val payment = response.payment
         } catch (e: Exception) {
             // handle error

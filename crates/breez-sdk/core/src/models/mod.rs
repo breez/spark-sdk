@@ -40,29 +40,35 @@ pub const DEFAULT_EXTERNAL_INPUT_PARSERS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Configuration for the [`App`](crate::App) platform identity.
+/// Configuration for connecting to the Breez SDK.
 ///
-/// Only `api_key` and `network` are required. All other fields have sensible
+/// `api_key`, `network`, and `seed` are required. All other fields have sensible
 /// defaults (identical to the legacy `default_config()` function).
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let config = AppConfig {
+/// let client = Breez::connect(ClientConfig {
 ///     api_key: "brz_test_...".into(),
 ///     network: Network::Mainnet,
+///     seed: Seed::Mnemonic { mnemonic: "...".into(), passphrase: None },
 ///     ..Default::default()
-/// };
+/// }).await?;
 /// ```
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct AppConfig {
+pub struct ClientConfig {
     /// Breez API key. Required for mainnet; may be empty for regtest.
     pub api_key: String,
     /// Network to connect to.
     pub network: Network,
-    /// Root directory for wallet storage. Each wallet gets a subdirectory
-    /// derived from its seed fingerprint.
+    /// The wallet seed. Required.
+    pub seed: Seed,
+    /// Storage directory for this client's data. If `None`, auto-derived
+    /// from the seed fingerprint under `storage_root`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub storage_dir: Option<String>,
+    /// Root directory for wallet storage when `storage_dir` is `None`.
     /// Default: `"./.breez"`
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub storage_root: Option<String>,
@@ -81,7 +87,7 @@ pub struct AppConfig {
     /// Whether to prefer Spark payments over Lightning.
     /// Default: false
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub prefer_spark: Option<bool>,
+    pub prefer_spark_over_lightning: Option<bool>,
     /// Custom external input parsers.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -100,144 +106,7 @@ pub struct AppConfig {
     /// Leaf optimization configuration.
     /// Default: auto_enabled=true, multiplicity=1
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub optimization: Option<OptimizationConfig>,
-}
-
-/// Per-wallet configuration for [`App::connect_wallet`](crate::App::connect_wallet).
-///
-/// Only `seed` is required. All other fields inherit from the parent
-/// [`App`](crate::App) configuration if left as `None`.
-///
-/// # Examples
-///
-/// ```ignore
-/// let wallet = app.connect_wallet(ClientConfig {
-///     seed: Seed::Mnemonic { mnemonic: "...".into(), passphrase: None },
-///     ..Default::default()
-/// }).await?;
-/// ```
-#[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ClientConfig {
-    /// The wallet seed. Required.
-    pub seed: Seed,
-    /// Explicit storage directory. If `None`, a directory is auto-derived
-    /// from the seed fingerprint under `App.storage_root`.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub storage_dir: Option<String>,
-    /// Override the app-level optimization config for this wallet.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub optimization: Option<OptimizationConfig>,
-    /// Override the app-level prefer_spark setting for this wallet.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub prefer_spark: Option<bool>,
-    /// Override the app-level private_mode setting for this wallet.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub private_mode: Option<bool>,
-    /// Override the app-level max_deposit_claim_fee for this wallet.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub max_deposit_claim_fee: Option<MaxFee>,
-}
-
-/// Flat configuration for single-step wallet connection.
-///
-/// Combines [`AppConfig`] and [`ClientConfig`] fields into a single struct
-/// for the common case where only one wallet is needed.
-///
-/// # Examples
-///
-/// ```ignore
-/// let wallet = App::connect(ConnectConfig {
-///     api_key: "brz_test_...".into(),
-///     network: Network::Mainnet,
-///     seed: Seed::Mnemonic { mnemonic: "...".into(), passphrase: None },
-///     ..Default::default()
-/// }).await?;
-/// ```
-#[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ConnectConfig {
-    // --- Required ---
-    /// Breez API key. Required for mainnet; may be empty for regtest.
-    pub api_key: String,
-    /// Network to connect to.
-    pub network: Network,
-    /// The wallet seed.
-    pub seed: Seed,
-
-    // --- Optional (AppConfig-level) ---
-    /// Root directory for wallet storage.
-    /// Default: `"./.breez"`
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub storage_root: Option<String>,
-    /// How often (in seconds) to sync wallet state.
-    /// Default: 60
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub sync_interval_secs: Option<u32>,
-    /// Maximum fee for automatic on-chain deposit claims.
-    /// Default: `Rate { sat_per_vbyte: 1 }`
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub max_deposit_claim_fee: Option<MaxFee>,
-    /// The domain for receiving via lnurl-pay and lightning address.
-    /// Default: derived from network.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub lnurl_domain: Option<String>,
-    /// Whether to prefer Spark payments over Lightning.
-    /// Default: false
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub prefer_spark: Option<bool>,
-    /// Custom external input parsers.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
-    /// Whether to use the built-in default external input parsers.
-    /// Default: true
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub use_default_external_input_parsers: Option<bool>,
-    /// URL for the real-time sync server.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub real_time_sync_server_url: Option<String>,
-    /// Whether Spark private mode is enabled by default.
-    /// Default: true
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub private_mode: Option<bool>,
-    /// Leaf optimization configuration.
-    /// Default: auto_enabled=true, multiplicity=1
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub optimization: Option<OptimizationConfig>,
-
-    // --- Optional (ClientConfig-level) ---
-    /// Explicit storage directory. If `None`, auto-derived from seed fingerprint.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub storage_dir: Option<String>,
-}
-
-impl ConnectConfig {
-    /// Split into `AppConfig` + `ClientConfig` for internal use.
-    pub fn into_parts(self) -> (AppConfig, ClientConfig) {
-        let app_config = AppConfig {
-            api_key: self.api_key,
-            network: self.network,
-            storage_root: self.storage_root,
-            sync_interval_secs: self.sync_interval_secs,
-            max_deposit_claim_fee: self.max_deposit_claim_fee.clone(),
-            lnurl_domain: self.lnurl_domain,
-            prefer_spark: self.prefer_spark,
-            external_input_parsers: self.external_input_parsers,
-            use_default_external_input_parsers: self.use_default_external_input_parsers,
-            real_time_sync_server_url: self.real_time_sync_server_url,
-            private_mode: self.private_mode,
-            optimization: self.optimization.clone(),
-        };
-        let wallet_config = ClientConfig {
-            seed: self.seed,
-            storage_dir: self.storage_dir,
-            optimization: self.optimization,
-            prefer_spark: self.prefer_spark,
-            private_mode: self.private_mode,
-            max_deposit_claim_fee: self.max_deposit_claim_fee,
-        };
-        (app_config, wallet_config)
-    }
+    pub leaf_optimization_config: Option<LeafOptimizationConfig>,
 }
 
 /// Represents the seed for wallet generation, either as a mnemonic phrase with an optional
@@ -809,12 +678,16 @@ pub struct Config {
     /// Leaf optimization controls the denominations of leaves that are held in the wallet.
     /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
-    pub optimization_config: OptimizationConfig,
+    pub optimization_config: LeafOptimizationConfig,
 }
+
+/// Deprecated alias for [`LeafOptimizationConfig`].
+#[deprecated(note = "Use `LeafOptimizationConfig` instead.")]
+pub type OptimizationConfig = LeafOptimizationConfig;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OptimizationConfig {
+pub struct LeafOptimizationConfig {
     /// Whether automatic leaf optimization is enabled.
     ///
     /// If set to true, the SDK will automatically optimize the leaf set when it changes.
@@ -1711,7 +1584,7 @@ pub struct OptimizationProgress {
 //  Unified Payment API types (Phase 1 of SDK Modernization)
 // ---------------------------------------------------------------------------
 
-/// Options for preparing a payment via the unified `prepare()` API.
+/// Options for preparing a payment via [`prepare_payment()`](crate::BreezClient::prepare_payment).
 ///
 /// All fields are optional – callers only need to supply the fields relevant
 /// to the destination they parsed with `parse()`.
@@ -1817,10 +1690,10 @@ pub enum PreparedPaymentFee {
     SparkSats { fee_sats: u64 },
     /// Fee for a Spark token transfer, denominated in token base units.
     SparkToken { fee_token_units: u128 },
-    /// Fee for a Lightning payment.
-    Lightning { fee_sats: u64 },
+    /// Fee for a Lightning (Bolt11) payment.
+    Bolt11Invoice { fee_sats: u64 },
     /// Fee for an on-chain (Bitcoin address) payment, with speed tiers.
-    Onchain {
+    BitcoinAddress {
         speed_fast: OnchainSpeedFee,
         speed_medium: OnchainSpeedFee,
         speed_slow: OnchainSpeedFee,
@@ -1843,15 +1716,15 @@ impl PreparedPaymentFee {
     /// Use the variant fields directly if you need a specific speed tier.
     pub fn fee_sats(&self) -> u64 {
         match self {
-            Self::SparkSats { fee_sats } | Self::Lightning { fee_sats } => *fee_sats,
+            Self::SparkSats { fee_sats } | Self::Bolt11Invoice { fee_sats } => *fee_sats,
             Self::SparkToken { .. } => 0,
-            Self::Onchain { speed_medium, .. } => speed_medium.total_fee_sat,
+            Self::BitcoinAddress { speed_medium, .. } => speed_medium.total_fee_sat,
         }
     }
 
     /// Returns the fee in token base units, if this is a token payment.
     ///
-    /// Returns `None` for non-token payments (`SparkSats`, `Lightning`, `Onchain`).
+    /// Returns `None` for non-token payments (`SparkSats`, `Bolt11Invoice`, `BitcoinAddress`).
     pub fn fee_token_units(&self) -> Option<u128> {
         match self {
             Self::SparkToken { fee_token_units } => Some(*fee_token_units),
@@ -1884,10 +1757,10 @@ impl PreparedPaymentFee {
             }
             SendPaymentMethod::Bolt11Invoice {
                 lightning_fee_sats, ..
-            } => PreparedPaymentFee::Lightning {
+            } => PreparedPaymentFee::Bolt11Invoice {
                 fee_sats: *lightning_fee_sats,
             },
-            SendPaymentMethod::BitcoinAddress { fee_quote, .. } => PreparedPaymentFee::Onchain {
+            SendPaymentMethod::BitcoinAddress { fee_quote, .. } => PreparedPaymentFee::BitcoinAddress {
                 speed_fast: OnchainSpeedFee {
                     total_fee_sat: fee_quote.speed_fast.total_fee_sat(),
                 },
@@ -1903,7 +1776,7 @@ impl PreparedPaymentFee {
 
     /// Extracts the fee from a `PrepareLnurlPayResponse`.
     pub(crate) fn from_lnurl_prepare(response: &PrepareLnurlPayResponse) -> Self {
-        PreparedPaymentFee::Lightning {
+        PreparedPaymentFee::Bolt11Invoice {
             fee_sats: response.fee_sats,
         }
     }
@@ -1932,9 +1805,9 @@ pub enum PreparedPaymentData {
 pub enum ReceivePaymentType {
     /// Receive via Lightning (Bolt11 invoice).
     #[default]
-    Lightning,
+    Bolt11Invoice,
     /// Receive via on-chain Bitcoin address.
-    Onchain,
+    BitcoinAddress,
     /// Receive via Spark address (persistent).
     SparkAddress,
     /// Receive via Spark invoice.
@@ -1953,7 +1826,7 @@ pub enum ReceivePaymentType {
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ReceiveOptions {
-    /// The type of payment to receive. Defaults to `Lightning`.
+    /// The type of payment to receive. Defaults to `Bolt11Invoice`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub payment_type: Option<ReceivePaymentType>,
 

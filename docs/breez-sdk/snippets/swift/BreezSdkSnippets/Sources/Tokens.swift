@@ -24,7 +24,7 @@ func fetchTokenBalances(client: BreezClient) async throws {
 
 func fetchTokenMetadata(client: BreezClient) async throws {
     // ANCHOR: fetch-token-metadata
-    let response = try await client.getTokensMetadata(
+    let response = try await client.tokens().metadata(
         request: GetTokensMetadataRequest(tokenIdentifiers: [
             "<token identifier 1>", "<token identifier 2>",
         ]))
@@ -113,7 +113,7 @@ func sendTokenPayment(client: BreezClient) async throws {
 func fetchConversionLimits(client: BreezClient) async throws {
     // ANCHOR: fetch-conversion-limits
     // Fetch limits for converting Bitcoin to a token
-    let fromBitcoinResponse = try await client.fetchConversionLimits(
+    let fromBitcoinResponse = try await client.tokens().fetchConversionLimits(
         request: FetchConversionLimitsRequest(
             conversionType: ConversionType.fromBitcoin,
             tokenIdentifier: "<token identifier>"
@@ -127,7 +127,7 @@ func fetchConversionLimits(client: BreezClient) async throws {
     }
 
     // Fetch limits for converting a token to Bitcoin
-    let toBitcoinResponse = try await client.fetchConversionLimits(
+    let toBitcoinResponse = try await client.tokens().fetchConversionLimits(
         request: FetchConversionLimitsRequest(
             conversionType: ConversionType.toBitcoin(
                 fromTokenIdentifier: "<token identifier>"

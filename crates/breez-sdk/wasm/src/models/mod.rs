@@ -631,11 +631,11 @@ pub struct Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
-    pub optimization_config: OptimizationConfig,
+    pub optimization_config: LeafOptimizationConfig,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]
-pub struct OptimizationConfig {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LeafOptimizationConfig)]
+pub struct LeafOptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
 }
@@ -1307,10 +1307,10 @@ pub enum PreparedPaymentFee {
         #[serde(with = "serde_u128_as_string")]
         fee_token_units: u128,
     },
-    Lightning {
+    Bolt11Invoice {
         fee_sats: u64,
     },
-    Onchain {
+    BitcoinAddress {
         speed_fast: OnchainSpeedFee,
         speed_medium: OnchainSpeedFee,
         speed_slow: OnchainSpeedFee,
@@ -1326,8 +1326,8 @@ pub struct OnchainSpeedFee {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentIntentType)]
 pub enum PaymentIntentType {
     Spark,
-    Lightning,
-    Onchain,
+    Bolt11Invoice,
+    BitcoinAddress,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConfirmPaymentResponse)]
@@ -1340,8 +1340,8 @@ pub struct ConfirmPaymentResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentType)]
 pub enum ReceivePaymentType {
     #[default]
-    Lightning,
-    Onchain,
+    Bolt11Invoice,
+    BitcoinAddress,
     SparkAddress,
     SparkInvoice,
 }
@@ -1369,49 +1369,23 @@ pub struct ReceiveResult {
 }
 
 // ---------------------------------------------------------------------------
-// App / Wallet configuration types
+// Client configuration
 // ---------------------------------------------------------------------------
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::AppConfig)]
-pub struct AppConfig {
-    pub api_key: String,
-    pub network: Network,
-    pub storage_root: Option<String>,
-    pub sync_interval_secs: Option<u32>,
-    pub max_deposit_claim_fee: Option<MaxFee>,
-    pub lnurl_domain: Option<String>,
-    pub prefer_spark: Option<bool>,
-    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
-    pub use_default_external_input_parsers: Option<bool>,
-    pub real_time_sync_server_url: Option<String>,
-    pub private_mode: Option<bool>,
-    pub optimization: Option<OptimizationConfig>,
-}
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClientConfig)]
 pub struct ClientConfig {
-    pub seed: Seed,
-    pub storage_dir: Option<String>,
-    pub optimization: Option<OptimizationConfig>,
-    pub prefer_spark: Option<bool>,
-    pub private_mode: Option<bool>,
-    pub max_deposit_claim_fee: Option<MaxFee>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectConfig)]
-pub struct ConnectConfig {
     pub api_key: String,
     pub network: Network,
     pub seed: Seed,
+    pub storage_dir: Option<String>,
     pub storage_root: Option<String>,
     pub sync_interval_secs: Option<u32>,
     pub max_deposit_claim_fee: Option<MaxFee>,
     pub lnurl_domain: Option<String>,
-    pub prefer_spark: Option<bool>,
+    pub prefer_spark_over_lightning: Option<bool>,
     pub external_input_parsers: Option<Vec<ExternalInputParser>>,
     pub use_default_external_input_parsers: Option<bool>,
     pub real_time_sync_server_url: Option<String>,
     pub private_mode: Option<bool>,
-    pub optimization: Option<OptimizationConfig>,
-    pub storage_dir: Option<String>,
+    pub leaf_optimization_config: Option<LeafOptimizationConfig>,
 }

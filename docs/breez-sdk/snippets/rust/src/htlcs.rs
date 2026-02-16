@@ -57,7 +57,7 @@ async fn list_claimable_htlc_payments(client: &BreezClient) -> Result<Vec<Paymen
         ..Default::default()
     };
 
-    let response = client.list_payments(request).await?;
+    let response = client.payments().list(request).await?;
     let payments = response.payments;
     // ANCHOR_END: list-claimable-htlc-payments
     Ok(payments)
@@ -67,7 +67,7 @@ async fn claim_htlc_payment(client: &BreezClient) -> Result<Payment> {
     // ANCHOR: claim-htlc-payment
     let preimage = "<preimage hex>".to_string();
     let response = client
-        .claim_htlc_payment(ClaimHtlcPaymentRequest { preimage })
+        .payments().claim_htlc(ClaimHtlcPaymentRequest { preimage })
         .await?;
     let payment = response.payment;
     // ANCHOR_END: claim-htlc-payment
