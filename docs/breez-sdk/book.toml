@@ -6,7 +6,7 @@ title = "Breez SDK - Nodeless (Spark)"
 [output.html]
 theme = "theme"
 additional-css = ["styles.css", "theme/pagetoc.css"]
-additional-js = ["tabs.js", "theme/pagetoc.js"]
+additional-js = ["tabs.js", "theme/pagetoc.js", "nav-banner.js"]
 git-repository-url = "https://github.com/breez/spark-sdk"
 edit-url-template = "https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/{path}"
 no-section-label = true

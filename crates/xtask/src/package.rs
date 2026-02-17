@@ -182,6 +182,10 @@ fn package_wasm_target(
         bail!("wasm-pack build failed for target {}", target);
     }
 
+    // Post-process the generated .d.ts to fix type signatures that wasm-bindgen
+    // generates as `any` (because the Rust side uses `JsValue`).
+    fix_wasm_dts(&out_path)?;
+
     // For Node.js target, copy the JavaScript sqlite storage implementation
     if target == "nodejs" {
         copy_nodejs_storage_files(crate_dir, &out_path)?;
@@ -192,6 +196,34 @@ fn package_wasm_target(
     }
 
     println!("Successfully built WASM target: {}", target);
+    Ok(())
+}
+
+/// Post-process the wasm-bindgen-generated `.d.ts` to fix type signatures.
+///
+/// wasm-bindgen emits `any` for `JsValue` parameters, but we want stronger
+/// types for public API methods like `preparePayment(destination: PaymentDestination, ...)`.
+fn fix_wasm_dts(out_path: &Path) -> Result<()> {
+    let dts_path = out_path.join("breez_sdk_spark_wasm.d.ts");
+    if !dts_path.exists() {
+        return Ok(()); // Nothing to fix
+    }
+
+    let content = std::fs::read_to_string(&dts_path)
+        .with_context(|| format!("Failed to read {}", dts_path.display()))?;
+
+    // Fix: preparePayment(destination: any, ...) → preparePayment(destination: PaymentDestination, ...)
+    let fixed = content.replace(
+        "preparePayment(destination: any, options?: PrepareOptions | null): Promise<PaymentIntent>",
+        "preparePayment(destination: PaymentDestination, options?: PrepareOptions | null): Promise<PaymentIntent>",
+    );
+
+    if fixed != content {
+        std::fs::write(&dts_path, &fixed)
+            .with_context(|| format!("Failed to write fixed {}", dts_path.display()))?;
+        println!("Fixed TypeScript types in {}", dts_path.display());
+    }
+
     Ok(())
 }
 

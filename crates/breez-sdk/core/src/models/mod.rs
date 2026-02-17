@@ -1584,6 +1584,63 @@ pub struct OptimizationProgress {
 //  Unified Payment API types (Phase 1 of SDK Modernization)
 // ---------------------------------------------------------------------------
 
+/// The destination for a payment: either a raw string or an already-parsed [`InputType`].
+///
+/// For most destinations (Bolt11 invoices, Bitcoin addresses, Spark addresses),
+/// a raw string is accepted and parsed internally by `prepare_payment()`.
+///
+/// **LNURL-Pay and Lightning Address** destinations **must** use the `Parsed`
+/// variant with an [`InputType`](crate::InputType) from a prior `parse()` call.
+/// This is required by the [LNURL spec (LUD-06)](https://github.com/lnurl/luds/blob/luds/06.md):
+/// the wallet must discover and display the service metadata (min/max sendable,
+/// description, comment constraints) to the user before selecting an amount.
+/// Passing a raw LNURL/Lightning address string to `prepare_payment()` returns an error.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Bolt11 invoice: pass raw string directly
+/// let payment = client.prepare_payment("lnbc1...".into(), None).await?;
+///
+/// // LNURL-Pay / Lightning Address: must parse first (LUD-06)
+/// let input = client.parse("user@domain.com").await?;
+/// // Show min/max sendable, description to user …
+/// let payment = client.prepare_payment(input.into(), Some(options)).await?;
+/// ```
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentDestination {
+    /// A raw destination string (invoice, address, etc.).
+    /// Will be parsed internally by `prepare_payment()`.
+    ///
+    /// **Note:** LNURL-Pay and Lightning Address strings are rejected in this
+    /// form — use `Parsed` with a pre-parsed [`InputType`](crate::InputType) instead.
+    Raw { destination: String },
+    /// An already-parsed input from a prior `parse()` / `parseInput()` call.
+    /// Required for LNURL-Pay and Lightning Address destinations.
+    Parsed { input: crate::InputType },
+}
+
+impl From<String> for PaymentDestination {
+    fn from(s: String) -> Self {
+        Self::Raw { destination: s }
+    }
+}
+
+impl From<&str> for PaymentDestination {
+    fn from(s: &str) -> Self {
+        Self::Raw {
+            destination: s.to_string(),
+        }
+    }
+}
+
+impl From<crate::InputType> for PaymentDestination {
+    fn from(input: crate::InputType) -> Self {
+        Self::Parsed { input }
+    }
+}
+
 /// Options for preparing a payment via [`prepare_payment()`](crate::BreezClient::prepare_payment).
 ///
 /// All fields are optional – callers only need to supply the fields relevant

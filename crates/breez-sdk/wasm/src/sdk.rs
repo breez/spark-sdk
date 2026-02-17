@@ -36,6 +36,23 @@ export type BreezSdk = BreezClient;
 /** @deprecated Use `BreezClient` instead. */
 export type Wallet = BreezClient;"#;
 
+/// Destination for `preparePayment()`: either a raw string or a pre-parsed `InputType`.
+#[wasm_bindgen(typescript_custom_section)]
+const PAYMENT_DESTINATION_TYPE: &'static str = r#"
+/**
+ * A payment destination: either a raw string (invoice, address) or a pre-parsed
+ * `InputType` from a prior `parseInput()` call.
+ *
+ * **LNURL-Pay and Lightning Address** destinations **must** be pre-parsed via
+ * `parseInput()` first — passing a raw LNURL/Lightning address string will throw.
+ * This enforces the LUD-06 wallet flow: parse first to discover min/max sendable
+ * and description metadata, show to user, then pass the parsed `InputType`.
+ *
+ * For non-LNURL destinations (Bolt11 invoices, Bitcoin addresses, Spark addresses),
+ * either a raw string or parsed `InputType` is accepted.
+ */
+export type PaymentDestination = string | InputType;"#;
+
 // ── Sub-object getters (sync — just Rc::clone) ─────────────────────
 #[wasm_bindgen(js_class = "BreezClient")]
 impl BreezClient {
@@ -261,6 +278,16 @@ impl BreezClient {
 
     /// Prepare a payment to the given destination.
     ///
+    /// The `destination` can be:
+    /// - A **string** (invoice, address) — parsed internally.
+    /// - A pre-parsed **`InputType`** object from a prior `parseInput()` / `parse()` call.
+    ///
+    /// **LNURL-Pay / Lightning Address** destinations **must** be pre-parsed via
+    /// `parseInput()` first — passing a raw LNURL/Lightning address string will
+    /// throw an error. This enforces the [LUD-06](https://github.com/lnurl/luds/blob/luds/06.md)
+    /// wallet flow: parse → show metadata (min/max sendable, description) → user
+    /// selects amount → preparePayment(parsedInput, { amountSats }).
+    ///
     /// Returns a `PaymentIntent` that can be inspected (`paymentType`, `amount`,
     /// `fee`, `feeSats`) and then sent with `send()`.
     ///
@@ -268,11 +295,31 @@ impl BreezClient {
     #[wasm_bindgen(js_name = "preparePayment")]
     pub async fn prepare_payment(
         &self,
-        destination: &str,
+        destination: JsValue,
         options: Option<PrepareOptions>,
     ) -> WasmResult<PaymentIntent> {
+        let core_destination = if destination.is_string() {
+            let s = destination.as_string().ok_or_else(|| {
+                breez_sdk_spark::SdkError::InvalidInput(
+                    "destination must be a string or InputType".to_string(),
+                )
+            })?;
+            breez_sdk_spark::PaymentDestination::Raw { destination: s }
+        } else {
+            // Try to deserialize as InputType (passed from a prior parseInput() call)
+            let input: InputType = serde_wasm_bindgen::from_value(destination).map_err(|e| {
+                breez_sdk_spark::SdkError::InvalidInput(format!(
+                    "destination must be a string or InputType object: {e}"
+                ))
+            })?;
+            let core_input: breez_sdk_spark::InputType = input.into();
+            breez_sdk_spark::PaymentDestination::Parsed { input: core_input }
+        };
         let options = options.map(Into::into);
-        let prepared = self.sdk.prepare(destination, options).await?;
+        let prepared = self
+            .sdk
+            .prepare_from_destination(core_destination, options)
+            .await?;
         // Decompose Arc-based PreparedPayment and re-wrap with Rc for WASM
         let (_arc_sdk, data) = prepared.into_parts();
         let inner = breez_sdk_spark::PreparedPayment::new(self.sdk.clone(), data);

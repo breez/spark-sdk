@@ -1,16 +1,32 @@
 use std::sync::Arc;
 
+use tracing::warn;
+
 use crate::{
     InputType, PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest,
     error::SdkError,
     models::{
-        PrepareOptions, PreparedPaymentData, ReceiveOptions, ReceivePaymentType, ReceiveResult,
+        PaymentDestination, PrepareOptions, PreparedPaymentData, ReceiveOptions,
+        ReceivePaymentType, ReceiveResult,
         prepared_payment::{PreparedPayment, PreparedPaymentHandle},
     },
 };
 
 use super::BreezClient;
+
+/// Extract a raw payment-request string from a parsed [`InputType`] for use
+/// with the legacy `prepare_send_payment()` API.
+fn payment_request_from_input(input: &InputType) -> Option<String> {
+    match input {
+        InputType::SparkAddress(d) => Some(d.address.clone()),
+        InputType::SparkInvoice(d) => Some(d.invoice.clone()),
+        InputType::Bolt11Invoice(d) => Some(d.invoice.bolt11.clone()),
+        InputType::BitcoinAddress(d) => Some(d.address.clone()),
+        InputType::Bip21(d) => Some(d.uri.clone()),
+        _ => None,
+    }
+}
 
 // Internal implementation: returns PreparedPayment<S> which is generic and cannot be
 // exported through UniFFI. Public API is `prepare_payment()` (UniFFI) and
@@ -24,13 +40,55 @@ impl BreezClient {
     ///
     /// Not part of the public API — use [`prepare_payment()`](Self::prepare_payment) instead.
     #[doc(hidden)]
-    pub async fn prepare(
+    pub async fn prepare_from_destination(
         &self,
-        destination: &str,
+        destination: PaymentDestination,
         options: Option<PrepareOptions>,
     ) -> Result<PreparedPayment<Arc<BreezClient>>, SdkError> {
         let options = options.unwrap_or_default();
-        let parsed = self.parse(destination).await?;
+
+        // Resolve destination: parse if raw string, use as-is if already parsed.
+        //
+        // For LNURL-Pay / Lightning Address destinations, only the `Parsed` variant
+        // is accepted. If a raw string resolves to LNURL, we reject with a helpful
+        // error. This enforces the LUD-06 wallet flow: parse first → show metadata
+        // to user → let user select amount → then call preparePayment with the
+        // parsed InputType.
+        //
+        // We check post-parse rather than with a local heuristic because some
+        // formats (like `user@domain`) may resolve to either LNURL-Pay or Bolt12
+        // in the future — only the actual parse result can tell us which.
+        let (parsed, was_raw) = match destination {
+            PaymentDestination::Raw { destination } => {
+                (self.parse(&destination).await?, true)
+            }
+            PaymentDestination::Parsed { input } => (input, false),
+        };
+
+        // Reject raw LNURL-Pay / Lightning Address strings (LUD-06 compliance).
+        let is_lnurl = matches!(
+            &parsed,
+            InputType::LnurlPay(_) | InputType::LightningAddress(_)
+        );
+        if is_lnurl && was_raw {
+            return Err(SdkError::InvalidInput(
+                "LNURL-Pay and Lightning Address destinations must be parsed first using \
+                 parse() / parseInput() before calling preparePayment(). This is required \
+                 by the LNURL spec (LUD-06): the wallet must discover and display the \
+                 service metadata (min/max sendable, description) to the user before \
+                 selecting an amount. Pass the parsed InputType to preparePayment() instead \
+                 of the raw string."
+                    .to_string(),
+            ));
+        }
+
+        // Warn if LNURL-specific options were passed for a non-LNURL destination.
+        if !is_lnurl && options.lnurl.is_some() {
+            warn!(
+                "LnurlPayOptions provided but destination is not LNURL-Pay/Lightning Address — \
+                 these options will be ignored."
+            );
+        }
 
         let data = match &parsed {
             // LNURL-Pay and Lightning Address → route through prepare_lnurl_pay
@@ -71,10 +129,15 @@ impl BreezClient {
             | InputType::SparkInvoice(_)
             | InputType::Bolt11Invoice(_)
             | InputType::BitcoinAddress(_) => {
+                let payment_request = payment_request_from_input(&parsed).ok_or_else(|| {
+                    SdkError::InvalidInput(
+                        "Could not extract payment request from parsed input".to_string(),
+                    )
+                })?;
                 let amount = options.unified_amount()?;
                 let response = self
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: destination.to_string(),
+                        payment_request,
                         amount,
                         token_identifier: options.token_identifier,
                         conversion_options: options.conversion_options,
@@ -87,14 +150,18 @@ impl BreezClient {
 
             // Bip21 URIs contain payment methods — pick the best one and prepare
             InputType::Bip21(bip21) => {
-                // Use the raw destination so prepare_send_payment can re-parse and extract
-                // the best payment method from the BIP21 URI.
+                let payment_request =
+                    payment_request_from_input(&parsed).ok_or_else(|| {
+                        SdkError::InvalidInput(
+                            "Could not extract payment request from parsed input".to_string(),
+                        )
+                    })?;
                 let amount = options
                     .unified_amount()?
                     .or(bip21.amount_sat.map(u128::from));
                 let response = self
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: destination.to_string(),
+                        payment_request,
                         amount,
                         token_identifier: options.token_identifier,
                         conversion_options: options.conversion_options,
@@ -108,7 +175,7 @@ impl BreezClient {
             // Unsupported destinations
             _ => {
                 return Err(SdkError::InvalidInput(format!(
-                    "Destination type {:?} is not supported for prepare(). \
+                    "Destination type {:?} is not supported for prepare_payment(). \
                      Use lnurl_auth() or lnurl_withdraw() for those destination types.",
                     std::mem::discriminant(&parsed)
                 )));
@@ -120,25 +187,35 @@ impl BreezClient {
 
         Ok(PreparedPayment::new(sdk_ref, data))
     }
-
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 #[allow(deprecated)] // receive() delegates to legacy receive_payment() internally
 impl BreezClient {
-    /// Parse the destination and prepare a payment in one step.
+    /// Prepare a payment to the given destination.
     ///
-    /// Accepts any destination string (Spark address, Spark invoice,
-    /// Bolt11 invoice, Bitcoin address, LNURL-Pay URL, Lightning address)
-    /// and returns a [`PreparedPaymentHandle`] that can be inspected (amount, fee)
+    /// Accepts a [`PaymentDestination`] — either a raw string (invoice, address)
+    /// or an already-parsed [`InputType`] from a prior `parse()` call.
+    ///
+    /// **LNURL-Pay and Lightning Address** destinations **must** be parsed first
+    /// using `parse()` / `parseInput()` and passed as `PaymentDestination::Parsed`.
+    /// This is required by the LNURL spec ([LUD-06](https://github.com/lnurl/luds/blob/luds/06.md)):
+    /// the wallet must discover and display the service metadata (min/max sendable,
+    /// description, comment constraints) to the user before selecting an amount.
+    /// Passing a raw LNURL/Lightning address string will return an error.
+    ///
+    /// For non-LNURL destinations (Bolt11 invoices, Bitcoin addresses, Spark
+    /// addresses), either form is accepted — raw strings are parsed internally.
+    ///
+    /// Returns a [`PreparedPaymentHandle`] that can be inspected (amount, fee)
     /// and then confirmed with [`PreparedPaymentHandle::send`].
     pub async fn prepare_payment(
         &self,
-        destination: String,
+        destination: PaymentDestination,
         options: Option<PrepareOptions>,
     ) -> Result<Arc<PreparedPaymentHandle>, SdkError> {
-        let prepared = self.prepare(&destination, options).await?;
+        let prepared = self.prepare_from_destination(destination, options).await?;
         Ok(Arc::new(PreparedPaymentHandle::new(prepared)))
     }
 

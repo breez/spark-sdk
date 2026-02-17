@@ -75,6 +75,14 @@ impl SdkEvent {
         self.payment().is_some()
     }
 
+    /// Returns `true` if this is any deposit event (unclaimed or claimed).
+    pub fn is_deposit(&self) -> bool {
+        matches!(
+            self,
+            SdkEvent::UnclaimedDeposits { .. } | SdkEvent::ClaimedDeposits { .. }
+        )
+    }
+
     /// Returns `true` if this is a `Synced` event.
     pub fn is_synced(&self) -> bool {
         matches!(self, SdkEvent::Synced { .. })

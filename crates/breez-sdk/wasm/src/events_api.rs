@@ -38,7 +38,8 @@ impl EventsApi {
     /// Returns a listener ID that can be passed to `remove()`.
     ///
     /// Supported event types: `"payment"`, `"paymentSucceeded"`,
-    /// `"paymentPending"`, `"paymentFailed"`, `"synced"`.
+    /// `"paymentPending"`, `"paymentFailed"`, `"synced"`,
+    /// `"deposit"`, `"unclaimedDeposits"`, `"claimedDeposits"`.
     ///
     /// ```js
     /// const id = await client.events.on("payment", (event) => {
@@ -52,9 +53,12 @@ impl EventsApi {
             "paymentPending" => |e| matches!(e, breez_sdk_spark::SdkEvent::PaymentPending { .. }),
             "paymentFailed" => |e| matches!(e, breez_sdk_spark::SdkEvent::PaymentFailed { .. }),
             "synced" => breez_sdk_spark::SdkEvent::is_synced,
+            "deposit" => breez_sdk_spark::SdkEvent::is_deposit,
+            "unclaimedDeposits" => |e| matches!(e, breez_sdk_spark::SdkEvent::UnclaimedDeposits { .. }),
+            "claimedDeposits" => |e| matches!(e, breez_sdk_spark::SdkEvent::ClaimedDeposits { .. }),
             _ => {
                 return Err(breez_sdk_spark::SdkError::InvalidInput(format!(
-                    "Unknown event type: \"{event_type}\". Supported: payment, paymentSucceeded, paymentPending, paymentFailed, synced"
+                    "Unknown event type: \"{event_type}\". Supported: payment, paymentSucceeded, paymentPending, paymentFailed, synced, deposit, unclaimedDeposits, claimedDeposits"
                 ))
                 .into());
             }

@@ -619,6 +619,13 @@
 </head>
 <body>
 
+<!-- ═══════════════════════════ Navigation ═══════════════════════════ -->
+<nav style="position:sticky;top:0;z-index:1000;background:var(--surface);border-bottom:1px solid var(--border);padding:10px 32px;display:flex;align-items:center;gap:24px;font-size:14px;">
+  <a href="./" style="color:var(--text-muted);text-decoration:none;transition:color .15s;" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text-muted)'">← SDK Guide</a>
+  <span style="color:var(--border);">|</span>
+  <span style="color:var(--accent);font-weight:600;">API Migration Guide</span>
+</nav>
+
 <!-- ═══════════════════════════════════════════════════ Hero ═══ -->
 <div class="hero">
   <div class="hero-badge">Migration Guide</div>
@@ -632,7 +639,7 @@
       <h2 style="margin-top:0">Background</h2>
     </div>
 
-    <p class="lead">While Danny was working on the new SDK page, we put together a code snippet to showcase how easy it is to get started with the Breez SDK. As we iterated, we kept simplifying it by removing configuration and implementation details.</p>
+    <p class="lead">While Danny was working on the new SDK page, he asked if we could demonstrate how easy it is to integrate the SDK with just a few lines of code. So we put together a minimal connect-and-pay snippet. As we iterated, we kept simplifying it by removing configuration and implementation details.</p>
 
     <div class="comparison" style="margin: 20px 0">
       <div class="card">
@@ -669,7 +676,7 @@ config.apiKey = <span class="st">YOUR_API_KEY</span>
       <li>How can we make our actual onboarding logic match the cleaned-up version?</li>
     </ul>
 
-    <p>So I looked into how other SDKs with similar concerns to ours address these questions. Some offload configuration to a web dashboard or CLI tool, both not feasible in the short term. Others go with set-and-forget defaults, which would work great for single API key & network setups, but doesn't fully apply to users that have multi-client setups with different networks, storage directories, and API key configurations.</p>
+    <p>So I looked into how other SDKs with similar concerns to ours address these questions. Some offload configuration to a web dashboard or CLI tool, both not feasible in the short term. Others go with set-and-forget defaults, which would work great for single API key & network setups, but doesn't fully apply to users that have multi-client (wallet) setups with different networks, storage directories, and API key configurations.</p>
 
     <p>Still, there were useful takeaways:</p>
     <ul>
@@ -712,6 +719,33 @@ config.apiKey = <span class="st">YOUR_API_KEY</span>
     <p class="naming-note">Also worth noting: none of the SDKs I looked at used an "SDK" suffix. They use their brand name as the main entry point. Instances are typically suffixed with <code>App</code> or <code>Client</code> (e.g. <code>FirebaseApp</code>, <code>StripeClient</code>). Our old API just exported <code>connect()</code> as a standalone function, with no namespace.</p>
 
     <p class="naming-note">The old API already supported multiple clients, but each <code>connect()</code> call needed its own full config object. <code>Breez.connect()</code> takes a single <code>ClientConfig</code> with everything needed. For advanced customization, use <code>Breez.builder(clientConfig)</code> to get an <code>SdkBuilder</code> for overriding storage, chain service, etc.</p>
+
+    <div class="comparison" style="margin-top:20px;margin-bottom:20px">
+      <div class="card" style="flex:1;max-width:100%">
+        <div class="card-header new" style="background:linear-gradient(135deg,#2a2040,#1e1835)"><span class="dot"></span>Advanced: Builder pattern
+          <span style="margin-left:auto;font-size:12px;opacity:0.7;font-weight:400">TypeScript</span>
+        </div>
+        <div class="lang-panel active" data-lang="typescript">
+          <pre><span class="cm">// Simple path — one call does everything</span>
+<span class="kw">const</span> client = <span class="kw">await</span> <span class="tp">Breez</span>.<span class="fn">connect</span>({
+  apiKey: <span class="st">'brz_...'</span>, network: <span class="st">'mainnet'</span>, seed
+})
+
+<span class="cm">// Advanced path — override individual components</span>
+<span class="kw">const</span> builder = <span class="kw">await</span> <span class="tp">Breez</span>.<span class="fn">builder</span>({
+  apiKey: <span class="st">'brz_...'</span>, network: <span class="st">'mainnet'</span>, seed
+})
+
+builder.<span class="fn">withStorage</span>(myCustomStorage)        <span class="cm">// custom persistence</span>
+builder.<span class="fn">withChainService</span>(myChainProvider)   <span class="cm">// custom blockchain provider</span>
+builder.<span class="fn">withFiatService</span>(myFiatProvider)     <span class="cm">// custom fiat rates</span>
+builder.<span class="fn">withLnurlClient</span>(myHttpClient)       <span class="cm">// custom LNURL HTTP client</span>
+builder.<span class="fn">withPaymentObserver</span>(myObserver)     <span class="cm">// payment lifecycle hooks</span>
+
+<span class="kw">const</span> client = <span class="kw">await</span> builder.<span class="fn">build</span>()</pre>
+        </div>
+      </div>
+    </div>
 
     <div class="design-principles">
       <div class="card">
@@ -759,7 +793,7 @@ config.apiKey = <span class="st">YOUR_API_KEY</span>
       </div>
       <div class="card" style="padding:16px">
         <strong style="color:var(--green)">Unified LNURL</strong>
-        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">3 calls &rarr; 1: <code>preparePayment(lnurlUrl)</code> resolves internally</p>
+        <p style="margin:8px 0 0;color:var(--text-muted);font-size:.9rem">3 calls &rarr; 1: <code>preparePayment(destination)</code> accepts string or parsed input</p>
       </div>
       <div class="card" style="padding:16px">
         <strong style="color:var(--green)">Inspect-then-send</strong>
@@ -1104,7 +1138,7 @@ config.apiKey = <span class="st">'&lt;breez api key&gt;'</span>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p>Single <code>preparePayment(destination, options)</code> auto-parses any destination (invoice, Spark address, LNURL, BIP-21). Returns a <code>PaymentIntent</code> with typed fee breakdown, separate <code>amountSats</code> and <code>amountTokenUnits</code> accessors. Call <code>.send()</code> when ready.</p>
+      <p>Single <code>preparePayment(destination, options)</code> accepts a string or pre-parsed <code>InputType</code>, auto-parses any destination (invoice, Spark address, LNURL, BIP-21). Returns a <code>PaymentIntent</code> with typed fee breakdown, separate <code>amountSats</code> and <code>amountTokenUnits</code> accessors. Call <code>.send()</code> when ready. For LNURL, pass a pre-parsed <code>InputType</code> to avoid a redundant network round-trip.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
@@ -1595,7 +1629,7 @@ fee = response.fee</pre>
   <div class="section-header">
     <span class="section-number">4</span>
     <h2>LNURL-Pay — Unified via preparePayment</h2>
-    <p>No more <code>parse()</code> + <code>prepareLnurlPay()</code> + <code>lnurlPay()</code>. Pass the LNURL directly to <code>preparePayment()</code> — resolution happens internally.</p>
+    <p>No more <code>parse()</code> + <code>prepareLnurlPay()</code> + <code>lnurlPay()</code>. Pass the LNURL directly to <code>preparePayment()</code> — or parse first to discover min/max sendable, then pass the parsed result to skip the redundant network round-trip.</p>
   </div>
 
   <div class="section-context">
@@ -1605,11 +1639,11 @@ fee = response.fee</pre>
     </div>
     <div class="context-card">
       <div class="context-card-label solution">Solution</div>
-      <p><code>preparePayment(lnurlUrl, options)</code> handles LNURL resolution internally. LNURL-specific options (<code>comment</code>, <code>validateSuccessActionUrl</code>) go in the <code>lnurl</code> sub-object. The returned <code>PaymentIntent</code> has <code>isLnurl</code> for detection.</p>
+      <p><code>preparePayment(destination, options)</code> accepts either a raw string or a pre-parsed <code>InputType</code>. LNURL-specific options (<code>comment</code>, <code>validateSuccessActionUrl</code>) go in the <code>lnurl</code> sub-object. When you need to inspect <code>minSendable</code>/<code>maxSendable</code>, call <code>parse()</code> first, then pass the result to <code>preparePayment()</code> to skip the redundant network round-trip.</p>
     </div>
     <div class="context-card">
       <div class="context-card-label benefits">Benefits</div>
-      <p>3 calls &rarr; 1. No manual type-checking of parse results. LNURL is just another destination string &mdash; callers don&rsquo;t need to know it&rsquo;s LNURL.</p>
+      <p>3 calls &rarr; 1 or 2. No manual type-checking or <code>payRequest</code> extraction. For simple flows, just pass a string. For LNURL flows that need min/max discovery, <code>parse()</code> + <code>preparePayment(parsedResult)</code> avoids double network calls.</p>
     </div>
   </div>
 
@@ -1717,134 +1751,214 @@ fee = response.fee</pre>
         </span>
       </div>
       <div class="lang-panel active" data-lang="typescript">
-        <pre><span class="cm">// preparePayment handles LNURL resolution internally</span>
-<span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(lnurlPayUrl, {
-  amountSats: <span class="nr">5_000</span>,
-  lnurl: { comment: optionalComment, validateSuccessActionUrl: <span class="kw">true</span> }
+        <pre><span class="cm">// Step 1: Parse the LNURL/Lightning Address to discover service metadata</span>
+<span class="cm">// Per LUD-06, the wallet must fetch and display min/max sendable, description, etc.</span>
+<span class="kw">const</span> input = <span class="kw">await</span> <span class="fn">parseInput</span>(lnurlPayUrl)
+
+<span class="cm">// Step 2: Extract pay request details for UI</span>
+<span class="kw">const</span> payRequest = input.type === <span class="st">'lnurlPay'</span> ? input
+  : input.type === <span class="st">'lightningAddress'</span> ? input.payRequest : <span class="kw">null</span>
+<span class="kw">const</span> minSats = Math.ceil(payRequest.minSendable / <span class="nr">1000</span>)
+<span class="kw">const</span> maxSats = Math.floor(payRequest.maxSendable / <span class="nr">1000</span>)
+<span class="cm">// Show description, min/max, and optional comment field to user</span>
+
+<span class="cm">// Step 3: Prepare with user-chosen amount — pass parsed input to skip re-fetch</span>
+<span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(input, {
+  amountSats: userChosenAmount,
+  lnurl: { comment, validateSuccessActionUrl: <span class="kw">true</span> }
 })
+console.log(<span class="st">`Fee: ${payment.feeSats} sats`</span>)
 
-console.log(<span class="st">`Is LNURL: </span>${payment.<span class="pr">isLnurl</span>}<span class="st">`</span>)
-console.log(<span class="st">`Fees: </span>${payment.<span class="pr">feeSats</span>}<span class="st"> sats`</span>)
-
+<span class="cm">// Step 4: Confirm payment</span>
 <span class="kw">const</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>({ idempotencyKey })</pre>
       </div>
       <div class="lang-panel" data-lang="rust">
-        <pre><span class="cm">// Rust still uses parse → prepareLnurlPay → lnurlPay</span>
-<span class="kw">if let</span> <span class="tp">Ok</span>(<span class="tp">InputType</span>::<span class="tp">LightningAddress</span>(details))
-    = client.<span class="fn">parse</span>(lnurl_pay_url).<span class="kw">await</span> {
-    <span class="kw">let</span> prepare = client.<span class="fn">prepare_lnurl_pay</span>(<span class="tp">PrepareLnurlPayRequest</span> {
-        amount_sats: <span class="nr">5_000</span>,
-        pay_request: details.pay_request,
-        comment: <span class="tp">Some</span>(<span class="st">"&lt;comment&gt;"</span>.<span class="fn">into</span>()),
-        validate_success_action_url: <span class="tp">Some</span>(<span class="kw">true</span>),
-        conversion_options: <span class="tp">None</span>,
-        fee_policy: <span class="tp">None</span>,
-    }).<span class="kw">await</span>?;
+        <pre><span class="cm">// Step 1: Parse the LNURL/Lightning Address to discover service metadata</span>
+<span class="cm">// Per LUD-06, the wallet must fetch and display min/max sendable, description, etc.</span>
+<span class="kw">let</span> parsed = client.<span class="fn">parse</span>(lnurl_pay_url).<span class="kw">await</span>?;
 
-    info!(<span class="st">"Fees: {} sats"</span>, prepare.fee_sats);
-}</pre>
+<span class="cm">// Step 2: Extract pay request details for UI (min/max, comment allowed, etc.)</span>
+<span class="kw">let</span> pay_request = <span class="kw">match</span> &amp;parsed {
+    <span class="tp">InputType</span>::LnurlPay(details) =&gt; details,
+    <span class="tp">InputType</span>::LightningAddress(la) =&gt; &amp;la.pay_request,
+    _ =&gt; <span class="kw">return</span> <span class="tp">Err</span>(..),
+};
+<span class="kw">let</span> min_sats = pay_request.min_sendable / <span class="nr">1_000</span>;
+<span class="kw">let</span> max_sats = pay_request.max_sendable / <span class="nr">1_000</span>;
+<span class="cm">// Show description, min/max, and optional comment field to user</span>
+
+<span class="cm">// Step 3: Prepare with user-chosen amount — pass parsed input to skip re-fetch</span>
+<span class="kw">let</span> payment = client.<span class="fn">prepare_payment</span>(
+    parsed.<span class="fn">into</span>(), <span class="cm">// PaymentDestination::Parsed — skips re-parsing</span>
+    <span class="tp">Some</span>(<span class="tp">PrepareOptions</span> {
+        amount_sats: <span class="tp">Some</span>(user_chosen_amount),
+        lnurl: <span class="tp">Some</span>(<span class="tp">LnurlPayOptions</span> {
+            comment: <span class="tp">Some</span>(<span class="st">"&lt;comment&gt;"</span>.<span class="fn">into</span>()),
+            ..Default::default()
+        }),
+        ..<span class="tp">Default</span>::<span class="fn">default</span>()
+    }),
+).<span class="kw">await</span>?;
+info!(<span class="st">"Fee: {} sats"</span>, payment.<span class="fn">fee</span>().<span class="fn">fee_sats</span>());
+
+<span class="cm">// Step 4: Confirm payment</span>
+<span class="kw">let</span> result = payment.<span class="fn">send</span>(<span class="tp">None</span>).<span class="kw">await</span>?;</pre>
       </div>
       <div class="lang-panel" data-lang="swift">
-        <pre><span class="kw">let</span> inputType = <span class="kw">try await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl)
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+<span class="kw">let</span> inputType = <span class="kw">try await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl)
 <span class="kw">if case</span> .lightningAddress(<span class="kw">v1: let</span> details) = inputType {
-    <span class="kw">let</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
-        amountSats: <span class="nr">5_000</span>,
-        payRequest: details.payRequest,
-        comment: <span class="st">"&lt;comment&gt;"</span>,
-        validateSuccessActionUrl: <span class="kw">true</span>,
-        conversionOptions: <span class="kw">nil</span>, feePolicy: <span class="kw">nil</span>
+    <span class="kw">let</span> minSats = details.payRequest.minSendable / <span class="nr">1_000</span>
+    <span class="kw">let</span> maxSats = details.payRequest.maxSendable / <span class="nr">1_000</span>
+    <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+    <span class="kw">let</span> payment = <span class="kw">try await</span> client.<span class="fn">preparePayment</span>(
+        destination: .parsed(input: inputType),
+        options: <span class="tp">PrepareOptions</span>(
+            amountSats: userChosenAmount,
+            lnurl: <span class="tp">LnurlPayOptions</span>(comment: <span class="st">"&lt;comment&gt;"</span>)
+        )
     )
-    <span class="kw">let</span> prepareResponse = <span class="kw">try await</span> client.<span class="fn">prepareLnurlPay</span>(request: req)
-    print(<span class="st">"Fees: \(prepareResponse.feeSats) sats"</span>)
+    print(<span class="st">"Fee: \(payment.fee().feeSats()) sats"</span>)
+
+    <span class="cm">// Step 3: Confirm</span>
+    <span class="kw">let</span> result = <span class="kw">try await</span> payment.<span class="fn">send</span>(options: <span class="kw">nil</span>)
 }</pre>
       </div>
       <div class="lang-panel" data-lang="kotlin">
-        <pre><span class="kw">val</span> inputType = client.<span class="fn">parse</span>(lnurlPayUrl)
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+<span class="kw">val</span> inputType = client.<span class="fn">parse</span>(lnurlPayUrl)
 <span class="kw">if</span> (inputType <span class="kw">is</span> <span class="tp">InputType</span>.<span class="tp">LightningAddress</span>) {
-    <span class="kw">val</span> req = <span class="tp">PrepareLnurlPayRequest</span>(
-        amountSats = <span class="nr">5_000</span>.toULong(),
-        payRequest = inputType.v1.payRequest,
-        comment = <span class="st">"&lt;comment&gt;"</span>,
-        validateSuccessActionUrl = <span class="kw">true</span>,
-        conversionOptions = <span class="kw">null</span>, feePolicy = <span class="kw">null</span>,
+    <span class="kw">val</span> minSats = inputType.v1.payRequest.minSendable / <span class="nr">1_000</span>
+    <span class="kw">val</span> maxSats = inputType.v1.payRequest.maxSendable / <span class="nr">1_000</span>
+    <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+    <span class="kw">val</span> payment = client.<span class="fn">preparePayment</span>(
+        destination = <span class="tp">PaymentDestination</span>.<span class="tp">Parsed</span>(input = inputType),
+        options = <span class="tp">PrepareOptions</span>(
+            amountSats = userChosenAmount,
+            lnurl = <span class="tp">LnurlPayOptions</span>(comment = <span class="st">"&lt;comment&gt;"</span>),
+        ),
     )
-    <span class="kw">val</span> prepareResponse = client.<span class="fn">prepareLnurlPay</span>(req)
-    <span class="cm">// Log.v("Breez", "Fees: ${prepareResponse.feeSats} sats")</span>
+    <span class="cm">// Log.v("Breez", "Fee: ${payment.fee().feeSats()} sats")</span>
+
+    <span class="cm">// Step 3: Confirm</span>
+    <span class="kw">val</span> result = payment.<span class="fn">send</span>(options = <span class="kw">null</span>)
 }</pre>
       </div>
       <div class="lang-panel" data-lang="go">
-        <pre>input, _ := client.<span class="fn">Parse</span>(lnurlPayUrl)
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+input, _ := client.<span class="fn">Parse</span>(lnurlPayUrl)
 
 <span class="kw">switch</span> inputType := input.(<span class="kw">type</span>) {
 <span class="kw">case</span> <span class="tp">breez_sdk_spark</span>.<span class="tp">InputTypeLightningAddress</span>:
-    amountSats := <span class="fn">uint64</span>(<span class="nr">5_000</span>)
+    minSats := inputType.Field0.PayRequest.MinSendable / <span class="nr">1_000</span>
+    maxSats := inputType.Field0.PayRequest.MaxSendable / <span class="nr">1_000</span>
+    <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
     comment := <span class="st">"&lt;comment&gt;"</span>
-    validate := <span class="kw">true</span>
-    request := <span class="tp">breez_sdk_spark</span>.<span class="tp">PrepareLnurlPayRequest</span>{
-        AmountSats: amountSats,
-        PayRequest: inputType.Field0.PayRequest,
-        Comment: &amp;comment,
-        ValidateSuccessActionUrl: &amp;validate,
-        FeePolicy: <span class="kw">nil</span>,
-    }
-    prepareResponse, _ := client.<span class="fn">PrepareLnurlPay</span>(request)
-    log.<span class="fn">Printf</span>(<span class="st">"Fees: %v sats"</span>, prepareResponse.FeeSats)
+    payment, _ := client.<span class="fn">PreparePayment</span>(
+        <span class="tp">breez_sdk_spark</span>.<span class="tp">PaymentDestinationParsed</span>{Input: input},
+        &amp;<span class="tp">breez_sdk_spark</span>.<span class="tp">PrepareOptions</span>{
+            AmountSats: &amp;userChosenAmount,
+            Lnurl: &amp;<span class="tp">breez_sdk_spark</span>.<span class="tp">LnurlPayOptions</span>{Comment: &amp;comment},
+        },
+    )
+    log.<span class="fn">Printf</span>(<span class="st">"Fee: %v sats"</span>, payment.<span class="fn">Fee</span>().<span class="fn">FeeSats</span>())
+
+    <span class="cm">// Step 3: Confirm</span>
+    result, _ := payment.<span class="fn">Send</span>(<span class="kw">nil</span>)
 }</pre>
       </div>
       <div class="lang-panel" data-lang="python">
-        <pre>parsed_input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurl_pay_url)
+        <pre><span class="cm"># Step 1: Parse to discover min/max sendable, description, etc.</span>
+parsed_input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurl_pay_url)
 <span class="kw">if</span> <span class="fn">isinstance</span>(parsed_input, <span class="tp">InputType</span>.LIGHTNING_ADDRESS):
     details = parsed_input[<span class="nr">0</span>]
-    request = <span class="tp">PrepareLnurlPayRequest</span>(
-        amount_sats=<span class="nr">5_000</span>,
-        pay_request=details.pay_request,
-        comment=<span class="st">"&lt;comment&gt;"</span>,
-        validate_success_action_url=<span class="kw">True</span>,
-        conversion_options=<span class="kw">None</span>, fee_policy=<span class="kw">None</span>,
+    min_sats = details.pay_request.min_sendable // <span class="nr">1_000</span>
+    max_sats = details.pay_request.max_sendable // <span class="nr">1_000</span>
+    <span class="cm"># Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm"># Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+    payment = <span class="kw">await</span> client.<span class="fn">prepare_payment</span>(
+        destination=<span class="tp">PaymentDestination</span>.<span class="tp">PARSED</span>(input=parsed_input),
+        options=<span class="tp">PrepareOptions</span>(
+            amount_sats=user_chosen_amount,
+            lnurl=<span class="tp">LnurlPayOptions</span>(comment=<span class="st">"&lt;comment&gt;"</span>),
+        ),
     )
-    prepare_response = <span class="kw">await</span> client.<span class="fn">prepare_lnurl_pay</span>(request=request)
-    logging.<span class="fn">debug</span>(<span class="st">f"Fees: {prepare_response.fee_sats} sats"</span>)</pre>
+    logging.<span class="fn">debug</span>(<span class="st">f"Fee: {payment.fee().fee_sats()} sats"</span>)
+
+    <span class="cm"># Step 3: Confirm</span>
+    result = <span class="kw">await</span> payment.<span class="fn">send</span>(options=<span class="kw">None</span>)</pre>
       </div>
       <div class="lang-panel" data-lang="csharp">
-        <pre><span class="kw">var</span> parsedInput = <span class="kw">await</span> client.<span class="fn">Parse</span>(lnurlPayUrl);
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+<span class="kw">var</span> parsedInput = <span class="kw">await</span> client.<span class="fn">Parse</span>(lnurlPayUrl);
 <span class="kw">if</span> (parsedInput <span class="kw">is</span> <span class="tp">InputType</span>.<span class="tp">LightningAddress</span> la) {
-    <span class="kw">var</span> request = <span class="kw">new</span> <span class="tp">PrepareLnurlPayRequest</span>(
-        amountSats: <span class="nr">5_000UL</span>,
-        payRequest: la.v1.payRequest,
-        comment: <span class="st">"&lt;comment&gt;"</span>,
-        validateSuccessActionUrl: <span class="kw">true</span>,
-        conversionOptions: <span class="kw">null</span>, feePolicy: <span class="kw">null</span>
+    <span class="kw">var</span> minSats = la.V1.PayRequest.MinSendable / <span class="nr">1_000</span>;
+    <span class="kw">var</span> maxSats = la.V1.PayRequest.MaxSendable / <span class="nr">1_000</span>;
+    <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+    <span class="kw">var</span> payment = <span class="kw">await</span> client.<span class="fn">PreparePayment</span>(
+        destination: <span class="kw">new</span> <span class="tp">PaymentDestination</span>.<span class="tp">Parsed</span>(input: parsedInput),
+        options: <span class="kw">new</span> <span class="tp">PrepareOptions</span>(
+            amountSats: userChosenAmount,
+            lnurl: <span class="kw">new</span> <span class="tp">LnurlPayOptions</span>(comment: <span class="st">"&lt;comment&gt;"</span>)
+        )
     );
-    <span class="kw">var</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">PrepareLnurlPay</span>(request: request);
-    Console.<span class="fn">WriteLine</span>(<span class="st">$"Fees: {prepareResponse.feeSats} sats"</span>);
+    Console.<span class="fn">WriteLine</span>(<span class="st">$"Fee: {payment.Fee().FeeSats()} sats"</span>);
+
+    <span class="cm">// Step 3: Confirm</span>
+    <span class="kw">var</span> result = <span class="kw">await</span> payment.<span class="fn">Send</span>(options: <span class="kw">null</span>);
 }</pre>
       </div>
       <div class="lang-panel" data-lang="flutter">
-        <pre><span class="tp">InputType</span> inputType = <span class="kw">await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl);
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+<span class="tp">InputType</span> inputType = <span class="kw">await</span> client.<span class="fn">parse</span>(input: lnurlPayUrl);
 <span class="kw">if</span> (inputType <span class="kw">is</span> <span class="tp">InputType_LightningAddress</span>) {
-    <span class="tp">PrepareLnurlPayRequest</span> request = <span class="tp">PrepareLnurlPayRequest</span>(
-        amountSats: <span class="tp">BigInt</span>.<span class="fn">from</span>(<span class="nr">5000</span>),
-        payRequest: inputType.field0.payRequest,
-        comment: <span class="st">"&lt;comment&gt;"</span>,
-        validateSuccessActionUrl: <span class="kw">true</span>,
-        conversionOptions: <span class="kw">null</span>, feePolicy: <span class="kw">null</span>,
+    <span class="kw">final</span> minSats = inputType.field0.payRequest.minSendable ~/ <span class="nr">1000</span>;
+    <span class="kw">final</span> maxSats = inputType.field0.payRequest.maxSendable ~/ <span class="nr">1000</span>;
+    <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+    <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+    <span class="kw">final</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>(
+        destination: <span class="tp">PaymentDestination</span>.<span class="fn">parsed</span>(input: inputType),
+        options: <span class="tp">PrepareOptions</span>(
+            amountSats: userChosenAmount,
+            lnurl: <span class="tp">LnurlPayOptions</span>(comment: <span class="st">"&lt;comment&gt;"</span>),
+        ),
     );
-    <span class="kw">final</span> prepareResponse =
-        <span class="kw">await</span> client.<span class="fn">prepareLnurlPay</span>(request: request);
-    print(<span class="st">"Fees: ${prepareResponse.feeSats} sats"</span>);
+    print(<span class="st">"Fee: ${payment.fee().feeSats()} sats"</span>);
+
+    <span class="cm">// Step 3: Confirm</span>
+    <span class="kw">final</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>(options: <span class="kw">null</span>);
 }</pre>
       </div>
       <div class="lang-panel" data-lang="react-native">
-        <pre><span class="kw">const</span> input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurlPayUrl)
+        <pre><span class="cm">// Step 1: Parse to discover min/max sendable, description, etc.</span>
+<span class="kw">const</span> input = <span class="kw">await</span> client.<span class="fn">parse</span>(lnurlPayUrl)
 <span class="kw">if</span> (input.tag === <span class="tp">InputType_Tags</span>.LightningAddress) {
-  <span class="kw">const</span> prepareResponse = <span class="kw">await</span> client.<span class="fn">prepareLnurlPay</span>({
-    amountSats: <span class="tp">BigInt</span>(<span class="nr">5_000</span>),
-    payRequest: input.inner[<span class="nr">0</span>].payRequest,
-    comment: <span class="st">'&lt;comment&gt;'</span>,
-    validateSuccessActionUrl: <span class="kw">true</span>,
-    feePolicy: <span class="kw">undefined</span>
+  <span class="kw">const</span> minSats = Math.ceil(input.inner[<span class="nr">0</span>].payRequest.minSendable / <span class="nr">1000</span>)
+  <span class="kw">const</span> maxSats = Math.floor(input.inner[<span class="nr">0</span>].payRequest.maxSendable / <span class="nr">1000</span>)
+  <span class="cm">// Show min/max and description to user, get chosen amount</span>
+
+  <span class="cm">// Step 2: Prepare — pass parsed input to skip redundant re-fetch</span>
+  <span class="kw">const</span> payment = <span class="kw">await</span> client.<span class="fn">preparePayment</span>({
+    destination: { tag: <span class="st">'parsed'</span>, input },
+    options: {
+      amountSats: userChosenAmount,
+      lnurl: { comment: <span class="st">'&lt;comment&gt;'</span> },
+    }
   })
-  console.log(<span class="st">`Fees: ${prepareResponse.feeSats} sats`</span>)
+  console.log(<span class="st">`Fee: ${payment.feeSats} sats`</span>)
+
+  <span class="cm">// Step 3: Confirm</span>
+  <span class="kw">const</span> result = <span class="kw">await</span> payment.<span class="fn">send</span>()
 }</pre>
       </div>
     </div>
@@ -1857,14 +1971,18 @@ console.log(<span class="st">`Fees: </span>${payment.<span class="pr">feeSats</s
     </div>
     <div class="step">
       <span class="step-num">1</span>
-      <span class="step-text">Remove <code>sdk.parse(url)</code> step — pass the LNURL/Lightning address directly to <code>preparePayment()</code></span>
+      <span class="step-text"><strong>Parse first</strong> (required per <a href="https://github.com/lnurl/luds/blob/luds/06.md" target="_blank">LUD-06</a>): call <code>parse()</code> / <code>parseInput()</code> to discover <code>minSendable</code>/<code>maxSendable</code>, description metadata, and <code>commentAllowed</code>. Display these to the user.</span>
     </div>
     <div class="step">
       <span class="step-num">2</span>
-      <span class="step-text"><code>prepareLnurlPay({amountSats, payRequest, comment, ...})</code> <span class="arrow">&rarr;</span> <code>preparePayment(url, {amountSats, lnurl: {comment, ...}})</code></span>
+      <span class="step-text"><strong>User selects amount</strong> within the <code>[minSendable, maxSendable]</code> bounds and optionally enters a comment.</span>
     </div>
     <div class="step">
       <span class="step-num">3</span>
+      <span class="step-text"><code>prepareLnurlPay({amountSats, payRequest, comment})</code> <span class="arrow">&rarr;</span> <code>preparePayment(parsedInput, {amountSats, lnurl: {comment}})</code> — pass the parsed <code>InputType</code> to avoid redundant re-fetch of LNURL metadata.</span>
+    </div>
+    <div class="step">
+      <span class="step-num">4</span>
       <span class="step-text"><code>sdk.lnurlPay({prepareResponse})</code> <span class="arrow">&rarr;</span> <code>payment.send({idempotencyKey})</code></span>
     </div>
   </div>
@@ -1954,8 +2072,8 @@ client.<span class="pr">deposits</span>.<span class="fn">listUnclaimed</span>()
 client.<span class="pr">deposits</span>.<span class="fn">claim</span>(request)
 client.<span class="pr">deposits</span>.<span class="fn">refund</span>(request)
 client.<span class="pr">deposits</span>.<span class="fn">recommendedFees</span>()
-client.<span class="pr">settings</span>.<span class="fn">get</span>()
-client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
+client.<span class="pr">userSettings</span>.<span class="fn">get</span>()
+client.<span class="pr">userSettings</span>.<span class="fn">update</span>({ ... })
 client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
 client.<span class="pr">message</span>.<span class="fn">check</span>({ message, pubkey, signature })
 client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
@@ -1989,8 +2107,8 @@ client.<span class="fn">deposits</span>().<span class="fn">list_unclaimed</span>
 client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request)
 client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request)
 client.<span class="fn">deposits</span>().<span class="fn">recommended_fees</span>()
-client.<span class="fn">settings</span>().<span class="fn">get</span>()
-client.<span class="fn">settings</span>().<span class="fn">update</span>(request)
+client.<span class="fn">user_settings</span>().<span class="fn">get</span>()
+client.<span class="fn">user_settings</span>().<span class="fn">update</span>(request)
 client.<span class="fn">message</span>().<span class="fn">sign</span>(request)
 client.<span class="fn">message</span>().<span class="fn">check</span>(request)
 client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request)
@@ -2019,8 +2137,8 @@ client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(
 client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request: request)
 client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request: request)
 client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
-client.<span class="fn">settings</span>().<span class="fn">get</span>()
-client.<span class="fn">settings</span>().<span class="fn">update</span>(request: request)
+client.<span class="fn">userSettings</span>().<span class="fn">get</span>()
+client.<span class="fn">userSettings</span>().<span class="fn">update</span>(request: request)
 client.<span class="fn">message</span>().<span class="fn">sign</span>(request: request)
 client.<span class="fn">message</span>().<span class="fn">check</span>(request: request)
 client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request: request)
@@ -2049,8 +2167,8 @@ client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(
 client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request)
 client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request)
 client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
-client.<span class="fn">settings</span>().<span class="fn">get</span>()
-client.<span class="fn">settings</span>().<span class="fn">update</span>(request)
+client.<span class="fn">userSettings</span>().<span class="fn">get</span>()
+client.<span class="fn">userSettings</span>().<span class="fn">update</span>(request)
 client.<span class="fn">message</span>().<span class="fn">sign</span>(request)
 client.<span class="fn">message</span>().<span class="fn">check</span>(request)
 client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request)
@@ -2079,8 +2197,8 @@ client.<span class="fn">Deposits</span>().<span class="fn">ListUnclaimed</span>(
 client.<span class="fn">Deposits</span>().<span class="fn">Claim</span>(request)
 client.<span class="fn">Deposits</span>().<span class="fn">Refund</span>(request)
 client.<span class="fn">Deposits</span>().<span class="fn">RecommendedFees</span>()
-client.<span class="fn">Settings</span>().<span class="fn">Get</span>()
-client.<span class="fn">Settings</span>().<span class="fn">Update</span>(request)
+client.<span class="fn">UserSettings</span>().<span class="fn">Get</span>()
+client.<span class="fn">UserSettings</span>().<span class="fn">Update</span>(request)
 client.<span class="fn">Message</span>().<span class="fn">Sign</span>(request)
 client.<span class="fn">Message</span>().<span class="fn">Check</span>(request)
 client.<span class="fn">Tokens</span>().<span class="fn">Metadata</span>(request)
@@ -2109,8 +2227,8 @@ client.<span class="fn">deposits</span>().<span class="fn">list_unclaimed</span>
 client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request=request)
 client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request=request)
 client.<span class="fn">deposits</span>().<span class="fn">recommended_fees</span>()
-client.<span class="fn">settings</span>().<span class="fn">get</span>()
-client.<span class="fn">settings</span>().<span class="fn">update</span>(request=request)
+client.<span class="fn">user_settings</span>().<span class="fn">get</span>()
+client.<span class="fn">user_settings</span>().<span class="fn">update</span>(request=request)
 client.<span class="fn">message</span>().<span class="fn">sign</span>(request=request)
 client.<span class="fn">message</span>().<span class="fn">check</span>(request=request)
 client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request=request)
@@ -2139,8 +2257,8 @@ client.<span class="fn">Deposits</span>().<span class="fn">ListUnclaimed</span>(
 client.<span class="fn">Deposits</span>().<span class="fn">Claim</span>(request: request)
 client.<span class="fn">Deposits</span>().<span class="fn">Refund</span>(request: request)
 client.<span class="fn">Deposits</span>().<span class="fn">RecommendedFees</span>()
-client.<span class="fn">Settings</span>().<span class="fn">Get</span>()
-client.<span class="fn">Settings</span>().<span class="fn">Update</span>(request: request)
+client.<span class="fn">UserSettings</span>().<span class="fn">Get</span>()
+client.<span class="fn">UserSettings</span>().<span class="fn">Update</span>(request: request)
 client.<span class="fn">Message</span>().<span class="fn">Sign</span>(request: request)
 client.<span class="fn">Message</span>().<span class="fn">Check</span>(request: request)
 client.<span class="fn">Tokens</span>().<span class="fn">Metadata</span>(request: request)
@@ -2169,8 +2287,8 @@ client.<span class="fn">deposits</span>().<span class="fn">listUnclaimed</span>(
 client.<span class="fn">deposits</span>().<span class="fn">claim</span>(request: request)
 client.<span class="fn">deposits</span>().<span class="fn">refund</span>(request: request)
 client.<span class="fn">deposits</span>().<span class="fn">recommendedFees</span>()
-client.<span class="fn">settings</span>().<span class="fn">get</span>()
-client.<span class="fn">settings</span>().<span class="fn">update</span>(request: request)
+client.<span class="fn">userSettings</span>().<span class="fn">get</span>()
+client.<span class="fn">userSettings</span>().<span class="fn">update</span>(request: request)
 client.<span class="fn">message</span>().<span class="fn">sign</span>(request: request)
 client.<span class="fn">message</span>().<span class="fn">check</span>(request: request)
 client.<span class="fn">tokens</span>().<span class="fn">metadata</span>(request: request)
@@ -2199,8 +2317,8 @@ client.<span class="pr">deposits</span>.<span class="fn">listUnclaimed</span>()
 client.<span class="pr">deposits</span>.<span class="fn">claim</span>(request)
 client.<span class="pr">deposits</span>.<span class="fn">refund</span>(request)
 client.<span class="pr">deposits</span>.<span class="fn">recommendedFees</span>()
-client.<span class="pr">settings</span>.<span class="fn">get</span>()
-client.<span class="pr">settings</span>.<span class="fn">update</span>({ ... })
+client.<span class="pr">userSettings</span>.<span class="fn">get</span>()
+client.<span class="pr">userSettings</span>.<span class="fn">update</span>({ ... })
 client.<span class="pr">message</span>.<span class="fn">sign</span>({ message })
 client.<span class="pr">message</span>.<span class="fn">check</span>({ message, pubkey, signature })
 client.<span class="pr">tokens</span>.<span class="fn">metadata</span>({ tokenIdentifiers })
@@ -2505,6 +2623,16 @@ console.log(<span class="st">`Fee: </span>${payment.<span class="pr">feeSats</sp
       <div class="type-card-variants">
         <code>apiKey</code> <code>network</code> <code>seed</code><br>
         + optional: <code>storageRoot</code> <code>storageDir</code> <code>syncIntervalSecs</code> <code>preferSparkOverLightning</code> <code>privateMode</code> <code>leafOptimizationConfig</code> <code>maxDepositClaimFee</code> <code>lnurlDomain</code> <code>realTimeSyncServerUrl</code> <code>useDefaultExternalInputParsers</code> <code>externalInputParsers</code>
+      </div>
+    </div>
+
+    <div class="type-card">
+      <div class="type-card-title">PaymentDestination</div>
+      <div class="type-card-desc">First parameter of <code>preparePayment()</code>. Pass a raw string or a pre-parsed <code>InputType</code> to avoid redundant LNURL round-trips.</div>
+      <div class="type-card-variants">
+        <code>string | InputType</code> <span style="color:var(--text-muted)">(TypeScript/WASM)</span><br>
+        <code>PaymentDestination::Raw { destination }</code> <span style="color:var(--text-muted)">(Rust/UniFFI)</span><br>
+        <code>PaymentDestination::Parsed { input }</code> <span style="color:var(--text-muted)">(Rust/UniFFI)</span>
       </div>
     </div>
 

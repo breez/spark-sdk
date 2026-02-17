@@ -14,8 +14,24 @@ const examplePrepareLnurlPay = async (client: BreezClient) => {
   // lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf
   const lnurlPayUrl = 'lightning@address.com'
 
-  // The modern API handles LNURL resolution internally via preparePayment
-  const amountSats = 5_000
+  // Step 1: Parse the LNURL/Lightning Address to discover service metadata.
+  // Per LUD-06, the wallet must fetch and display min/max sendable, description, etc.
+  const input = await parseInput(lnurlPayUrl)
+
+  // Step 2: Extract pay request details for UI.
+  // Show min/max sendable bounds, description, and optional comment field to user.
+  const payRequest = input.type === 'lnurlPay' ? input
+    : input.type === 'lightningAddress' ? input.payRequest : null
+  if (!payRequest) throw new Error('Not an LNURL-Pay destination')
+  const minSats = Math.ceil(payRequest.minSendable / 1000)
+  const maxSats = Math.floor(payRequest.maxSendable / 1000)
+  const commentAllowed = payRequest.commentAllowed ?? 0
+  // Display these constraints in your UI...
+
+  // Step 3: After user selects an amount and optional comment, prepare the payment.
+  // Passing the parsed `input` avoids a redundant network round-trip to re-fetch
+  // the LNURL metadata (the parse step already did that).
+  const userChosenAmount = 5_000 // User's selected amount within [minSats, maxSats]
   const optionalComment = '<comment>'
   const optionalValidateSuccessActionUrl = true
   // Optionally set to use token funds to pay via token conversion
@@ -35,8 +51,8 @@ const examplePrepareLnurlPay = async (client: BreezClient) => {
     validateSuccessActionUrl: optionalValidateSuccessActionUrl
   }
 
-  const payment = await client.preparePayment(lnurlPayUrl, {
-    amountSats,
+  const payment = await client.preparePayment(input, {
+    amountSats: userChosenAmount,
     lnurl,
     conversionOptions: optionalConversionOptions
   })
@@ -54,11 +70,15 @@ const examplePrepareLnurlPayFeesIncluded = async (client: BreezClient) => {
   // Use 'feesIncluded' to deduct fees from the amount instead.
   // The receiver gets amount minus fees.
   const lnurlPayUrl = 'lightning@address.com'
+
+  // Parse first to discover min/max and display to user (required per LUD-06)
+  const input = await parseInput(lnurlPayUrl)
+
   const optionalComment = '<comment>'
   const amountSats = 5_000
   const feePolicy: FeePolicy = 'feesIncluded'
 
-  const payment = await client.preparePayment(lnurlPayUrl, {
+  const payment = await client.preparePayment(input, {
     amountSats,
     lnurl: { comment: optionalComment },
     feePolicy
