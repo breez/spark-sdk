@@ -150,6 +150,45 @@ pub enum InputType {
     SparkInvoice(SparkInvoiceDetails),
 }
 
+/// A locally-parsed input type that does not require network calls.
+/// Used for validating payment identifiers (e.g. in contacts) without async resolution.
+#[derive(Clone, Debug)]
+pub enum LocalInputType {
+    Bip21(Bip21Details),
+    BitcoinAddress(BitcoinAddressDetails),
+    Bolt11Invoice(Bolt11InvoiceDetails),
+    Bolt12InvoiceRequest(Bolt12InvoiceRequestDetails),
+    Bolt12Offer(Bolt12OfferDetails),
+    SparkAddress(SparkAddressDetails),
+    SparkInvoice(SparkInvoiceDetails),
+    SilentPaymentAddress(SilentPaymentAddressDetails),
+    /// A lightning address validated for format only (not resolved via network).
+    LightningAddress {
+        address: String,
+    },
+    /// A decoded LNURL (bech32 or scheme-prefixed). Type is unknown without network resolution.
+    Lnurl {
+        url: String,
+    },
+}
+
+/// Intermediate parse result for Spark addresses, which can be either
+/// a plain address or an invoice.
+#[derive(Clone, Debug)]
+pub enum SparkAddressParsed {
+    Address(SparkAddressDetails),
+    Invoice(SparkInvoiceDetails),
+}
+
+impl From<SparkAddressParsed> for InputType {
+    fn from(parsed: SparkAddressParsed) -> Self {
+        match parsed {
+            SparkAddressParsed::Address(details) => InputType::SparkAddress(details),
+            SparkAddressParsed::Invoice(details) => InputType::SparkInvoice(details),
+        }
+    }
+}
+
 impl TryFrom<LnurlRequestDetails> for InputType {
     type Error = LnurlError;
     fn try_from(lnurl_data: LnurlRequestDetails) -> Result<Self, Self::Error> {

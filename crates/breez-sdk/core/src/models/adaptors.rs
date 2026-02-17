@@ -1,5 +1,5 @@
 use breez_sdk_common::input::{
-    self, InputType, PaymentRequestSource, SparkInvoiceDetails, parse_spark_address,
+    self, PaymentRequestSource, SparkAddressParsed, SparkInvoiceDetails, parse_spark_address,
 };
 use spark_wallet::{
     CoopExitFeeQuote, CoopExitSpeedFeeQuote, ExitSpeed, LightningSendPayment, LightningSendStatus,
@@ -96,7 +96,7 @@ impl PaymentDetails {
         if !transfer.is_ssp_transfer {
             // Check for Spark invoice payments
             if let Some(spark_invoice) = &transfer.spark_invoice {
-                let Some(InputType::SparkInvoice(invoice_details)) =
+                let Some(SparkAddressParsed::Invoice(invoice_details)) =
                     parse_spark_address(spark_invoice, &PaymentRequestSource::default())
                 else {
                     return Err(SdkError::Generic("Invalid spark invoice".to_string()));
