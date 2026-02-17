@@ -534,6 +534,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     setLnurlMetadata: (metadata: SetLnurlMetadataItem[]) => Promise<void>;
     getPaymentsByParentIds: (parentPaymentIds: string[]) => Promise<{ [parentId: string]: RelatedPayment[] }>;
     listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
+    getContact: (id: string) => Promise<Contact>;
     insertContact: (contact: Contact) => Promise<void>;
     updateContact: (contact: Contact) => Promise<Contact>;
     deleteContact: (id: string) => Promise<void>;
