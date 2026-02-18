@@ -446,14 +446,41 @@ impl SparkWallet {
 
         // Collect the wallet transfer information from the lightning send payment result. If
         // not present, we need to query for the SSP user request to get the transfer details.
-        let wallet_transfer = match lightning_payment.lightning_send_payment {
-            Some(_) => WalletTransfer::from_transfer(
-                lightning_payment.transfer,
-                None,
-                None,
-                self.identity_public_key,
-                self.config.service_provider_config.identity_public_key,
-            ),
+        let payment_hash = lightning_payment.payment_hash;
+        let lightning_send_payment = lightning_payment.lightning_send_payment;
+        let wallet_transfer = match &lightning_send_payment {
+            Some(lsp) => {
+                let preimage = lsp
+                    .payment_preimage
+                    .as_deref()
+                    .map(Preimage::from_hex)
+                    .transpose()
+                    .map_err(SparkWalletError::ServiceError)?;
+                let preimage_request = PreimageRequest {
+                    payment_hash,
+                    status: if preimage.is_some() {
+                        PreimageRequestStatus::PreimageShared
+                    } else {
+                        PreimageRequestStatus::WaitingForPreimage
+                    },
+                    created_time: UNIX_EPOCH
+                        + Duration::from_secs(
+                            lightning_payment.transfer.created_time.unwrap_or_default(),
+                        ),
+                    expiry_time: UNIX_EPOCH
+                        + Duration::from_secs(
+                            lightning_payment.transfer.expiry_time.unwrap_or_default(),
+                        ),
+                    preimage,
+                };
+                WalletTransfer::from_transfer(
+                    lightning_payment.transfer,
+                    None,
+                    Some(preimage_request),
+                    self.identity_public_key,
+                    self.config.service_provider_config.identity_public_key,
+                )
+            }
             None => {
                 create_transfer(
                     lightning_payment.transfer,
@@ -470,7 +497,7 @@ impl SparkWallet {
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
-            lightning_payment: lightning_payment.lightning_send_payment,
+            lightning_payment: lightning_send_payment,
         })
     }
 

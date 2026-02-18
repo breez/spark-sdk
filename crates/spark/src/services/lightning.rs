@@ -191,6 +191,7 @@ impl TryFrom<crate::ssp::LightningReceiveRequest> for LightningReceivePayment {
 pub struct PayLightningResult {
     pub transfer: Transfer,
     pub lightning_send_payment: Option<LightningSendPayment>,
+    pub payment_hash: sha256::Hash,
 }
 
 pub struct LightningService {
@@ -471,6 +472,7 @@ impl LightningService {
                 return Ok(PayLightningResult {
                     transfer,
                     lightning_send_payment: None,
+                    payment_hash: *payment_hash,
                 });
             }
             (_, Err(e)) => return Err(e),
@@ -494,6 +496,7 @@ impl LightningService {
         Ok(PayLightningResult {
             lightning_send_payment: Some(lightning_send_payment),
             transfer,
+            payment_hash: *payment_hash,
         })
     }
 
