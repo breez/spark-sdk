@@ -16,7 +16,8 @@ namespace BreezSdkSnippets
             var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
                 description: description,
                 amountSats: optionalAmountSats,
-                expirySecs: optionalExpirySecs
+                expirySecs: optionalExpirySecs,
+                paymentHash: null
             );
             var request = new ReceivePaymentRequest(paymentMethod: paymentMethod);
             var response = await sdk.ReceivePayment(request: request);

@@ -15,7 +15,8 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                 paymentMethod: ReceivePaymentMethod.bolt11Invoice(
                     description: description,
                     amountSats: optionalAmountSats,
-                    expirySecs: optionalExpirySecs
+                    expirySecs: optionalExpirySecs,
+                    paymentHash: nil
                 )
             ))
 

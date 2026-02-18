@@ -14,7 +14,7 @@ class ReceivePayment {
             val optionalExpirySecs = 3600.toUInt()
 
             val request = ReceivePaymentRequest(
-                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpirySecs)
+                ReceivePaymentMethod.Bolt11Invoice(description, optionalAmountSats, optionalExpirySecs, null)
             )
             val response = sdk.receivePayment(request)
 

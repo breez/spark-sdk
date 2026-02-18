@@ -45,7 +45,7 @@
 - [Advanced features](guide/advanced.md)
   - [Custom configuration](guide/config.md)
   - [Custom leaf optimization](guide/optimize.md)
-  - [Spark HTLC Payments](guide/htlcs.md)
+  - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)
 - [Moving to production](guide/moving_to_production.md)
 

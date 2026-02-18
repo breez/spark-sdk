@@ -48,6 +48,30 @@ namespace BreezSdkSnippets
             // ANCHOR_END: send-htlc-payment
         }
 
+        async Task ReceiveHodlInvoicePayment(BreezSdk sdk)
+        {
+            // ANCHOR: receive-hodl-invoice-payment
+            var preimage = "<32-byte unique preimage hex>";
+            var preimageBytes = Convert.FromHexString(preimage);
+            var paymentHashBytes = System.Security.Cryptography.SHA256.HashData(preimageBytes);
+            var paymentHash = Convert.ToHexString(paymentHashBytes).ToLower();
+
+            var response = await sdk.ReceivePayment(
+                request: new ReceivePaymentRequest(
+                    paymentMethod: new ReceivePaymentMethod.Bolt11Invoice(
+                        description: "HODL invoice",
+                        amountSats: 50_000UL,
+                        expirySecs: null,
+                        paymentHash: paymentHash
+                    )
+                )
+            );
+
+            var invoice = response.paymentRequest;
+            Console.WriteLine($"HODL invoice: {invoice}");
+            // ANCHOR_END: receive-hodl-invoice-payment
+        }
+
         async Task ListClaimableHtlcPayments(BreezSdk sdk)
         {
             // ANCHOR: list-claimable-htlc-payments
@@ -60,12 +84,29 @@ namespace BreezSdkSnippets
                             SparkHtlcStatus.WaitingForPreimage
                         },
                         conversionRefundNeeded: null
+                    ),
+                    new PaymentDetailsFilter.Lightning(
+                        htlcStatus: new List<SparkHtlcStatus> {
+                            SparkHtlcStatus.WaitingForPreimage
+                        }
                     )
                 }
             );
 
             var response = await sdk.ListPayments(request: request);
             var payments = response.payments;
+
+            foreach (var payment in payments)
+            {
+                if (payment.details is PaymentDetails.Spark sparkDetails && sparkDetails.htlcDetails != null)
+                {
+                    Console.WriteLine($"Spark HTLC expiry time: {sparkDetails.htlcDetails.expiryTime}");
+                }
+                else if (payment.details is PaymentDetails.Lightning lightningDetails && lightningDetails.htlcDetails != null)
+                {
+                    Console.WriteLine($"Lightning HTLC expiry time: {lightningDetails.htlcDetails.expiryTime}");
+                }
+            }
             // ANCHOR_END: list-claimable-htlc-payments
         }
 

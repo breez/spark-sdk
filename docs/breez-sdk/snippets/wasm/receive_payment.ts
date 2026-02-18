@@ -13,7 +13,8 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
       type: 'bolt11Invoice',
       description,
       amountSats: optionalAmountSats,
-      expirySecs: optionalExpirySecs
+      expirySecs: optionalExpirySecs,
+      paymentHash: undefined
     }
   })
 

@@ -77,6 +77,41 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 	return &payment, nil
 }
 
+func ReceiveHodlInvoicePayment(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: receive-hodl-invoice-payment
+	preimage := "<32-byte unique preimage hex>"
+	preimageBytes, err := hex.DecodeString(preimage)
+	if err != nil {
+		return err
+	}
+	paymentHashBytes := sha256.Sum256(preimageBytes)
+	paymentHash := hex.EncodeToString(paymentHashBytes[:])
+
+	amountSats := uint64(50_000)
+	response, err := sdk.ReceivePayment(breez_sdk_spark.ReceivePaymentRequest{
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
+			Description: "HODL invoice",
+			AmountSats:  &amountSats,
+			ExpirySecs:  nil,
+			PaymentHash: &paymentHash,
+		},
+	})
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return err
+	}
+
+	invoice := response.PaymentRequest
+	log.Printf("HODL invoice: %v", invoice)
+	// ANCHOR_END: receive-hodl-invoice-payment
+	return nil
+}
+
 func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Payment, error) {
 	// ANCHOR: list-claimable-htlc-payments
 	typeFilter := []breez_sdk_spark.PaymentType{
@@ -87,6 +122,11 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	}
 	paymentDetailsFilter := []breez_sdk_spark.PaymentDetailsFilter{
 		breez_sdk_spark.PaymentDetailsFilterSpark{
+			HtlcStatus: &[]breez_sdk_spark.SparkHtlcStatus{
+				breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
+			},
+		},
+		breez_sdk_spark.PaymentDetailsFilterLightning{
 			HtlcStatus: &[]breez_sdk_spark.SparkHtlcStatus{
 				breez_sdk_spark.SparkHtlcStatusWaitingForPreimage,
 			},
@@ -111,6 +151,21 @@ func ListClaimableHtlcPayments(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spar
 	}
 
 	payments := response.Payments
+
+	for _, payment := range payments {
+		if payment.Details != nil {
+			switch details := (*payment.Details).(type) {
+			case breez_sdk_spark.PaymentDetailsSpark:
+				if details.HtlcDetails != nil {
+					log.Printf("Spark HTLC expiry time: %v", details.HtlcDetails.ExpiryTime)
+				}
+			case breez_sdk_spark.PaymentDetailsLightning:
+				if details.HtlcDetails != nil {
+					log.Printf("Lightning HTLC expiry time: %v", details.HtlcDetails.ExpiryTime)
+				}
+			}
+		}
+	}
 	// ANCHOR_END: list-claimable-htlc-payments
 	return &payments, nil
 }

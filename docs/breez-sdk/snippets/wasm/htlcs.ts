@@ -40,6 +40,27 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   return payment
 }
 
+const exampleReceiveHodlInvoicePayment = async (sdk: BreezSdk) => {
+  // ANCHOR: receive-hodl-invoice-payment
+  const preimage = '<32-byte unique preimage hex>'
+  const preimageBuffer = Buffer.from(preimage, 'hex')
+  const paymentHash = createHash('sha256').update(preimageBuffer).digest('hex')
+
+  const response = await sdk.receivePayment({
+    paymentMethod: {
+      type: 'bolt11Invoice',
+      description: 'HODL invoice',
+      amountSats: 50_000,
+      expirySecs: undefined,
+      paymentHash
+    }
+  })
+
+  const invoice = response.paymentRequest
+  console.log(`HODL invoice: ${invoice}`)
+  // ANCHOR_END: receive-hodl-invoice-payment
+}
+
 const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
   // ANCHOR: list-claimable-htlc-payments
   const response = await sdk.listPayments({
@@ -48,10 +69,21 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
     paymentDetailsFilter: [{
       type: 'spark',
       htlcStatus: ['waitingForPreimage']
+    }, {
+      type: 'lightning',
+      htlcStatus: ['waitingForPreimage']
     }],
     assetFilter: undefined
   })
   const payments = response.payments
+
+  for (const payment of payments) {
+    if (payment.details?.type === 'spark' && payment.details.htlcDetails != null) {
+      console.log(`Spark HTLC expiry time: ${payment.details.htlcDetails.expiryTime}`)
+    } else if (payment.details?.type === 'lightning' && payment.details.htlcDetails != null) {
+      console.log(`Lightning HTLC expiry time: ${payment.details.htlcDetails.expiryTime}`)
+    }
+  }
   // ANCHOR_END: list-claimable-htlc-payments
   return payments
 }

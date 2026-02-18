@@ -40,18 +40,52 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
   return payment;
 }
 
+Future<void> receiveHodlInvoicePayment(BreezSdk sdk) async {
+  // ANCHOR: receive-hodl-invoice-payment
+  String preimage = "<32-byte unique preimage hex>";
+  List<int> preimageBytes = hex.decode(preimage);
+  Digest paymentHashDigest = sha256.convert(preimageBytes);
+  String paymentHash = hex.encode(paymentHashDigest.bytes);
+
+  final response = await sdk.receivePayment(
+      request: ReceivePaymentRequest(
+          paymentMethod: ReceivePaymentMethod.bolt11Invoice(
+              description: "HODL invoice",
+              amountSats: BigInt.from(50000),
+              expirySecs: null,
+              paymentHash: paymentHash)));
+
+  final invoice = response.paymentRequest;
+  print("HODL invoice: $invoice");
+  // ANCHOR_END: receive-hodl-invoice-payment
+}
+
 Future<List<Payment>> listClaimableHtlcPayments(BreezSdk sdk) async {
   // ANCHOR: list-claimable-htlc-payments
   final request = ListPaymentsRequest(
     typeFilter: [PaymentType.receive],
     statusFilter: [PaymentStatus.pending],
-    paymentDetailsFilter: [PaymentDetailsFilter.spark(
-      htlcStatus: [SparkHtlcStatus.waitingForPreimage],
-    )],
+    paymentDetailsFilter: [
+      PaymentDetailsFilter.spark(
+        htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+      ),
+      PaymentDetailsFilter.lightning(
+        htlcStatus: [SparkHtlcStatus.waitingForPreimage],
+      ),
+    ],
   );
 
   final response = await sdk.listPayments(request: request);
   final payments = response.payments;
+
+  for (final payment in payments) {
+    final details = payment.details;
+    if (details is PaymentDetails_Spark && details.htlcDetails != null) {
+      print("Spark HTLC expiry time: ${details.htlcDetails!.expiryTime}");
+    } else if (details is PaymentDetails_Lightning && details.htlcDetails != null) {
+      print("Lightning HTLC expiry time: ${details.htlcDetails!.expiryTime}");
+    }
+  }
   // ANCHOR_END: list-claimable-htlc-payments
   return payments;
 }

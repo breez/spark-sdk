@@ -7,7 +7,9 @@ import {
   PaymentDetailsFilter,
   PaymentType,
   PaymentStatus,
-  SendPaymentMethod_Tags
+  SendPaymentMethod_Tags,
+  ReceivePaymentMethod,
+  PaymentDetails_Tags
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
@@ -53,6 +55,26 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   return payment
 }
 
+const exampleReceiveHodlInvoicePayment = async (sdk: BreezSdk) => {
+  // ANCHOR: receive-hodl-invoice-payment
+  const preimage = '<32-byte unique preimage hex>'
+  const preimageBuffer = Buffer.from(preimage, 'hex')
+  const paymentHash = createHash('sha256').update(preimageBuffer).digest('hex')
+
+  const response = await sdk.receivePayment({
+    paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
+      description: 'HODL invoice',
+      amountSats: BigInt(50_000),
+      expirySecs: undefined,
+      paymentHash
+    })
+  })
+
+  const invoice = response.paymentRequest
+  console.log(`HODL invoice: ${invoice}`)
+  // ANCHOR_END: receive-hodl-invoice-payment
+}
+
 const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[]> => {
   // ANCHOR: list-claimable-htlc-payments
   const request = {
@@ -61,6 +83,8 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
     paymentDetailsFilter: [new PaymentDetailsFilter.Spark({
       htlcStatus: [SparkHtlcStatus.WaitingForPreimage],
       conversionRefundNeeded: undefined
+    }), new PaymentDetailsFilter.Lightning({
+      htlcStatus: [SparkHtlcStatus.WaitingForPreimage]
     })],
     assetFilter: undefined,
     fromTimestamp: undefined,
@@ -72,6 +96,20 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
 
   const response = await sdk.listPayments(request)
   const payments = response.payments
+
+  for (const payment of payments) {
+    if (payment.details?.tag === PaymentDetails_Tags.Spark) {
+      const htlc = payment.details.inner.htlcDetails
+      if (htlc != null) {
+        console.log(`Spark HTLC expiry time: ${htlc.expiryTime}`)
+      }
+    } else if (payment.details?.tag === PaymentDetails_Tags.Lightning) {
+      const htlc = payment.details.inner.htlcDetails
+      if (htlc != null) {
+        console.log(`Lightning HTLC expiry time: ${htlc.expiryTime}`)
+      }
+    }
+  }
   // ANCHOR_END: list-claimable-htlc-payments
   return payments
 }

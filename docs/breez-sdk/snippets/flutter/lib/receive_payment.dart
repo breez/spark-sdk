@@ -14,7 +14,8 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
       paymentMethod: ReceivePaymentMethod.bolt11Invoice(
           description: description,
           amountSats: optionalAmountSats,
-          expirySecs: optionalExpirySecs));
+          expirySecs: optionalExpirySecs,
+          paymentHash: null));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );

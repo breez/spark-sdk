@@ -58,6 +58,36 @@ class Htlcs {
         // ANCHOR_END: send-htlc-payment
     }
 
+    suspend fun receiveHodlInvoicePayment(sdk: BreezSdk) {
+        // ANCHOR: receive-hodl-invoice-payment
+        try {
+            val preimage = "<32-byte unique preimage hex>"
+            val preimageBytes = preimage.hexToByteArray()
+            val digest = SHA256()
+            digest.update(preimageBytes)
+            val paymentHashBytes = digest.digest()
+            val paymentHash = paymentHashBytes.toHexString()
+
+            val response = sdk.receivePayment(
+                ReceivePaymentRequest(
+                    paymentMethod = ReceivePaymentMethod.Bolt11Invoice(
+                        description = "HODL invoice",
+                        amountSats = 50_000u,
+                        expirySecs = null,
+                        paymentHash = paymentHash
+                    )
+                )
+            )
+
+            val invoice = response.paymentRequest
+            // Log.v("Breez", "HODL invoice: $invoice")
+        } catch (e: Exception) {
+            // handle error
+            throw e
+        }
+        // ANCHOR_END: receive-hodl-invoice-payment
+    }
+
     suspend fun listClaimableHtlcPayments(sdk: BreezSdk) {
         // ANCHOR: list-claimable-htlc-payments
         try {
@@ -68,12 +98,34 @@ class Htlcs {
                     PaymentDetailsFilter.Spark(
                         htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
                         conversionRefundNeeded = null
+                    ),
+                    PaymentDetailsFilter.Lightning(
+                        htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE)
                     )
                 )
             )
 
             val response = sdk.listPayments(request)
             val payments = response.payments
+
+            for (payment in payments) {
+                val details = payment.details
+                when (details) {
+                    is PaymentDetails.Spark -> {
+                        val htlc = details.htlcDetails
+                        if (htlc != null) {
+                            // Log.v("Breez", "Spark HTLC expiry time: ${htlc.expiryTime}")
+                        }
+                    }
+                    is PaymentDetails.Lightning -> {
+                        val htlc = details.htlcDetails
+                        if (htlc != null) {
+                            // Log.v("Breez", "Lightning HTLC expiry time: ${htlc.expiryTime}")
+                        }
+                    }
+                    else -> {}
+                }
+            }
         } catch (e: Exception) {
             // handle error
             throw e
