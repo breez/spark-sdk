@@ -21,6 +21,11 @@ pub fn validate_contact_input(name: &str, payment_identifier: &str) -> Result<St
             "Payment identifier cannot be empty".to_string(),
         ));
     }
+    if payment_identifier.len() > 2000 {
+        return Err(SdkError::InvalidInput(
+            "Payment identifier cannot exceed 2000 characters".to_string(),
+        ));
+    }
 
     validate_payment_identifier(payment_identifier)?;
 
@@ -132,6 +137,19 @@ mod tests {
         // Unknown input is allowed — it may be valid for external/async parsers
         assert!(validate_contact_input(VALID_NAME, "not_a_payment_format").is_ok());
         assert!(validate_contact_input(VALID_NAME, "https://example.com/lnurl").is_ok());
+    }
+
+    #[test]
+    fn test_rejects_oversized_payment_identifier() {
+        let long_id = "a".repeat(2001);
+        let result = validate_contact_input(VALID_NAME, &long_id);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot exceed 2000")
+        );
     }
 
     #[test]
