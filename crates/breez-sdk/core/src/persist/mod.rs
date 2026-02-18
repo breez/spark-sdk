@@ -97,10 +97,15 @@ impl From<std::num::TryFromIntError> for StorageError {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_payment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl_pay_info: Option<LnurlPayInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_info: Option<ConversionInfo>,
 }
 
