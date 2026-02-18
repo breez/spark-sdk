@@ -3270,15 +3270,16 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0].name, "Alice");
 
-    // Test update - returns Contact with preserved created_at
+    // Test upsert - preserves created_at from existing row
     let to_update = Contact {
         id: "c1".to_string(),
         name: "Alice B".to_string(),
         payment_identifier: "alice@example.com".to_string(),
-        created_at: 0, // Should be ignored
+        created_at: 0, // Should be ignored by ON CONFLICT
         updated_at: 2000,
     };
-    let updated = storage.update_contact(to_update).await.unwrap();
+    storage.insert_contact(to_update).await.unwrap();
+    let updated = storage.get_contact("c1".to_string()).await.unwrap();
     assert_eq!(updated.name, "Alice B");
     assert_eq!(updated.created_at, 1000); // Verify created_at preserved
 
@@ -3311,7 +3312,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         Err(StorageError::Duplicate)
     ));
 
-    // Test update to duplicate
+    // Test upsert to duplicate (name, payment_identifier)
     let c4 = Contact {
         id: "c4".to_string(),
         name: "Carol".to_string(),
@@ -3328,21 +3329,8 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         updated_at: 2000,
     };
     assert!(matches!(
-        storage.update_contact(c4_dup).await,
+        storage.insert_contact(c4_dup).await,
         Err(StorageError::Duplicate)
-    ));
-
-    // Test update not found
-    let missing = Contact {
-        id: "missing".to_string(),
-        name: "X".to_string(),
-        payment_identifier: "x@example.com".to_string(),
-        created_at: 0,
-        updated_at: 1000,
-    };
-    assert!(matches!(
-        storage.update_contact(missing).await,
-        Err(StorageError::NotFound)
     ));
 
     // Test pagination

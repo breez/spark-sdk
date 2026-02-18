@@ -1939,66 +1939,52 @@ class IndexedDBStorage {
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction("contacts", "readwrite");
       const store = transaction.objectStore("contacts");
+      const index = store.index("name_identifier");
 
-      const request = store.add(contact);
+      // Check for UNIQUE(name, paymentIdentifier) manually before upserting
+      const lookupRequest = index.get([contact.name, contact.paymentIdentifier]);
 
-      request.onsuccess = () => resolve();
-
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Inserting contact failed: ${request.error?.name || "Unknown error"} - ${request.error?.message || ""}`,
-            request.error
-          )
-        );
-      };
-    });
-  }
-
-  async updateContact(contact) {
-    if (!this.db) {
-      throw new StorageError("Database not initialized");
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction("contacts", "readwrite");
-      const store = transaction.objectStore("contacts");
-
-      // First check if the contact exists
-      const getRequest = store.get(contact.id);
-
-      getRequest.onsuccess = () => {
-        const existingContact = getRequest.result;
-        if (!existingContact) {
-          reject(new StorageError("Contact not found"));
+      lookupRequest.onsuccess = () => {
+        const existing = lookupRequest.result;
+        if (existing && existing.id !== contact.id) {
+          reject(new StorageError("Duplicate contact"));
           return;
         }
 
-        // Preserve created_at from the existing record
-        const updatedContact = {
-          ...contact,
-          createdAt: existingContact.createdAt,
+        // Preserve created_at from existing record on update
+        const getRequest = store.get(contact.id);
+        getRequest.onsuccess = () => {
+          const existingById = getRequest.result;
+          const toStore = existingById
+            ? { ...contact, createdAt: existingById.createdAt }
+            : contact;
+
+          const putRequest = store.put(toStore);
+          putRequest.onsuccess = () => resolve();
+          putRequest.onerror = () => {
+            reject(
+              new StorageError(
+                `Inserting contact failed: ${putRequest.error?.name || "Unknown error"} - ${putRequest.error?.message || ""}`,
+                putRequest.error
+              )
+            );
+          };
         };
-
-        const putRequest = store.put(updatedContact);
-
-        putRequest.onsuccess = () => resolve(updatedContact);
-
-        putRequest.onerror = () => {
+        getRequest.onerror = () => {
           reject(
             new StorageError(
-              `Updating contact failed: ${putRequest.error?.name || "Unknown error"} - ${putRequest.error?.message || ""}`,
-              putRequest.error
+              `Failed to check existing contact: ${getRequest.error?.message || "Unknown error"}`,
+              getRequest.error
             )
           );
         };
       };
 
-      getRequest.onerror = () => {
+      lookupRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get contact for update: ${getRequest.error?.message || "Unknown error"}`,
-            getRequest.error
+            `Failed to check contact uniqueness: ${lookupRequest.error?.message || "Unknown error"}`,
+            lookupRequest.error
           )
         );
       };

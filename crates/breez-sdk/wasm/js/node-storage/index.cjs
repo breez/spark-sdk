@@ -1313,6 +1313,10 @@ class SqliteStorage {
       const stmt = this.db.prepare(`
         INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          payment_identifier = excluded.payment_identifier,
+          updated_at = excluded.updated_at
       `);
 
       stmt.run(
@@ -1333,47 +1337,6 @@ class SqliteStorage {
       }
       return Promise.reject(
         new StorageError(`Failed to insert contact: ${error.message}`, error)
-      );
-    }
-  }
-
-  updateContact(contact) {
-    try {
-      const updateStmt = this.db.prepare(`
-        UPDATE contacts
-        SET name = ?, payment_identifier = ?, updated_at = ?
-        WHERE id = ?
-      `);
-
-      const result = updateStmt.run(
-        contact.name,
-        contact.paymentIdentifier,
-        contact.updatedAt,
-        contact.id
-      );
-
-      if (result.changes === 0) {
-        return Promise.reject(new StorageError("Contact not found"));
-      }
-
-      // Fetch and return the updated record
-      const selectStmt = this.db.prepare(`
-        SELECT id, name, payment_identifier AS paymentIdentifier, created_at AS createdAt, updated_at AS updatedAt
-        FROM contacts
-        WHERE id = ?
-      `);
-
-      const updated = selectStmt.get(contact.id);
-      return Promise.resolve(updated);
-    } catch (error) {
-      // Check for UNIQUE constraint violation
-      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-        return Promise.reject(
-          new StorageError("Duplicate contact", error)
-        );
-      }
-      return Promise.reject(
-        new StorageError(`Failed to update contact: ${error.message}`, error)
       );
     }
   }

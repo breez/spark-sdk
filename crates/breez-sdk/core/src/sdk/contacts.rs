@@ -64,8 +64,8 @@ impl BreezSdk {
             updated_at: now,
         };
 
-        let updated = self.storage.update_contact(contact).await?;
-        Ok(updated)
+        self.storage.insert_contact(contact.clone()).await?;
+        Ok(contact)
     }
 
     /// Deletes a contact by its ID.

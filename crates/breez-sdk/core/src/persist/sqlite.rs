@@ -979,7 +979,12 @@ impl Storage for SqliteStorage {
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         match connection.execute(
-            "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               payment_identifier = excluded.payment_identifier,
+               updated_at = excluded.updated_at",
             params![
                 contact.id,
                 contact.name,
@@ -990,45 +995,11 @@ impl Storage for SqliteStorage {
         ) {
             Ok(_) => Ok(()),
             Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
-                // SQLITE_CONSTRAINT_UNIQUE
+                // SQLITE_CONSTRAINT_UNIQUE (name, payment_identifier)
                 Err(StorageError::Duplicate)
             }
             Err(e) => Err(e.into()),
         }
-    }
-
-    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
-        let connection = self.get_connection()?;
-        match connection.execute(
-            "UPDATE contacts SET name = ?, payment_identifier = ?, updated_at = ? WHERE id = ?",
-            params![
-                contact.name,
-                contact.payment_identifier,
-                contact.updated_at,
-                contact.id,
-            ],
-        ) {
-            Ok(0) => return Err(StorageError::NotFound),
-            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
-                return Err(StorageError::Duplicate);
-            }
-            Err(e) => return Err(e.into()),
-            Ok(_) => {}
-        }
-        // Fetch and return updated record with preserved created_at
-        let mut stmt = connection.prepare(
-            "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = ?",
-        )?;
-        let updated = stmt.query_row(params![contact.id], |row| {
-            Ok(Contact {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                payment_identifier: row.get(2)?,
-                created_at: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        })?;
-        Ok(updated)
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {

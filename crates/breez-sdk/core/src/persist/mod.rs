@@ -406,11 +406,10 @@ pub trait Storage: Send + Sync {
     /// Gets a single contact by its ID
     async fn get_contact(&self, id: String) -> Result<Contact, StorageError>;
 
-    /// Inserts a new contact into storage
+    /// Inserts or updates a contact in storage (upsert by id).
+    /// Preserves `created_at` on update. Errors with `StorageError::Duplicate`
+    /// on UNIQUE(name, `payment_identifier`) violation.
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError>;
-
-    /// Updates an existing contact in storage, returns the updated contact
-    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError>;
 
     /// Deletes a contact by its ID
     async fn delete_contact(&self, id: String) -> Result<(), StorageError>;

@@ -942,7 +942,11 @@ impl Storage for PostgresStorage {
         let result = client
             .execute(
                 "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5)",
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (id) DO UPDATE SET
+                   name = EXCLUDED.name,
+                   payment_identifier = EXCLUDED.payment_identifier,
+                   updated_at = EXCLUDED.updated_at",
                 &[
                     &contact.id,
                     &contact.name,
@@ -966,50 +970,6 @@ impl Storage for PostgresStorage {
                 }
             }
         }
-    }
-
-    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
-        let result = client
-            .execute(
-                "UPDATE contacts SET name = $1, payment_identifier = $2, updated_at = $3 WHERE id = $4",
-                &[
-                    &contact.name,
-                    &contact.payment_identifier,
-                    &i64::try_from(contact.updated_at)?,
-                    &contact.id,
-                ],
-            )
-            .await;
-
-        match result {
-            Ok(0) => return Err(StorageError::NotFound),
-            Err(e) => {
-                if let Some(code) = e.code()
-                    && code == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
-                {
-                    return Err(StorageError::Duplicate);
-                }
-                return Err(map_db_error(e));
-            }
-            Ok(_) => {}
-        }
-
-        // Fetch and return updated record with preserved created_at
-        let row = client
-            .query_one(
-                "SELECT id, name, payment_identifier, created_at, updated_at FROM contacts WHERE id = $1",
-                &[&contact.id],
-            )
-            .await?;
-
-        Ok(Contact {
-            id: row.get(0),
-            name: row.get(1),
-            payment_identifier: row.get(2),
-            created_at: u64::try_from(row.get::<_, i64>(3))?,
-            updated_at: u64::try_from(row.get::<_, i64>(4))?,
-        })
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {

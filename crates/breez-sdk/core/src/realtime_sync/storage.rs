@@ -342,10 +342,7 @@ impl SyncedStorage {
             created_at: sync_data.created_at,
             updated_at: sync_data.updated_at,
         };
-        // Upsert: try update, if fails try insert
-        if self.inner.update_contact(contact.clone()).await.is_err() {
-            let _ = self.inner.insert_contact(contact).await;
-        }
+        self.inner.insert_contact(contact).await?;
         Ok(())
     }
 
@@ -486,29 +483,6 @@ impl Storage for SyncedStorage {
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
         self.inner.insert_contact(contact).await
-    }
-
-    async fn update_contact(&self, contact: Contact) -> Result<Contact, StorageError> {
-        let sync_data = ContactSyncData {
-            id: contact.id.clone(),
-            name: contact.name.clone(),
-            payment_identifier: contact.payment_identifier.clone(),
-            created_at: contact.created_at,
-            updated_at: contact.updated_at,
-        };
-        self.sync_service
-            .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(RecordType::Contact.to_string(), &contact.id),
-                schema_version: RecordType::Contact.schema_version(),
-                updated_fields: serde_json::from_value(
-                    serde_json::to_value(&sync_data)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                )
-                .map_err(|e| StorageError::Serialization(e.to_string()))?,
-            })
-            .await
-            .map_err(|e| StorageError::Implementation(e.to_string()))?;
-        self.inner.update_contact(contact).await
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {

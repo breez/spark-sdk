@@ -347,31 +347,6 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn update_contact(
-        &self,
-        contact: breez_sdk_spark::Contact,
-    ) -> Result<breez_sdk_spark::Contact, StorageError> {
-        let original_contact = contact.clone();
-        let wasm_contact: Contact = contact.into();
-        let promise = self
-            .storage
-            .update_contact(wasm_contact)
-            .map_err(js_error_to_storage_error)?;
-        let future = JsFuture::from(promise);
-        let result = future
-            .await
-            .map_err(|e| map_js_constraint_error(e, "update"))?;
-
-        // If JS returns the updated contact, use it; otherwise return the input
-        if result.is_null() || result.is_undefined() {
-            Ok(original_contact)
-        } else {
-            let updated: Contact = serde_wasm_bindgen::from_value(result)
-                .map_err(|e| StorageError::Serialization(e.to_string()))?;
-            Ok(updated.into())
-        }
-    }
-
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
         let promise = self
             .storage
@@ -536,7 +511,6 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     listContacts: (request: ListContactsRequest) => Promise<Contact[]>;
     getContact: (id: string) => Promise<Contact>;
     insertContact: (contact: Contact) => Promise<void>;
-    updateContact: (contact: Contact) => Promise<Contact>;
     deleteContact: (id: string) => Promise<void>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
@@ -627,9 +601,6 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = insertContact, catch)]
     pub fn insert_contact(this: &Storage, contact: Contact) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = updateContact, catch)]
-    pub fn update_contact(this: &Storage, contact: Contact) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = deleteContact, catch)]
     pub fn delete_contact(this: &Storage, id: String) -> Result<Promise, JsValue>;
