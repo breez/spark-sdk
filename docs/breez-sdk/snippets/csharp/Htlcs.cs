@@ -102,7 +102,7 @@ namespace BreezSdkSnippets
                 {
                     Console.WriteLine($"Spark HTLC expiry time: {sparkDetails.htlcDetails.expiryTime}");
                 }
-                else if (payment.details is PaymentDetails.Lightning lightningDetails && lightningDetails.htlcDetails != null)
+                else if (payment.details is PaymentDetails.Lightning lightningDetails)
                 {
                     Console.WriteLine($"Lightning HTLC expiry time: {lightningDetails.htlcDetails.expiryTime}");
                 }

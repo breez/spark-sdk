@@ -105,9 +105,8 @@ async def list_claimable_htlc_payments(sdk: BreezSdk):
             if payment.details.htlc_details is not None:
                 logging.debug(f"Spark HTLC expiry time: {payment.details.htlc_details.expiry_time}")
         elif isinstance(payment.details, PaymentDetails.LIGHTNING):
-            if payment.details.htlc_details is not None:
-                expiry = payment.details.htlc_details.expiry_time
-                logging.debug(f"Lightning HTLC expiry time: {expiry}")
+            expiry = payment.details.htlc_details.expiry_time
+            logging.debug(f"Lightning HTLC expiry time: {expiry}")
     # ANCHOR_END: list-claimable-htlc-payments
 
 

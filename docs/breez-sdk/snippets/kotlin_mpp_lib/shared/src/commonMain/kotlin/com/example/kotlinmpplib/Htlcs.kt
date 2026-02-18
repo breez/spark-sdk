@@ -119,9 +119,7 @@ class Htlcs {
                     }
                     is PaymentDetails.Lightning -> {
                         val htlc = details.htlcDetails
-                        if (htlc != null) {
-                            // Log.v("Breez", "Lightning HTLC expiry time: ${htlc.expiryTime}")
-                        }
+                        // Log.v("Breez", "Lightning HTLC expiry time: ${htlc.expiryTime}")
                     }
                     else -> {}
                 }

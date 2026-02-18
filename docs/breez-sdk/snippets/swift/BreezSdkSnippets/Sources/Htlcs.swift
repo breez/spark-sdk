@@ -109,8 +109,8 @@ func listClaimableHtlcPayments(sdk: BreezSdk) async throws -> [Payment] {
     for payment in payments {
         if case let .spark(_, htlcDetails, _) = payment.details, let htlc = htlcDetails {
             print("Spark HTLC expiry time: \(htlc.expiryTime)")
-        } else if case let .lightning(_, _, _, _, _, htlcDetails, _, _, _) = payment.details, let htlc = htlcDetails {
-            print("Lightning HTLC expiry time: \(htlc.expiryTime)")
+        } else if case let .lightning(_, _, _, htlcDetails, _, _, _) = payment.details {
+            print("Lightning HTLC expiry time: \(htlcDetails.expiryTime)")
         }
     }
     // ANCHOR_END: list-claimable-htlc-payments

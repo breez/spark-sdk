@@ -105,9 +105,7 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
       }
     } else if (payment.details?.tag === PaymentDetails_Tags.Lightning) {
       const htlc = payment.details.inner.htlcDetails
-      if (htlc != null) {
-        console.log(`Lightning HTLC expiry time: ${htlc.expiryTime}`)
-      }
+      console.log(`Lightning HTLC expiry time: ${htlc.expiryTime}`)
     }
   }
   // ANCHOR_END: list-claimable-htlc-payments

@@ -80,7 +80,7 @@ const exampleListClaimableHtlcPayments = async (sdk: BreezSdk): Promise<Payment[
   for (const payment of payments) {
     if (payment.details?.type === 'spark' && payment.details.htlcDetails != null) {
       console.log(`Spark HTLC expiry time: ${payment.details.htlcDetails.expiryTime}`)
-    } else if (payment.details?.type === 'lightning' && payment.details.htlcDetails != null) {
+    } else if (payment.details?.type === 'lightning') {
       console.log(`Lightning HTLC expiry time: ${payment.details.htlcDetails.expiryTime}`)
     }
   }
