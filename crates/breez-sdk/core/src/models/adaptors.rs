@@ -81,8 +81,13 @@ impl PaymentDetails {
                 let htlc_details = transfer
                     .htlc_preimage_request
                     .as_ref()
-                    .map(|pr| pr.clone().try_into())
-                    .transpose()?;
+                    .ok_or_else(|| {
+                        SdkError::Generic(
+                            "Missing HTLC details for Lightning receive payment".to_string(),
+                        )
+                    })?
+                    .clone()
+                    .try_into()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
                     preimage: request.lightning_receive_payment_preimage.clone(),
@@ -103,8 +108,13 @@ impl PaymentDetails {
                 let htlc_details = transfer
                     .htlc_preimage_request
                     .as_ref()
-                    .map(|pr| pr.clone().try_into())
-                    .transpose()?;
+                    .ok_or_else(|| {
+                        SdkError::Generic(
+                            "Missing HTLC details for Lightning send payment".to_string(),
+                        )
+                    })?
+                    .clone()
+                    .try_into()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
                     preimage: request.lightning_send_payment_preimage.clone(),
@@ -244,7 +254,7 @@ impl Payment {
         payment: LightningSendPayment,
         amount_sat: u128,
         transfer_id: String,
-        htlc_details: Option<SparkHtlcDetails>,
+        htlc_details: SparkHtlcDetails,
     ) -> Result<Self, SdkError> {
         let mut status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,

@@ -581,7 +581,7 @@ pub enum _PaymentDetails {
         invoice: String,
         payment_hash: String,
         destination_pubkey: String,
-        htlc_details: Option<SparkHtlcDetails>,
+        htlc_details: SparkHtlcDetails,
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,

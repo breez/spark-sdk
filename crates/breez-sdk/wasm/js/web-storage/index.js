@@ -331,6 +331,72 @@ class MigrationManager {
             transaction.objectStore("settings").delete("sync_initial_complete");
           }
         }
+      },
+      {
+        name: "Backfill htlc_details for existing Lightning payments",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payments")) {
+            const paymentStore = transaction.objectStore("payments");
+            const getAllRequest = paymentStore.getAll();
+
+            getAllRequest.onsuccess = () => {
+              const payments = getAllRequest.result;
+              payments.forEach((payment) => {
+                let details;
+                if (typeof payment.details === "string") {
+                  try {
+                    details = JSON.parse(payment.details);
+                  } catch (e) {
+                    return;
+                  }
+                } else {
+                  details = payment.details;
+                }
+
+                if (details && details.type === "lightning" && !details.htlcDetails) {
+                  let htlcStatus;
+                  if (payment.status === "completed") {
+                    htlcStatus = "preimageShared";
+                  } else if (payment.status === "pending") {
+                    htlcStatus = "waitingForPreimage";
+                  } else {
+                    htlcStatus = "returned";
+                  }
+                  details.htlcDetails = {
+                    paymentHash: details.paymentHash,
+                    preimage: details.preimage || null,
+                    expiryTime: 0,
+                    status: htlcStatus,
+                  };
+                  payment.details = JSON.stringify(details);
+                  paymentStore.put(payment);
+                }
+              });
+            };
+          }
+
+          // Reset sync offset to trigger resync
+          if (db.objectStoreNames.contains("settings")) {
+            const settingsStore = transaction.objectStore("settings");
+            const getRequest = settingsStore.get("sync_offset");
+
+            getRequest.onsuccess = () => {
+              const syncCache = getRequest.result;
+              if (syncCache && syncCache.value) {
+                try {
+                  const syncInfo = JSON.parse(syncCache.value);
+                  syncInfo.offset = 0;
+                  settingsStore.put({
+                    key: "sync_offset",
+                    value: JSON.stringify(syncInfo),
+                  });
+                } catch (e) {
+                  // If parsing fails, just continue
+                }
+              }
+            };
+          }
+        },
       }
     ];
   }
@@ -355,7 +421,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 10; // Current schema version
+    this.dbVersion = 11; // Current schema version
   }
 
   /**
@@ -1948,6 +2014,12 @@ class IndexedDBStorage {
       }
     }
 
+    if (details && details.type === "lightning" && !details.htlcDetails) {
+      throw new StorageError(
+        `htlc_details is required for Lightning payment ${payment.id}`
+      );
+    }
+
     if (metadata && details) {
       if (details.type == "lightning") {
         if (metadata.lnurlDescription && !details.description) {
@@ -2054,4 +2126,4 @@ export async function createDefaultStorage(
   return storage;
 }
 
-export { IndexedDBStorage, StorageError };
+export { IndexedDBStorage, MigrationManager, StorageError };

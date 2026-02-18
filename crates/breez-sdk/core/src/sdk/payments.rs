@@ -1057,8 +1057,12 @@ impl BreezSdk {
                 let htlc_details = payment_response
                     .transfer
                     .htlc_preimage_request
-                    .map(TryInto::try_into)
-                    .transpose()?;
+                    .ok_or_else(|| {
+                        SdkError::Generic(
+                            "Missing HTLC details for Lightning send payment".to_string(),
+                        )
+                    })?
+                    .try_into()?;
                 let payment = Payment::from_lightning(
                     lightning_payment,
                     amount,
@@ -1205,16 +1209,21 @@ impl BreezSdk {
         timeout_res?
     }
 
-    // Pools the lightning send payment untill it is in completed state.
+    // Pools the lightning send payment until it is in completed state.
     fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
         const MAX_POLL_ATTEMPTS: u32 = 20;
         let payment_id = payment.id.clone();
         info!("Polling lightning send payment {}", payment_id);
 
-        let htlc_details = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => htlc_details.clone(),
+        let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
+            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
             _ => None,
-        });
+        }) else {
+            error!(
+                "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
+            );
+            return;
+        };
         let spark_wallet = self.spark_wallet.clone();
         let storage = self.storage.clone();
         let sync_trigger = self.sync_trigger.clone();

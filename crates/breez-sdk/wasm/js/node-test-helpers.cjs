@@ -4,6 +4,7 @@
  */
 
 const path = require("path");
+const { MigrationManager } = require("./node-storage/migrations.cjs");
 
 // Require better-sqlite3 from the node-storage package where it's installed
 let Database;
@@ -42,143 +43,9 @@ function createOldV17Database(dbPath) {
   const db = new Database(dbPath);
 
   try {
-    // Create the exact schema that should exist at v18 (before tx_type migration)
-    // Need all payment detail tables because queries JOIN against them
-    const transaction = db.transaction(() => {
-      // Payments table (with TEXT amount/fees from migration 7)
-      db.exec(`
-        CREATE TABLE payments (
-          id TEXT PRIMARY KEY,
-          payment_type TEXT NOT NULL,
-          status TEXT NOT NULL,
-          amount TEXT NOT NULL,
-          fees TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
-          method TEXT,
-          withdraw_tx_id TEXT,
-          deposit_tx_id TEXT,
-          spark INTEGER
-        )
-      `);
-      db.exec(
-        `CREATE INDEX idx_payments_timestamp ON payments(timestamp DESC)`
-      );
-
-      // Payment details token table WITHOUT tx_type column (pre-v18)
-      db.exec(`
-        CREATE TABLE payment_details_token (
-          payment_id TEXT PRIMARY KEY,
-          metadata TEXT,
-          tx_hash TEXT,
-          invoice_details TEXT,
-          FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
-        )
-      `);
-
-      // Settings table
-      db.exec(`
-        CREATE TABLE settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        )
-      `);
-
-      // Payment metadata table (with conversion_info from migration 16)
-      db.exec(`
-        CREATE TABLE payment_metadata (
-          payment_id TEXT PRIMARY KEY,
-          lnurl_pay_info TEXT,
-          lnurl_description TEXT,
-          lnurl_withdraw_info TEXT,
-          parent_payment_id TEXT,
-          conversion_info TEXT,
-          FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
-        )
-      `);
-
-      // Payment details lightning table (needed for JOINs in queries)
-      db.exec(`
-        CREATE TABLE payment_details_lightning (
-          payment_id TEXT PRIMARY KEY,
-          invoice TEXT NOT NULL,
-          payment_hash TEXT NOT NULL,
-          destination_pubkey TEXT NOT NULL,
-          description TEXT,
-          preimage TEXT,
-          FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
-        )
-      `);
-      db.exec(
-        `CREATE INDEX idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)`
-      );
-
-      // Payment details spark table (needed for JOINs in queries)
-      db.exec(`
-        CREATE TABLE payment_details_spark (
-          payment_id TEXT NOT NULL PRIMARY KEY,
-          invoice_details TEXT,
-          htlc_details TEXT,
-          FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
-        )
-      `);
-
-      // LNURL receive metadata table (needed for JOINs in queries)
-      db.exec(`
-        CREATE TABLE lnurl_receive_metadata (
-          payment_hash TEXT NOT NULL PRIMARY KEY,
-          nostr_zap_request TEXT,
-          nostr_zap_receipt TEXT,
-          sender_comment TEXT
-        )
-      `);
-
-      // Sync tables (created by migration 9, needed by migrations 18-19)
-      db.exec(`
-        CREATE TABLE sync_revision (
-          revision INTEGER NOT NULL DEFAULT 0
-        )
-      `);
-      db.exec(`INSERT INTO sync_revision (revision) VALUES (0)`);
-      db.exec(`
-        CREATE TABLE sync_outgoing (
-          record_type TEXT NOT NULL,
-          data_id TEXT NOT NULL,
-          schema_version TEXT NOT NULL,
-          commit_time INTEGER NOT NULL,
-          updated_fields_json TEXT NOT NULL,
-          revision INTEGER NOT NULL
-        )
-      `);
-      db.exec(`CREATE INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id)`);
-      db.exec(`
-        CREATE TABLE sync_state (
-          record_type TEXT NOT NULL,
-          data_id TEXT NOT NULL,
-          schema_version TEXT NOT NULL,
-          commit_time INTEGER NOT NULL,
-          data TEXT NOT NULL,
-          revision INTEGER NOT NULL,
-          PRIMARY KEY (record_type, data_id)
-        )
-      `);
-      db.exec(`
-        CREATE TABLE sync_incoming (
-          record_type TEXT NOT NULL,
-          data_id TEXT NOT NULL,
-          schema_version TEXT NOT NULL,
-          commit_time INTEGER NOT NULL,
-          data TEXT NOT NULL,
-          revision INTEGER NOT NULL,
-          PRIMARY KEY (record_type, data_id, revision)
-        )
-      `);
-      db.exec(`CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)`);
-
-      // Set database version to 17 (before tx_type migration at index 17)
-      db.pragma("user_version = 17");
-    });
-
-    transaction();
+    // Run real migrations 0-16 to build the schema at version 17
+    const mgr = new MigrationManager(db, Error);
+    mgr.migrate(17);
 
     // Insert test token payment WITHOUT tx_type (pre-v18 format)
     const insertPayment = db.prepare(`
@@ -227,4 +94,93 @@ function createOldV17Database(dbPath) {
   }
 }
 
-module.exports = { createOldV17Database };
+/**
+ * Creates an old v20 format SQLite database for migration testing.
+ * This simulates the database state before the v20→v21 migration.
+ * The v21 migration (index 20) backfills htlc_details for Lightning payments.
+ * The v20 migration (index 19) added the htlc_details column but left it NULL.
+ */
+function createOldV20Database(dbPath) {
+  const db = new Database(dbPath);
+
+  try {
+    // Run real migrations 0-19 to build the schema at version 20
+    const mgr = new MigrationManager(db, Error);
+    mgr.migrate(20);
+
+    // Insert test Lightning payments with different statuses
+    const insertPayment = db.prepare(`
+      INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+    `);
+
+    const insertLightning = db.prepare(`
+      INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, preimage)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    // Completed Lightning payment
+    insertPayment.run(
+      "ln-completed",
+      "send",
+      "completed",
+      "1000",
+      "10",
+      1700000001,
+      JSON.stringify("lightning")
+    );
+    insertLightning.run(
+      "ln-completed",
+      "lnbc_completed",
+      "hash_completed_0123456789abcdef",
+      "03pubkey1",
+      "preimage_completed"
+    );
+
+    // Pending Lightning payment
+    insertPayment.run(
+      "ln-pending",
+      "receive",
+      "pending",
+      "2000",
+      "0",
+      1700000002,
+      JSON.stringify("lightning")
+    );
+    insertLightning.run(
+      "ln-pending",
+      "lnbc_pending",
+      "hash_pending_0123456789abcdef0",
+      "03pubkey2",
+      null
+    );
+
+    // Failed Lightning payment
+    insertPayment.run(
+      "ln-failed",
+      "send",
+      "failed",
+      "3000",
+      "5",
+      1700000003,
+      JSON.stringify("lightning")
+    );
+    insertLightning.run(
+      "ln-failed",
+      "lnbc_failed",
+      "hash_failed_0123456789abcdef01",
+      "03pubkey3",
+      null
+    );
+
+    db.close();
+    return Promise.resolve();
+  } catch (error) {
+    db.close();
+    return Promise.reject(
+      new Error(`Failed to create old v20 database: ${error.message}`)
+    );
+  }
+}
+
+module.exports = { createOldV17Database, createOldV20Database };

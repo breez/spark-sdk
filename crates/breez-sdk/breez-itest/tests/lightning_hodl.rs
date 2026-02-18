@@ -96,7 +96,7 @@ async fn test_01_lightning_hodl_success(
     assert!(matches!(
         &bob_pending_payment.details,
         Some(PaymentDetails::Lightning {
-            htlc_details: Some(details), ..
+            htlc_details: details, ..
         })
         if details.payment_hash == payment_hash
             && details.preimage.is_none()
@@ -131,7 +131,7 @@ async fn test_01_lightning_hodl_success(
     assert!(matches!(
         &bob_completed.details,
         Some(PaymentDetails::Lightning {
-            htlc_details: Some(details), ..
+            htlc_details: details, ..
         })
         if details.payment_hash == payment_hash
             && details.preimage == Some(preimage.clone())

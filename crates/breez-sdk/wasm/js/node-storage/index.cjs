@@ -712,7 +712,7 @@ class SqliteStorage {
         preimage: row.lightning_preimage,
         htlcDetails: row.lightning_htlc_details
           ? JSON.parse(row.lightning_htlc_details)
-          : null,
+          : (() => { throw new StorageError(`htlc_details is required for Lightning payment ${row.id}`); })(),
       };
 
       if (row.lnurl_pay_info) {

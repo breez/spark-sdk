@@ -27,6 +27,9 @@ extern "C" {
 extern "C" {
     #[wasm_bindgen(js_name = "createOldV17Database", catch)]
     fn create_old_v17_database(db_path: &str) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(js_name = "createOldV20Database", catch)]
+    fn create_old_v20_database(db_path: &str) -> Result<Promise, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -370,4 +373,157 @@ async fn test_migration_from_v17_to_v18() {
         "Should find only the Transfer payment"
     );
     assert_eq!(transfer_payments[0].id, "token-migration-test-payment");
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_from_v20_to_v21() {
+    let data_dir = "/tmp/breez-sdk-node-migration-v20-to-v21-test";
+    let db_path = format!("{}/storage.sql", data_dir);
+
+    // Step 1: Remove any existing test directory
+    let future = JsFuture::from(remove_dir_all(data_dir).expect("Failed to remove test data_dir"));
+    let _ = future.await.expect("Failed to remove test data_dir");
+
+    // Step 2: Create directory
+    let fs = js_sys::eval("require('fs').promises").expect("Failed to get fs module");
+    let mkdir = js_sys::Reflect::get(&fs, &"mkdir".into())
+        .expect("Failed to get mkdir")
+        .dyn_into::<js_sys::Function>()
+        .expect("mkdir is not a function");
+    let mkdir_options = js_sys::Object::new();
+    js_sys::Reflect::set(&mkdir_options, &"recursive".into(), &true.into())
+        .expect("Failed to set recursive");
+    let mkdir_promise = mkdir
+        .call2(&fs, &data_dir.into(), &mkdir_options)
+        .expect("Failed to call mkdir");
+    JsFuture::from(
+        mkdir_promise
+            .dyn_into::<Promise>()
+            .expect("mkdir didn't return promise"),
+    )
+    .await
+    .expect("Failed to create directory");
+
+    // Step 3: Create old v20 database with Lightning payments WITHOUT htlc_details backfill
+    let create_future = JsFuture::from(
+        create_old_v20_database(&db_path).expect("Failed to call create_old_v20_database"),
+    );
+    create_future
+        .await
+        .expect("Failed to create old v20 format database");
+
+    // Step 4: Open with new code (triggers migration to v21 - the htlc_details backfill)
+    let storage = create_default_storage(data_dir, None)
+        .await
+        .expect("Failed to create node storage instance");
+    let storage = WasmStorage { storage };
+
+    // Step 5: Verify Completed → PreimageShared
+    let completed =
+        breez_sdk_spark::Storage::get_payment_by_id(&storage, "ln-completed".to_string())
+            .await
+            .expect("Failed to get completed payment");
+
+    match &completed.details {
+        Some(breez_sdk_spark::PaymentDetails::Lightning {
+            htlc_details,
+            payment_hash,
+            preimage,
+            ..
+        }) => {
+            assert_eq!(
+                htlc_details.status,
+                breez_sdk_spark::SparkHtlcStatus::PreimageShared,
+                "Completed payment should have PreimageShared htlc status"
+            );
+            assert_eq!(htlc_details.expiry_time, 0);
+            assert_eq!(&htlc_details.payment_hash, payment_hash);
+            assert_eq!(htlc_details.preimage.as_deref(), Some("preimage_completed"));
+            assert_eq!(preimage.as_deref(), Some("preimage_completed"));
+        }
+        _ => panic!("Expected Lightning payment details for ln-completed"),
+    }
+
+    // Step 6: Verify Pending → WaitingForPreimage
+    let pending = breez_sdk_spark::Storage::get_payment_by_id(&storage, "ln-pending".to_string())
+        .await
+        .expect("Failed to get pending payment");
+
+    match &pending.details {
+        Some(breez_sdk_spark::PaymentDetails::Lightning {
+            htlc_details,
+            preimage,
+            ..
+        }) => {
+            assert_eq!(
+                htlc_details.status,
+                breez_sdk_spark::SparkHtlcStatus::WaitingForPreimage,
+                "Pending payment should have WaitingForPreimage htlc status"
+            );
+            assert_eq!(htlc_details.expiry_time, 0);
+            assert!(htlc_details.preimage.is_none());
+            assert!(preimage.is_none());
+        }
+        _ => panic!("Expected Lightning payment details for ln-pending"),
+    }
+
+    // Step 7: Verify Failed → Returned
+    let failed = breez_sdk_spark::Storage::get_payment_by_id(&storage, "ln-failed".to_string())
+        .await
+        .expect("Failed to get failed payment");
+
+    match &failed.details {
+        Some(breez_sdk_spark::PaymentDetails::Lightning { htlc_details, .. }) => {
+            assert_eq!(
+                htlc_details.status,
+                breez_sdk_spark::SparkHtlcStatus::Returned,
+                "Failed payment should have Returned htlc status"
+            );
+            assert_eq!(htlc_details.expiry_time, 0);
+        }
+        _ => panic!("Expected Lightning payment details for ln-failed"),
+    }
+
+    // Step 8: Verify filtering by htlc_status works on migrated data
+    let waiting_payments = breez_sdk_spark::Storage::list_payments(
+        &storage,
+        breez_sdk_spark::ListPaymentsRequest {
+            payment_details_filter: Some(vec![breez_sdk_spark::PaymentDetailsFilter::Lightning {
+                htlc_status: Some(vec![breez_sdk_spark::SparkHtlcStatus::WaitingForPreimage]),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("Failed to list waiting payments");
+    assert_eq!(waiting_payments.len(), 1);
+    assert_eq!(waiting_payments[0].id, "ln-pending");
+
+    let preimage_shared = breez_sdk_spark::Storage::list_payments(
+        &storage,
+        breez_sdk_spark::ListPaymentsRequest {
+            payment_details_filter: Some(vec![breez_sdk_spark::PaymentDetailsFilter::Lightning {
+                htlc_status: Some(vec![breez_sdk_spark::SparkHtlcStatus::PreimageShared]),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("Failed to list preimage shared payments");
+    assert_eq!(preimage_shared.len(), 1);
+    assert_eq!(preimage_shared[0].id, "ln-completed");
+
+    let returned = breez_sdk_spark::Storage::list_payments(
+        &storage,
+        breez_sdk_spark::ListPaymentsRequest {
+            payment_details_filter: Some(vec![breez_sdk_spark::PaymentDetailsFilter::Lightning {
+                htlc_status: Some(vec![breez_sdk_spark::SparkHtlcStatus::Returned]),
+            }]),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("Failed to list returned payments");
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].id, "ln-failed");
 }

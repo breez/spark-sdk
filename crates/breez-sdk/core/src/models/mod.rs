@@ -372,8 +372,8 @@ pub enum PaymentDetails {
         /// The invoice destination/payee pubkey
         destination_pubkey: String,
 
-        /// The HTLC transfer details. May be absent for legacy payments.
-        htlc_details: Option<SparkHtlcDetails>,
+        /// The HTLC transfer details
+        htlc_details: SparkHtlcDetails,
 
         /// Lnurl payment information if this was an lnurl payment.
         lnurl_pay_info: Option<LnurlPayInfo>,
