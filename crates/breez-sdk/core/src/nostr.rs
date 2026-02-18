@@ -31,7 +31,9 @@ impl NostrClient {
     ) -> Result<String, NostrError> {
         // Extract invoice and preimage from payment details
         let Some(PaymentDetails::Lightning {
-            invoice, preimage, ..
+            invoice,
+            htlc_details,
+            ..
         }) = &payment.details
         else {
             return Err(NostrError::ZapReceiptCreationError(
@@ -39,9 +41,12 @@ impl NostrClient {
             ));
         };
 
-        let builder =
-            lnurl_models::nostr::create_zap_receipt(zap_request, invoice, preimage.clone())
-                .map_err(NostrError::ZapReceiptCreationError)?;
+        let builder = lnurl_models::nostr::create_zap_receipt(
+            zap_request,
+            invoice,
+            htlc_details.preimage.clone(),
+        )
+        .map_err(NostrError::ZapReceiptCreationError)?;
 
         self.signer
             .sign_event(builder)

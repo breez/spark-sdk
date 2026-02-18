@@ -2079,7 +2079,7 @@ class IndexedDBStorage {
     if (
       !payment.details ||
       payment.details.type !== "lightning" ||
-      !payment.details.paymentHash
+      !payment.details.htlcDetails?.paymentHash
     ) {
       return Promise.resolve(payment);
     }
@@ -2090,7 +2090,7 @@ class IndexedDBStorage {
 
     return new Promise((resolve, reject) => {
       const lnurlReceiveRequest = lnurlReceiveMetadataStore.get(
-        payment.details.paymentHash
+        payment.details.htlcDetails.paymentHash
       );
 
       lnurlReceiveRequest.onsuccess = () => {

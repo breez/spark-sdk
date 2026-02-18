@@ -186,7 +186,7 @@ impl BreezSdk {
             for payment in payments {
                 let Some(PaymentDetails::Lightning {
                     ref lnurl_receive_metadata,
-                    ref payment_hash,
+                    ref htlc_details,
                     ..
                 }) = payment.details
                 else {
@@ -224,7 +224,7 @@ impl BreezSdk {
                 // Publish the zap receipt via the server
                 let zap_receipt = match lnurl_server_client
                     .publish_zap_receipt(&PublishZapReceiptRequest {
-                        payment_hash: payment_hash.clone(),
+                        payment_hash: htlc_details.payment_hash.clone(),
                         zap_receipt: zap_receipt.clone(),
                     })
                     .await
@@ -245,7 +245,7 @@ impl BreezSdk {
                         sender_comment: lnurl_receive_metadata.sender_comment.clone(),
                         nostr_zap_request: Some(zap_request.clone()),
                         nostr_zap_receipt: Some(zap_receipt),
-                        payment_hash: payment_hash.clone(),
+                        payment_hash: htlc_details.payment_hash.clone(),
                     }])
                     .await
                 {

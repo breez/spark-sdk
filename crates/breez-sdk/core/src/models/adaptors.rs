@@ -90,9 +90,7 @@ impl PaymentDetails {
                     .try_into()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
-                    preimage: request.lightning_receive_payment_preimage.clone(),
                     invoice: request.invoice.encoded_invoice.clone(),
-                    payment_hash: request.invoice.payment_hash.clone(),
                     destination_pubkey: invoice_details.payee_pubkey,
                     htlc_details,
                     lnurl_pay_info: None,
@@ -117,9 +115,7 @@ impl PaymentDetails {
                     .try_into()?;
                 PaymentDetails::Lightning {
                     description: invoice_details.description,
-                    preimage: request.lightning_send_payment_preimage.clone(),
                     invoice: request.encoded_invoice.clone(),
-                    payment_hash: invoice_details.payment_hash,
                     destination_pubkey: invoice_details.payee_pubkey,
                     htlc_details,
                     lnurl_pay_info: None,
@@ -274,9 +270,7 @@ impl Payment {
         )?;
         let details = PaymentDetails::Lightning {
             description: invoice_details.description,
-            preimage: payment.payment_preimage,
             invoice: payment.encoded_invoice,
-            payment_hash: invoice_details.payment_hash,
             destination_pubkey: invoice_details.payee_pubkey,
             htlc_details,
             lnurl_pay_info: None,

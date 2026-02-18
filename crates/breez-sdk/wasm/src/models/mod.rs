@@ -478,9 +478,7 @@ pub enum PaymentDetails {
     },
     Lightning {
         description: Option<String>,
-        preimage: Option<String>,
         invoice: String,
-        payment_hash: String,
         destination_pubkey: String,
         htlc_details: SparkHtlcDetails,
         lnurl_pay_info: Option<LnurlPayInfo>,

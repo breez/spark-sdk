@@ -359,15 +359,10 @@ pub enum PaymentDetails {
     Lightning {
         /// Represents the invoice description
         description: Option<String>,
-        /// The preimage of the paid invoice (proof of payment).
-        preimage: Option<String>,
         /// Represents the Bolt11/Bolt12 invoice associated with a payment
         /// In the case of a Send payment, this is the invoice paid by the user
         /// In the case of a Receive payment, this is the invoice paid to the user
         invoice: String,
-
-        /// The payment hash of the invoice
-        payment_hash: String,
 
         /// The invoice destination/payee pubkey
         destination_pubkey: String,

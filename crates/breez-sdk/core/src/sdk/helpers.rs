@@ -143,14 +143,14 @@ pub(crate) fn process_success_action(
         }
     };
 
-    let Some(PaymentDetails::Lightning { preimage, .. }) = &payment.details else {
+    let Some(PaymentDetails::Lightning { htlc_details, .. }) = &payment.details else {
         return Err(LnurlError::general(format!(
             "Invalid payment type: expected type `PaymentDetails::Lightning`, got payment details {:?}.",
             payment.details
         )));
     };
 
-    let Some(preimage) = preimage else {
+    let Some(preimage) = &htlc_details.preimage else {
         return Ok(None);
     };
 

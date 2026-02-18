@@ -1083,15 +1083,15 @@ impl Storage for PostgresStorage {
             }
             Some(PaymentDetails::Lightning {
                 invoice,
-                payment_hash,
                 destination_pubkey,
                 description,
-                preimage,
                 htlc_details,
                 ..
             }) => {
+                let payment_hash = &htlc_details.payment_hash;
+                let preimage = &htlc_details.preimage;
                 let htlc_json: Option<serde_json::Value> = Some(
-                    serde_json::to_value(htlc_details)
+                    serde_json::to_value(&htlc_details)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 );
                 tx.execute(
@@ -1104,7 +1104,7 @@ impl Storage for PostgresStorage {
                             description = EXCLUDED.description,
                             preimage = COALESCE(EXCLUDED.preimage, payment_details_lightning.preimage),
                             htlc_details = COALESCE(EXCLUDED.htlc_details, payment_details_lightning.htlc_details)",
-                    &[&payment.id, &invoice, &payment_hash, &destination_pubkey, &description, &preimage, &htlc_json],
+                    &[&payment.id, &invoice, payment_hash, &destination_pubkey, &description, preimage, &htlc_json],
                 )
                 .await?;
             }
@@ -1792,10 +1792,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(11);
             let destination_pubkey: String = row.get(12);
             let description: Option<String> = row.get(13);
-            let preimage: Option<String> = row.get(14);
             let htlc_details_json: Option<serde_json::Value> = row.get(15);
             let htlc_details: SparkHtlcDetails = htlc_details_json
                 .ok_or_else(|| {
@@ -1829,10 +1827,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 };
             Some(PaymentDetails::Lightning {
                 invoice,
-                payment_hash,
                 destination_pubkey,
                 description,
-                preimage,
                 htlc_details,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
@@ -2292,17 +2288,14 @@ mod tests {
             .await
             .unwrap();
         match &completed.details {
-            Some(PaymentDetails::Lightning {
-                htlc_details,
-                payment_hash,
-                preimage,
-                ..
-            }) => {
+            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::PreimageShared);
                 assert_eq!(htlc_details.expiry_time, 0);
-                assert_eq!(&htlc_details.payment_hash, payment_hash);
+                assert_eq!(
+                    htlc_details.payment_hash,
+                    "hash_completed_0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+                );
                 assert_eq!(htlc_details.preimage.as_deref(), Some("preimage_completed"));
-                assert_eq!(preimage.as_deref(), Some("preimage_completed"));
             }
             _ => panic!("Expected Lightning payment details for ln-completed"),
         }
@@ -2313,15 +2306,14 @@ mod tests {
             .await
             .unwrap();
         match &pending.details {
-            Some(PaymentDetails::Lightning {
-                htlc_details,
-                preimage,
-                ..
-            }) => {
+            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::WaitingForPreimage);
                 assert_eq!(htlc_details.expiry_time, 0);
+                assert_eq!(
+                    htlc_details.payment_hash,
+                    "hash_pending_0123456789abcdef0123456789abcdef0123456789abcdef012345678"
+                );
                 assert!(htlc_details.preimage.is_none());
-                assert!(preimage.is_none());
             }
             _ => panic!("Expected Lightning payment details for ln-pending"),
         }

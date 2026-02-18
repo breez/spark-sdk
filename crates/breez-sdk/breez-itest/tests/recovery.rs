@@ -125,14 +125,12 @@ fn build_expected_payments(payments: &[Payment], balance_sats: u64) -> ExpectedR
                     payment_hash: htlc.payment_hash.clone(),
                     preimage: htlc.preimage.clone(),
                 }),
-                Some(PaymentDetails::Lightning {
-                    payment_hash,
-                    preimage,
-                    ..
-                }) => Some(ExpectedPaymentDetails::Lightning {
-                    payment_hash: payment_hash.clone(),
-                    preimage: preimage.clone(),
-                }),
+                Some(PaymentDetails::Lightning { htlc_details, .. }) => {
+                    Some(ExpectedPaymentDetails::Lightning {
+                        payment_hash: htlc_details.payment_hash.clone(),
+                        preimage: htlc_details.preimage.clone(),
+                    })
+                }
                 Some(PaymentDetails::Deposit { tx_id }) => Some(ExpectedPaymentDetails::OnChain {
                     tx_id: tx_id.clone(),
                 }),
@@ -866,19 +864,14 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
                 payment_hash,
                 preimage,
             }) => {
-                if let Some(PaymentDetails::Lightning {
-                    payment_hash: h,
-                    preimage: p,
-                    ..
-                }) = &payment.details
-                {
+                if let Some(PaymentDetails::Lightning { htlc_details, .. }) = &payment.details {
                     assert_eq!(
-                        h, payment_hash,
+                        &htlc_details.payment_hash, payment_hash,
                         "Lightning payment_hash mismatch for {}",
                         expected.id
                     );
                     assert_eq!(
-                        p, preimage,
+                        &htlc_details.preimage, preimage,
                         "Lightning preimage mismatch for {}",
                         expected.id
                     );

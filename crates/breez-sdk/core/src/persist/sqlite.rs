@@ -614,10 +614,8 @@ impl Storage for SqliteStorage {
             }
             Some(PaymentDetails::Lightning {
                 invoice,
-                payment_hash,
                 destination_pubkey,
                 description,
-                preimage,
                 htlc_details,
                 ..
             }) => {
@@ -634,10 +632,10 @@ impl Storage for SqliteStorage {
                     params![
                         payment.id,
                         invoice,
-                        payment_hash,
+                        htlc_details.payment_hash,
                         destination_pubkey,
                         description,
-                        preimage,
+                        htlc_details.preimage,
                         Some(serde_json::to_string(&htlc_details)?),
                     ],
                 )?;
@@ -1291,10 +1289,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(11)?;
             let destination_pubkey: String = row.get(12)?;
             let description: Option<String> = row.get(13)?;
-            let preimage: Option<String> = row.get(14)?;
             let htlc_details_str: String = row.get::<_, Option<String>>(15)?.ok_or_else(|| {
                 rusqlite::Error::FromSqlConversionFailure(
                     15,
@@ -1320,10 +1316,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 };
             Some(PaymentDetails::Lightning {
                 invoice,
-                payment_hash,
                 destination_pubkey,
                 description,
-                preimage,
                 htlc_details,
                 lnurl_pay_info,
                 lnurl_withdraw_info,
@@ -2011,17 +2005,14 @@ mod tests {
             .await
             .unwrap();
         match &completed.details {
-            Some(PaymentDetails::Lightning {
-                htlc_details,
-                payment_hash,
-                preimage,
-                ..
-            }) => {
+            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::PreimageShared);
                 assert_eq!(htlc_details.expiry_time, 0);
-                assert_eq!(&htlc_details.payment_hash, payment_hash);
+                assert_eq!(
+                    htlc_details.payment_hash,
+                    "hash_completed_0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+                );
                 assert_eq!(htlc_details.preimage.as_deref(), Some("preimage_completed"));
-                assert_eq!(preimage.as_deref(), Some("preimage_completed"));
             }
             _ => panic!("Expected Lightning payment details for ln-completed"),
         }
@@ -2032,15 +2023,14 @@ mod tests {
             .await
             .unwrap();
         match &pending.details {
-            Some(PaymentDetails::Lightning {
-                htlc_details,
-                preimage,
-                ..
-            }) => {
+            Some(PaymentDetails::Lightning { htlc_details, .. }) => {
                 assert_eq!(htlc_details.status, SparkHtlcStatus::WaitingForPreimage);
                 assert_eq!(htlc_details.expiry_time, 0);
+                assert_eq!(
+                    htlc_details.payment_hash,
+                    "hash_pending_0123456789abcdef0123456789abcdef0123456789abcdef012345678"
+                );
                 assert!(htlc_details.preimage.is_none());
-                assert!(preimage.is_none());
             }
             _ => panic!("Expected Lightning payment details for ln-pending"),
         }

@@ -392,10 +392,10 @@ class SqliteStorage {
           lightningInsert.run({
             id: payment.id,
             invoice: payment.details.invoice,
-            paymentHash: payment.details.paymentHash,
+            paymentHash: payment.details.htlcDetails.paymentHash,
             destinationPubkey: payment.details.destinationPubkey,
             description: payment.details.description,
-            preimage: payment.details.preimage,
+            preimage: payment.details.htlcDetails?.preimage,
             htlcDetails: payment.details.htlcDetails
               ? JSON.stringify(payment.details.htlcDetails)
               : null,
@@ -706,10 +706,8 @@ class SqliteStorage {
       details = {
         type: "lightning",
         invoice: row.lightning_invoice,
-        paymentHash: row.lightning_payment_hash,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        preimage: row.lightning_preimage,
         htlcDetails: row.lightning_htlc_details
           ? JSON.parse(row.lightning_htlc_details)
           : (() => { throw new StorageError(`htlc_details is required for Lightning payment ${row.id}`); })(),

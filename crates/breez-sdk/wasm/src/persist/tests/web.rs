@@ -437,21 +437,15 @@ async fn test_migration_from_v10_to_v11() {
             .expect("Failed to get completed payment");
 
     match &completed.details {
-        Some(breez_sdk_spark::PaymentDetails::Lightning {
-            htlc_details,
-            payment_hash,
-            preimage,
-            ..
-        }) => {
+        Some(breez_sdk_spark::PaymentDetails::Lightning { htlc_details, .. }) => {
             assert_eq!(
                 htlc_details.status,
                 breez_sdk_spark::SparkHtlcStatus::PreimageShared,
                 "Completed payment should have PreimageShared htlc status"
             );
             assert_eq!(htlc_details.expiry_time, 0);
-            assert_eq!(&htlc_details.payment_hash, payment_hash);
+            assert_eq!(htlc_details.payment_hash, "hash_completed_0123456789abcdef");
             assert_eq!(htlc_details.preimage.as_deref(), Some("preimage_completed"));
-            assert_eq!(preimage.as_deref(), Some("preimage_completed"));
         }
         _ => panic!("Expected Lightning payment details for ln-completed"),
     }
@@ -462,19 +456,15 @@ async fn test_migration_from_v10_to_v11() {
         .expect("Failed to get pending payment");
 
     match &pending.details {
-        Some(breez_sdk_spark::PaymentDetails::Lightning {
-            htlc_details,
-            preimage,
-            ..
-        }) => {
+        Some(breez_sdk_spark::PaymentDetails::Lightning { htlc_details, .. }) => {
             assert_eq!(
                 htlc_details.status,
                 breez_sdk_spark::SparkHtlcStatus::WaitingForPreimage,
                 "Pending payment should have WaitingForPreimage htlc status"
             );
             assert_eq!(htlc_details.expiry_time, 0);
+            assert_eq!(htlc_details.payment_hash, "hash_pending_0123456789abcdef0");
             assert!(htlc_details.preimage.is_none());
-            assert!(preimage.is_none());
         }
         _ => panic!("Expected Lightning payment details for ln-pending"),
     }

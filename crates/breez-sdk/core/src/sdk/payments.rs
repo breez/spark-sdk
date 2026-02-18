@@ -132,17 +132,7 @@ impl BreezSdk {
         }
 
         let transfer = self.spark_wallet.claim_htlc(&preimage).await?;
-        let mut payment: Payment = transfer.try_into()?;
-
-        // The SSP may not have the preimage yet for hodl invoices, so set it
-        // explicitly since we already have it.
-        if let Some(PaymentDetails::Lightning {
-            preimage: ref mut p,
-            ..
-        }) = payment.details
-        {
-            p.get_or_insert(request.preimage.clone());
-        }
+        let payment: Payment = transfer.try_into()?;
 
         // Insert the payment into storage to make it immediately available for listing
         self.storage.insert_payment(payment.clone()).await?;
