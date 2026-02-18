@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, warn};
@@ -544,6 +548,26 @@ impl SyncProcessor {
             debug!("Processing {} incoming records", total_count);
         }
 
+        // Build a map of pending outgoing changes grouped by RecordId. When an incoming
+        // record has pending outgoing changes for the same RecordId, we overlay the
+        // outgoing fields onto the incoming data so the handler sees the merged state.
+        let outgoing_by_record = if total_count > 0 {
+            let pending_outgoing = self.storage.get_pending_outgoing_changes(u32::MAX).await?;
+            let mut map: HashMap<RecordId, Vec<crate::sync::storage::RecordChange>> =
+                HashMap::new();
+            for outgoing in pending_outgoing {
+                map.entry(outgoing.change.id.clone())
+                    .or_default()
+                    .push(outgoing.change);
+            }
+            for changes in map.values_mut() {
+                changes.sort_by_key(|c| c.local_revision);
+            }
+            map
+        } else {
+            HashMap::new()
+        };
+
         for incoming_record in incoming_records {
             // TODO: Ensure the incoming change revision number is correct according to our assumptions. But also... allow replays.
             let incoming_revision = incoming_record.new_state.revision;
@@ -567,17 +591,28 @@ impl SyncProcessor {
                     .await?;
             }
 
-            // Now notify the relational database to update. Wait for it to be done. Note that this could be improved
-            // in the future to also add actions to the pending outgoing changes for the same record. Like maybe delete
-            // an action, or change its field values. Now it is not necessary yet, because there are only immutable
-            // changes.
+            // Build merged IncomingChange for the handler. Start from the raw incoming
+            // state, then overlay any pending outgoing fields so the handler sees the
+            // true combined state.
+            let mut merged_incoming: crate::sync::model::IncomingChange =
+                (&incoming_record).try_into()?;
+            if let Some(outgoing_changes) = outgoing_by_record.get(&incoming_record.new_state.id) {
+                for outgoing_change in outgoing_changes {
+                    for (k, v) in &outgoing_change.updated_fields {
+                        if let Ok(value) = serde_json::from_str(v) {
+                            merged_incoming.new_state.data.insert(k.clone(), value);
+                        }
+                    }
+                }
+            }
+
             debug!(
                 "Invoking relational database callback for incoming record {:?}, revision {}",
                 incoming_record.new_state.id, incoming_revision
             );
             match self
                 .new_record_handler
-                .on_incoming_change((&incoming_record).try_into()?)
+                .on_incoming_change(merged_incoming)
                 .await
             {
                 Ok(RecordOutcome::Completed) => {
@@ -1032,6 +1067,11 @@ mod tests {
             .returning(move |_| Ok(vec![incoming_record.clone()]));
 
         mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
+        mock_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1079,6 +1119,11 @@ mod tests {
             .returning(move |_| Ok(vec![incoming_record.clone()]));
 
         mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
+        mock_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1122,6 +1167,11 @@ mod tests {
             .times(1)
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
 
         // No state update should happen when the incoming revision is already reflected.
         mock_storage.expect_update_record_from_incoming().times(0);
@@ -1349,6 +1399,10 @@ mod tests {
             .in_sequence(&mut incoming_seq)
             .return_once(move |_| Ok(vec![deferred_retry_incoming]));
         old_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+        old_storage
             .expect_update_record_from_incoming()
             .times(1)
             .returning(|_| Ok(()));
@@ -1412,6 +1466,10 @@ mod tests {
             .times(1)
             .with(eq(u32::MAX))
             .return_once(move |_| Ok(vec![deferred_for_upgrade]));
+        upgraded_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
         upgraded_storage
             .expect_update_record_from_incoming()
             .times(0);
@@ -1506,6 +1564,11 @@ mod tests {
             .times(1)
             .with(eq(u32::MAX))
             .returning(move |_| Ok(vec![pending_incoming.clone()]));
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
 
         mock_storage
             .expect_update_record_from_incoming()
@@ -1901,5 +1964,267 @@ mod tests {
         // Verify
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Signing failure");
+    }
+
+    // Helper to create an outgoing change with specific fields
+    fn create_outgoing_change_with_fields(
+        id_type: &str,
+        id_data: &str,
+        local_revision: u64,
+        fields: HashMap<String, String>,
+    ) -> crate::sync::storage::OutgoingChange {
+        let change = crate::sync::storage::RecordChange {
+            id: RecordId::new(id_type, id_data),
+            schema_version: "1.0.0".to_string(),
+            updated_fields: fields,
+            local_revision,
+        };
+        crate::sync::storage::OutgoingChange {
+            change,
+            parent: None,
+        }
+    }
+
+    // Helper to create an incoming record with specific data fields
+    fn create_record_with_data(
+        id_type: &str,
+        id_data: &str,
+        revision: u64,
+        data: HashMap<String, String>,
+    ) -> crate::sync::storage::Record {
+        crate::sync::storage::Record {
+            id: RecordId::new(id_type, id_data),
+            revision,
+            schema_version: "1.0.0".to_string(),
+            data,
+        }
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_merge_no_pending_outgoing_sees_raw_incoming() {
+        let mut mock_storage = MockSyncStorage::new();
+
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), "\"Alice\"".to_string());
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record_with_data("Contact", "c1", 5, data),
+            old_state: None,
+        };
+
+        mock_storage
+            .expect_get_incoming_records()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .withf(|change| {
+                change.new_state.data.get("name") == Some(&serde_json::json!("Alice"))
+                    && !change.new_state.data.contains_key("deleted_at")
+            })
+            .returning(|_| Ok(RecordOutcome::Completed));
+
+        mock_storage
+            .expect_delete_incoming_record()
+            .returning(|_| Ok(()));
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(mock_handler),
+            Arc::new(mock_storage),
+        );
+
+        let result = sync_processor.pull_sync_once_local().await;
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_merge_one_pending_outgoing_overlays_fields() {
+        let mut mock_storage = MockSyncStorage::new();
+
+        let mut incoming_data = HashMap::new();
+        incoming_data.insert("name".to_string(), "\"Alice\"".to_string());
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record_with_data("Contact", "c1", 5, incoming_data),
+            old_state: None,
+        };
+
+        let mut outgoing_fields = HashMap::new();
+        outgoing_fields.insert("deleted_at".to_string(), "1234567890".to_string());
+        let outgoing = create_outgoing_change_with_fields("Contact", "c1", 1, outgoing_fields);
+
+        mock_storage
+            .expect_get_incoming_records()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        let outgoing_clone = outgoing.clone();
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![outgoing_clone.clone()]));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .withf(|change| {
+                // Handler should see both the original incoming field and the overlaid outgoing field
+                change.new_state.data.get("name") == Some(&serde_json::json!("Alice"))
+                    && change.new_state.data.get("deleted_at")
+                        == Some(&serde_json::json!(1_234_567_890))
+            })
+            .returning(|_| Ok(RecordOutcome::Completed));
+
+        mock_storage
+            .expect_delete_incoming_record()
+            .returning(|_| Ok(()));
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(mock_handler),
+            Arc::new(mock_storage),
+        );
+
+        let result = sync_processor.pull_sync_once_local().await;
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_merge_multiple_pending_outgoing_applied_in_order() {
+        let mut mock_storage = MockSyncStorage::new();
+
+        let mut incoming_data = HashMap::new();
+        incoming_data.insert("name".to_string(), "\"Alice\"".to_string());
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record_with_data("Contact", "c1", 5, incoming_data),
+            old_state: None,
+        };
+
+        // First outgoing change: sets name to Bob (local_revision=1)
+        let mut fields1 = HashMap::new();
+        fields1.insert("name".to_string(), "\"Bob\"".to_string());
+        let outgoing1 = create_outgoing_change_with_fields("Contact", "c1", 1, fields1);
+
+        // Second outgoing change: sets name to Charlie (local_revision=2) — should win
+        let mut fields2 = HashMap::new();
+        fields2.insert("name".to_string(), "\"Charlie\"".to_string());
+        let outgoing2 = create_outgoing_change_with_fields("Contact", "c1", 2, fields2);
+
+        mock_storage
+            .expect_get_incoming_records()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        // Return outgoing changes in reverse order to verify sorting
+        let out1 = outgoing1.clone();
+        let out2 = outgoing2.clone();
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![out2.clone(), out1.clone()]));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .withf(|change| {
+                // After sorting by local_revision and applying in order,
+                // the second change (Charlie) should overwrite the first (Bob)
+                change.new_state.data.get("name") == Some(&serde_json::json!("Charlie"))
+            })
+            .returning(|_| Ok(RecordOutcome::Completed));
+
+        mock_storage
+            .expect_delete_incoming_record()
+            .returning(|_| Ok(()));
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(mock_handler),
+            Arc::new(mock_storage),
+        );
+
+        let result = sync_processor.pull_sync_once_local().await;
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn test_pull_merge_different_record_id_no_merge() {
+        let mut mock_storage = MockSyncStorage::new();
+
+        let mut incoming_data = HashMap::new();
+        incoming_data.insert("name".to_string(), "\"Alice\"".to_string());
+        let incoming_record = crate::sync::storage::IncomingChange {
+            new_state: create_record_with_data("Contact", "c1", 5, incoming_data),
+            old_state: None,
+        };
+
+        // Outgoing change for a DIFFERENT RecordId — should NOT be merged
+        let mut fields = HashMap::new();
+        fields.insert("deleted_at".to_string(), "999".to_string());
+        let outgoing = create_outgoing_change_with_fields("Contact", "c2", 1, fields);
+
+        mock_storage
+            .expect_get_incoming_records()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![incoming_record.clone()]));
+
+        let outgoing_clone = outgoing.clone();
+        mock_storage
+            .expect_get_pending_outgoing_changes()
+            .with(eq(u32::MAX))
+            .returning(move |_| Ok(vec![outgoing_clone.clone()]));
+
+        mock_storage
+            .expect_update_record_from_incoming()
+            .returning(|_| Ok(()));
+
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_incoming_change()
+            .times(1)
+            .withf(|change| {
+                // No merge: handler sees raw incoming without deleted_at
+                change.new_state.data.get("name") == Some(&serde_json::json!("Alice"))
+                    && !change.new_state.data.contains_key("deleted_at")
+            })
+            .returning(|_| Ok(RecordOutcome::Completed));
+
+        mock_storage
+            .expect_delete_incoming_record()
+            .returning(|_| Ok(()));
+
+        let sync_processor = SyncProcessor::new(
+            create_signing_client(MockSyncerClient::new(), MockSyncSigner::new()),
+            broadcast::channel(10).1,
+            Arc::new(mock_handler),
+            Arc::new(mock_storage),
+        );
+
+        let result = sync_processor.pull_sync_once_local().await;
+        assert_eq!(result.unwrap(), 1);
     }
 }

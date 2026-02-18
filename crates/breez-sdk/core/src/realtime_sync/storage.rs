@@ -28,7 +28,6 @@ const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 enum RecordType {
     PaymentMetadata,
     Contact,
-    ContactDeletion,
 }
 
 impl RecordType {
@@ -36,7 +35,7 @@ impl RecordType {
     const fn schema_version(&self) -> SchemaVersion {
         match self {
             Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
-            Self::Contact | Self::ContactDeletion => SchemaVersion::new(1, 0, 0),
+            Self::Contact => SchemaVersion::new(1, 0, 0),
         }
     }
 }
@@ -46,7 +45,6 @@ impl Display for RecordType {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
             RecordType::Contact => "Contact",
-            RecordType::ContactDeletion => "ContactDeletion",
         };
         write!(f, "{s}")
     }
@@ -59,11 +57,12 @@ impl FromStr for RecordType {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
             "Contact" => Ok(RecordType::Contact),
-            "ContactDeletion" => Ok(RecordType::ContactDeletion),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
 }
+
+const DELETED_AT_FIELD: &str = "deleted_at";
 
 /// Internal sync model for contacts
 #[derive(Serialize, Deserialize)]
@@ -73,12 +72,9 @@ struct ContactSyncData {
     pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
-}
-
-/// Minimal sync model for contact deletion
-#[derive(Serialize, Deserialize)]
-struct ContactDeletionData {
-    pub deleted_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub deleted_at: Option<u64>,
 }
 
 pub struct SyncedStorage {
@@ -260,11 +256,7 @@ impl SyncedStorage {
                 .await
             }
             RecordType::Contact => {
-                self.handle_contact_update(change.new_state.data, change.new_state.id.data_id)
-                    .await
-            }
-            RecordType::ContactDeletion => {
-                self.handle_contact_deletion(change.new_state.id.data_id)
+                self.handle_contact_change(change.new_state.data, change.new_state.id.data_id)
                     .await
             }
         }?;
@@ -298,11 +290,8 @@ impl SyncedStorage {
                 .await
             }
             RecordType::Contact => {
-                self.handle_contact_update(change.change.updated_fields, change.change.id.data_id)
+                self.handle_contact_change(change.change.updated_fields, change.change.id.data_id)
                     .await
-            }
-            RecordType::ContactDeletion => {
-                self.handle_contact_deletion(change.change.id.data_id).await
             }
         }
     }
@@ -324,31 +313,30 @@ impl SyncedStorage {
         Ok(())
     }
 
-    async fn handle_contact_update(
+    async fn handle_contact_change(
         &self,
-        updated_fields: HashMap<String, Value>,
+        fields: HashMap<String, Value>,
         data_id: String,
     ) -> anyhow::Result<()> {
-        let sync_data: ContactSyncData = serde_json::from_value(
-            serde_json::to_value(&updated_fields)
-                .map_err(|e| StorageError::Serialization(e.to_string()))?,
-        )
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        if fields.contains_key(DELETED_AT_FIELD) {
+            // Ignore not-found errors when deleting
+            let _ = self.inner.delete_contact(data_id).await;
+        } else {
+            let sync_data: ContactSyncData = serde_json::from_value(
+                serde_json::to_value(&fields)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
+            )
+            .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        let contact = Contact {
-            id: data_id,
-            name: sync_data.name,
-            payment_identifier: sync_data.payment_identifier,
-            created_at: sync_data.created_at,
-            updated_at: sync_data.updated_at,
-        };
-        self.inner.insert_contact(contact).await?;
-        Ok(())
-    }
-
-    async fn handle_contact_deletion(&self, data_id: String) -> anyhow::Result<()> {
-        // Ignore not-found errors when deleting
-        let _ = self.inner.delete_contact(data_id).await;
+            let contact = Contact {
+                id: data_id,
+                name: sync_data.name,
+                payment_identifier: sync_data.payment_identifier,
+                created_at: sync_data.created_at,
+                updated_at: sync_data.updated_at,
+            };
+            self.inner.insert_contact(contact).await?;
+        }
         Ok(())
     }
 }
@@ -469,6 +457,7 @@ impl Storage for SyncedStorage {
             payment_identifier: contact.payment_identifier.clone(),
             created_at: contact.created_at,
             updated_at: contact.updated_at,
+            deleted_at: None,
         };
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
@@ -490,16 +479,13 @@ impl Storage for SyncedStorage {
             .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let deletion_data = ContactDeletionData { deleted_at: now };
+        let mut updated_fields = HashMap::new();
+        updated_fields.insert(DELETED_AT_FIELD.to_string(), serde_json::json!(now));
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(RecordType::ContactDeletion.to_string(), &id),
-                schema_version: RecordType::ContactDeletion.schema_version(),
-                updated_fields: serde_json::from_value(
-                    serde_json::to_value(&deletion_data)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                )
-                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                id: RecordId::new(RecordType::Contact.to_string(), &id),
+                schema_version: RecordType::Contact.schema_version(),
+                updated_fields,
             })
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
@@ -788,5 +774,111 @@ mod tests {
 
         // Verify no payment metadata side effect
         assert!(storage.get_payment_by_id("id1".to_string()).await.is_err());
+    }
+
+    fn make_contact_data(name: &str, payment_id: &str) -> HashMap<String, Value> {
+        let mut data = HashMap::new();
+        data.insert("id".to_string(), serde_json::json!("c1"));
+        data.insert("name".to_string(), serde_json::json!(name));
+        data.insert(
+            "payment_identifier".to_string(),
+            serde_json::json!(payment_id),
+        );
+        data.insert("created_at".to_string(), serde_json::json!(1000));
+        data.insert("updated_at".to_string(), serde_json::json!(1000));
+        data
+    }
+
+    #[tokio::test]
+    async fn test_incoming_contact_without_deleted_at_upserts() {
+        let temp_dir = create_temp_dir("incoming_contact_upsert");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let data = make_contact_data("Alice", "alice@example.com");
+        let change =
+            make_incoming_change("Contact", "c1", RecordType::Contact.schema_version(), data);
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RecordOutcome::Completed);
+
+        let contact = storage.get_contact("c1".to_string()).await.unwrap();
+        assert_eq!(contact.name, "Alice");
+        assert_eq!(contact.payment_identifier, "alice@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_incoming_contact_with_deleted_at_deletes() {
+        let temp_dir = create_temp_dir("incoming_contact_delete");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        // First insert a contact
+        storage
+            .insert_contact(Contact {
+                id: "c1".to_string(),
+                name: "Alice".to_string(),
+                payment_identifier: "alice@example.com".to_string(),
+                created_at: 1000,
+                updated_at: 1000,
+            })
+            .await
+            .unwrap();
+
+        // Incoming change with deleted_at should delete the contact
+        let mut data = make_contact_data("Alice", "alice@example.com");
+        data.insert("deleted_at".to_string(), serde_json::json!(2000));
+        let change =
+            make_incoming_change("Contact", "c1", RecordType::Contact.schema_version(), data);
+        let result = synced.handle_incoming_change(change).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RecordOutcome::Completed);
+
+        assert!(storage.get_contact("c1".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_replay_contact_without_deleted_at_upserts() {
+        let temp_dir = create_temp_dir("outgoing_contact_upsert");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let data = make_contact_data("Bob", "bob@example.com");
+        let change =
+            make_outgoing_change("Contact", "c2", RecordType::Contact.schema_version(), data);
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        let contact = storage.get_contact("c2".to_string()).await.unwrap();
+        assert_eq!(contact.name, "Bob");
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_replay_contact_with_deleted_at_deletes() {
+        let temp_dir = create_temp_dir("outgoing_contact_delete");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        // First insert a contact
+        storage
+            .insert_contact(Contact {
+                id: "c3".to_string(),
+                name: "Charlie".to_string(),
+                payment_identifier: "charlie@example.com".to_string(),
+                created_at: 1000,
+                updated_at: 1000,
+            })
+            .await
+            .unwrap();
+
+        // Outgoing replay with deleted_at should delete the contact
+        let mut data = HashMap::new();
+        data.insert("deleted_at".to_string(), serde_json::json!(2000));
+        let change =
+            make_outgoing_change("Contact", "c3", RecordType::Contact.schema_version(), data);
+        let result = synced.handle_outgoing_change(change).await;
+        assert!(result.is_ok());
+
+        assert!(storage.get_contact("c3".to_string()).await.is_err());
     }
 }
