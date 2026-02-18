@@ -25,27 +25,6 @@ fn js_error_to_storage_error(js_error: JsValue) -> StorageError {
     StorageError::Implementation(error_message)
 }
 
-/// Helper function to map JS constraint errors to appropriate StorageError variants
-fn map_js_constraint_error(js_error: JsValue, operation: &str) -> StorageError {
-    let error_message = get_detailed_js_error(&js_error);
-    let error_lower = error_message.to_lowercase();
-
-    // Check for unique constraint violation
-    if error_lower.contains("unique")
-        || error_lower.contains("duplicate")
-        || error_lower.contains("constraint")
-    {
-        return StorageError::Duplicate;
-    }
-
-    // Check for not found (for update operations)
-    if operation == "update" && error_lower.contains("not found") {
-        return StorageError::NotFound;
-    }
-
-    StorageError::Implementation(error_message)
-}
-
 /// Extract detailed error information from a JavaScript error value
 fn get_detailed_js_error(js_error: &JsValue) -> String {
     // Check for DomException which is common for IndexedDB errors
@@ -343,7 +322,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let future = JsFuture::from(promise);
         future
             .await
-            .map_err(|e| map_js_constraint_error(e, "insert"))?;
+            .map_err(js_error_to_storage_error)?;
         Ok(())
     }
 

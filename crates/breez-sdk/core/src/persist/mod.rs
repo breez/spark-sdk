@@ -84,9 +84,6 @@ pub enum StorageError {
     #[error("Failed to serialize/deserialize data: {0}")]
     Serialization(String),
 
-    #[error("Duplicate entry")]
-    Duplicate,
-
     #[error("Not found")]
     NotFound,
 }
@@ -407,8 +404,7 @@ pub trait Storage: Send + Sync {
     async fn get_contact(&self, id: String) -> Result<Contact, StorageError>;
 
     /// Inserts or updates a contact in storage (upsert by id).
-    /// Preserves `created_at` on update. Errors with `StorageError::Duplicate`
-    /// on UNIQUE(name, `payment_identifier`) violation.
+    /// Preserves `created_at` on update.
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError>;
 
     /// Deletes a contact by its ID

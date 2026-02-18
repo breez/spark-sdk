@@ -3291,7 +3291,7 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         .unwrap();
     assert!(contacts.is_empty());
 
-    // Test duplicate insert (relies on UNIQUE constraint)
+    // Test duplicate (name, payment_identifier) with different id — allowed at storage layer
     let c2 = Contact {
         id: "c2".to_string(),
         name: "Bob".to_string(),
@@ -3307,12 +3307,9 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         created_at: 1000,
         updated_at: 1000,
     };
-    assert!(matches!(
-        storage.insert_contact(c3).await,
-        Err(StorageError::Duplicate)
-    ));
+    storage.insert_contact(c3).await.unwrap();
 
-    // Test upsert to duplicate (name, payment_identifier)
+    // Test upsert to duplicate (name, payment_identifier) — allowed at storage layer
     let c4 = Contact {
         id: "c4".to_string(),
         name: "Carol".to_string(),
@@ -3328,13 +3325,11 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         created_at: 0,
         updated_at: 2000,
     };
-    assert!(matches!(
-        storage.insert_contact(c4_dup).await,
-        Err(StorageError::Duplicate)
-    ));
+    storage.insert_contact(c4_dup).await.unwrap();
 
     // Test pagination
     storage.delete_contact("c2".to_string()).await.unwrap();
+    storage.delete_contact("c3".to_string()).await.unwrap();
     storage.delete_contact("c4".to_string()).await.unwrap();
     for i in 0..5 {
         let c = Contact {

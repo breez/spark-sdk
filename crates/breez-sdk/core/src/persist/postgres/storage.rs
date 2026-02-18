@@ -235,6 +235,8 @@ impl PostgresStorage {
                     updated_at BIGINT NOT NULL,
                     UNIQUE(name, payment_identifier)
                 )"],
+            // Migration 7: Remove UNIQUE constraint from contacts
+            &["ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_name_payment_identifier_key"],
         ]
     }
 }
@@ -959,16 +961,7 @@ impl Storage for PostgresStorage {
 
         match result {
             Ok(_) => Ok(()),
-            Err(e) => {
-                // Check for unique constraint violation (SQLSTATE 23505)
-                if let Some(code) = e.code()
-                    && code == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
-                {
-                    Err(StorageError::Duplicate)
-                } else {
-                    Err(map_db_error(e))
-                }
-            }
+            Err(e) => Err(map_db_error(e)),
         }
     }
 

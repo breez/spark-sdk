@@ -393,6 +393,21 @@ class MigrationManager {
           UNIQUE(name, payment_identifier)
         )`
       },
+      {
+        name: "Remove unique constraint from contacts",
+        sql: [
+          `CREATE TABLE contacts_new (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            payment_identifier TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )`,
+          `INSERT INTO contacts_new SELECT * FROM contacts`,
+          `DROP TABLE contacts`,
+          `ALTER TABLE contacts_new RENAME TO contacts`,
+        ]
+      },
     ];
   }
 }

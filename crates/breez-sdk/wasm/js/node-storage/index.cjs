@@ -1329,12 +1329,6 @@ class SqliteStorage {
 
       return Promise.resolve();
     } catch (error) {
-      // Check for UNIQUE constraint violation (SQLITE_CONSTRAINT_UNIQUE = 2067)
-      if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-        return Promise.reject(
-          new StorageError("Duplicate contact", error)
-        );
-      }
       return Promise.reject(
         new StorageError(`Failed to insert contact: ${error.message}`, error)
       );

@@ -321,6 +321,16 @@ impl SqliteStorage {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(name, payment_identifier)
             );",
+            "CREATE TABLE contacts_new (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO contacts_new SELECT * FROM contacts;
+            DROP TABLE contacts;
+            ALTER TABLE contacts_new RENAME TO contacts;",
         ]
     }
 }
@@ -978,7 +988,7 @@ impl Storage for SqliteStorage {
 
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
-        match connection.execute(
+        connection.execute(
             "INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
@@ -992,14 +1002,8 @@ impl Storage for SqliteStorage {
                 contact.created_at,
                 contact.updated_at,
             ],
-        ) {
-            Ok(_) => Ok(()),
-            Err(rusqlite::Error::SqliteFailure(err, _)) if err.extended_code == 2067 => {
-                // SQLITE_CONSTRAINT_UNIQUE (name, payment_identifier)
-                Err(StorageError::Duplicate)
-            }
-            Err(e) => Err(e.into()),
-        }
+        )?;
+        Ok(())
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
