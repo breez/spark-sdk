@@ -138,6 +138,15 @@ async fn test_01_lightning_hodl_success(
             && details.status == SparkHtlcStatus::PreimageShared
     ));
 
+    // Wait for Alice's payment succeeded event
+    info!("Waiting for Alice's send payment to complete...");
+    let alice_completed_payment =
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+
+    assert_eq!(alice_completed_payment.status, PaymentStatus::Completed);
+    assert_eq!(alice_completed_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_completed_payment.amount, 10_000);
+
     // Verify Bob's balance increased
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_final_balance = bob
