@@ -1,4 +1,4 @@
-use breez_sdk_common::input::{LocalInputType, parse_local};
+use breez_sdk_common::input::{LocalInputType, ParseError, parse_local};
 
 use crate::SdkError;
 
@@ -28,38 +28,45 @@ pub fn validate_contact_input(name: &str, payment_identifier: &str) -> Result<St
 }
 
 fn validate_payment_identifier(payment_identifier: &str) -> Result<(), SdkError> {
-    let parsed = parse_local(payment_identifier).map_err(|_| {
-        SdkError::InvalidInput("Payment identifier is not a recognized payment format".to_string())
-    })?;
-
-    match parsed {
-        LocalInputType::BitcoinAddress(_)
-        | LocalInputType::SparkAddress(_)
-        | LocalInputType::LightningAddress { .. }
-        | LocalInputType::Lnurl { .. } => Ok(()),
-
-        LocalInputType::Bolt11Invoice(_) => Err(SdkError::InvalidInput(
+    match parse_local(payment_identifier) {
+        // Known non-reusable types — reject
+        Ok(LocalInputType::Bolt11Invoice(_)) => Err(SdkError::InvalidInput(
             "Bolt11 invoices are not reusable and cannot be used as a contact payment identifier"
                 .to_string(),
         )),
-        LocalInputType::Bip21(_) => Err(SdkError::InvalidInput(
-            "BIP-21 URIs are not yet supported as a contact payment identifier".to_string(),
-        )),
-        LocalInputType::Bolt12InvoiceRequest(_) => Err(SdkError::InvalidInput(
+        Ok(LocalInputType::Bolt12InvoiceRequest(_)) => Err(SdkError::InvalidInput(
             "Bolt12 invoice requests are not reusable and cannot be used as a contact payment identifier"
                 .to_string(),
         )),
-        LocalInputType::Bolt12Offer(_) => Err(SdkError::InvalidInput(
-            "Bolt12 offers are not yet supported as a contact payment identifier".to_string(),
-        )),
-        LocalInputType::SparkInvoice(_) => Err(SdkError::InvalidInput(
+        Ok(LocalInputType::SparkInvoice(_)) => Err(SdkError::InvalidInput(
             "Spark invoices are not reusable and cannot be used as a contact payment identifier"
                 .to_string(),
         )),
-        LocalInputType::SilentPaymentAddress(_) => Err(SdkError::InvalidInput(
+
+        // Known unsupported types — reject
+        Ok(LocalInputType::Bip21(_)) => Err(SdkError::InvalidInput(
+            "BIP-21 URIs are not yet supported as a contact payment identifier".to_string(),
+        )),
+        Ok(LocalInputType::Bolt12Offer(_)) => Err(SdkError::InvalidInput(
+            "Bolt12 offers are not yet supported as a contact payment identifier".to_string(),
+        )),
+        Ok(LocalInputType::SilentPaymentAddress(_)) => Err(SdkError::InvalidInput(
             "Silent payment addresses are not yet supported as a contact payment identifier"
                 .to_string(),
         )),
+
+        // Known accepted types or unrecognized input — allow
+        Ok(_) | Err(ParseError::InvalidInput) => Ok(()),
+
+        // Empty input (defensive — already caught above)
+        Err(ParseError::EmptyInput) => Err(SdkError::InvalidInput(
+            "Payment identifier cannot be empty".to_string(),
+        )),
+
+        // Other parse errors — reject
+        Err(e) => Err(SdkError::InvalidInput(format!(
+            "Failed to validate payment identifier: {e}"
+        ))),
     }
 }
 
@@ -121,10 +128,10 @@ mod tests {
     }
 
     #[test]
-    fn test_rejects_garbage() {
-        let result = validate_contact_input(VALID_NAME, "not_a_payment_format");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a recognized"));
+    fn test_accepts_unknown_input() {
+        // Unknown input is allowed — it may be valid for external/async parsers
+        assert!(validate_contact_input(VALID_NAME, "not_a_payment_format").is_ok());
+        assert!(validate_contact_input(VALID_NAME, "https://example.com/lnurl").is_ok());
     }
 
     #[test]
