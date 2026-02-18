@@ -22,8 +22,7 @@ impl BreezSdk {
             })
             .await?;
         let duplicate = contacts.iter().any(|c| {
-            c.payment_identifier == payment_identifier
-                && exclude_id.is_none_or(|id| c.id != id)
+            c.payment_identifier == payment_identifier && exclude_id.is_none_or(|id| c.id != id)
         });
         if duplicate {
             return Err(SdkError::InvalidInput("Duplicate entry".to_string()));

@@ -320,9 +320,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
             .insert_contact(contact)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
-        future
-            .await
-            .map_err(js_error_to_storage_error)?;
+        future.await.map_err(js_error_to_storage_error)?;
         Ok(())
     }
 

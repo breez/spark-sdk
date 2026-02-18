@@ -236,7 +236,9 @@ impl PostgresStorage {
                     UNIQUE(name, payment_identifier)
                 )"],
             // Migration 7: Remove UNIQUE constraint from contacts
-            &["ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_name_payment_identifier_key"],
+            &[
+                "ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_name_payment_identifier_key",
+            ],
         ]
     }
 }
