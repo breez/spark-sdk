@@ -1760,18 +1760,6 @@ async fn create_transfers(
         })
         .collect();
 
-    // Validate that every PreimageSwap transfer has HTLC data
-    for transfer in &transfers.items {
-        if transfer.transfer_type == TransferType::PreimageSwap
-            && !htlc_requests_map.contains_key(&transfer.id.to_string())
-        {
-            return Err(SparkWalletError::Generic(format!(
-                "PreimageSwap transfer {} is missing HTLC data",
-                transfer.id
-            )));
-        }
-    }
-
     Ok(transfers.map(|t| {
         WalletTransfer::from_transfer(
             t.clone(),
@@ -1800,7 +1788,7 @@ async fn create_transfer(
         .next();
 
     let preimage_request = if transfer.transfer_type == TransferType::PreimageSwap {
-        let request = htlc_service
+        htlc_service
             .query_htlc(
                 QueryHtlcFilter {
                     transfer_ids: vec![transfer.id.to_string()],
@@ -1815,13 +1803,6 @@ async fn create_transfer(
             .items
             .first()
             .cloned()
-            .ok_or_else(|| {
-                SparkWalletError::Generic(format!(
-                    "PreimageSwap transfer {} is missing HTLC data",
-                    transfer.id
-                ))
-            })?;
-        Some(request)
     } else {
         None
     };
