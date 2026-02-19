@@ -10,13 +10,32 @@ use uuid::Uuid;
 
 use crate::{DepositInfo, Payment};
 
+/// Describes what was synchronized in a [`SdkEvent::Synced`] event.
+///
+/// Clients can match on specific variants to react to individual sync stages
+/// (e.g., show the balance before the full payment history is ready).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SyncUpdate {
+    /// Wallet balance was fetched and cached.
+    BalanceUpdated,
+    /// Payment history was synced to local storage.
+    PaymentsUpdated,
+    /// Complete sync finished (wallet, payments, deposits, metadata).
+    FullSync,
+}
+
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SdkEvent {
-    /// Emitted when the wallet has been synchronized with the network
-    Synced,
+    /// Emitted when the wallet has been synchronized with the network.
+    ///
+    /// The [`SyncUpdate`] field describes what was synced in this cycle.
+    Synced {
+        sync_update: SyncUpdate,
+    },
     /// Emitted when the SDK was unable to claim deposits
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
@@ -52,7 +71,7 @@ impl SdkEvent {
 impl fmt::Display for SdkEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SdkEvent::Synced => write!(f, "Synced"),
+            SdkEvent::Synced { sync_update } => write!(f, "Synced({sync_update:?})"),
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 write!(f, "UnclaimedDeposits: {unclaimed_deposits:?}")
             }
@@ -98,7 +117,7 @@ pub enum OptimizationEvent {
 }
 
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct InternalSyncedEvent {
     pub wallet: bool,
     pub wallet_state: bool,
@@ -217,21 +236,20 @@ impl EventEmitter {
 
         let mut mtx = self.synced_event_buffer.lock().await;
 
-        let is_first_event = if let Some(buffered) = &*mtx {
+        let (is_first_event, effective) = if let Some(buffered) = &*mtx {
             let merged = buffered.merge(synced);
 
             // The first synced event emitted should at least have the wallet synced.
             // Subsequent events might have only partial syncs.
             if merged.wallet && (!self.has_real_time_sync || merged.storage_incoming.is_some()) {
                 *mtx = None;
+                (true, merged)
             } else {
                 *mtx = Some(merged);
                 return;
             }
-
-            true
         } else {
-            false
+            (false, synced.clone())
         };
 
         drop(mtx);
@@ -241,8 +259,19 @@ impl EventEmitter {
             return;
         }
 
-        // Emit the merged event
-        self.emit(&SdkEvent::Synced).await;
+        let sync_update = if effective.wallet
+            && effective.wallet_state
+            && effective.deposits
+            && effective.lnurl_metadata
+        {
+            SyncUpdate::FullSync
+        } else if effective.wallet_state {
+            SyncUpdate::PaymentsUpdated
+        } else {
+            SyncUpdate::BalanceUpdated
+        };
+
+        self.emit(&SdkEvent::Synced { sync_update }).await;
     }
 }
 
@@ -288,9 +317,11 @@ impl EventListener for FilteredEventListener<dyn Fn(Payment) + Send + Sync> {
 
 // -- Sync filter --
 
-impl FilteredEventListener<dyn Fn() + Send + Sync> {
+impl FilteredEventListener<dyn Fn(SyncUpdate) + Send + Sync> {
     /// Creates a listener that fires only for `Synced` events.
-    pub fn sync(callback: impl Fn() + Send + Sync + 'static) -> Self {
+    ///
+    /// The callback receives a [`SyncUpdate`] describing what was synced.
+    pub fn sync(callback: impl Fn(SyncUpdate) + Send + Sync + 'static) -> Self {
         Self {
             filter: Box::new(callback),
         }
@@ -298,10 +329,10 @@ impl FilteredEventListener<dyn Fn() + Send + Sync> {
 }
 
 #[macros::async_trait]
-impl EventListener for FilteredEventListener<dyn Fn() + Send + Sync> {
+impl EventListener for FilteredEventListener<dyn Fn(SyncUpdate) + Send + Sync> {
     async fn on_event(&self, event: SdkEvent) {
-        if matches!(event, SdkEvent::Synced) {
-            (self.filter)();
+        if let SdkEvent::Synced { sync_update } = event {
+            (self.filter)(sync_update);
         }
     }
 }
@@ -374,7 +405,9 @@ mod tests {
 
         let _ = emitter.add_listener(listener).await;
 
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced {
+            sync_update: SyncUpdate::FullSync,
+        };
 
         emitter.emit(&event).await;
 
@@ -406,7 +439,9 @@ mod tests {
         assert!(emitter.remove_listener(&id1).await);
 
         // Emit an event
-        let event = SdkEvent::Synced {};
+        let event = SdkEvent::Synced {
+            sync_update: SyncUpdate::FullSync,
+        };
         emitter.emit(&event).await;
 
         // The first listener should not receive the event
@@ -672,7 +707,7 @@ mod tests {
         #[macros::async_trait]
         impl EventListener for CountingListener {
             async fn on_event(&self, event: SdkEvent) {
-                if matches!(event, SdkEvent::Synced) {
+                if matches!(event, SdkEvent::Synced { .. }) {
                     self.count.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -787,7 +822,7 @@ mod tests {
         #[macros::async_trait]
         impl EventListener for CountingListener {
             async fn on_event(&self, event: SdkEvent) {
-                if matches!(event, SdkEvent::Synced) {
+                if matches!(event, SdkEvent::Synced { .. }) {
                     self.count.fetch_add(1, Ordering::Relaxed);
                 }
             }

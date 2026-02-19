@@ -115,9 +115,9 @@ class BreezSdkSpark {
   void subscribeToEventStream() {
     _eventSubscription = _eventStream?.listen((sdkEvent) {
       switch (sdkEvent) {
-        case SdkEvent_Synced():
-          // Data has been synchronized with the network. When this event is received,
-          // it is recommended to refresh the payment list and wallet balance.
+        case SdkEvent_Synced(:final syncUpdate):
+          // Data has been synchronized with the network. The syncUpdate field
+          // describes what was synced (balanceUpdated, paymentsUpdated, or fullSync).
           break;
         case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
           // SDK was unable to claim some deposits automatically

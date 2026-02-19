@@ -72,9 +72,9 @@ def set_logger(logger: SdkLogger):
 class SdkListener(EventListener):
     def on_event(self, event: SdkEvent):
         if isinstance(event, SdkEvent.SYNCED):
-            # Data has been synchronized with the network. When this event is received,
-            # it is recommended to refresh the payment list and wallet balance.
-            pass
+            # Data has been synchronized with the network. The sync_update field
+            # describes what was synced (BALANCE_UPDATED, PAYMENTS_UPDATED, or FULL_SYNC).
+            sync_update = event.sync_update
         elif isinstance(event, SdkEvent.UNCLAIMED_DEPOSITS):
             # SDK was unable to claim some deposits automatically
             unclaimed_deposits = event.unclaimed_deposits

@@ -52,9 +52,9 @@ func logging() throws {
 class SdkEventListener: EventListener {
     func onEvent(event: SdkEvent) async {
         switch event {
-        case .synced:
-            // Data has been synchronized with the network. When this event is received,
-            // it is recommended to refresh the payment list and wallet balance.
+        case .synced(let syncUpdate):
+            // Data has been synchronized with the network. The syncUpdate field
+            // describes what was synced (.balanceUpdated, .paymentsUpdated, or .fullSync).
             break
         case .unclaimedDeposits(let unclaimedDeposits):
             // SDK was unable to claim some deposits automatically

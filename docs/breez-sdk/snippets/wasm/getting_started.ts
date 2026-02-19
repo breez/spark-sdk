@@ -69,8 +69,9 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
     onEvent = async (event: SdkEvent) => {
       switch (event.type) {
         case 'synced': {
-          // Data has been synchronized with the network. When this event is received,
-          // it is recommended to refresh the payment list and wallet balance.
+          // Data has been synchronized with the network. The syncUpdate field
+          // describes what was synced ('balanceUpdated', 'paymentsUpdated', or 'fullSync').
+          const syncUpdate = event.syncUpdate
           break
         }
         case 'unclaimedDeposits': {

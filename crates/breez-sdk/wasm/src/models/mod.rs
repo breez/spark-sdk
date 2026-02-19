@@ -56,10 +56,19 @@ mod serde_option_u128_as_string {
     }
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SyncUpdate)]
+pub enum SyncUpdate {
+    BalanceUpdated,
+    PaymentsUpdated,
+    FullSync,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
-    Synced,
+    Synced {
+        sync_update: SyncUpdate,
+    },
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },

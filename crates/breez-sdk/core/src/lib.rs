@@ -26,7 +26,7 @@ pub use chain::{
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
 pub use error::{DepositClaimError, SdkError, SignerError};
-pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
+pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent, SyncUpdate};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{

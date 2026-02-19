@@ -63,9 +63,9 @@ pub(crate) struct SdkEventListener {}
 impl EventListener for SdkEventListener {
     async fn on_event(&self, e: SdkEvent) {
         match e {
-            SdkEvent::Synced => {
-                // Data has been synchronized with the network. When this event is received,
-                // it is recommended to refresh the payment list and wallet balance.
+            SdkEvent::Synced { sync_update } => {
+                // Data has been synchronized with the network. The sync_update field
+                // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
             }
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 // SDK was unable to claim some deposits automatically

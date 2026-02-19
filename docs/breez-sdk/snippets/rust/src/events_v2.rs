@@ -19,8 +19,8 @@ async fn typed_event_listeners(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: on-sync
     // Listen only for Synced events (Rust only)
     let sync_listener_id = sdk
-        .on_sync(|| {
-            info!("Wallet synced — refresh UI");
+        .on_sync(|update| {
+            info!("Sync update: {update:?}");
         })
         .await;
     // ANCHOR_END: on-sync

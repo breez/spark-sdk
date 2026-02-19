@@ -15,8 +15,22 @@ When the SDK connects, it automatically spawns a background task that concurrent
 fetches the wallet balance and recent payment history. This allows the UI to
 display balance and payments quickly without waiting for the full periodic sync.
 
-Each sub-task emits a {{#enum SdkEvent::Synced}} event on completion, so your
-sync listener will fire as soon as data is available.
+Each sub-task emits a {{#enum SdkEvent::Synced}} event with a `SyncUpdate` value
+describing what was synced:
+
+| `SyncUpdate` variant | Meaning |
+|---|---|
+| `BalanceUpdated` | Wallet balance was fetched and cached (fast, early) |
+| `PaymentsUpdated` | Payment history was synced to local storage (fast, early) |
+| `FullSync` | Complete sync finished (wallet, payments, deposits, metadata) |
+
+**Typical startup sequence:**
+
+1. `Synced { sync_update: BalanceUpdated }` — balance is ready, show it in UI
+2. `Synced { sync_update: PaymentsUpdated }` — payment list is ready
+3. `Synced { sync_update: FullSync }` — everything is done, dismiss loading indicators
+
+Events 1 and 2 may arrive in either order. Event 3 is always last.
 
 <h2 id="on-payment">
     <a class="header" href="#on-payment">Listening for payments</a>
@@ -32,6 +46,7 @@ The {{#name on_payment}} helper fires for {{#enum SdkEvent::PaymentSucceeded}},
 </h2>
 
 The {{#name on_sync}} helper fires only for {{#enum SdkEvent::Synced}} events.
+The callback receives a `SyncUpdate` value so you can react to specific sync stages.
 
 {{#tabs events_v2:on-sync}}
 

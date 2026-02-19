@@ -60,8 +60,9 @@ class GettingStarted {
         override suspend fun onEvent(e: SdkEvent) {
             when (e) {
                 is SdkEvent.Synced -> {
-                    // Data has been synchronized with the network. When this event is received,
-                    // it is recommended to refresh the payment list and wallet balance.
+                    // Data has been synchronized with the network. The syncUpdate field
+                    // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+                    val syncUpdate = e.syncUpdate
                 }
                 is SdkEvent.UnclaimedDeposits -> {
                     // SDK was unable to claim some deposits automatically

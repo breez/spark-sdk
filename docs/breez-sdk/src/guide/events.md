@@ -2,6 +2,10 @@
 
 The SDK emits several events to provide the application with an up-to-date state of the SDK or ongoing payments.
 
+The {{#enum SdkEvent::Synced}} event carries a `SyncUpdate` field that describes
+what was synced: `BalanceUpdated`, `PaymentsUpdated`, or `FullSync`. See
+[Enhanced event listeners](events_v2.md) for details on progressive loading.
+
 <h2 id="add-event-listener">
     <a class="header" href="#add-event-listener">Add event listener</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.add_event_listener">API docs</a>

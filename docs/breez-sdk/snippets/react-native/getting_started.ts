@@ -62,8 +62,9 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
   class JsEventListener {
     onEvent = async (event: SdkEvent) => {
       if (event.tag === SdkEvent_Tags.Synced) {
-        // Data has been synchronized with the network. When this event is received,
-        // it is recommended to refresh the payment list and wallet balance.
+        // Data has been synchronized with the network. The syncUpdate field
+        // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+        const syncUpdate = event.inner.syncUpdate
       } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
         // SDK was unable to claim some deposits automatically
         const unclaimedDeposits = event.inner.unclaimedDeposits

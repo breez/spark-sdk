@@ -79,8 +79,9 @@ type SdkListener struct{}
 func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	switch event := e.(type) {
 	case breez_sdk_spark.SdkEventSynced:
-		// Data has been synchronized with the network. When this event is received,
-		// it is recommended to refresh the payment list and wallet balance.
+		// Data has been synchronized with the network. The SyncUpdate field
+		// describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+		_ = event.SyncUpdate
 	case breez_sdk_spark.SdkEventUnclaimedDeposits:
 		// SDK was unable to claim some deposits automatically
 		unclaimedDeposits := event.UnclaimedDeposits

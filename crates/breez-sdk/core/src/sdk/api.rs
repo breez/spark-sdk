@@ -9,7 +9,7 @@ use crate::{
     UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
-    events::{EventListener, FilteredEventListener},
+    events::{EventListener, FilteredEventListener, SyncUpdate},
     issuer::TokenIssuer,
     models::{GetInfoRequest, GetInfoResponse},
     persist::ObjectCacheRepository,
@@ -335,18 +335,26 @@ impl BreezSdk {
 
     /// Registers a listener that fires only for `Synced` events.
     ///
+    /// The callback receives a [`SyncUpdate`] describing what was synced:
+    /// - [`SyncUpdate::BalanceUpdated`] -- wallet balance was fetched
+    /// - [`SyncUpdate::PaymentsUpdated`] -- payment history was synced
+    /// - [`SyncUpdate::FullSync`] -- complete sync finished
+    ///
     /// Returns a listener ID that can be used with [`remove_event_listener`].
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// # async fn example(sdk: &breez_sdk_spark::BreezSdk) {
-    /// let id = sdk.on_sync(|| {
-    ///     println!("Wallet synced — refresh UI");
+    /// use breez_sdk_spark::SyncUpdate;
+    /// let id = sdk.on_sync(|update| match update {
+    ///     SyncUpdate::BalanceUpdated => println!("Balance ready"),
+    ///     SyncUpdate::PaymentsUpdated => println!("Payments ready"),
+    ///     SyncUpdate::FullSync => println!("Everything synced"),
     /// }).await;
     /// # }
     /// ```
-    pub async fn on_sync(&self, callback: impl Fn() + Send + Sync + 'static) -> String {
+    pub async fn on_sync(&self, callback: impl Fn(SyncUpdate) + Send + Sync + 'static) -> String {
         self.event_emitter
             .add_listener(Box::new(FilteredEventListener::sync(callback)))
             .await

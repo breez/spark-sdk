@@ -1,11 +1,20 @@
 use crate::frb_generated::StreamSink;
-use breez_sdk_spark::{DepositInfo, EventListener, Payment};
+use breez_sdk_spark::{DepositInfo, EventListener, Payment, SyncUpdate};
 pub use breez_sdk_spark::{OptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
+#[frb(mirror(SyncUpdate))]
+pub enum _SyncUpdate {
+    BalanceUpdated,
+    PaymentsUpdated,
+    FullSync,
+}
+
 #[frb(mirror(SdkEvent))]
 pub enum _SdkEvent {
-    Synced,
+    Synced {
+        sync_update: SyncUpdate,
+    },
     UnclaimedDeposits {
         unclaimed_deposits: Vec<DepositInfo>,
     },

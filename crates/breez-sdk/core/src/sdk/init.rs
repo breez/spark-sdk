@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::{
     AssetFilter, Network, PaymentDetails, PaymentStatus, PaymentType, SdkEvent,
-    SetLnurlMetadataItem,
+    SetLnurlMetadataItem, SyncUpdate,
     error::SdkError,
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
@@ -124,7 +124,11 @@ impl BreezSdk {
                 match update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
                     Ok(()) => {
                         info!("instant_wallet_load: balance updated, emitting Synced");
-                        sdk.event_emitter.emit(&SdkEvent::Synced).await;
+                        sdk.event_emitter
+                            .emit(&SdkEvent::Synced {
+                                sync_update: SyncUpdate::BalanceUpdated,
+                            })
+                            .await;
                     }
                     Err(e) => error!("instant_wallet_load: failed to update balance: {e:?}"),
                 }
@@ -141,7 +145,11 @@ impl BreezSdk {
                     match sync_service.sync_payments(false).await {
                         Ok(()) => {
                             info!("instant_wallet_load: payments synced, emitting Synced");
-                            sdk.event_emitter.emit(&SdkEvent::Synced).await;
+                            sdk.event_emitter
+                                .emit(&SdkEvent::Synced {
+                                    sync_update: SyncUpdate::PaymentsUpdated,
+                                })
+                                .await;
                         }
                         Err(e) => {
                             error!("instant_wallet_load: failed to sync payments: {e:?}");
