@@ -321,22 +321,24 @@ impl SyncedStorage {
         if fields.contains_key(DELETED_AT_FIELD) {
             // Ignore not-found errors when deleting
             let _ = self.inner.delete_contact(data_id).await;
-        } else {
-            let sync_data: ContactSyncData = serde_json::from_value(
-                serde_json::to_value(&fields)
-                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
-            )
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
-
-            let contact = Contact {
-                id: data_id,
-                name: sync_data.name,
-                payment_identifier: sync_data.payment_identifier,
-                created_at: sync_data.created_at,
-                updated_at: sync_data.updated_at,
-            };
-            self.inner.insert_contact(contact).await?;
+            return Ok(());
         }
+
+        let sync_data: ContactSyncData = serde_json::from_value(
+            serde_json::to_value(&fields)
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+        )
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+
+        let contact = Contact {
+            id: data_id,
+            name: sync_data.name,
+            payment_identifier: sync_data.payment_identifier,
+            created_at: sync_data.created_at,
+            updated_at: sync_data.updated_at,
+        };
+        self.inner.insert_contact(contact).await?;
+
         Ok(())
     }
 }
