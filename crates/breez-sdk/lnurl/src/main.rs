@@ -235,28 +235,6 @@ where
 
     let subscribed_keys = Arc::new(Mutex::new(HashSet::new()));
 
-    // Initialize zap subscriptions if nostr keys are provided
-    if let Some(nostr_keys) = &nostr_keys {
-        // start bg task to subscribe to users with unexpired invoices
-        for user in repository.get_zap_monitored_users().await? {
-            let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
-                .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
-
-            zap::create_rpc_client_and_subscribe(
-                repository.clone(),
-                user_pubkey,
-                &connection_manager,
-                &coordinator,
-                signer.clone(),
-                session_manager.clone(),
-                Arc::clone(&service_provider),
-                nostr_keys.clone(),
-                Arc::clone(&subscribed_keys),
-            )
-            .await?;
-        }
-    }
-
     let state = State {
         db: repository,
         wallet,
@@ -274,6 +252,51 @@ where
         service_provider,
         subscribed_keys,
     };
+
+    // Initialize zap subscriptions in the background so the server starts quickly.
+    if state.nostr_keys.is_some() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let nostr_keys = state.nostr_keys.as_ref().unwrap();
+            match state.db.get_zap_monitored_users().await {
+                Ok(users) => {
+                    info!(
+                        "subscribing to {} zap-monitored users in the background",
+                        users.len()
+                    );
+                    for user in users {
+                        let user_pubkey = match bitcoin::secp256k1::PublicKey::from_str(&user) {
+                            Ok(pk) => pk,
+                            Err(e) => {
+                                error!("failed to parse user pubkey '{user}': {e:?}");
+                                continue;
+                            }
+                        };
+
+                        if let Err(e) = zap::create_rpc_client_and_subscribe(
+                            state.db.clone(),
+                            user_pubkey,
+                            &state.connection_manager,
+                            &state.coordinator,
+                            state.signer.clone(),
+                            state.session_manager.clone(),
+                            Arc::clone(&state.service_provider),
+                            nostr_keys.clone(),
+                            Arc::clone(&state.subscribed_keys),
+                        )
+                        .await
+                        {
+                            error!("failed to subscribe to zap updates for user '{user}': {e:?}");
+                        }
+                    }
+                    info!("finished subscribing to zap-monitored users");
+                }
+                Err(e) => {
+                    error!("failed to get zap-monitored users: {e:?}");
+                }
+            }
+        });
+    }
 
     let server_router = Router::new()
         .route(
