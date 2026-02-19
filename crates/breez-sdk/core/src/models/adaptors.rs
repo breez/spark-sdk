@@ -61,6 +61,17 @@ fn derive_htlc_details_from_ssp(
     })
 }
 
+/// If the HTLC details are missing a preimage, fill it in from the given fallback and update
+/// the status to [`SparkHtlcStatus::PreimageShared`] accordingly.
+fn reconcile_htlc_preimage(details: &mut SparkHtlcDetails, preimage: Option<&str>) {
+    if details.preimage.is_none() {
+        details.preimage = preimage.map(ToString::to_string);
+    }
+    if details.preimage.is_some() {
+        details.status = SparkHtlcStatus::PreimageShared;
+    }
+}
+
 impl PaymentMethod {
     fn from_transfer(transfer: &WalletTransfer) -> Self {
         match transfer.transfer_type {
@@ -80,6 +91,7 @@ impl PaymentMethod {
 }
 
 impl PaymentDetails {
+    #[allow(clippy::too_many_lines)]
     fn from_transfer(transfer: &WalletTransfer) -> Result<Option<Self>, SdkError> {
         if !transfer.is_ssp_transfer {
             // Check for Spark invoice payments
@@ -124,7 +136,12 @@ impl PaymentDetails {
                         "Invalid invoice in SspUserRequest::LightningReceiveRequest".to_string(),
                     ))?;
                 let htlc_details = if let Some(req) = &transfer.htlc_preimage_request {
-                    req.clone().try_into()?
+                    let mut details: SparkHtlcDetails = req.clone().try_into()?;
+                    reconcile_htlc_preimage(
+                        &mut details,
+                        request.lightning_receive_payment_preimage.as_deref(),
+                    );
+                    details
                 } else {
                     derive_htlc_details_from_ssp(
                         transfer,
@@ -148,7 +165,12 @@ impl PaymentDetails {
                         "Invalid invoice in SspUserRequest::LightningSendRequest".to_string(),
                     ))?;
                 let htlc_details = if let Some(req) = &transfer.htlc_preimage_request {
-                    req.clone().try_into()?
+                    let mut details: SparkHtlcDetails = req.clone().try_into()?;
+                    reconcile_htlc_preimage(
+                        &mut details,
+                        request.lightning_send_payment_preimage.as_deref(),
+                    );
+                    details
                 } else {
                     derive_htlc_details_from_ssp(
                         transfer,
@@ -289,11 +311,18 @@ impl TryFrom<WalletTransfer> for Payment {
 }
 
 impl Payment {
+    /// Creates a [`Payment`] from a [`LightningSendPayment`] and its associated HTLC details.
+    ///
+    /// The `htlc_details` may be stale (e.g. captured at payment creation time), so this
+    /// method reconciles them with the current state of the `payment`:
+    /// - The preimage is taken from `htlc_details` if present, otherwise from the payment.
+    /// - If a preimage is available from either source, the HTLC status is set to
+    ///   [`SparkHtlcStatus::PreimageShared`].
     pub fn from_lightning(
         payment: LightningSendPayment,
         amount_sat: u128,
         transfer_id: String,
-        htlc_details: SparkHtlcDetails,
+        mut htlc_details: SparkHtlcDetails,
     ) -> Result<Self, SdkError> {
         let mut status = match payment.status {
             LightningSendStatus::LightningPaymentSucceeded => PaymentStatus::Completed,
@@ -307,6 +336,8 @@ impl Payment {
         if payment.payment_preimage.is_some() {
             status = PaymentStatus::Completed;
         }
+
+        reconcile_htlc_preimage(&mut htlc_details, payment.payment_preimage.as_deref());
 
         let invoice_details = input::parse_invoice(&payment.encoded_invoice).ok_or(
             SdkError::Generic("Invalid invoice in LightnintSendPayment".to_string()),
