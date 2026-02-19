@@ -675,13 +675,27 @@ fn flutter_check_cmd() -> Result<()> {
     let flutter_dir = workspace_root.join("packages/flutter");
 
     println!("Checking Flutter package...");
+
+    // Run codegen first to regenerate frb_generated.rs from the current model mirrors
+    println!("Running Flutter codegen...");
     let status = Command::new("just")
-        .arg("build")
+        .arg("codegen")
         .current_dir(&flutter_dir)
         .status()
-        .with_context(|| "failed to run `just build`. Make sure just is installed: cargo install just (or brew install just)")?;
+        .with_context(|| "failed to run `just codegen`. Make sure just is installed: cargo install just (or brew install just)")?;
     if !status.success() {
-        bail!("Flutter check failed: just build failed");
+        bail!("Flutter check failed: just codegen failed");
+    }
+
+    // Then build the Rust library with the regenerated bindings
+    println!("Building Flutter Rust library...");
+    let status = Command::new("just")
+        .arg("build-release")
+        .current_dir(&flutter_dir)
+        .status()
+        .with_context(|| "failed to run `just build-release`")?;
+    if !status.success() {
+        bail!("Flutter check failed: just build-release failed");
     }
 
     println!("Flutter check completed successfully");
