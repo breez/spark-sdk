@@ -1,5 +1,6 @@
 mod buying_bitcoin;
 mod config;
+mod events_v2;
 mod external_signer;
 mod fiat_currencies;
 mod getting_started;

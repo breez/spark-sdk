@@ -252,6 +252,94 @@ impl Default for EventEmitter {
     }
 }
 
+/// A filtered event listener that only fires its callback for specific event types.
+///
+/// Used internally by the typed listener helpers (`on_payment`, `on_sync`, `on_deposit`)
+/// to provide ergonomic, type-safe event subscriptions.
+pub(crate) struct FilteredEventListener<F: ?Sized> {
+    filter: Box<F>,
+}
+
+// -- Payment filter --
+
+impl FilteredEventListener<dyn Fn(Payment) + Send + Sync> {
+    /// Creates a listener that fires only for payment events
+    /// (`PaymentSucceeded`, `PaymentPending`, `PaymentFailed`).
+    pub fn payment(callback: impl Fn(Payment) + Send + Sync + 'static) -> Self {
+        Self {
+            filter: Box::new(callback),
+        }
+    }
+}
+
+#[macros::async_trait]
+impl EventListener for FilteredEventListener<dyn Fn(Payment) + Send + Sync> {
+    async fn on_event(&self, event: SdkEvent) {
+        match event {
+            SdkEvent::PaymentSucceeded { payment }
+            | SdkEvent::PaymentPending { payment }
+            | SdkEvent::PaymentFailed { payment } => {
+                (self.filter)(payment);
+            }
+            _ => {}
+        }
+    }
+}
+
+// -- Sync filter --
+
+impl FilteredEventListener<dyn Fn() + Send + Sync> {
+    /// Creates a listener that fires only for `Synced` events.
+    pub fn sync(callback: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            filter: Box::new(callback),
+        }
+    }
+}
+
+#[macros::async_trait]
+impl EventListener for FilteredEventListener<dyn Fn() + Send + Sync> {
+    async fn on_event(&self, event: SdkEvent) {
+        if matches!(event, SdkEvent::Synced) {
+            (self.filter)();
+        }
+    }
+}
+
+// -- Deposit filter --
+
+impl FilteredEventListener<dyn Fn(Vec<DepositInfo>, Vec<DepositInfo>) + Send + Sync> {
+    /// Creates a listener that fires for deposit events.
+    ///
+    /// The callback receives `(unclaimed_deposits, claimed_deposits)`.
+    /// For `UnclaimedDeposits` events, `claimed_deposits` will be empty.
+    /// For `ClaimedDeposits` events, `unclaimed_deposits` will be empty.
+    pub fn deposit(
+        callback: impl Fn(Vec<DepositInfo>, Vec<DepositInfo>) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            filter: Box::new(callback),
+        }
+    }
+}
+
+#[macros::async_trait]
+impl EventListener
+    for FilteredEventListener<dyn Fn(Vec<DepositInfo>, Vec<DepositInfo>) + Send + Sync>
+{
+    async fn on_event(&self, event: SdkEvent) {
+        match event {
+            SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
+                (self.filter)(unclaimed_deposits, vec![]);
+            }
+            SdkEvent::ClaimedDeposits { claimed_deposits } => {
+                (self.filter)(vec![], claimed_deposits);
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

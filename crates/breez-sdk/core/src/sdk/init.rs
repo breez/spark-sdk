@@ -5,19 +5,24 @@ use tokio_with_wasm::alias as tokio;
 use tracing::{error, info};
 
 use crate::{
-    AssetFilter, Network, PaymentDetails, PaymentStatus, PaymentType, SetLnurlMetadataItem,
+    AssetFilter, Network, PaymentDetails, PaymentStatus, PaymentType, SdkEvent,
+    SetLnurlMetadataItem,
     error::SdkError,
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
     persist::ObjectCacheRepository,
     stable_balance::StableBalance,
+    sync::SparkSyncService,
     token_conversion::{
         DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
         TokenConverter,
     },
 };
 
-use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
+use super::{
+    BreezSdk, BreezSdkParams, SyncCoordinator,
+    helpers::{update_balances, validate_breez_api_key},
+};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -95,13 +100,59 @@ impl BreezSdk {
     /// This method initiates the following background tasks:
     /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
     /// 2. `periodic_sync`: syncs the wallet with the Spark network
-    /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
-    /// 4. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
+    /// 3. `spawn_instant_wallet_load`: fetches balance + recent payments immediately for fast UI
+    /// 4. `try_recover_lightning_address`: recovers the lightning address on startup
+    /// 5. `spawn_zap_receipt_publisher`: publishes zap receipts for payments with zap requests
     pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
+        self.spawn_instant_wallet_load();
         self.try_recover_lightning_address();
         self.spawn_zap_receipt_publisher();
+    }
+
+    /// Spawns a background task that concurrently fetches the wallet balance
+    /// and recent payment history immediately on connect.
+    ///
+    /// This provides a fast initial load so the UI can display balance and
+    /// payments without waiting for the full periodic sync to complete. Both
+    /// tasks run in parallel and each emits a `Synced` event on completion.
+    fn spawn_instant_wallet_load(&self) {
+        let sdk = self.clone();
+        tokio::spawn(async move {
+            let fetch_balance = async {
+                match update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
+                    Ok(()) => {
+                        info!("instant_wallet_load: balance updated, emitting Synced");
+                        sdk.event_emitter.emit(&SdkEvent::Synced).await;
+                    }
+                    Err(e) => error!("instant_wallet_load: failed to update balance: {e:?}"),
+                }
+            };
+
+            let fetch_history = {
+                let sdk = sdk.clone();
+                async move {
+                    let sync_service = SparkSyncService::new(
+                        sdk.spark_wallet.clone(),
+                        sdk.storage.clone(),
+                        sdk.event_emitter.clone(),
+                    );
+                    match sync_service.sync_payments(false).await {
+                        Ok(()) => {
+                            info!("instant_wallet_load: payments synced, emitting Synced");
+                            sdk.event_emitter.emit(&SdkEvent::Synced).await;
+                        }
+                        Err(e) => {
+                            error!("instant_wallet_load: failed to sync payments: {e:?}");
+                        }
+                    }
+                }
+            };
+
+            tokio::join!(fetch_balance, fetch_history);
+            info!("instant_wallet_load: completed");
+        });
     }
 
     fn spawn_spark_private_mode_initialization(&self) {

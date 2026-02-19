@@ -20,6 +20,7 @@
     - [Customizing the SDK](guide/customizing.md)
   - [Getting the SDK info](guide/get_info.md)
   - [Listening to events](guide/events.md)
+  - [Enhanced event listeners <span class="badge badge-new">New</span>](guide/events_v2.md)
   - [Adding logging](guide/logging.md)
   - [Spark status](guide/spark_status.md)
 - [Payment fundamentals](guide/payments.md)

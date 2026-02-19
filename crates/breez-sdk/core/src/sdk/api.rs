@@ -3,13 +3,13 @@ use std::str::FromStr;
 use tracing::{error, info};
 
 use crate::{
-    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
+    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse, DepositInfo,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
+    ListFiatRatesResponse, OptimizationProgress, Payment, SignMessageRequest, SignMessageResponse,
     UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
-    events::EventListener,
+    events::{EventListener, FilteredEventListener},
     issuer::TokenIssuer,
     models::{GetInfoRequest, GetInfoResponse},
     persist::ObjectCacheRepository,
@@ -308,5 +308,79 @@ impl BreezSdk {
             .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+// Typed event listener helpers (Rust-only — not exported to UniFFI/WASM/Flutter)
+impl BreezSdk {
+    /// Registers a listener that fires only for payment events
+    /// (`PaymentSucceeded`, `PaymentPending`, `PaymentFailed`).
+    ///
+    /// Returns a listener ID that can be used with [`remove_event_listener`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn example(sdk: &breez_sdk_spark::BreezSdk) {
+    /// let id = sdk.on_payment(|payment| {
+    ///     println!("Payment: {:?}", payment.status);
+    /// }).await;
+    /// # }
+    /// ```
+    pub async fn on_payment(&self, callback: impl Fn(Payment) + Send + Sync + 'static) -> String {
+        self.event_emitter
+            .add_listener(Box::new(FilteredEventListener::payment(callback)))
+            .await
+    }
+
+    /// Registers a listener that fires only for `Synced` events.
+    ///
+    /// Returns a listener ID that can be used with [`remove_event_listener`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn example(sdk: &breez_sdk_spark::BreezSdk) {
+    /// let id = sdk.on_sync(|| {
+    ///     println!("Wallet synced — refresh UI");
+    /// }).await;
+    /// # }
+    /// ```
+    pub async fn on_sync(&self, callback: impl Fn() + Send + Sync + 'static) -> String {
+        self.event_emitter
+            .add_listener(Box::new(FilteredEventListener::sync(callback)))
+            .await
+    }
+
+    /// Registers a listener that fires for deposit events
+    /// (`UnclaimedDeposits` and `ClaimedDeposits`).
+    ///
+    /// The callback receives `(unclaimed_deposits, claimed_deposits)`.
+    /// For `UnclaimedDeposits` events, `claimed_deposits` will be empty.
+    /// For `ClaimedDeposits` events, `unclaimed_deposits` will be empty.
+    ///
+    /// Returns a listener ID that can be used with [`remove_event_listener`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn example(sdk: &breez_sdk_spark::BreezSdk) {
+    /// let id = sdk.on_deposit(|unclaimed, claimed| {
+    ///     if !unclaimed.is_empty() {
+    ///         println!("New unclaimed deposits: {}", unclaimed.len());
+    ///     }
+    ///     if !claimed.is_empty() {
+    ///         println!("Deposits claimed: {}", claimed.len());
+    ///     }
+    /// }).await;
+    /// # }
+    /// ```
+    pub async fn on_deposit(
+        &self,
+        callback: impl Fn(Vec<DepositInfo>, Vec<DepositInfo>) + Send + Sync + 'static,
+    ) -> String {
+        self.event_emitter
+            .add_listener(Box::new(FilteredEventListener::deposit(callback)))
+            .await
     }
 }
