@@ -5,32 +5,6 @@ use crate::{
 
 use super::BreezSdk;
 
-impl BreezSdk {
-    /// Checks that no other contact (excluding `exclude_id`) shares the same
-    /// `(name, payment_identifier)` pair.
-    async fn check_contact_duplicate(
-        &self,
-        name: &str,
-        payment_identifier: &str,
-        exclude_id: Option<&str>,
-    ) -> Result<(), SdkError> {
-        let contacts = self
-            .storage
-            .list_contacts(ListContactsRequest {
-                name: Some(name.to_string()),
-                ..Default::default()
-            })
-            .await?;
-        let duplicate = contacts.iter().any(|c| {
-            c.payment_identifier == payment_identifier && exclude_id.is_none_or(|id| c.id != id)
-        });
-        if duplicate {
-            return Err(SdkError::InvalidInput("Duplicate entry".to_string()));
-        }
-        Ok(())
-    }
-}
-
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -46,9 +20,6 @@ impl BreezSdk {
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
         let name = validate_contact_input(&request.name, &request.payment_identifier)?;
         let payment_identifier = request.payment_identifier.trim().to_string();
-
-        self.check_contact_duplicate(&name, &payment_identifier, None)
-            .await?;
 
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
@@ -81,9 +52,6 @@ impl BreezSdk {
         let payment_identifier = request.payment_identifier.trim().to_string();
 
         let existing = self.storage.get_contact(request.id.clone()).await?;
-
-        self.check_contact_duplicate(&name, &payment_identifier, Some(&request.id))
-            .await?;
 
         let now = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
