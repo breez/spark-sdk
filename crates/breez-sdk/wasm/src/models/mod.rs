@@ -1276,3 +1276,23 @@ pub struct BuyBitcoinRequest {
 pub struct BuyBitcoinResponse {
     pub url: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConfigUpdate)]
+pub enum StableBalanceConfigUpdate {
+    Set { config: StableBalanceConfig },
+    Unset,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::MaxDepositClaimFeeUpdate)]
+pub enum MaxDepositClaimFeeUpdate {
+    Set { fee: MaxFee },
+    Unset,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateConfigRequest)]
+pub struct UpdateConfigRequest {
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxDepositClaimFeeUpdate>,
+    pub prefer_spark_over_lightning: Option<bool>,
+    pub stable_balance_config: Option<StableBalanceConfigUpdate>,
+}

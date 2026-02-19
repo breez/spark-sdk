@@ -307,6 +307,11 @@ impl BreezSdk {
         Ok(self.sdk.update_user_settings(request.into()).await?)
     }
 
+    #[wasm_bindgen(js_name = "updateConfig")]
+    pub async fn update_config(&self, request: UpdateConfigRequest) -> WasmResult<()> {
+        Ok(self.sdk.update_config(request.into()).await?)
+    }
+
     #[wasm_bindgen(js_name = "getTokenIssuer")]
     pub fn get_token_issuer(&self) -> TokenIssuer {
         let token_issuer = self.sdk.get_token_issuer();

@@ -1,9 +1,11 @@
 import {
+  type BreezSdk,
   defaultConfig,
   Network,
   MaxFee,
-  OptimizationConfig,
-  StableBalanceConfig
+  MaxDepositClaimFeeUpdate,
+  StableBalanceConfig,
+  StableBalanceConfigUpdate
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleConfigureSdk = () => {
@@ -60,9 +62,47 @@ const exampleConfigureStableBalance = () => {
   console.log('Config:', config)
 }
 
+const exampleUpdateConfig = async (sdk: BreezSdk) => {
+  // ANCHOR: update-config
+  // Update the sync interval and prefer Spark over Lightning
+  await sdk.updateConfig({
+    syncIntervalSecs: 30,
+    preferSparkOverLightning: true,
+    maxDepositClaimFee: undefined,
+    stableBalanceConfig: undefined
+  })
+
+  // Enable stable balance with auto-conversion
+  await sdk.updateConfig({
+    syncIntervalSecs: undefined,
+    preferSparkOverLightning: undefined,
+    maxDepositClaimFee: undefined,
+    stableBalanceConfig: new StableBalanceConfigUpdate.Set({
+      config: StableBalanceConfig.new({
+        tokenIdentifier: '<token_identifier>',
+        thresholdSats: BigInt(10_000),
+        maxSlippageBps: 100,
+        reservedSats: BigInt(1_000)
+      })
+    })
+  })
+
+  // Disable stable balance and update max deposit claim fee
+  await sdk.updateConfig({
+    syncIntervalSecs: undefined,
+    preferSparkOverLightning: undefined,
+    maxDepositClaimFee: new MaxDepositClaimFeeUpdate.Set({
+      fee: new MaxFee.Rate({ satPerVbyte: BigInt(5) })
+    }),
+    stableBalanceConfig: new StableBalanceConfigUpdate.Unset()
+  })
+  // ANCHOR_END: update-config
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
   exampleConfigureOptimizationConfiguration,
-  exampleConfigureStableBalance
+  exampleConfigureStableBalance,
+  exampleUpdateConfig
 }

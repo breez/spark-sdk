@@ -56,4 +56,32 @@ class Config {
         // ANCHOR_END: stable-balance-config
         println("Config: $config")
     }
+
+    suspend fun updateConfig(sdk: BreezSdk) {
+        // ANCHOR: update-config
+        // Update the sync interval and prefer Spark over Lightning
+        sdk.updateConfig(UpdateConfigRequest(
+            syncIntervalSecs = 30u,
+            preferSparkOverLightning = true
+        ))
+
+        // Enable stable balance with auto-conversion
+        sdk.updateConfig(UpdateConfigRequest(
+            stableBalanceConfig = StableBalanceConfigUpdate.Set(
+                StableBalanceConfig(
+                    tokenIdentifier = "<token_identifier>",
+                    thresholdSats = 10_000u,
+                    maxSlippageBps = 100u,
+                    reservedSats = 1_000u
+                )
+            )
+        ))
+
+        // Disable stable balance and update max deposit claim fee
+        sdk.updateConfig(UpdateConfigRequest(
+            maxDepositClaimFee = MaxDepositClaimFeeUpdate.Set(MaxFee.Rate(5u)),
+            stableBalanceConfig = StableBalanceConfigUpdate.Unset
+        ))
+        // ANCHOR_END: update-config
+    }
 }

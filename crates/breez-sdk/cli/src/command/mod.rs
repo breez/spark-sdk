@@ -6,14 +6,15 @@ use breez_sdk_spark::{
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxDepositClaimFeeUpdate, MaxFee,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, StableBalanceConfig,
+    StableBalanceConfigUpdate, SyncWalletRequest, TokenIssuer, TokenTransactionType,
+    UpdateConfigRequest, UpdateUserSettingsRequest,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rand::RngCore;
 use rustyline::{
     Completer, Editor, Helper, Hinter, Validator, highlight::Highlighter, hint::HistoryHinter,
@@ -25,6 +26,67 @@ use std::{
 };
 
 use crate::command::issuer::IssuerCommand;
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum UpdateConfigCommand {
+    /// Update stable balance configuration
+    #[command(subcommand)]
+    StableBalance(StableBalanceCommand),
+
+    /// Update max deposit claim fee
+    #[command(subcommand)]
+    MaxDepositFee(MaxDepositFeeCommand),
+
+    /// Set whether to prefer spark over lightning for payments
+    PreferSpark {
+        #[clap(long)]
+        enabled: bool,
+    },
+
+    /// Set the sync interval in seconds
+    SyncInterval {
+        #[clap(long)]
+        secs: u32,
+    },
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum StableBalanceCommand {
+    /// Enable or update stable balance
+    Set {
+        #[clap(long)]
+        token_identifier: String,
+        #[clap(long)]
+        threshold_sats: Option<u64>,
+        #[clap(long)]
+        max_slippage_bps: Option<u32>,
+        #[clap(long)]
+        reserved_sats: Option<u64>,
+    },
+    /// Disable stable balance
+    Unset,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum MaxDepositFeeCommand {
+    /// Set a fixed fee amount in sats
+    Fixed {
+        #[clap(long)]
+        amount: u64,
+    },
+    /// Set a fee rate in satoshis per vbyte
+    Rate {
+        #[clap(long)]
+        sat_per_vbyte: u64,
+    },
+    /// Use network-recommended fee with leeway
+    NetworkRecommended {
+        #[clap(long)]
+        leeway_sat_per_vbyte: u64,
+    },
+    /// Clear the max fee (any fee is allowed)
+    Unset,
+}
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -306,6 +368,10 @@ pub enum Command {
 
     /// Get the status of the Spark network services
     GetSparkStatus,
+
+    /// Update SDK configuration at runtime
+    #[command(subcommand)]
+    UpdateConfig(UpdateConfigCommand),
 
     /// Issuer related commands
     #[command(subcommand)]
@@ -873,6 +939,74 @@ pub(crate) async fn execute_command(
         Command::GetSparkStatus => {
             let res = breez_sdk_spark::get_spark_status().await?;
             print_value(&res)?;
+            Ok(true)
+        }
+        Command::UpdateConfig(subcmd) => {
+            let request = match subcmd {
+                UpdateConfigCommand::StableBalance(cmd) => {
+                    let update = match cmd {
+                        StableBalanceCommand::Set {
+                            token_identifier,
+                            threshold_sats,
+                            max_slippage_bps,
+                            reserved_sats,
+                        } => StableBalanceConfigUpdate::Set {
+                            config: StableBalanceConfig {
+                                token_identifier,
+                                threshold_sats,
+                                max_slippage_bps,
+                                reserved_sats,
+                            },
+                        },
+                        StableBalanceCommand::Unset => StableBalanceConfigUpdate::Unset,
+                    };
+                    UpdateConfigRequest {
+                        stable_balance_config: Some(update),
+                        max_deposit_claim_fee: None,
+                        prefer_spark_over_lightning: None,
+                        sync_interval_secs: None,
+                    }
+                }
+                UpdateConfigCommand::MaxDepositFee(cmd) => {
+                    let update = match cmd {
+                        MaxDepositFeeCommand::Fixed { amount } => MaxDepositClaimFeeUpdate::Set {
+                            fee: MaxFee::Fixed { amount },
+                        },
+                        MaxDepositFeeCommand::Rate { sat_per_vbyte } => {
+                            MaxDepositClaimFeeUpdate::Set {
+                                fee: MaxFee::Rate { sat_per_vbyte },
+                            }
+                        }
+                        MaxDepositFeeCommand::NetworkRecommended {
+                            leeway_sat_per_vbyte,
+                        } => MaxDepositClaimFeeUpdate::Set {
+                            fee: MaxFee::NetworkRecommended {
+                                leeway_sat_per_vbyte,
+                            },
+                        },
+                        MaxDepositFeeCommand::Unset => MaxDepositClaimFeeUpdate::Unset,
+                    };
+                    UpdateConfigRequest {
+                        stable_balance_config: None,
+                        max_deposit_claim_fee: Some(update),
+                        prefer_spark_over_lightning: None,
+                        sync_interval_secs: None,
+                    }
+                }
+                UpdateConfigCommand::PreferSpark { enabled } => UpdateConfigRequest {
+                    stable_balance_config: None,
+                    max_deposit_claim_fee: None,
+                    prefer_spark_over_lightning: Some(enabled),
+                    sync_interval_secs: None,
+                },
+                UpdateConfigCommand::SyncInterval { secs } => UpdateConfigRequest {
+                    stable_balance_config: None,
+                    max_deposit_claim_fee: None,
+                    prefer_spark_over_lightning: None,
+                    sync_interval_secs: Some(secs),
+                },
+            };
+            sdk.update_config(request).await?;
             Ok(true)
         }
         Command::Issuer(issuer_command) => {

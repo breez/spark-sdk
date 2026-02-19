@@ -477,7 +477,7 @@ impl BreezSdk {
                     Some(InvoiceDescription::Memo(description.clone())),
                     None,
                     expiry_secs,
-                    self.config.prefer_spark_over_lightning,
+                    *self.prefer_spark_over_lightning.lock().await,
                 )
                 .await?
                 .invoice
@@ -556,9 +556,10 @@ impl BreezSdk {
         }
 
         // Prevent auto-convert from running while this payment is in progress.
+        let maybe_stable_balance = self.stable_balance.lock().await.clone();
         let _lock_guard = match (
             &request.prepare_response.token_identifier,
-            &self.stable_balance,
+            &maybe_stable_balance,
         ) {
             (None, Some(sb)) => Some(sb.create_payment_lock_guard()),
             _ => None,
@@ -1014,7 +1015,7 @@ impl BreezSdk {
                 prefer_spark,
                 completion_timeout_secs,
             }) => (prefer_spark, completion_timeout_secs),
-            _ => (self.config.prefer_spark_over_lightning, None),
+            _ => (*self.prefer_spark_over_lightning.lock().await, None),
         };
         let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
             (true, Some(fee), _) => fee,
@@ -1305,7 +1306,8 @@ impl BreezSdk {
         token_identifier: Option<&String>,
         payment_amount: u128,
     ) -> Result<Option<ConversionOptions>, SdkError> {
-        if let Some(stable_balance) = &self.stable_balance {
+        let maybe_stable_balance = self.stable_balance.lock().await.clone();
+        if let Some(stable_balance) = &maybe_stable_balance {
             stable_balance
                 .get_conversion_options(options, token_identifier, payment_amount)
                 .await

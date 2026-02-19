@@ -69,6 +69,36 @@ impl SyncRequest {
     }
 }
 
+/// Manages a service-scoped shutdown channel linked to the global SDK shutdown.
+///
+/// When the global shutdown fires, the forwarder task propagates it to this
+/// service's dedicated channel. Calling [`shutdown`](ServiceShutdown::shutdown)
+/// signals the service independently of the global shutdown.
+pub(crate) struct ServiceShutdown {
+    sender: watch::Sender<()>,
+}
+
+impl ServiceShutdown {
+    /// Creates a new shutdown linked to the global shutdown.
+    /// Returns `(self, receiver)` — pass the receiver to the service being started.
+    pub(crate) fn new(global_shutdown: &watch::Sender<()>) -> (Self, watch::Receiver<()>) {
+        let (tx, rx) = watch::channel(());
+        let mut global_rx = global_shutdown.subscribe();
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            let _ = global_rx.changed().await;
+            let _ = tx_clone.send(());
+        });
+        (Self { sender: tx }, rx)
+    }
+
+    /// Signal this service to shut down and wait for it to observe the signal.
+    pub(crate) async fn send(self) {
+        let _ = self.sender.send(());
+        self.sender.closed().await;
+    }
+}
+
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
 #[derive(Clone)]
@@ -92,8 +122,13 @@ pub struct BreezSdk {
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) nostr_client: Arc<NostrClient>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
-    pub(crate) stable_balance: Option<Arc<StableBalance>>,
+    pub(crate) sync_signing_client: Option<SigningClient>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    pub(crate) stable_balance: Arc<Mutex<Option<Arc<StableBalance>>>>,
+    pub(crate) stable_balance_shutdown: Arc<Mutex<Option<ServiceShutdown>>>,
+    pub(crate) max_deposit_claim_fee: Arc<Mutex<Option<crate::MaxFee>>>,
+    pub(crate) prefer_spark_over_lightning: Arc<Mutex<bool>>,
+    pub(crate) sync_interval_secs: Arc<Mutex<u32>>,
 }
 
 pub(crate) struct BreezSdkParams {

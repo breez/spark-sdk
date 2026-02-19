@@ -1,6 +1,6 @@
 use flashnet::{FlashnetConfig, IntegratorConfig};
 use std::sync::Arc;
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::{Mutex, OnceCell, broadcast, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{error, info};
 
@@ -17,7 +17,9 @@ use crate::{
     },
 };
 
-use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
+use super::{
+    BreezSdk, BreezSdkParams, ServiceShutdown, SyncCoordinator, helpers::validate_breez_api_key,
+};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -53,16 +55,26 @@ impl BreezSdk {
         ));
 
         // Create StableBalance if configured (spawns its own auto-convert background task)
-        let stable_balance = params.config.stable_balance_config.as_ref().map(|config| {
-            Arc::new(StableBalance::new(
-                config.clone(),
-                Arc::clone(&token_converter),
-                Arc::clone(&params.spark_wallet),
-                params.shutdown_sender.subscribe(),
-                params.sync_signing_client.clone(),
-            ))
-        });
+        let (stable_balance, stable_balance_shutdown) =
+            match params.config.stable_balance_config.as_ref() {
+                Some(config) => {
+                    let (shutdown, shutdown_rx) = ServiceShutdown::new(&params.shutdown_sender);
+                    let stable_balance = Arc::new(StableBalance::new(
+                        config.clone(),
+                        Arc::clone(&token_converter),
+                        Arc::clone(&params.spark_wallet),
+                        shutdown_rx,
+                        params.sync_signing_client.clone(),
+                    ));
+                    (Some(stable_balance), Some(shutdown))
+                }
+                None => (None, None),
+            };
         let sync_coordinator = SyncCoordinator::new();
+
+        let max_deposit_claim_fee = params.config.max_deposit_claim_fee.clone();
+        let prefer_spark_over_lightning = params.config.prefer_spark_over_lightning;
+        let sync_interval_secs = params.config.sync_interval_secs;
 
         let sdk = Self {
             config: params.config,
@@ -76,14 +88,19 @@ impl BreezSdk {
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_coordinator,
-            zap_receipt_trigger: tokio::sync::broadcast::channel(10).0,
+            zap_receipt_trigger: broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
-            stable_balance,
+            sync_signing_client: params.sync_signing_client,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
+            stable_balance: Arc::new(Mutex::new(stable_balance)),
+            stable_balance_shutdown: Arc::new(Mutex::new(stable_balance_shutdown)),
+            max_deposit_claim_fee: Arc::new(Mutex::new(max_deposit_claim_fee)),
+            prefer_spark_over_lightning: Arc::new(Mutex::new(prefer_spark_over_lightning)),
+            sync_interval_secs: Arc::new(Mutex::new(sync_interval_secs)),
         };
 
         sdk.start(initial_synced_sender);

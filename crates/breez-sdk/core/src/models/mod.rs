@@ -646,6 +646,61 @@ pub struct StableBalanceConfig {
     pub reserved_sats: Option<u64>,
 }
 
+/// Update variant for the `stable_balance_config` field in [`UpdateConfigRequest`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum StableBalanceConfigUpdate {
+    /// Enable or update stable balance with the given configuration.
+    Set { config: StableBalanceConfig },
+    /// Disable stable balance (auto-conversion stops).
+    Unset,
+}
+
+/// Update variant for the `max_deposit_claim_fee` field in [`UpdateConfigRequest`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum MaxDepositClaimFeeUpdate {
+    /// Set the maximum fee for deposit claims.
+    Set { fee: MaxFee },
+    /// Disable automatic deposit claiming.
+    Unset,
+}
+
+/// Request to update SDK configuration at runtime.
+///
+/// Only fields set to `Some` are applied; `None` fields are left unchanged.
+/// For `stable_balance_config` and `max_deposit_claim_fee`, use `Set`/`Unset` variants
+/// to distinguish between setting an explicit value and clearing/disabling.
+/// For `prefer_spark_over_lightning` and `sync_interval_secs`, provide the value directly.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UpdateConfigRequest {
+    /// The interval in seconds between periodic wallet syncs.
+    /// `None` leaves it unchanged.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub sync_interval_secs: Option<u32>,
+
+    /// Update the maximum fee allowed for automatic deposit claims.
+    ///
+    /// Use [`MaxDepositClaimFeeUpdate::Set`] to set an explicit fee limit,
+    /// [`MaxDepositClaimFeeUpdate::Unset`] to disable automatic deposit claiming.
+    /// `None` leaves it unchanged.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub max_deposit_claim_fee: Option<MaxDepositClaimFeeUpdate>,
+
+    /// Whether to prefer Spark transfers over Lightning when both are available.
+    /// `None` leaves it unchanged.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_spark_over_lightning: Option<bool>,
+
+    /// Update the stable balance (auto-conversion) configuration.
+    ///
+    /// Use [`StableBalanceConfigUpdate::Set`] to enable/update, [`StableBalanceConfigUpdate::Unset`]
+    /// to disable. `None` leaves it unchanged.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub stable_balance_config: Option<StableBalanceConfigUpdate>,
+}
+
 impl Config {
     /// Validates the configuration.
     ///

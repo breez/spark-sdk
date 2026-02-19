@@ -67,3 +67,44 @@ func ConfigureStableBalance() {
 	// ANCHOR_END: stable-balance-config
 	log.Printf("Config: %+v", config)
 }
+
+func UpdateConfig(sdk *breez_sdk_spark.BreezSdk) {
+	// ANCHOR: update-config
+	// Update the sync interval and prefer Spark over Lightning
+	syncIntervalSecs := uint32(30)
+	preferSpark := true
+	sdk.UpdateConfig(breez_sdk_spark.UpdateConfigRequest{
+		SyncIntervalSecs:         &syncIntervalSecs,
+		PreferSparkOverLightning: &preferSpark,
+	})
+
+	// Enable stable balance with auto-conversion
+	thresholdSats := uint64(10_000)
+	maxSlippageBps := uint32(100)
+	reservedSats := uint64(1_000)
+	setStableBalance := breez_sdk_spark.StableBalanceConfigUpdate(
+		breez_sdk_spark.StableBalanceConfigUpdateSet{
+			Config: breez_sdk_spark.StableBalanceConfig{
+				TokenIdentifier: "<token_identifier>",
+				ThresholdSats:   &thresholdSats,
+				MaxSlippageBps:  &maxSlippageBps,
+				ReservedSats:    &reservedSats,
+			},
+		})
+	sdk.UpdateConfig(breez_sdk_spark.UpdateConfigRequest{
+		StableBalanceConfig: &setStableBalance,
+	})
+
+	// Disable stable balance and update max deposit claim fee
+	setFee := breez_sdk_spark.MaxDepositClaimFeeUpdate(
+		breez_sdk_spark.MaxDepositClaimFeeUpdateSet{
+			Fee: breez_sdk_spark.MaxFeeRate{SatPerVbyte: 5},
+		})
+	unsetStableBalance := breez_sdk_spark.StableBalanceConfigUpdate(
+		breez_sdk_spark.StableBalanceConfigUpdateUnset{})
+	sdk.UpdateConfig(breez_sdk_spark.UpdateConfigRequest{
+		MaxDepositClaimFee:  &setFee,
+		StableBalanceConfig: &unsetStableBalance,
+	})
+	// ANCHOR_END: update-config
+}

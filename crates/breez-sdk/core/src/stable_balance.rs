@@ -96,6 +96,7 @@ impl StableBalance {
     /// 1. Waits for a trigger signal
     /// 2. Executes auto-conversion if conditions are met
     fn spawn_auto_convert_task(&self, mut shutdown_receiver: watch::Receiver<()>) {
+        info!("Auto-conversion task started");
         let stable_balance = self.clone();
 
         tokio::spawn(async move {

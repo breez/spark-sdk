@@ -221,6 +221,13 @@ impl BreezSdk {
         self.inner.update_user_settings(request).await
     }
 
+    pub async fn update_config(
+        &self,
+        request: UpdateConfigRequest,
+    ) -> Result<(), SdkError> {
+        self.inner.update_config(request).await
+    }
+
     #[frb(sync)]
     pub fn get_token_issuer(&self) -> crate::issuer::TokenIssuer {
         let token_issuer = self.inner.get_token_issuer();

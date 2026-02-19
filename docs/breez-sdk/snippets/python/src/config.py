@@ -1,10 +1,14 @@
 import logging
 from breez_sdk_spark import (
+    BreezSdk,
     default_config,
     Network,
     MaxFee,
+    MaxDepositClaimFeeUpdate,
     OptimizationConfig,
     StableBalanceConfig,
+    StableBalanceConfigUpdate,
+    UpdateConfigRequest,
 )
 
 
@@ -57,3 +61,32 @@ async def configure_stable_balance():
     )
     # ANCHOR_END: stable-balance-config
     logging.info(f"Config: {config}")
+
+async def update_config(sdk: BreezSdk):
+    # ANCHOR: update-config
+    # Update the sync interval and prefer Spark over Lightning
+    await sdk.update_config(request=UpdateConfigRequest(
+        sync_interval_secs=30,
+        prefer_spark_over_lightning=True,
+    ))
+
+    # Enable stable balance with auto-conversion
+    await sdk.update_config(request=UpdateConfigRequest(
+        stable_balance_config=StableBalanceConfigUpdate.SET(
+            config=StableBalanceConfig(
+                token_identifier="<token_identifier>",
+                threshold_sats=10_000,
+                max_slippage_bps=100,
+                reserved_sats=1_000,
+            )
+        ),
+    ))
+
+    # Disable stable balance and update max deposit claim fee
+    await sdk.update_config(request=UpdateConfigRequest(
+        max_deposit_claim_fee=MaxDepositClaimFeeUpdate.SET(
+            fee=MaxFee.RATE(sat_per_vbyte=5),
+        ),
+        stable_balance_config=StableBalanceConfigUpdate.UNSET,
+    ))
+    # ANCHOR_END: update-config

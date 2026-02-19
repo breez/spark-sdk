@@ -1,4 +1,4 @@
-import { defaultConfig } from '@breeztech/breez-sdk-spark'
+import { type BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
 
 const exampleConfigureSdk = async () => {
   // ANCHOR: max-deposit-claim-fee
@@ -54,9 +54,42 @@ const exampleConfigureStableBalance = async () => {
   console.log('Config:', config)
 }
 
+const exampleUpdateConfig = async (sdk: BreezSdk) => {
+  // ANCHOR: update-config
+  // Update the sync interval and prefer Spark over Lightning
+  await sdk.updateConfig({
+    syncIntervalSecs: 30,
+    preferSparkOverLightning: true
+  })
+
+  // Enable stable balance with auto-conversion
+  await sdk.updateConfig({
+    stableBalanceConfig: {
+      type: 'set',
+      config: {
+        tokenIdentifier: '<token_identifier>',
+        thresholdSats: 10_000,
+        maxSlippageBps: 100,
+        reservedSats: 1_000
+      }
+    }
+  })
+
+  // Disable stable balance and update max deposit claim fee
+  await sdk.updateConfig({
+    maxDepositClaimFee: {
+      type: 'set',
+      fee: { type: 'rate', satPerVbyte: 5 }
+    },
+    stableBalanceConfig: { type: 'unset' }
+  })
+  // ANCHOR_END: update-config
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
   exampleConfigureOptimizationConfiguration,
-  exampleConfigureStableBalance
+  exampleConfigureStableBalance,
+  exampleUpdateConfig
 }

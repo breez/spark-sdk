@@ -1,18 +1,21 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 use tracing::{error, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
-    UpdateUserSettingsRequest, UserSettings,
+    ListFiatRatesResponse, MaxDepositClaimFeeUpdate, OptimizationProgress, SignMessageRequest,
+    SignMessageResponse, StableBalanceConfig, StableBalanceConfigUpdate, UpdateUserSettingsRequest,
+    UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
     models::{GetInfoRequest, GetInfoResponse},
     persist::ObjectCacheRepository,
+    sdk::ServiceShutdown,
+    stable_balance::StableBalance,
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
@@ -63,6 +66,47 @@ impl BreezSdk {
 
         self.shutdown_sender.closed().await;
         info!("Breez SDK disconnected");
+        Ok(())
+    }
+
+    /// Updates SDK configuration at runtime.
+    ///
+    /// Only fields set to `Some` are applied; `None` fields are left unchanged.
+    /// For service-backed fields like `stable_balance_config`, the old service is
+    /// stopped and a new one is started with the updated configuration.
+    pub async fn update_config(&self, request: crate::UpdateConfigRequest) -> Result<(), SdkError> {
+        if let Some(update) = request.stable_balance_config {
+            match update {
+                StableBalanceConfigUpdate::Set { config } => {
+                    self.apply_stable_balance_config(Some(config)).await?;
+                }
+                StableBalanceConfigUpdate::Unset => {
+                    self.apply_stable_balance_config(None).await?;
+                }
+            }
+        }
+
+        if let Some(update) = request.max_deposit_claim_fee {
+            let mut fee = self.max_deposit_claim_fee.lock().await;
+            match update {
+                MaxDepositClaimFeeUpdate::Set { fee: new_fee } => {
+                    *fee = Some(new_fee);
+                }
+                MaxDepositClaimFeeUpdate::Unset => {
+                    *fee = None;
+                }
+            }
+        }
+
+        if let Some(prefer_spark) = request.prefer_spark_over_lightning {
+            *self.prefer_spark_over_lightning.lock().await = prefer_spark;
+        }
+
+        if let Some(secs) = request.sync_interval_secs {
+            *self.sync_interval_secs.lock().await = secs;
+        }
+
+        info!("SDK configuration updated");
         Ok(())
     }
 
@@ -308,5 +352,40 @@ impl BreezSdk {
             .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+impl BreezSdk {
+    /// Applies a stable balance configuration change.
+    ///
+    /// `Some(config)` → stop old service (if any), start new one.
+    /// `None` → stop old service (if any), leave disabled.
+    pub(super) async fn apply_stable_balance_config(
+        &self,
+        config: Option<StableBalanceConfig>,
+    ) -> Result<(), SdkError> {
+        // Stop the existing service if running
+        let maybe_shutdown = self.stable_balance_shutdown.lock().await.take();
+        if let Some(shutdown) = maybe_shutdown {
+            shutdown.send().await;
+        }
+        // Clear the old service reference
+        *self.stable_balance.lock().await = None;
+
+        // Start a new service if config is provided
+        if let Some(config) = config {
+            let (shutdown, shutdown_rx) = ServiceShutdown::new(&self.shutdown_sender);
+            let stable_balance = Arc::new(StableBalance::new(
+                config,
+                Arc::clone(&self.token_converter),
+                Arc::clone(&self.spark_wallet),
+                shutdown_rx,
+                self.sync_signing_client.clone(),
+            ));
+            *self.stable_balance.lock().await = Some(stable_balance);
+            *self.stable_balance_shutdown.lock().await = Some(shutdown);
+        }
+
+        Ok(())
     }
 }

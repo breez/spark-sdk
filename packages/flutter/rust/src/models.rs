@@ -1000,6 +1000,26 @@ pub struct _UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
 }
 
+#[frb(mirror(StableBalanceConfigUpdate))]
+pub enum _StableBalanceConfigUpdate {
+    Set { config: StableBalanceConfig },
+    Unset,
+}
+
+#[frb(mirror(MaxDepositClaimFeeUpdate))]
+pub enum _MaxDepositClaimFeeUpdate {
+    Set { fee: MaxFee },
+    Unset,
+}
+
+#[frb(mirror(UpdateConfigRequest))]
+pub struct _UpdateConfigRequest {
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxDepositClaimFeeUpdate>,
+    pub prefer_spark_over_lightning: Option<bool>,
+    pub stable_balance_config: Option<StableBalanceConfigUpdate>,
+}
+
 #[frb(mirror(CreateIssuerTokenRequest))]
 pub struct _CreateIssuerTokenRequest {
     pub name: String,
