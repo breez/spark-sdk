@@ -232,13 +232,8 @@ impl PostgresStorage {
                     name TEXT NOT NULL,
                     payment_identifier TEXT NOT NULL,
                     created_at BIGINT NOT NULL,
-                    updated_at BIGINT NOT NULL,
-                    UNIQUE(name, payment_identifier)
+                    updated_at BIGINT NOT NULL
                 )"],
-            // Migration 7: Remove UNIQUE constraint from contacts
-            &[
-                "ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_name_payment_identifier_key",
-            ],
         ]
     }
 }
