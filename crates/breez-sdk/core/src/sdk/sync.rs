@@ -135,8 +135,9 @@ impl BreezSdk {
                     // couldn't process it. Now that the payment is completed, re-trigger.
                     let _ = self.lnurl_preimage_trigger.send(());
 
+                    // Fetch the payment to include already stored metadata
                     self.event_emitter
-                        .emit(&SdkEvent::PaymentSucceeded { payment })
+                        .get_emit_payment(self.storage.clone(), payment)
                         .await;
                 }
                 self.sync_coordinator
@@ -154,8 +155,9 @@ impl BreezSdk {
                     // Ensure potential lnurl metadata is synced before emitting the event
                     self.sync_single_lnurl_metadata(&mut payment).await;
 
+                    // Fetch the payment to include already stored metadata
                     self.event_emitter
-                        .emit(&SdkEvent::PaymentPending { payment })
+                        .get_emit_payment(self.storage.clone(), payment)
                         .await;
                 }
                 self.sync_coordinator

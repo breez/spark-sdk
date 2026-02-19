@@ -1,14 +1,19 @@
 use core::fmt;
 use std::{
     collections::BTreeMap,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-use crate::{DepositInfo, Payment};
+use tracing::info;
+
+use crate::{DepositInfo, Payment, Storage, utils::payments::get_payment_with_conversion_details};
 
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
@@ -209,6 +214,17 @@ impl EventEmitter {
         for listener in listeners.values() {
             listener.on_event(event.clone()).await;
         }
+    }
+
+    /// Gets the payment from storage to include already stored metadata and conversion details.
+    /// Emit the appropriate event based on its status. Falls back to the provided
+    /// payment if the storage lookup fails.
+    pub(crate) async fn get_emit_payment(&self, storage: Arc<dyn Storage>, payment: Payment) {
+        let payment = get_payment_with_conversion_details(payment.id.clone(), storage)
+            .await
+            .unwrap_or(payment);
+        info!("Emitting payment event: {payment:?}");
+        self.emit(&SdkEvent::from_payment(payment)).await;
     }
 
     pub async fn emit_synced(&self, synced: &InternalSyncedEvent) {

@@ -6,7 +6,7 @@ use spark_wallet::{
 use tracing::{error, info};
 
 use crate::{
-    EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, SdkEvent, Storage,
+    EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository},
     utils::token::token_transaction_to_payments,
 };
@@ -114,15 +114,9 @@ impl SparkSyncService {
                 info!("Inserted payment: {payment:?}");
 
                 if should_emit {
-                    // Re-read from DB to pick up on already persisted metadata.
-                    let emit_payment = self
-                        .storage
-                        .get_payment_by_id(payment.id.clone())
-                        .await
-                        .unwrap_or(payment);
-                    info!("Emitting payment event on sync: {emit_payment:?}");
+                    // Fetch the payment to include already stored metadata
                     self.event_emitter
-                        .emit(&SdkEvent::from_payment(emit_payment))
+                        .get_emit_payment(self.storage.clone(), payment.clone())
                         .await;
                 }
             }
@@ -355,9 +349,9 @@ impl SparkSyncService {
             }
 
             if should_emit {
-                info!("Emitting payment event on sync: {payment:?}");
+                // Fetch the payment to include already stored metadata
                 self.event_emitter
-                    .emit(&SdkEvent::from_payment(payment.clone()))
+                    .get_emit_payment(self.storage.clone(), payment.clone())
                     .await;
             }
         }

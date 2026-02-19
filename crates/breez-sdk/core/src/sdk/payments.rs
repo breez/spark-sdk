@@ -25,6 +25,7 @@ use crate::{
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
+    utils::payments::get_payment_with_conversion_details,
     utils::{
         send_payment_validation::validate_prepare_send_payment_request,
         token::map_and_persist_token_transaction,
@@ -427,22 +428,8 @@ impl BreezSdk {
         &self,
         request: GetPaymentRequest,
     ) -> Result<GetPaymentResponse, SdkError> {
-        let mut payment = self.storage.get_payment_by_id(request.payment_id).await?;
-
-        // Load related payments (single ID batch)
-        let related_payments_map = self
-            .storage
-            .get_payments_by_parent_ids(vec![payment.id.clone()])
-            .await?;
-
-        if let Some(related_payments) = related_payments_map.get(&payment.id) {
-            match related_payments.try_into() {
-                Ok(conversion_details) => payment.conversion_details = Some(conversion_details),
-                Err(e) => {
-                    warn!("Related payments not convertable to ConversionDetails: {e}");
-                }
-            }
-        }
+        let payment =
+            get_payment_with_conversion_details(request.payment_id, self.storage.clone()).await?;
 
         Ok(GetPaymentResponse { payment })
     }
@@ -530,6 +517,7 @@ impl BreezSdk {
         // Emit payment status event and trigger wallet state sync
         if let Ok(response) = &res {
             if !suppress_payment_event {
+                // Emit the payment with metadata already included
                 self.event_emitter
                     .emit(&SdkEvent::from_payment(response.payment.clone()))
                     .await;
@@ -712,13 +700,9 @@ impl BreezSdk {
             )
             .await?;
         // Fetch the updated payment with conversion details
-        self.get_payment(GetPaymentRequest {
-            payment_id: response.payment.id,
-        })
-        .await
-        .map(|res| SendPaymentResponse {
-            payment: res.payment,
-        })
+        get_payment_with_conversion_details(response.payment.id, self.storage.clone())
+            .await
+            .map(|payment| SendPaymentResponse { payment })
         // _lock_guard drops here, releasing the distributed lock if no other payments are in-flight
     }
 
@@ -1241,7 +1225,8 @@ impl BreezSdk {
                                 if let Err(e) = storage.insert_payment(payment.clone()).await {
                                     error!("Failed to update payment in storage: {e:?}");
                                 }
-                                event_emitter.emit(&SdkEvent::from_payment(payment.clone())).await;
+                                // Fetch the payment to include already stored metadata
+                                event_emitter.get_emit_payment(storage.clone(), payment.clone()).await;
                                 sync_coordinator
                                     .trigger_sync_no_wait(SyncType::WalletState, true)
                                     .await;
