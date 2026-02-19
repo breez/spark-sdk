@@ -278,6 +278,47 @@ pub fn default_external_signer(
     Ok(Arc::new(signer))
 }
 
+/// Verifies a signed message against a public key.
+///
+/// This is a pure cryptographic operation that does not require a wallet
+/// connection. The message is SHA256 hashed before verification.
+///
+/// The signature can be hex-encoded in either DER or compact format.
+///
+/// # Arguments
+///
+/// * `request` - The verification request containing message, public key, and signature
+///
+/// # Returns
+///
+/// Result containing whether the signature is valid
+#[allow(clippy::needless_pass_by_value)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn verify_message(
+    request: crate::CheckMessageRequest,
+) -> Result<crate::CheckMessageResponse, SdkError> {
+    use bitcoin::hashes::Hash as _;
+    use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+    use std::str::FromStr;
+
+    let pubkey = PublicKey::from_str(&request.pubkey)
+        .map_err(|_| SdkError::InvalidInput("Invalid public key".to_string()))?;
+    let signature_bytes = hex::decode(&request.signature)
+        .map_err(|_| SdkError::InvalidInput("Not a valid hex encoded signature".to_string()))?;
+    let signature = Signature::from_der(&signature_bytes)
+        .or_else(|_| Signature::from_compact(&signature_bytes))
+        .map_err(|_| {
+            SdkError::InvalidInput("Not a valid DER or compact encoded signature".to_string())
+        })?;
+
+    let secp = bitcoin::secp256k1::Secp256k1::verification_only();
+    let msg_hash = bitcoin::hashes::sha256::Hash::hash(request.message.as_bytes());
+    let msg = bitcoin::secp256k1::Message::from_digest(msg_hash.to_byte_array());
+    let is_valid = secp.verify_ecdsa(&msg, &signature, &pubkey).is_ok();
+
+    Ok(crate::CheckMessageResponse { is_valid })
+}
+
 /// Fetches the current status of Spark network services relevant to the SDK.
 ///
 /// This function queries the Spark status API and returns the worst status

@@ -1,4 +1,4 @@
-import { type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { Breez, type BreezSdk } from '@breeztech/breez-sdk-spark'
 
 const exampleSignMessage = async (sdk: BreezSdk) => {
   // ANCHOR: sign-message
@@ -29,4 +29,18 @@ const exampleCheckMessage = async (sdk: BreezSdk) => {
 
   console.log(`Signature valid: ${isValid}`)
   // ANCHOR_END: check-message
+}
+
+const exampleVerifyMessage = () => {
+  // ANCHOR: verify-message
+  // No wallet connection needed — pure cryptographic verification
+  const response = Breez.verifyMessage({
+    message: '<message>',
+    pubkey: '<pubkey of signer>',
+    signature: '<message signature>'
+  })
+  const isValid = response.isValid
+
+  console.log(`Signature valid: ${isValid}`)
+  // ANCHOR_END: verify-message
 }

@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;

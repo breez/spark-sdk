@@ -79,4 +79,13 @@ impl Breez {
         let status = breez_sdk_spark::get_spark_status().await?;
         Ok(status.into())
     }
+
+    /// Verifies a signed message against a public key.
+    ///
+    /// This is a pure cryptographic operation that does not require a wallet
+    /// connection. The message is SHA256 hashed before verification.
+    #[wasm_bindgen(js_name = "verifyMessage")]
+    pub fn verify_message(request: CheckMessageRequest) -> WasmResult<CheckMessageResponse> {
+        Ok(breez_sdk_spark::verify_message(request.into())?.into())
+    }
 }

@@ -45,4 +45,15 @@ impl Breez {
     pub async fn get_spark_status() -> Result<SparkStatus, SdkError> {
         breez_sdk_spark::get_spark_status().await
     }
+
+    /// Verifies a signed message against a public key.
+    ///
+    /// This is a pure cryptographic operation that does not require a wallet
+    /// connection. The message is SHA256 hashed before verification.
+    #[frb(sync)]
+    pub fn verify_message(
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError> {
+        breez_sdk_spark::verify_message(request)
+    }
 }

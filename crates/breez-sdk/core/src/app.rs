@@ -1,5 +1,6 @@
 use crate::{
-    ExternalInputParser, InputType, Logger, Network, SparkStatus, error::SdkError, models::Config,
+    CheckMessageRequest, CheckMessageResponse, ExternalInputParser, InputType, Logger, Network,
+    SparkStatus, error::SdkError, models::Config,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -61,6 +62,30 @@ impl Breez {
     /// This is equivalent to the [`get_spark_status`](crate::get_spark_status) free function.
     pub async fn get_spark_status() -> Result<SparkStatus, SdkError> {
         crate::get_spark_status().await
+    }
+
+    /// Verifies a signed message against a public key.
+    ///
+    /// This is a pure cryptographic operation that does not require a wallet
+    /// connection. The message is SHA256 hashed before verification.
+    ///
+    /// The signature can be hex-encoded in either DER or compact format.
+    ///
+    /// This is equivalent to the [`verify_message`](crate::verify_message) free function.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use breez_sdk_spark::{Breez, CheckMessageRequest};
+    ///
+    /// let result = Breez::verify_message(CheckMessageRequest {
+    ///     message: "hello".to_string(),
+    ///     pubkey: "<pubkey>".to_string(),
+    ///     signature: "<signature>".to_string(),
+    /// });
+    /// ```
+    pub fn verify_message(request: CheckMessageRequest) -> Result<CheckMessageResponse, SdkError> {
+        crate::verify_message(request)
     }
 }
 
@@ -158,5 +183,131 @@ mod tests {
         fn _takes_breez_sdk(_sdk: &crate::BreezSdk) {}
 
         // Both should accept the same type — this is a compile-time test
+    }
+
+    #[test]
+    fn test_verify_message_valid_signature() {
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        // Generate a keypair and sign a message
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0xcd; 32]).unwrap();
+        let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+
+        let message = "hello world";
+        let msg_hash = sha256::Hash::hash(message.as_bytes());
+        let msg = bitcoin::secp256k1::Message::from_digest(msg_hash.to_byte_array());
+        let signature = secp.sign_ecdsa(&msg, &secret_key);
+
+        // Verify using Breez::verify_message()
+        let result = Breez::verify_message(CheckMessageRequest {
+            message: message.to_string(),
+            pubkey: public_key.to_string(),
+            signature: hex::encode(signature.serialize_der()),
+        });
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_valid);
+
+        // Also verify with compact encoding
+        let result_compact = Breez::verify_message(CheckMessageRequest {
+            message: message.to_string(),
+            pubkey: public_key.to_string(),
+            signature: hex::encode(signature.serialize_compact()),
+        });
+        assert!(result_compact.is_ok());
+        assert!(result_compact.unwrap().is_valid);
+    }
+
+    #[test]
+    fn test_verify_message_invalid_signature() {
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0xcd; 32]).unwrap();
+        let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+
+        let message = "hello world";
+        let wrong_message = "wrong message";
+        let msg_hash = sha256::Hash::hash(wrong_message.as_bytes());
+        let msg = bitcoin::secp256k1::Message::from_digest(msg_hash.to_byte_array());
+        let signature = secp.sign_ecdsa(&msg, &secret_key);
+
+        // Verify with the wrong message — should return is_valid: false
+        let result = Breez::verify_message(CheckMessageRequest {
+            message: message.to_string(),
+            pubkey: public_key.to_string(),
+            signature: hex::encode(signature.serialize_der()),
+        });
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_valid);
+    }
+
+    #[test]
+    fn test_verify_message_invalid_pubkey() {
+        let result = Breez::verify_message(CheckMessageRequest {
+            message: "hello".to_string(),
+            pubkey: "not-a-pubkey".to_string(),
+            signature: "deadbeef".to_string(),
+        });
+        assert!(matches!(
+            result,
+            Err(crate::SdkError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_verify_message_invalid_signature_hex() {
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0xcd; 32]).unwrap();
+        let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+
+        let result = Breez::verify_message(CheckMessageRequest {
+            message: "hello".to_string(),
+            pubkey: public_key.to_string(),
+            signature: "not-hex".to_string(),
+        });
+        assert!(matches!(
+            result,
+            Err(crate::SdkError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn test_verify_message_matches_free_function() {
+        use bitcoin::hashes::{Hash, sha256};
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0xab; 32]).unwrap();
+        let public_key = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+
+        let message = "test message";
+        let msg_hash = sha256::Hash::hash(message.as_bytes());
+        let msg = bitcoin::secp256k1::Message::from_digest(msg_hash.to_byte_array());
+        let signature = secp.sign_ecdsa(&msg, &secret_key);
+
+        let pubkey_str = public_key.to_string();
+        let sig_hex = hex::encode(signature.serialize_der());
+
+        let from_breez = Breez::verify_message(CheckMessageRequest {
+            message: message.to_string(),
+            pubkey: pubkey_str.clone(),
+            signature: sig_hex.clone(),
+        })
+        .unwrap();
+
+        let from_free = crate::verify_message(CheckMessageRequest {
+            message: message.to_string(),
+            pubkey: pubkey_str,
+            signature: sig_hex,
+        })
+        .unwrap();
+
+        assert_eq!(from_breez.is_valid, from_free.is_valid);
+        assert!(from_breez.is_valid);
     }
 }

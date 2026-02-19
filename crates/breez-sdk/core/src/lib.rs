@@ -37,7 +37,10 @@ pub use persist::{
     path::default_storage_path,
 };
 #[allow(deprecated)]
-pub use sdk::{BreezClient, BreezSdk, default_config, get_spark_status, init_logging, parse_input};
+pub use sdk::{
+    BreezClient, BreezSdk, default_config, get_spark_status, init_logging, parse_input,
+    verify_message,
+};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;
 

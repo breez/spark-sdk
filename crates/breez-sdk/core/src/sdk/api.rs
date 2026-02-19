@@ -177,6 +177,10 @@ impl BreezSdk {
     /// Verifies a message signature against the provided public key. The message
     /// is SHA256 hashed before verification. The signature can be hex encoded
     /// in either DER or compact format.
+    #[deprecated(
+        since = "0.6.0",
+        note = "Use `Breez::verify_message()` or `verify_message()` instead — no wallet connection needed"
+    )]
     pub async fn check_message(
         &self,
         request: CheckMessageRequest,

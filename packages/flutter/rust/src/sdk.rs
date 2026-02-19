@@ -37,6 +37,17 @@ pub fn init_logging(
     breez_sdk_spark::init_logging(log_dir, Some(app_logger), log_filter)
 }
 
+/// Verifies a signed message against a public key.
+///
+/// This is a pure cryptographic operation that does not require a wallet
+/// connection. The message is SHA256 hashed before verification.
+#[frb(sync)]
+pub fn verify_message(
+    request: CheckMessageRequest,
+) -> Result<CheckMessageResponse, SdkError> {
+    breez_sdk_spark::verify_message(request)
+}
+
 pub struct BreezSdk {
     pub(crate) inner: Arc<breez_sdk_spark::BreezSdk>,
 }
@@ -207,6 +218,7 @@ impl BreezSdk {
         self.inner.sign_message(request).await
     }
 
+    #[allow(deprecated)]
     pub async fn check_message(
         &self,
         request: CheckMessageRequest,

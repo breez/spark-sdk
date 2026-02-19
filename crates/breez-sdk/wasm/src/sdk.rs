@@ -88,6 +88,15 @@ pub fn default_external_signer(
     Ok(crate::signer::DefaultSigner::new(signer))
 }
 
+/// Verifies a signed message against a public key.
+///
+/// This is a pure cryptographic operation that does not require a wallet
+/// connection. The message is SHA256 hashed before verification.
+#[wasm_bindgen(js_name = "verifyMessage")]
+pub fn verify_message(request: CheckMessageRequest) -> WasmResult<CheckMessageResponse> {
+    Ok(breez_sdk_spark::verify_message(request.into())?.into())
+}
+
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
@@ -293,6 +302,7 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "checkMessage")]
+    #[allow(deprecated)]
     pub async fn check_message(
         &self,
         request: CheckMessageRequest,

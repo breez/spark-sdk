@@ -20,6 +20,7 @@ async fn sign_message(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+#[allow(deprecated)]
 async fn check_message(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: check-message
     let check_message_request = CheckMessageRequest {
@@ -33,5 +34,20 @@ async fn check_message(sdk: &BreezSdk) -> Result<()> {
 
     info!("Signature valid: {}", is_valid);
     // ANCHOR_END: check-message
+    Ok(())
+}
+
+fn verify_message_example() -> Result<()> {
+    // ANCHOR: verify-message
+    // No wallet connection needed — pure cryptographic verification
+    let request = CheckMessageRequest {
+        message: "<message>".to_string(),
+        pubkey: "<pubkey of signer>".to_string(),
+        signature: "<message signature>".to_string(),
+    };
+    let response = Breez::verify_message(request)?;
+
+    info!("Signature valid: {}", response.is_valid);
+    // ANCHOR_END: verify-message
     Ok(())
 }
