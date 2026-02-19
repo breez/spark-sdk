@@ -10,7 +10,7 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
-    SparkHtlcDetails, TokenTransactionType,
+    SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -286,23 +286,18 @@ impl SqliteStorage {
              DELETE FROM sync_state;
              UPDATE sync_revision SET revision = 0;
              DELETE FROM settings WHERE key = 'sync_initial_complete';",
-            "ALTER TABLE payment_details_lightning ADD COLUMN htlc_details TEXT;",
-            // Backfill htlc_details for existing Lightning payments where it's NULL.
-            // After this migration, htlc_details is required for all Lightning payments.
+            "ALTER TABLE payment_details_lightning ADD COLUMN htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage';
+             ALTER TABLE payment_details_lightning ADD COLUMN htlc_expiry_time INTEGER NOT NULL DEFAULT 0;",
+            // Backfill htlc_status for existing Lightning payments where it's NULL.
+            // After this migration, htlc_status is required for all Lightning payments.
             // Also reset the bitcoin sync offset to trigger a full resync, which will
             // correct the backfilled expiry_time values.
             "UPDATE payment_details_lightning
-             SET htlc_details = json_object(
-                 'payment_hash', payment_hash,
-                 'preimage', preimage,
-                 'expiry_time', 0,
-                 'status', CASE
+             SET htlc_status = CASE
                      WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
                      WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
                      ELSE 'Returned'
-                 END
-             )
-             WHERE htlc_details IS NULL;
+                 END;
              UPDATE settings
              SET value = json_set(value, '$.offset', 0)
              WHERE key = 'sync_offset' AND json_valid(value);",
@@ -432,9 +427,15 @@ impl Storage for SqliteStorage {
                         .map(|_| "?")
                         .collect::<Vec<_>>()
                         .join(", ");
-                    payment_details_clauses.push(format!(
-                        "json_extract({alias}.htlc_details, '$.status') IN ({placeholders})"
-                    ));
+                    if alias == "l" {
+                        // Lightning: htlc_status is a direct column
+                        payment_details_clauses.push(format!("l.htlc_status IN ({placeholders})"));
+                    } else {
+                        // Spark: htlc_details is still JSON
+                        payment_details_clauses.push(format!(
+                            "json_extract(s.htlc_details, '$.status') IN ({placeholders})"
+                        ));
+                    }
                     for htlc_status in htlc_statuses {
                         params.push(Box::new(htlc_status.to_string()));
                     }
@@ -620,15 +621,16 @@ impl Storage for SqliteStorage {
                 ..
             }) => {
                 tx.execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_details)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(payment_id) DO UPDATE SET
                         invoice=excluded.invoice,
                         payment_hash=excluded.payment_hash,
                         destination_pubkey=excluded.destination_pubkey,
                         description=excluded.description,
                         preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-                        htlc_details=COALESCE(excluded.htlc_details, payment_details_lightning.htlc_details)",
+                        htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
+                        htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
                     params![
                         payment.id,
                         invoice,
@@ -636,7 +638,8 @@ impl Storage for SqliteStorage {
                         destination_pubkey,
                         description,
                         htlc_details.preimage,
-                        Some(serde_json::to_string(&htlc_details)?),
+                        htlc_details.status.to_string(),
+                        htlc_details.expiry_time,
                     ],
                 )?;
             }
@@ -770,7 +773,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(28)?;
+            let parent_payment_id: String = row.get(29)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1236,7 +1239,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-26 are used by `map_payment`, index 27 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-27 are used by `map_payment`, index 28 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1253,7 +1256,8 @@ const SELECT_PAYMENT_SQL: &str = "
            l.destination_pubkey AS lightning_destination_pubkey,
            COALESCE(l.description, pm.lnurl_description) AS lightning_description,
            l.preimage AS lightning_preimage,
-           l.htlc_details AS lightning_htlc_details,
+           l.htlc_status AS lightning_htlc_status,
+           l.htlc_expiry_time AS lightning_htlc_expiry_time,
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
@@ -1280,7 +1284,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let deposit_tx_id: Option<String> = row.get(8)?;
     let spark: Option<i32> = row.get(9)?;
     let lightning_invoice: Option<String> = row.get(10)?;
-    let token_metadata: Option<String> = row.get(19)?;
+    let token_metadata: Option<String> = row.get(20)?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
@@ -1289,21 +1293,30 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
+            let payment_hash: String = row.get(11)?;
             let destination_pubkey: String = row.get(12)?;
             let description: Option<String> = row.get(13)?;
-            let htlc_details_str: String = row.get::<_, Option<String>>(15)?.ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    15,
-                    rusqlite::types::Type::Null,
-                    "htlc_details is required for Lightning payments".into(),
-                )
-            })?;
-            let htlc_details: SparkHtlcDetails = serde_json_from_str(&htlc_details_str, 15)?;
-            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(16)?;
-            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(17)?;
-            let lnurl_nostr_zap_request: Option<String> = row.get(25)?;
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(26)?;
-            let lnurl_sender_comment: Option<String> = row.get(27)?;
+            let preimage: Option<String> = row.get(14)?;
+            let htlc_status: SparkHtlcStatus =
+                row.get::<_, Option<SparkHtlcStatus>>(15)?.ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        15,
+                        rusqlite::types::Type::Null,
+                        "htlc_status is required for Lightning payments".into(),
+                    )
+                })?;
+            let htlc_expiry_time: u64 = row.get(16)?;
+            let htlc_details = SparkHtlcDetails {
+                payment_hash,
+                preimage,
+                expiry_time: htlc_expiry_time,
+                status: htlc_status,
+            };
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(17)?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(18)?;
+            let lnurl_nostr_zap_request: Option<String> = row.get(26)?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(27)?;
+            let lnurl_sender_comment: Option<String> = row.get(28)?;
             let lnurl_receive_metadata =
                 if lnurl_nostr_zap_request.is_some() || lnurl_sender_comment.is_some() {
                     Some(LnurlReceiveMetadata {
@@ -1327,17 +1340,17 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(23)?;
+            let invoice_details_str: Option<String> = row.get(24)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 23))
-                .transpose()?;
-            let htlc_details_str: Option<String> = row.get(24)?;
-            let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 24))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(18)?;
+            let htlc_details_str: Option<String> = row.get(25)?;
+            let htlc_details = htlc_details_str
+                .map(|s| serde_json_from_str(&s, 25))
+                .transpose()?;
+            let conversion_info_str: Option<String> = row.get(19)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 18))
+                .map(|s: String| serde_json_from_str(&s, 19))
                 .transpose()?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1346,18 +1359,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type: TokenTransactionType = row.get(21)?;
-            let invoice_details_str: Option<String> = row.get(22)?;
+            let tx_type: TokenTransactionType = row.get(22)?;
+            let invoice_details_str: Option<String> = row.get(23)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 22))
+                .map(|s| serde_json_from_str(&s, 23))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(18)?;
+            let conversion_info_str: Option<String> = row.get(19)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 18))
+                .map(|s: String| serde_json_from_str(&s, 19))
                 .transpose()?;
             Some(PaymentDetails::Token {
-                metadata: serde_json_from_str(&metadata, 19)?,
-                tx_hash: row.get(20)?,
+                metadata: serde_json_from_str(&metadata, 20)?,
+                tx_hash: row.get(21)?,
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1432,6 +1445,26 @@ impl FromSql for TokenTransactionType {
                 let tx_type: TokenTransactionType =
                     s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
                 Ok(tx_type)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for SparkHtlcStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl FromSql for SparkHtlcStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                let status: SparkHtlcStatus =
+                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                Ok(status)
             }
             _ => Err(FromSqlError::InvalidType),
         }
@@ -1895,8 +1928,8 @@ mod tests {
         let temp_dir = create_temp_dir("sqlite_migration_htlc_details");
         let db_path = temp_dir.join(super::DEFAULT_DB_FILENAME);
 
-        // Step 1: Create database at version 23 (before the htlc_details backfill migration)
-        // This includes the ALTER TABLE that adds the htlc_details column (migration 22)
+        // Step 1: Create database at version 23 (before the htlc_status backfill migration)
+        // This includes the ALTER TABLE that adds htlc_status and htlc_expiry_time columns (migration 22)
         // but not the backfill UPDATE (migration 23).
         {
             let mut conn = Connection::open(&db_path).unwrap();

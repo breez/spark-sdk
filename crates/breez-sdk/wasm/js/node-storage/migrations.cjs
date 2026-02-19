@@ -347,26 +347,21 @@ class MigrationManager {
         ]
       },
       {
-        name: "Add htlc_details to lightning payments",
+        name: "Add htlc_status and htlc_expiry_time to lightning payments",
         sql: [
-          `ALTER TABLE payment_details_lightning ADD COLUMN htlc_details TEXT`,
+          `ALTER TABLE payment_details_lightning ADD COLUMN htlc_status TEXT NOT NULL DEFAULT 'waitingForPreimage'`,
+          `ALTER TABLE payment_details_lightning ADD COLUMN htlc_expiry_time INTEGER NOT NULL DEFAULT 0`,
         ]
       },
       {
-        name: "Backfill htlc_details for existing Lightning payments",
+        name: "Backfill htlc_status for existing Lightning payments",
         sql: [
           `UPDATE payment_details_lightning
-           SET htlc_details = json_object(
-               'paymentHash', payment_hash,
-               'preimage', preimage,
-               'expiryTime', 0,
-               'status', CASE
+           SET htlc_status = CASE
                    WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'preimageShared'
                    WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'waitingForPreimage'
                    ELSE 'returned'
-               END
-           )
-           WHERE htlc_details IS NULL`,
+               END`,
           `UPDATE settings
            SET value = json_set(value, '$.offset', 0)
            WHERE key = 'sync_offset' AND json_valid(value)`,

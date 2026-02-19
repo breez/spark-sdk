@@ -18,7 +18,7 @@ use webpki_roots::TLS_SERVER_ROOTS;
 use crate::{
     AssetFilter, ConversionInfo, DepositInfo, ListPaymentsRequest, LnurlPayInfo,
     LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentDetailsFilter, PaymentMethod,
-    SparkHtlcDetails,
+    SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{PaymentMetadata, SetLnurlMetadataItem, UpdateDepositPayload},
     sync_storage::{
@@ -702,22 +702,19 @@ impl PostgresStorage {
                 "UPDATE sync_revision SET revision = 0",
                 "DELETE FROM settings WHERE key = 'sync_initial_complete'",
             ],
-            // Migration 6: Add htlc_details to lightning payments
-            &["ALTER TABLE payment_details_lightning ADD COLUMN htlc_details JSONB"],
-            // Migration 7: Backfill htlc_details for existing Lightning payments
+            // Migration 6: Add htlc_status and htlc_expiry_time to lightning payments
+            &[
+                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage'",
+                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_expiry_time BIGINT NOT NULL DEFAULT 0",
+            ],
+            // Migration 7: Backfill htlc_status for existing Lightning payments
             &[
                 "UPDATE payment_details_lightning
-                 SET htlc_details = jsonb_build_object(
-                     'payment_hash', payment_hash,
-                     'preimage', preimage,
-                     'expiry_time', 0,
-                     'status', CASE
+                 SET htlc_status = CASE
                          WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
                          WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
                          ELSE 'Returned'
-                     END
-                 )
-                 WHERE htlc_details IS NULL",
+                     END",
                 "UPDATE settings
                  SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
                  WHERE key = 'sync_offset' AND value IS NOT NULL",
@@ -883,10 +880,17 @@ impl Storage for PostgresStorage {
                             placeholder
                         })
                         .collect();
-                    payment_details_clauses.push(format!(
-                        "{alias}.htlc_details::jsonb->>'status' IN ({})",
-                        placeholders.join(", ")
-                    ));
+                    if alias == "l" {
+                        // Lightning: htlc_status is a direct column
+                        payment_details_clauses
+                            .push(format!("l.htlc_status IN ({})", placeholders.join(", ")));
+                    } else {
+                        // Spark: htlc_details is still JSONB
+                        payment_details_clauses.push(format!(
+                            "s.htlc_details::jsonb->>'status' IN ({})",
+                            placeholders.join(", ")
+                        ));
+                    }
                     for htlc_status in htlc_statuses {
                         params.push(Box::new(htlc_status.to_string()));
                     }
@@ -1090,21 +1094,20 @@ impl Storage for PostgresStorage {
             }) => {
                 let payment_hash = &htlc_details.payment_hash;
                 let preimage = &htlc_details.preimage;
-                let htlc_json: Option<serde_json::Value> = Some(
-                    serde_json::to_value(&htlc_details)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                );
+                let htlc_status = htlc_details.status.to_string();
+                let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
                 tx.execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_details)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                          ON CONFLICT(payment_id) DO UPDATE SET
                             invoice = EXCLUDED.invoice,
                             payment_hash = EXCLUDED.payment_hash,
                             destination_pubkey = EXCLUDED.destination_pubkey,
                             description = EXCLUDED.description,
                             preimage = COALESCE(EXCLUDED.preimage, payment_details_lightning.preimage),
-                            htlc_details = COALESCE(EXCLUDED.htlc_details, payment_details_lightning.htlc_details)",
-                    &[&payment.id, &invoice, payment_hash, &destination_pubkey, &description, preimage, &htlc_json],
+                            htlc_status = COALESCE(EXCLUDED.htlc_status, payment_details_lightning.htlc_status),
+                            htlc_expiry_time = COALESCE(EXCLUDED.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
+                    &[&payment.id, &invoice, payment_hash, &destination_pubkey, &description, preimage, &htlc_status, &htlc_expiry_time],
                 )
                 .await?;
             }
@@ -1256,7 +1259,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(28);
+            let parent_payment_id: String = row.get(29);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1738,7 +1741,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-27 are used by `map_payment`, index 28 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-28 are used by `map_payment`, index 29 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1755,7 +1758,8 @@ const SELECT_PAYMENT_SQL: &str = "
            l.destination_pubkey AS lightning_destination_pubkey,
            COALESCE(l.description, pm.lnurl_description) AS lightning_description,
            l.preimage AS lightning_preimage,
-           l.htlc_details AS lightning_htlc_details,
+           l.htlc_status AS lightning_htlc_status,
+           l.htlc_expiry_time AS lightning_htlc_expiry_time,
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
@@ -1782,7 +1786,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let deposit_tx_id: Option<String> = row.get(8);
     let spark: Option<bool> = row.get(9);
     let lightning_invoice: Option<String> = row.get(10);
-    let token_metadata: Option<serde_json::Value> = row.get(19);
+    let token_metadata: Option<serde_json::Value> = row.get(20);
 
     let details = match (
         lightning_invoice,
@@ -1792,24 +1796,33 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
+            let payment_hash: String = row.get(11);
             let destination_pubkey: String = row.get(12);
             let description: Option<String> = row.get(13);
-            let htlc_details_json: Option<serde_json::Value> = row.get(15);
-            let htlc_details: SparkHtlcDetails = htlc_details_json
+            let preimage: Option<String> = row.get(14);
+            let htlc_status_str: Option<String> = row.get(15);
+            let htlc_status: SparkHtlcStatus = htlc_status_str
                 .ok_or_else(|| {
                     StorageError::Implementation(
-                        "htlc_details is required for Lightning payments".to_string(),
+                        "htlc_status is required for Lightning payments".to_string(),
                     )
                 })
-                .and_then(|v| {
-                    serde_json::from_value(v)
-                        .map_err(|e| StorageError::Serialization(e.to_string()))
+                .and_then(|s| {
+                    s.parse()
+                        .map_err(|e: String| StorageError::Serialization(e))
                 })?;
-            let lnurl_pay_info_json: Option<serde_json::Value> = row.get(16);
-            let lnurl_withdraw_info_json: Option<serde_json::Value> = row.get(17);
-            let lnurl_nostr_zap_request: Option<String> = row.get(25);
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(26);
-            let lnurl_sender_comment: Option<String> = row.get(27);
+            let htlc_expiry_time: i64 = row.get(16);
+            let htlc_details = SparkHtlcDetails {
+                payment_hash,
+                preimage,
+                expiry_time: u64::try_from(htlc_expiry_time)?,
+                status: htlc_status,
+            };
+            let lnurl_pay_info_json: Option<serde_json::Value> = row.get(17);
+            let lnurl_withdraw_info_json: Option<serde_json::Value> = row.get(18);
+            let lnurl_nostr_zap_request: Option<String> = row.get(26);
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(27);
+            let lnurl_sender_comment: Option<String> = row.get(28);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -1838,11 +1851,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_json: Option<serde_json::Value> = row.get(23);
+            let invoice_details_json: Option<serde_json::Value> = row.get(24);
             let invoice_details = from_json_opt(invoice_details_json)?;
-            let htlc_details_json: Option<serde_json::Value> = row.get(24);
+            let htlc_details_json: Option<serde_json::Value> = row.get(25);
             let htlc_details = from_json_opt(htlc_details_json)?;
-            let conversion_info_json: Option<serde_json::Value> = row.get(18);
+            let conversion_info_json: Option<serde_json::Value> = row.get(19);
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1851,18 +1864,18 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type_str: String = row.get(21);
+            let tx_type_str: String = row.get(22);
             let tx_type = tx_type_str
                 .parse()
                 .map_err(|e: String| StorageError::Serialization(e))?;
-            let invoice_details_json: Option<serde_json::Value> = row.get(22);
+            let invoice_details_json: Option<serde_json::Value> = row.get(23);
             let invoice_details = from_json_opt(invoice_details_json)?;
-            let conversion_info_json: Option<serde_json::Value> = row.get(18);
+            let conversion_info_json: Option<serde_json::Value> = row.get(19);
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Token {
                 metadata: serde_json::from_value(metadata)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                tx_hash: row.get(20),
+                tx_hash: row.get(21),
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -2142,7 +2155,7 @@ mod tests {
             "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
         );
 
-        // Step 1: Connect directly and apply migrations 1-6 (before the backfill)
+        // Step 1: Connect directly and apply migrations 1-6 (before the htlc_status backfill)
         {
             let (client, conn) = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls)
                 .await

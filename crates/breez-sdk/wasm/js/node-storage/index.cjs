@@ -48,7 +48,8 @@ const SELECT_PAYMENT_SQL = `
            l.destination_pubkey AS lightning_destination_pubkey,
            COALESCE(l.description, pm.lnurl_description) AS lightning_description,
            l.preimage AS lightning_preimage,
-           l.htlc_details AS lightning_htlc_details,
+           l.htlc_status AS lightning_htlc_status,
+           l.htlc_expiry_time AS lightning_htlc_expiry_time,
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
@@ -214,9 +215,17 @@ class SqliteStorage {
             const placeholders = paymentDetailsFilter.htlcStatus
               .map(() => "?")
               .join(", ");
-            paymentDetailsClauses.push(
-              `json_extract(${htlcAlias}.htlc_details, '$.status') IN (${placeholders})`
-            );
+            if (htlcAlias === "l") {
+              // Lightning: htlc_status is a direct column
+              paymentDetailsClauses.push(
+                `l.htlc_status IN (${placeholders})`
+              );
+            } else {
+              // Spark: htlc_details is still JSON
+              paymentDetailsClauses.push(
+                `json_extract(s.htlc_details, '$.status') IN (${placeholders})`
+              );
+            }
             params.push(...paymentDetailsFilter.htlcStatus);
           }
           // Filter by token conversion info presence
@@ -328,15 +337,16 @@ class SqliteStorage {
       );
       const lightningInsert = this.db.prepare(
         `INSERT INTO payment_details_lightning
-          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_details)
-          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage, @htlcDetails)
+          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage, @htlcStatus, @htlcExpiryTime)
           ON CONFLICT(payment_id) DO UPDATE SET
             invoice=excluded.invoice,
             payment_hash=excluded.payment_hash,
             destination_pubkey=excluded.destination_pubkey,
             description=excluded.description,
             preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-            htlc_details=COALESCE(excluded.htlc_details, payment_details_lightning.htlc_details)`
+            htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
+            htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`
       );
       const tokenInsert = this.db.prepare(
         `INSERT INTO payment_details_token 
@@ -396,9 +406,8 @@ class SqliteStorage {
             destinationPubkey: payment.details.destinationPubkey,
             description: payment.details.description,
             preimage: payment.details.htlcDetails?.preimage,
-            htlcDetails: payment.details.htlcDetails
-              ? JSON.stringify(payment.details.htlcDetails)
-              : null,
+            htlcStatus: payment.details.htlcDetails?.status || null,
+            htlcExpiryTime: payment.details.htlcDetails?.expiryTime || 0,
           });
         }
 
@@ -708,9 +717,14 @@ class SqliteStorage {
         invoice: row.lightning_invoice,
         destinationPubkey: row.lightning_destination_pubkey,
         description: row.lightning_description,
-        htlcDetails: row.lightning_htlc_details
-          ? JSON.parse(row.lightning_htlc_details)
-          : (() => { throw new StorageError(`htlc_details is required for Lightning payment ${row.id}`); })(),
+        htlcDetails: row.lightning_htlc_status
+          ? {
+              paymentHash: row.lightning_payment_hash,
+              preimage: row.lightning_preimage || null,
+              expiryTime: row.lightning_htlc_expiry_time || 0,
+              status: row.lightning_htlc_status,
+            }
+          : (() => { throw new StorageError(`htlc_status is required for Lightning payment ${row.id}`); })(),
       };
 
       if (row.lnurl_pay_info) {
