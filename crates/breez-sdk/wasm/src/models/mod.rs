@@ -1270,3 +1270,71 @@ pub struct BuyBitcoinRequest {
 pub struct BuyBitcoinResponse {
     pub url: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConnectOptions)]
+pub struct ConnectOptions {
+    pub network: Option<Network>,
+    pub storage_dir: Option<String>,
+    pub key_set: Option<KeySetConfig>,
+    pub lnurl_domain: Option<String>,
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
+    pub prefer_spark_over_lightning: Option<bool>,
+    pub private_mode: Option<bool>,
+    pub optimization_config: Option<OptimizationConfig>,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: Option<bool>,
+    pub real_time_sync_server_url: Option<String>,
+    pub stable_balance_config: Option<StableBalanceConfig>,
+}
+
+/// Credentials for connecting to the Breez SDK.
+///
+/// On WASM, only the `Mnemonic` variant is available.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum SdkCredentials {
+    Mnemonic {
+        api_key: String,
+        mnemonic: String,
+        passphrase: Option<String>,
+    },
+}
+
+impl From<SdkCredentials> for breez_sdk_spark::SdkCredentials {
+    fn from(value: SdkCredentials) -> Self {
+        match value {
+            SdkCredentials::Mnemonic {
+                api_key,
+                mnemonic,
+                passphrase,
+            } => breez_sdk_spark::SdkCredentials::Mnemonic {
+                api_key,
+                mnemonic,
+                passphrase,
+            },
+        }
+    }
+}
+
+impl From<breez_sdk_spark::SdkCredentials> for SdkCredentials {
+    fn from(value: breez_sdk_spark::SdkCredentials) -> Self {
+        match value {
+            breez_sdk_spark::SdkCredentials::Mnemonic {
+                api_key,
+                mnemonic,
+                passphrase,
+            } => SdkCredentials::Mnemonic {
+                api_key,
+                mnemonic,
+                passphrase,
+            },
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            breez_sdk_spark::SdkCredentials::Signer { .. } => {
+                panic!("Signer credentials are not supported on WASM")
+            }
+        }
+    }
+}

@@ -1,4 +1,5 @@
 pub(crate) mod adaptors;
+mod connect;
 pub mod payment_observer;
 pub use payment_observer::*;
 
@@ -1517,4 +1518,135 @@ pub struct OptimizationProgress {
     pub is_running: bool,
     pub current_round: u32,
     pub total_rounds: u32,
+}
+
+/// Credentials for connecting to the Breez SDK.
+///
+/// Contains the API key and authentication method (mnemonic or external signer).
+#[derive(Clone)]
+pub enum SdkCredentials {
+    /// Connect using a BIP-39 mnemonic phrase.
+    Mnemonic {
+        /// A Breez API key. Request one at <https://breez.technology/request-api-key/>.
+        api_key: String,
+        /// The mnemonic phrase (12 or 24 words).
+        mnemonic: String,
+        /// An optional passphrase for the mnemonic.
+        passphrase: Option<String>,
+    },
+    /// Connect using an external signer implementation.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    Signer {
+        /// A Breez API key. Request one at <https://breez.technology/request-api-key/>.
+        api_key: String,
+        /// An external signer implementation.
+        signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    },
+}
+
+impl fmt::Debug for SdkCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SdkCredentials::Mnemonic { .. } => f
+                .debug_struct("SdkCredentials::Mnemonic")
+                .field("api_key", &"<redacted>")
+                .field("mnemonic", &"<redacted>")
+                .finish(),
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            SdkCredentials::Signer { .. } => f
+                .debug_struct("SdkCredentials::Signer")
+                .field("api_key", &"<redacted>")
+                .field("signer", &"<ExternalSigner>")
+                .finish(),
+        }
+    }
+}
+
+impl SdkCredentials {
+    /// Returns the API key from the credentials.
+    pub fn api_key(&self) -> &str {
+        match self {
+            SdkCredentials::Mnemonic { api_key, .. } => api_key,
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            SdkCredentials::Signer { api_key, .. } => api_key,
+        }
+    }
+}
+
+/// Optional configuration overrides for connecting to the SDK.
+///
+/// All fields are optional — when `None`, sensible defaults are applied
+/// (equivalent to [`Breez::default_config()`](crate::Breez::default_config)).
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectOptions {
+    /// The network to connect to. Defaults to `Mainnet`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub network: Option<Network>,
+    /// The root directory for SDK storage. Defaults to `"./.data"`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub storage_dir: Option<String>,
+    /// Key set configuration for key derivation.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub key_set: Option<KeySetConfig>,
+    /// The domain used for receiving through LNURL-pay and lightning address.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub lnurl_domain: Option<String>,
+    /// Sync interval in seconds.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub sync_interval_secs: Option<u32>,
+    /// Maximum fee for claiming static deposits.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub max_deposit_claim_fee: Option<MaxFee>,
+    /// When true, prefer Spark payments over Lightning.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_spark_over_lightning: Option<bool>,
+    /// Whether Spark private mode is enabled by default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub private_mode: Option<bool>,
+    /// Configuration for leaf optimization.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub optimization_config: Option<OptimizationConfig>,
+    /// External input parsers for custom payment input handling.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub external_input_parsers: Option<Vec<crate::ExternalInputParser>>,
+    /// Whether to use default external input parsers.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub use_default_external_input_parsers: Option<bool>,
+    /// URL for the real-time sync server.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub real_time_sync_server_url: Option<String>,
+    /// Configuration for automatic Bitcoin-to-stable-token conversion.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub stable_balance_config: Option<StableBalanceConfig>,
+}
+
+/// Custom service providers for advanced SDK initialization.
+///
+/// Use with [`Breez::with_providers()`](crate::Breez::with_providers) to inject custom
+/// implementations of storage, chain service, or other providers.
+#[derive(Clone, Default)]
+pub struct Providers {
+    /// Custom storage implementation.
+    pub storage: Option<std::sync::Arc<dyn crate::persist::Storage>>,
+    /// Custom Bitcoin chain service.
+    pub chain_service: Option<std::sync::Arc<dyn crate::BitcoinChainService>>,
+    /// Custom fiat service.
+    pub fiat_service: Option<std::sync::Arc<dyn crate::FiatService>>,
+    /// Custom LNURL HTTP client.
+    pub lnurl_client: Option<std::sync::Arc<dyn crate::RestClient>>,
+    /// Custom payment observer.
+    pub payment_observer: Option<std::sync::Arc<dyn crate::PaymentObserver>>,
+}
+
+impl fmt::Debug for Providers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Providers")
+            .field("storage", &self.storage.is_some())
+            .field("chain_service", &self.chain_service.is_some())
+            .field("fiat_service", &self.fiat_service.is_some())
+            .field("lnurl_client", &self.lnurl_client.is_some())
+            .field("payment_observer", &self.payment_observer.is_some())
+            .finish()
+    }
 }

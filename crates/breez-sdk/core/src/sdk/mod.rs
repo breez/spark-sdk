@@ -278,6 +278,32 @@ pub fn default_external_signer(
     Ok(Arc::new(signer))
 }
 
+/// Simplified connect using mnemonic credentials and optional configuration.
+///
+/// This is the UniFFI-compatible version of [`Breez::connect()`](crate::Breez::connect).
+/// Use this free function from Swift, Kotlin, Go, Python, etc.
+///
+/// # Arguments
+/// * `api_key` - A Breez API key
+/// * `mnemonic` - BIP-39 mnemonic phrase (12 or 24 words)
+/// * `passphrase` - Optional passphrase for the mnemonic
+/// * `options` - Optional configuration overrides
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn connect_with_mnemonic(
+    api_key: String,
+    mnemonic: String,
+    passphrase: Option<String>,
+    options: Option<crate::ConnectOptions>,
+) -> Result<BreezSdk, SdkError> {
+    let credentials = crate::SdkCredentials::Mnemonic {
+        api_key,
+        mnemonic,
+        passphrase,
+    };
+    crate::Breez::connect(credentials, options).await
+}
+
 /// Fetches the current status of Spark network services relevant to the SDK.
 ///
 /// This function queries the Spark status API and returns the worst status

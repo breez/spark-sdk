@@ -22,8 +22,30 @@ impl Breez {
         breez_sdk_spark::default_config(network)
     }
 
-    /// Connects to the Spark network using the provided configuration and seed.
-    pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
+    /// Connects to the Spark network using mnemonic credentials and optional configuration.
+    ///
+    /// This is the primary entry point for initializing the SDK.
+    pub async fn connect(
+        api_key: String,
+        mnemonic: String,
+        passphrase: Option<String>,
+        options: Option<ConnectOptions>,
+    ) -> Result<BreezSdk, SdkError> {
+        let credentials = SdkCredentials::Mnemonic {
+            api_key,
+            mnemonic,
+            passphrase,
+        };
+        let sdk = breez_sdk_spark::Breez::connect(credentials, options).await?;
+        Ok(BreezSdk {
+            inner: Arc::new(sdk),
+        })
+    }
+
+    /// Connects using a legacy `ConnectRequest`.
+    ///
+    /// Prefer `Breez.connect()` for new code.
+    pub async fn connect_legacy(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
         let sdk = breez_sdk_spark::connect(request).await?;
         Ok(BreezSdk {
             inner: Arc::new(sdk),

@@ -29,9 +29,43 @@ impl Breez {
         Ok(result.into())
     }
 
-    /// Connects to the Spark network using the provided configuration and seed.
+    /// Connects to the Spark network using credentials and optional configuration.
+    ///
+    /// This is the primary entry point for initializing the SDK. For most use cases,
+    /// only credentials are needed — sensible defaults are applied automatically.
     #[wasm_bindgen(js_name = "connect")]
-    pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
+    pub async fn connect(
+        credentials: SdkCredentials,
+        options: Option<ConnectOptions>,
+    ) -> WasmResult<BreezSdk> {
+        let credentials_core: breez_sdk_spark::SdkCredentials = credentials.into();
+        let opts: breez_sdk_spark::ConnectOptions = options.map(Into::into).unwrap_or_default();
+        let (config, seed) = credentials_core.to_config_and_seed(&opts)?;
+        let storage_dir = opts
+            .storage_dir
+            .clone()
+            .unwrap_or_else(|| "./.data".to_string());
+
+        let wasm_config: Config = config.into();
+        let wasm_seed: Seed = seed.into();
+        let mut builder = SdkBuilder::new(wasm_config, wasm_seed)
+            .with_default_storage(storage_dir)
+            .await?;
+
+        if let Some(key_set) = opts.key_set {
+            let wasm_key_set: KeySetConfig = key_set.into();
+            builder = builder.with_key_set(wasm_key_set);
+        }
+
+        let sdk = builder.build().await?;
+        Ok(sdk)
+    }
+
+    /// Connects using a legacy `ConnectRequest`.
+    ///
+    /// Prefer `Breez.connect(credentials, options)` for new code.
+    #[wasm_bindgen(js_name = "connectLegacy")]
+    pub async fn connect_legacy(request: ConnectRequest) -> WasmResult<BreezSdk> {
         let builder = SdkBuilder::new(request.config, request.seed)
             .with_default_storage(request.storage_dir)
             .await?;

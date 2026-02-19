@@ -2,6 +2,7 @@
 
 mod buying_bitcoin;
 mod config;
+mod connect;
 mod external_signer;
 mod fiat_currencies;
 mod getting_started;

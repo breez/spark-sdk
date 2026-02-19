@@ -4,22 +4,34 @@ use crate::{
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use {
-    crate::{ConnectRequest, models::KeySetConfig, sdk::BreezSdk, sdk_builder::SdkBuilder},
+    crate::{
+        ConnectOptions, ConnectRequest, Providers, SdkCredentials, models::KeySetConfig,
+        sdk::BreezSdk, sdk_builder::SdkBuilder,
+    },
     std::sync::Arc,
 };
 
 /// Top-level namespace for the Breez SDK.
 ///
 /// `Breez` groups all static/global SDK functions that don't require a wallet
-/// connection. Use [`Breez::connect`] (non-WASM) or the existing [`connect`](crate::connect)
-/// free function to obtain a [`BreezSdk`] (also exported as [`BreezClient`]) instance.
+/// connection. Use [`Breez::connect`] (non-WASM) to obtain a [`BreezSdk`]
+/// (also exported as [`BreezClient`]) instance.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// use breez_sdk_spark::{Breez, Network};
+/// use breez_sdk_spark::{Breez, SdkCredentials};
 ///
-/// let config = Breez::default_config(Network::Mainnet);
+/// # async {
+/// let sdk = Breez::connect(
+///     SdkCredentials::Mnemonic {
+///         api_key: "<breez api key>".into(),
+///         mnemonic: "<mnemonic words>".into(),
+///         passphrase: None,
+///     },
+///     None,
+/// ).await.unwrap();
+/// # };
 /// ```
 pub struct Breez;
 
@@ -68,18 +80,42 @@ impl Breez {
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[allow(deprecated)]
 impl Breez {
-    /// Connects to the Spark network using the provided configuration and seed.
+    /// Connects to the Spark network using credentials and optional configuration.
     ///
-    /// This is equivalent to the [`connect`](crate::connect) free function.
+    /// This is the primary entry point for initializing the SDK. For most use cases,
+    /// only credentials are needed — sensible defaults are applied automatically.
     ///
     /// # Arguments
+    /// * `credentials` - API key + authentication (mnemonic or external signer)
+    /// * `options` - Optional configuration overrides (network, storage, etc.)
     ///
-    /// * `request` - The connection request containing config, seed, and storage directory
+    /// # Examples
+    /// ```rust,no_run
+    /// use breez_sdk_spark::{Breez, SdkCredentials};
     ///
-    /// # Returns
+    /// # async {
+    /// let sdk = Breez::connect(
+    ///     SdkCredentials::Mnemonic {
+    ///         api_key: "<api key>".into(),
+    ///         mnemonic: "<words>".into(),
+    ///         passphrase: None,
+    ///     },
+    ///     None,
+    /// ).await.unwrap();
+    /// # };
+    /// ```
+    pub async fn connect(
+        credentials: SdkCredentials,
+        options: Option<ConnectOptions>,
+    ) -> Result<BreezSdk, SdkError> {
+        let opts = options.unwrap_or_default();
+        Self::connect_internal(credentials, opts, Providers::default()).await
+    }
+
+    /// Connects using a legacy [`ConnectRequest`].
     ///
-    /// An initialized [`BreezSdk`] instance (also available as [`BreezClient`])
-    pub async fn connect(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
+    /// Prefer [`Breez::connect()`] for new code.
+    pub async fn connect_legacy(request: ConnectRequest) -> Result<BreezSdk, SdkError> {
         crate::connect(request).await
     }
 
@@ -90,6 +126,37 @@ impl Breez {
         request: crate::ConnectWithSignerRequest,
     ) -> Result<BreezSdk, SdkError> {
         crate::connect_with_signer(request).await
+    }
+
+    /// Returns a builder with custom service providers for advanced initialization.
+    ///
+    /// Use this when you need to inject custom storage, chain service, fiat service,
+    /// or payment observers. For standard use cases, use [`Breez::connect()`] instead.
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use breez_sdk_spark::{Breez, Providers, SdkCredentials};
+    ///
+    /// # async {
+    /// let providers = Providers {
+    ///     storage: None, // Some(custom_storage),
+    ///     ..Default::default()
+    /// };
+    /// let sdk = Breez::with_providers(providers)
+    ///     .connect(
+    ///         SdkCredentials::Mnemonic {
+    ///             api_key: "<api key>".into(),
+    ///             mnemonic: "<words>".into(),
+    ///             passphrase: None,
+    ///         },
+    ///         None,
+    ///     )
+    ///     .await
+    ///     .unwrap();
+    /// # };
+    /// ```
+    pub fn with_providers(providers: Providers) -> BreezWithProviders {
+        BreezWithProviders { providers }
     }
 
     /// Creates a default external signer from a mnemonic phrase.
@@ -110,6 +177,81 @@ impl Breez {
     /// provider implementations.
     pub fn builder(config: Config, seed: crate::Seed) -> SdkBuilder {
         SdkBuilder::new(config, seed)
+    }
+
+    /// Internal shared connect implementation.
+    async fn connect_internal(
+        credentials: SdkCredentials,
+        opts: ConnectOptions,
+        providers: Providers,
+    ) -> Result<BreezSdk, SdkError> {
+        let storage_dir = opts
+            .storage_dir
+            .clone()
+            .unwrap_or_else(|| "./.data".to_string());
+
+        match credentials {
+            SdkCredentials::Mnemonic { .. } => {
+                let (config, seed) = credentials.to_config_and_seed(&opts)?;
+                let mut builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+                if let Some(key_set) = opts.key_set {
+                    builder = builder.with_key_set(key_set);
+                }
+                builder = Self::apply_providers(builder, providers);
+                builder.build().await
+            }
+            SdkCredentials::Signer {
+                signer, api_key, ..
+            } => {
+                let network = opts.network.unwrap_or(Network::Mainnet);
+                let mut config = crate::default_config(network);
+                config.api_key = Some(api_key);
+                config = opts.apply_to_config(config);
+                let mut builder =
+                    SdkBuilder::new_with_signer(config, signer).with_default_storage(storage_dir);
+                builder = Self::apply_providers(builder, providers);
+                builder.build().await
+            }
+        }
+    }
+
+    /// Applies custom providers to an SDK builder.
+    fn apply_providers(mut builder: SdkBuilder, providers: Providers) -> SdkBuilder {
+        if let Some(storage) = providers.storage {
+            builder = builder.with_storage(storage);
+        }
+        if let Some(chain_service) = providers.chain_service {
+            builder = builder.with_chain_service(chain_service);
+        }
+        if let Some(fiat_service) = providers.fiat_service {
+            builder = builder.with_fiat_service(fiat_service);
+        }
+        if let Some(lnurl_client) = providers.lnurl_client {
+            builder = builder.with_lnurl_client(lnurl_client);
+        }
+        if let Some(observer) = providers.payment_observer {
+            builder = builder.with_payment_observer(observer);
+        }
+        builder
+    }
+}
+
+/// Builder returned by [`Breez::with_providers()`] for connecting with custom providers.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub struct BreezWithProviders {
+    providers: Providers,
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl BreezWithProviders {
+    /// Connects with the pre-configured custom providers.
+    pub async fn connect(
+        self,
+        credentials: SdkCredentials,
+        options: Option<ConnectOptions>,
+    ) -> Result<BreezSdk, SdkError> {
+        let opts = options.unwrap_or_default();
+        Breez::connect_internal(credentials, opts, self.providers).await
     }
 }
 

@@ -22,6 +22,8 @@ pub mod token_conversion;
 mod utils;
 
 pub use app::Breez;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use app::BreezWithProviders;
 pub use chain::{
     BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
     rest_client::{ChainApiType, RestClientChainService},
@@ -36,6 +38,8 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use sdk::connect_with_mnemonic;
 #[allow(deprecated)]
 pub use sdk::{BreezClient, BreezSdk, default_config, get_spark_status, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;

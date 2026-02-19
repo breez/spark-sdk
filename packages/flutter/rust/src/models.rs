@@ -1149,3 +1149,20 @@ pub struct _SparkStatus {
     pub status: ServiceStatus,
     pub last_updated: u64,
 }
+
+#[frb(mirror(ConnectOptions))]
+pub struct _ConnectOptions {
+    pub network: Option<Network>,
+    pub storage_dir: Option<String>,
+    pub key_set: Option<KeySetConfig>,
+    pub lnurl_domain: Option<String>,
+    pub sync_interval_secs: Option<u32>,
+    pub max_deposit_claim_fee: Option<MaxFee>,
+    pub prefer_spark_over_lightning: Option<bool>,
+    pub private_mode: Option<bool>,
+    pub optimization_config: Option<OptimizationConfig>,
+    pub external_input_parsers: Option<Vec<ExternalInputParser>>,
+    pub use_default_external_input_parsers: Option<bool>,
+    pub real_time_sync_server_url: Option<String>,
+    pub stable_balance_config: Option<StableBalanceConfig>,
+}
