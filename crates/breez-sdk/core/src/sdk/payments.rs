@@ -8,12 +8,13 @@ use tracing::{error, info, warn};
 use web_time::Duration;
 
 use crate::{
-    BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
-    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
-    SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
-    WaitForPaymentIdentifier,
+    BitcoinAddressDetails, BitcoinAddressResult, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest,
+    ClaimHtlcPaymentResponse, ConversionEstimate, ConversionOptions, ConversionPurpose,
+    ConversionType, FeePolicy, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+    GetPaymentRequest, GetPaymentResponse, InputType, InvoiceOptions, InvoiceResult,
+    OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote, SendPaymentMethod,
+    SendPaymentOptions, SparkAddressResult, SparkHtlcOptions, SparkInvoiceDetails,
+    SparkInvoiceOptions, SparkInvoiceResult, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -1348,5 +1349,103 @@ impl BreezSdk {
             )
             .await
             .map_err(Into::into)
+    }
+}
+
+// Simplified receive API methods.
+//
+// These are convenience wrappers around `receive_payment()` that provide
+// dedicated methods for each payment method. They can also be exported
+// via UniFFI since the input/output types are all simple Records.
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
+impl BreezSdk {
+    /// Creates a Lightning (BOLT11) invoice for receiving payments.
+    ///
+    /// This is a convenience wrapper around [`receive_payment()`](BreezSdk::receive_payment)
+    /// using `ReceivePaymentMethod::Bolt11Invoice`.
+    ///
+    /// # Arguments
+    /// * `options` - Optional invoice configuration (amount, description, expiry).
+    ///   If `None`, creates an amountless invoice with default settings.
+    pub async fn create_invoice(
+        &self,
+        options: Option<InvoiceOptions>,
+    ) -> Result<InvoiceResult, SdkError> {
+        let opts = options.unwrap_or_default();
+        let resp = self
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                    description: opts.description.unwrap_or_default(),
+                    amount_sats: opts.amount_sats,
+                    expiry_secs: opts.expiry_secs,
+                    payment_hash: None,
+                },
+            })
+            .await?;
+        Ok(InvoiceResult {
+            bolt11: resp.payment_request,
+            fee_sats: u64::try_from(resp.fee).unwrap_or(u64::MAX),
+        })
+    }
+
+    /// Creates a Spark invoice for receiving payments.
+    ///
+    /// This is a convenience wrapper around [`receive_payment()`](BreezSdk::receive_payment)
+    /// using `ReceivePaymentMethod::SparkInvoice`.
+    ///
+    /// # Arguments
+    /// * `options` - Optional Spark invoice configuration (amount, token, expiry, etc.).
+    ///   If `None`, creates an amountless Bitcoin Spark invoice.
+    pub async fn create_spark_invoice(
+        &self,
+        options: Option<SparkInvoiceOptions>,
+    ) -> Result<SparkInvoiceResult, SdkError> {
+        let opts = options.unwrap_or_default();
+        let resp = self
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::SparkInvoice {
+                    amount: opts.amount,
+                    token_identifier: opts.token_identifier,
+                    expiry_time: opts.expiry_time,
+                    description: opts.description,
+                    sender_public_key: opts.sender_public_key,
+                },
+            })
+            .await?;
+        Ok(SparkInvoiceResult {
+            invoice: resp.payment_request,
+            fee: resp.fee,
+        })
+    }
+
+    /// Returns a Bitcoin on-chain deposit address.
+    ///
+    /// This is a convenience wrapper around [`receive_payment()`](BreezSdk::receive_payment)
+    /// using `ReceivePaymentMethod::BitcoinAddress`.
+    pub async fn get_bitcoin_address(&self) -> Result<BitcoinAddressResult, SdkError> {
+        let resp = self
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::BitcoinAddress,
+            })
+            .await?;
+        Ok(BitcoinAddressResult {
+            address: resp.payment_request,
+        })
+    }
+
+    /// Returns the wallet's Spark address.
+    ///
+    /// This is a convenience wrapper around [`receive_payment()`](BreezSdk::receive_payment)
+    /// using `ReceivePaymentMethod::SparkAddress`.
+    pub async fn get_spark_address(&self) -> Result<SparkAddressResult, SdkError> {
+        let resp = self
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::SparkAddress,
+            })
+            .await?;
+        Ok(SparkAddressResult {
+            address: resp.payment_request,
+        })
     }
 }

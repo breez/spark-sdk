@@ -122,6 +122,44 @@ impl BreezSdk {
         Ok(self.sdk.receive_payment(request.into()).await?.into())
     }
 
+    /// Creates a Lightning (BOLT11) invoice for receiving payments.
+    #[wasm_bindgen(js_name = "createInvoice")]
+    pub async fn create_invoice(
+        &self,
+        options: Option<InvoiceOptions>,
+    ) -> WasmResult<InvoiceResult> {
+        Ok(self
+            .sdk
+            .create_invoice(options.map(|o| o.into()))
+            .await?
+            .into())
+    }
+
+    /// Creates a Spark invoice for receiving payments.
+    #[wasm_bindgen(js_name = "createSparkInvoice")]
+    pub async fn create_spark_invoice(
+        &self,
+        options: Option<SparkInvoiceOptions>,
+    ) -> WasmResult<SparkInvoiceResult> {
+        Ok(self
+            .sdk
+            .create_spark_invoice(options.map(|o| o.into()))
+            .await?
+            .into())
+    }
+
+    /// Returns a Bitcoin on-chain deposit address.
+    #[wasm_bindgen(js_name = "getBitcoinAddress")]
+    pub async fn get_bitcoin_address(&self) -> WasmResult<BitcoinAddressResult> {
+        Ok(self.sdk.get_bitcoin_address().await?.into())
+    }
+
+    /// Returns the wallet's Spark address.
+    #[wasm_bindgen(js_name = "getSparkAddress")]
+    pub async fn get_spark_address(&self) -> WasmResult<SparkAddressResult> {
+        Ok(self.sdk.get_spark_address().await?.into())
+    }
+
     #[wasm_bindgen(js_name = "claimHtlcPayment")]
     pub async fn claim_htlc_payment(
         &self,

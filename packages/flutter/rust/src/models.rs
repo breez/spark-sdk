@@ -386,6 +386,44 @@ pub struct _ReceivePaymentResponse {
     pub fee: u128,
 }
 
+#[frb(mirror(InvoiceOptions))]
+pub struct _InvoiceOptions {
+    pub amount_sats: Option<u64>,
+    pub description: Option<String>,
+    pub expiry_secs: Option<u32>,
+}
+
+#[frb(mirror(SparkInvoiceOptions))]
+pub struct _SparkInvoiceOptions {
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+    pub expiry_time: Option<u64>,
+    pub description: Option<String>,
+    pub sender_public_key: Option<String>,
+}
+
+#[frb(mirror(InvoiceResult))]
+pub struct _InvoiceResult {
+    pub bolt11: String,
+    pub fee_sats: u64,
+}
+
+#[frb(mirror(SparkInvoiceResult))]
+pub struct _SparkInvoiceResult {
+    pub invoice: String,
+    pub fee: u128,
+}
+
+#[frb(mirror(BitcoinAddressResult))]
+pub struct _BitcoinAddressResult {
+    pub address: String,
+}
+
+#[frb(mirror(SparkAddressResult))]
+pub struct _SparkAddressResult {
+    pub address: String,
+}
+
 #[frb(mirror(RefundDepositRequest))]
 pub struct _RefundDepositRequest {
     pub txid: String,

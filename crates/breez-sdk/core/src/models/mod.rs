@@ -969,6 +969,79 @@ pub struct ReceivePaymentResponse {
     pub fee: u128,
 }
 
+/// Options for creating a Lightning (Bolt11) invoice.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct InvoiceOptions {
+    /// The amount in satoshis. If `None`, creates an amountless invoice.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub amount_sats: Option<u64>,
+    /// A description to embed in the invoice.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub description: Option<String>,
+    /// The expiry duration in seconds. Defaults to the node's default if `None`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub expiry_secs: Option<u32>,
+}
+
+/// Options for creating a Spark invoice.
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkInvoiceOptions {
+    /// Amount to receive. Denominated in sats if `token_identifier` is absent,
+    /// otherwise in the token base units.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub amount: Option<u128>,
+    /// The token identifier for token payments. Absence indicates Bitcoin.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub token_identifier: Option<String>,
+    /// The expiry time as a unix timestamp in seconds.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub expiry_time: Option<u64>,
+    /// A description to embed in the invoice.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub description: Option<String>,
+    /// If set, the invoice may only be fulfilled by a payer with this public key.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub sender_public_key: Option<String>,
+}
+
+/// The result of creating a Lightning (Bolt11) invoice.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct InvoiceResult {
+    /// The BOLT11 invoice string.
+    pub bolt11: String,
+    /// The fee in satoshis to receive this payment.
+    pub fee_sats: u64,
+}
+
+/// The result of creating a Spark invoice.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkInvoiceResult {
+    /// The Spark invoice string.
+    pub invoice: String,
+    /// The fee to receive this payment (in sats or token base units).
+    pub fee: u128,
+}
+
+/// The result of requesting a Bitcoin deposit address.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BitcoinAddressResult {
+    /// The Bitcoin address for receiving deposits.
+    pub address: String,
+}
+
+/// The result of requesting a Spark address.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkAddressResult {
+    /// The Spark address.
+    pub address: String,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
     /// The amount to send in satoshis.

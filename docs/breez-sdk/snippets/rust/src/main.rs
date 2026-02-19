@@ -13,6 +13,7 @@ mod lnurl_withdraw;
 mod messages;
 mod optimize;
 mod parsing_inputs;
+mod receive;
 mod receive_payment;
 mod refunding_payments;
 mod sdk_building;

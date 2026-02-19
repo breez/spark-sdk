@@ -67,6 +67,32 @@ impl BreezSdk {
         self.inner.receive_payment(request).await
     }
 
+    /// Creates a Lightning (BOLT11) invoice.
+    pub async fn create_invoice(
+        &self,
+        options: Option<InvoiceOptions>,
+    ) -> Result<InvoiceResult, SdkError> {
+        self.inner.create_invoice(options).await
+    }
+
+    /// Creates a Spark invoice.
+    pub async fn create_spark_invoice(
+        &self,
+        options: Option<SparkInvoiceOptions>,
+    ) -> Result<SparkInvoiceResult, SdkError> {
+        self.inner.create_spark_invoice(options).await
+    }
+
+    /// Returns a Bitcoin on-chain deposit address.
+    pub async fn get_bitcoin_address(&self) -> Result<BitcoinAddressResult, SdkError> {
+        self.inner.get_bitcoin_address().await
+    }
+
+    /// Returns the wallet's Spark address.
+    pub async fn get_spark_address(&self) -> Result<SparkAddressResult, SdkError> {
+        self.inner.get_spark_address().await
+    }
+
     pub async fn claim_htlc_payment(
         &self,
         request: ClaimHtlcPaymentRequest,

@@ -1276,3 +1276,45 @@ pub struct BuyBitcoinRequest {
 pub struct BuyBitcoinResponse {
     pub url: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InvoiceOptions)]
+pub struct InvoiceOptions {
+    pub amount_sats: Option<u64>,
+    pub description: Option<String>,
+    pub expiry_secs: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoiceOptions)]
+pub struct SparkInvoiceOptions {
+    #[tsify(type = "string")]
+    #[serde(with = "serde_option_u128_as_string")]
+    pub amount: Option<u128>,
+    pub token_identifier: Option<String>,
+    pub expiry_time: Option<u64>,
+    pub description: Option<String>,
+    pub sender_public_key: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::InvoiceResult)]
+pub struct InvoiceResult {
+    pub bolt11: String,
+    pub fee_sats: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoiceResult)]
+pub struct SparkInvoiceResult {
+    pub invoice: String,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
+    pub fee: u128,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BitcoinAddressResult)]
+pub struct BitcoinAddressResult {
+    pub address: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkAddressResult)]
+pub struct SparkAddressResult {
+    pub address: String,
+}
