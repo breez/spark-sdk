@@ -36,9 +36,7 @@ class Contacts {
     suspend fun listContacts(sdk: BreezSdk) {
         // ANCHOR: list-contacts
         // List contacts with pagination (e.g., 10 contacts starting from offset 0)
-        // Optionally filter by exact name match
         val contacts = sdk.listContacts(ListContactsRequest(
-            name = null, // Set to Some("Alice") to filter by name
             offset = 0u,
             limit = 10u
         ))

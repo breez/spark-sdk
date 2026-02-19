@@ -886,23 +886,13 @@ impl Storage for PostgresStorage {
         let limit = i64::from(request.limit.unwrap_or(u32::MAX));
         let offset = i64::from(request.offset.unwrap_or(0));
 
-        let rows = if let Some(ref name) = request.name {
-            client
-                .query(
-                    "SELECT id, name, payment_identifier, created_at, updated_at
-                     FROM contacts WHERE name = $1 ORDER BY name ASC LIMIT $2 OFFSET $3",
-                    &[name, &limit, &offset],
-                )
-                .await?
-        } else {
-            client
-                .query(
-                    "SELECT id, name, payment_identifier, created_at, updated_at
-                     FROM contacts ORDER BY name ASC LIMIT $1 OFFSET $2",
-                    &[&limit, &offset],
-                )
-                .await?
-        };
+        let rows = client
+            .query(
+                "SELECT id, name, payment_identifier, created_at, updated_at
+                 FROM contacts ORDER BY name ASC LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
+            )
+            .await?;
 
         let mut contacts = Vec::new();
         for row in rows {
@@ -1673,12 +1663,6 @@ mod tests {
     async fn test_contacts_crud() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_contacts_crud(Box::new(fixture.storage)).await;
-    }
-
-    #[tokio::test]
-    async fn test_contacts_name_filter() {
-        let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_contacts_name_filter(Box::new(fixture.storage)).await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.

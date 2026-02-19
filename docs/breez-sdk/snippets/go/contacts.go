@@ -54,11 +54,9 @@ func DeleteContact(sdk *breez_sdk_spark.BreezSdk) error {
 func ListContacts(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Contact, error) {
 	// ANCHOR: list-contacts
 	// List contacts with pagination (e.g., 10 contacts starting from offset 0)
-	// Optionally filter by exact name match
 	offset := uint32(0)
 	limit := uint32(10)
 	contacts, err := sdk.ListContacts(breez_sdk_spark.ListContactsRequest{
-		Name:   nil, // Set to &"Alice" to filter by name
 		Offset: &offset,
 		Limit:  &limit,
 	})

@@ -44,10 +44,8 @@ async def delete_contact(sdk: BreezSdk):
 async def list_contacts(sdk: BreezSdk):
     # ANCHOR: list-contacts
     # List contacts with pagination (e.g., 10 contacts starting from offset 0)
-    # Optionally filter by exact name match
     contacts = await sdk.list_contacts(
         request=ListContactsRequest(
-            name=None,  # Set to Some("Alice") to filter by name
             offset=0,
             limit=10,
         )

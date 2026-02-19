@@ -1179,7 +1179,6 @@ pub struct _UpdateContactRequest {
 
 #[frb(mirror(ListContactsRequest))]
 pub struct _ListContactsRequest {
-    pub name: Option<String>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
 }

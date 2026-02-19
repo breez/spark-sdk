@@ -1843,7 +1843,6 @@ class IndexedDBStorage {
 
     const actualOffset = request.offset !== null && request.offset !== undefined ? request.offset : 0;
     const actualLimit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
-    const nameFilter = request.name !== null && request.name !== undefined ? request.name : null;
 
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction("contacts", "readonly");
@@ -1854,9 +1853,7 @@ class IndexedDBStorage {
       let count = 0;
       let skipped = 0;
 
-      // If name filter is specified, use IDBKeyRange to filter by exact name
-      const keyRange = nameFilter !== null ? IDBKeyRange.only(nameFilter) : null;
-      const cursorRequest = nameIndex.openCursor(keyRange);
+      const cursorRequest = nameIndex.openCursor();
 
       cursorRequest.onsuccess = (event) => {
         const cursor = event.target.result;

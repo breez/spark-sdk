@@ -1333,7 +1333,6 @@ pub struct UpdateContactRequest {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ListContactsRequest)]
 pub struct ListContactsRequest {
-    pub name: Option<String>,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
 }

@@ -42,10 +42,8 @@ pub(crate) async fn delete_contact(sdk: &BreezSdk) -> Result<()> {
 pub(crate) async fn list_contacts(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: list-contacts
     // List contacts with pagination (e.g., 10 contacts starting from offset 0)
-    // Optionally filter by exact name match
     let contacts = sdk
         .list_contacts(ListContactsRequest {
-            name: None, // Set to Some("Alice") to filter by name
             offset: Some(0),
             limit: Some(10),
         })
