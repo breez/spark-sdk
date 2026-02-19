@@ -546,7 +546,7 @@ impl Storage for SyncedStorage {
 #[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use super::*;
-    use crate::persist::sqlite::SqliteStorage;
+    use crate::{SparkHtlcDetails, persist::sqlite::SqliteStorage};
     use breez_sdk_common::sync::{
         Record as ModelRecord, RecordChange as ModelRecordChange, RecordId as ModelRecordId,
     };
@@ -613,10 +613,14 @@ mod tests {
             method: crate::PaymentMethod::Lightning,
             details: Some(crate::PaymentDetails::Lightning {
                 invoice: "lnbc1test".to_string(),
-                payment_hash: "abc123".to_string(),
                 destination_pubkey: "02def456".to_string(),
                 description: None,
-                preimage: None,
+                htlc_details: SparkHtlcDetails {
+                    payment_hash: "abc123".to_string(),
+                    preimage: None,
+                    expiry_time: 0,
+                    status: crate::SparkHtlcStatus::WaitingForPreimage,
+                },
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
