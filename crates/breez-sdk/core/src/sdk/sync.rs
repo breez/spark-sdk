@@ -18,6 +18,7 @@ use crate::{
     },
 };
 
+#[allow(deprecated)]
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
     helpers::{BalanceWatcher, update_balances},
@@ -168,6 +169,7 @@ impl BreezSdk {
         }
     }
 
+    #[allow(deprecated)]
     pub(super) async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
         if payment.payment_type != PaymentType::Receive {
             return;

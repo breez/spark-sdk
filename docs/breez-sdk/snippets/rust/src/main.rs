@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 mod buying_bitcoin;
 mod config;
 mod external_signer;

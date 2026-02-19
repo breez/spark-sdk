@@ -4,6 +4,7 @@ mod persist;
 use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
+#[allow(deprecated)]
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig,
     create_postgres_storage, default_config, default_postgres_storage_config,
@@ -89,6 +90,7 @@ impl EventListener for CliEventListener {
     }
 }
 
+#[allow(deprecated)]
 async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,

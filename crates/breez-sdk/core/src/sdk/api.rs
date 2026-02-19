@@ -16,6 +16,7 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
+#[allow(deprecated)]
 use super::{BreezSdk, helpers::get_or_create_deposit_address, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -66,6 +67,7 @@ impl BreezSdk {
         Ok(())
     }
 
+    #[allow(deprecated)]
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
         parse_input(input, Some(self.external_input_parsers.clone())).await
     }

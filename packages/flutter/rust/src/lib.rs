@@ -1,3 +1,4 @@
+pub mod breez;
 pub mod errors;
 pub mod events;
 mod frb_generated;
@@ -7,4 +8,5 @@ pub mod models;
 pub mod sdk;
 pub mod sdk_builder;
 
+pub use breez::Breez;
 pub use sdk::BreezSdk;

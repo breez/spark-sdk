@@ -51,3 +51,24 @@ a.tag:hover {
 .lang-fn span { display: none; }
 .lang-fn span.fn-rust { display: inline; } /* Default before JS runs */
 
+/* API lifecycle badges for SUMMARY.md navigation and page headings */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: bold;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+
+.badge-new {
+    background: #22c55e;
+    color: white;
+}
+
+.badge-deprecated {
+    background: #ef4444;
+    color: white;
+}
+

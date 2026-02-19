@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use anyhow::Result;
 use breez_sdk_itest::ReinitializableSdkInstance;
 use breez_sdk_spark::*;

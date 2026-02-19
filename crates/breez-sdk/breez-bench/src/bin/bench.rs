@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Breez SDK Performance Benchmark CLI
 //!
 //! Measures payment/transfer performance.

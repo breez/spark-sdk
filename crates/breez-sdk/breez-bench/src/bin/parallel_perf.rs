@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Parallel Payment Performance Testing Tool
 //!
 //! Tests parallel payment throughput in regtest by executing

@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;

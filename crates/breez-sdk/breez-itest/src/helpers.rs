@@ -207,6 +207,7 @@ pub async fn build_sdk_with_external_signer(
     config.real_time_sync_server_url = None;
 
     // Create default external signer from mnemonic
+    #[allow(deprecated)]
     let signer = breez_sdk_spark::default_external_signer(
         mnemonic,
         None, // no passphrase
@@ -847,6 +848,7 @@ pub async fn build_sdk_with_postgres(
     ))
     .await?;
 
+    #[allow(deprecated)]
     let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;

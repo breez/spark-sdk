@@ -117,6 +117,12 @@ pub struct BreezSdk {
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
 }
 
+/// Alias for [`BreezSdk`].
+///
+/// `BreezClient` is the preferred name going forward. The original `BreezSdk`
+/// name is retained for backward compatibility.
+pub type BreezClient = BreezSdk;
+
 pub(crate) struct BreezSdkParams {
     pub config: Config,
     pub storage: Arc<dyn Storage>,
@@ -133,6 +139,8 @@ pub(crate) struct BreezSdkParams {
     pub buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
 }
 
+#[deprecated(since = "0.6.0", note = "Use `Breez::parse()` instead")]
+#[allow(deprecated)]
 pub async fn parse_input(
     input: &str,
     external_input_parsers: Option<Vec<ExternalInputParser>>,
@@ -145,7 +153,9 @@ pub async fn parse_input(
     .into())
 }
 
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
+#[deprecated(since = "0.6.0", note = "Use `Breez::init_logging()` instead")]
 pub fn init_logging(
     log_dir: Option<String>,
     app_logger: Option<Box<dyn Logger>>,
@@ -164,7 +174,9 @@ pub fn init_logging(
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[deprecated(since = "0.6.0", note = "Use `Breez::connect()` instead")]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
         .with_default_storage(request.storage_dir);
@@ -185,7 +197,9 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[deprecated(since = "0.6.0", note = "Use `Breez::connect_with_signer()` instead")]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,
 ) -> Result<BreezSdk, SdkError> {
@@ -195,7 +209,9 @@ pub async fn connect_with_signer(
     Ok(sdk)
 }
 
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
+#[deprecated(since = "0.6.0", note = "Use `Breez::default_config()` instead")]
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {
         Network::Mainnet => Some("breez.tips".to_string()),
@@ -235,7 +251,12 @@ pub fn default_config(network: Network) -> Config {
 /// # Returns
 ///
 /// Result containing the signer as `Arc<dyn ExternalSigner>`
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
+#[deprecated(
+    since = "0.6.0",
+    note = "Use `Breez::default_external_signer()` instead"
+)]
 pub fn default_external_signer(
     mnemonic: String,
     passphrase: Option<String>,
@@ -261,7 +282,9 @@ pub fn default_external_signer(
 ///
 /// This function queries the Spark status API and returns the worst status
 /// across the Spark Operators and SSP services.
+#[allow(deprecated)]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[deprecated(since = "0.6.0", note = "Use `Breez::get_spark_status()` instead")]
 pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
     use chrono::DateTime;
     use platform_utils::DefaultHttpClient;

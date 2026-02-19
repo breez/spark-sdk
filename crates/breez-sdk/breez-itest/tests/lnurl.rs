@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::{borrow::Cow, sync::Arc};
 
 use anyhow::Result;
