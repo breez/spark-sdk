@@ -1,5 +1,7 @@
 pub(crate) mod adaptors;
+pub mod parsed_action;
 pub mod payment_observer;
+pub use parsed_action::*;
 pub use payment_observer::*;
 
 // Re-export public conversion types from the conversion module

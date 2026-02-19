@@ -195,6 +195,62 @@ pub enum _InputType {
     SparkInvoice(SparkInvoiceDetails),
 }
 
+#[frb(mirror(ParsedAction))]
+pub enum _ParsedAction {
+    Send(SendAction),
+    Receive(ReceiveAction),
+    Authenticate(AuthAction),
+    Multi {
+        bip21_details: Bip21Details,
+        actions: Vec<ParsedAction>,
+    },
+    Unsupported {
+        raw: String,
+    },
+}
+
+#[frb(mirror(SendAction))]
+pub enum _SendAction {
+    Bolt11 {
+        invoice_details: Bolt11InvoiceDetails,
+    },
+    Bolt12Invoice {
+        invoice_details: Bolt12InvoiceDetails,
+    },
+    Bolt12Offer {
+        offer_details: Bolt12OfferDetails,
+    },
+    SparkInvoice {
+        invoice_details: SparkInvoiceDetails,
+    },
+    SparkAddress {
+        address_details: SparkAddressDetails,
+    },
+    Bitcoin {
+        address_details: BitcoinAddressDetails,
+    },
+    LnurlPay {
+        pay_details: LnurlPayRequestDetails,
+    },
+    LightningAddress {
+        address_details: LightningAddressDetails,
+    },
+}
+
+#[frb(mirror(ReceiveAction))]
+pub enum _ReceiveAction {
+    LnurlWithdraw {
+        withdraw_details: LnurlWithdrawRequestDetails,
+    },
+}
+
+#[frb(mirror(AuthAction))]
+pub struct _AuthAction {
+    pub domain: String,
+    pub action: Option<String>,
+    pub request_data: LnurlAuthRequestDetails,
+}
+
 #[frb(mirror(PaymentDetailsFilter))]
 pub enum _PaymentDetailsFilter {
     Spark {

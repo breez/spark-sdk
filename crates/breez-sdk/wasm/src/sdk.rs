@@ -109,6 +109,54 @@ impl BreezSdk {
         Ok(self.sdk.parse(input).await?.into())
     }
 
+    /// Parses an input string and returns a structured `ParsedAction`.
+    ///
+    /// This is a higher-level alternative to `parse()` that categorizes
+    /// the result into Send, Receive, Authenticate, or Multi actions.
+    #[wasm_bindgen(js_name = "parseAction")]
+    pub async fn parse_action(&self, input: &str) -> WasmResult<ParsedAction> {
+        Ok(self.sdk.parse_action(input).await?.into())
+    }
+
+    /// Prepares a send payment from a parsed `SendAction`.
+    #[wasm_bindgen(js_name = "prepareSend")]
+    pub async fn prepare_send(
+        &self,
+        action: SendAction,
+        amount: Option<u64>,
+        token_identifier: Option<String>,
+    ) -> WasmResult<PrepareSendPaymentResponse> {
+        let core_action: breez_sdk_spark::SendAction = action.into();
+        Ok(self
+            .sdk
+            .prepare_send(&core_action, amount.map(u128::from), token_identifier)
+            .await?
+            .into())
+    }
+
+    /// Executes an LNURL-withdraw from a parsed `ReceiveAction`.
+    #[wasm_bindgen(js_name = "withdraw")]
+    pub async fn withdraw(
+        &self,
+        action: ReceiveAction,
+        amount_sats: u64,
+        completion_timeout_secs: Option<u32>,
+    ) -> WasmResult<LnurlWithdrawResponse> {
+        let core_action: breez_sdk_spark::ReceiveAction = action.into();
+        Ok(self
+            .sdk
+            .withdraw(core_action, amount_sats, completion_timeout_secs)
+            .await?
+            .into())
+    }
+
+    /// Performs LNURL-auth from a parsed `AuthAction`.
+    #[wasm_bindgen(js_name = "authenticate")]
+    pub async fn authenticate(&self, action: AuthAction) -> WasmResult<LnurlCallbackStatus> {
+        let core_action: breez_sdk_spark::AuthAction = action.into();
+        Ok(self.sdk.authenticate(core_action).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "getInfo")]
     pub async fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
         Ok(self.sdk.get_info(request.into()).await?.into())

@@ -56,6 +56,40 @@ impl BreezSdk {
         self.inner.parse(input).await
     }
 
+    /// Parses an input string and returns a structured `ParsedAction`.
+    pub async fn parse_action(&self, input: &str) -> Result<ParsedAction, SdkError> {
+        self.inner.parse_action(input).await
+    }
+
+    /// Prepares a send payment from a parsed `SendAction`.
+    pub async fn prepare_send(
+        &self,
+        action: SendAction,
+        amount: Option<u128>,
+        token_identifier: Option<String>,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        self.inner
+            .prepare_send(&action, amount, token_identifier)
+            .await
+    }
+
+    /// Executes an LNURL-withdraw from a parsed `ReceiveAction`.
+    pub async fn withdraw(
+        &self,
+        action: ReceiveAction,
+        amount_sats: u64,
+        completion_timeout_secs: Option<u32>,
+    ) -> Result<LnurlWithdrawResponse, SdkError> {
+        self.inner
+            .withdraw(action, amount_sats, completion_timeout_secs)
+            .await
+    }
+
+    /// Performs LNURL-auth from a parsed `AuthAction`.
+    pub async fn authenticate(&self, action: AuthAction) -> Result<LnurlCallbackStatus, SdkError> {
+        self.inner.authenticate(action).await
+    }
+
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
         self.inner.get_info(request).await
     }

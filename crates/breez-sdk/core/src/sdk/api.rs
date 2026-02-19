@@ -3,15 +3,16 @@ use std::str::FromStr;
 use tracing::{error, info};
 
 use crate::{
-    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
+    AuthAction, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
-    UpdateUserSettingsRequest, UserSettings,
+    ListFiatRatesResponse, LnurlCallbackStatus, LnurlWithdrawRequest, OptimizationProgress,
+    ParsedAction, PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceiveAction, SendAction,
+    SignMessageRequest, SignMessageResponse, UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse},
+    models::{GetInfoRequest, GetInfoResponse, LnurlWithdrawResponse},
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
@@ -308,5 +309,71 @@ impl BreezSdk {
             .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+// Action-based API methods.
+//
+// These use `ParsedAction` / `SendAction` / etc. which contain recursive enums
+// and trait objects that aren't directly UniFFI-exportable. They're available
+// from Rust, WASM, and Flutter via their respective wrappers.
+impl BreezSdk {
+    /// Parses an input string and returns a structured [`ParsedAction`].
+    ///
+    /// This is a higher-level alternative to [`parse()`](BreezSdk::parse) that
+    /// categorizes the result into Send, Receive, Authenticate, or Multi actions.
+    pub async fn parse_action(&self, input: &str) -> Result<ParsedAction, SdkError> {
+        let input_type = parse_input(input, Some(self.external_input_parsers.clone())).await?;
+        Ok(ParsedAction::from(input_type))
+    }
+
+    /// Prepares a send payment from a [`SendAction`].
+    ///
+    /// This is a convenience wrapper around [`prepare_send_payment()`](BreezSdk::prepare_send_payment)
+    /// that extracts the payment request string from the action.
+    pub async fn prepare_send(
+        &self,
+        action: &SendAction,
+        amount: Option<u128>,
+        token_identifier: Option<String>,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        self.prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: action.payment_request(),
+            amount,
+            token_identifier,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await
+    }
+
+    /// Executes an LNURL-withdraw from a [`ReceiveAction`].
+    ///
+    /// This is a convenience wrapper around [`lnurl_withdraw()`](BreezSdk::lnurl_withdraw)
+    /// that extracts the withdraw details from the action.
+    pub async fn withdraw(
+        &self,
+        action: ReceiveAction,
+        amount_sats: u64,
+        completion_timeout_secs: Option<u32>,
+    ) -> Result<LnurlWithdrawResponse, SdkError> {
+        match action {
+            ReceiveAction::LnurlWithdraw { withdraw_details } => {
+                self.lnurl_withdraw(LnurlWithdrawRequest {
+                    amount_sats,
+                    withdraw_request: withdraw_details,
+                    completion_timeout_secs,
+                })
+                .await
+            }
+        }
+    }
+
+    /// Performs LNURL-auth from an [`AuthAction`].
+    ///
+    /// This is a convenience wrapper around [`lnurl_auth()`](BreezSdk::lnurl_auth)
+    /// that extracts the request data from the action.
+    pub async fn authenticate(&self, action: AuthAction) -> Result<LnurlCallbackStatus, SdkError> {
+        self.lnurl_auth(action.request_data).await
     }
 }

@@ -12,6 +12,7 @@ mod lnurl_pay;
 mod lnurl_withdraw;
 mod messages;
 mod optimize;
+mod parse_action;
 mod parsing_inputs;
 mod receive_payment;
 mod refunding_payments;

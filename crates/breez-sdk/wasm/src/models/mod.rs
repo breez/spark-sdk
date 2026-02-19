@@ -1276,3 +1276,205 @@ pub struct BuyBitcoinRequest {
 pub struct BuyBitcoinResponse {
     pub url: String,
 }
+
+// --- ParsedAction types ---
+// These use manual serde/Tsify derives because ParsedAction is recursive
+// (Multi contains Vec<ParsedAction>), which the extern_wasm_bindgen macro can't handle.
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum ParsedAction {
+    Send(SendAction),
+    Receive(ReceiveAction),
+    Authenticate(AuthAction),
+    Multi {
+        #[serde(rename = "bip21Details")]
+        bip21_details: Bip21Details,
+        actions: Vec<ParsedAction>,
+    },
+    Unsupported {
+        raw: String,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum SendAction {
+    Bolt11 {
+        #[serde(rename = "invoiceDetails")]
+        invoice_details: Bolt11InvoiceDetails,
+    },
+    Bolt12Invoice {
+        #[serde(rename = "invoiceDetails")]
+        invoice_details: Bolt12InvoiceDetails,
+    },
+    Bolt12Offer {
+        #[serde(rename = "offerDetails")]
+        offer_details: Bolt12OfferDetails,
+    },
+    SparkInvoice {
+        #[serde(rename = "invoiceDetails")]
+        invoice_details: SparkInvoiceDetails,
+    },
+    SparkAddress {
+        #[serde(rename = "addressDetails")]
+        address_details: SparkAddressDetails,
+    },
+    Bitcoin {
+        #[serde(rename = "addressDetails")]
+        address_details: BitcoinAddressDetails,
+    },
+    LnurlPay {
+        #[serde(rename = "payDetails")]
+        pay_details: LnurlPayRequestDetails,
+    },
+    LightningAddress {
+        #[serde(rename = "addressDetails")]
+        address_details: LightningAddressDetails,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum ReceiveAction {
+    LnurlWithdraw {
+        #[serde(rename = "withdrawDetails")]
+        withdraw_details: LnurlWithdrawRequestDetails,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AuthAction)]
+pub struct AuthAction {
+    pub domain: String,
+    pub action: Option<String>,
+    pub request_data: LnurlAuthRequestDetails,
+}
+
+// Manual From conversions for ParsedAction (recursive enum)
+impl From<breez_sdk_spark::ParsedAction> for ParsedAction {
+    fn from(action: breez_sdk_spark::ParsedAction) -> Self {
+        match action {
+            breez_sdk_spark::ParsedAction::Send(send) => ParsedAction::Send(send.into()),
+            breez_sdk_spark::ParsedAction::Receive(recv) => ParsedAction::Receive(recv.into()),
+            breez_sdk_spark::ParsedAction::Authenticate(auth) => {
+                ParsedAction::Authenticate(auth.into())
+            }
+            breez_sdk_spark::ParsedAction::Multi {
+                bip21_details,
+                actions,
+            } => ParsedAction::Multi {
+                bip21_details: bip21_details.into(),
+                actions: actions.into_iter().map(ParsedAction::from).collect(),
+            },
+            breez_sdk_spark::ParsedAction::Unsupported { raw } => ParsedAction::Unsupported { raw },
+        }
+    }
+}
+
+impl From<breez_sdk_spark::SendAction> for SendAction {
+    fn from(action: breez_sdk_spark::SendAction) -> Self {
+        match action {
+            breez_sdk_spark::SendAction::Bolt11 { invoice_details } => SendAction::Bolt11 {
+                invoice_details: invoice_details.into(),
+            },
+            breez_sdk_spark::SendAction::Bolt12Invoice { invoice_details } => {
+                SendAction::Bolt12Invoice {
+                    invoice_details: invoice_details.into(),
+                }
+            }
+            breez_sdk_spark::SendAction::Bolt12Offer { offer_details } => SendAction::Bolt12Offer {
+                offer_details: offer_details.into(),
+            },
+            breez_sdk_spark::SendAction::SparkInvoice { invoice_details } => {
+                SendAction::SparkInvoice {
+                    invoice_details: invoice_details.into(),
+                }
+            }
+            breez_sdk_spark::SendAction::SparkAddress { address_details } => {
+                SendAction::SparkAddress {
+                    address_details: address_details.into(),
+                }
+            }
+            breez_sdk_spark::SendAction::Bitcoin { address_details } => SendAction::Bitcoin {
+                address_details: address_details.into(),
+            },
+            breez_sdk_spark::SendAction::LnurlPay { pay_details } => SendAction::LnurlPay {
+                pay_details: pay_details.into(),
+            },
+            breez_sdk_spark::SendAction::LightningAddress { address_details } => {
+                SendAction::LightningAddress {
+                    address_details: address_details.into(),
+                }
+            }
+        }
+    }
+}
+
+impl From<SendAction> for breez_sdk_spark::SendAction {
+    fn from(action: SendAction) -> Self {
+        match action {
+            SendAction::Bolt11 { invoice_details } => breez_sdk_spark::SendAction::Bolt11 {
+                invoice_details: invoice_details.into(),
+            },
+            SendAction::Bolt12Invoice { invoice_details } => {
+                breez_sdk_spark::SendAction::Bolt12Invoice {
+                    invoice_details: invoice_details.into(),
+                }
+            }
+            SendAction::Bolt12Offer { offer_details } => breez_sdk_spark::SendAction::Bolt12Offer {
+                offer_details: offer_details.into(),
+            },
+            SendAction::SparkInvoice { invoice_details } => {
+                breez_sdk_spark::SendAction::SparkInvoice {
+                    invoice_details: invoice_details.into(),
+                }
+            }
+            SendAction::SparkAddress { address_details } => {
+                breez_sdk_spark::SendAction::SparkAddress {
+                    address_details: address_details.into(),
+                }
+            }
+            SendAction::Bitcoin { address_details } => breez_sdk_spark::SendAction::Bitcoin {
+                address_details: address_details.into(),
+            },
+            SendAction::LnurlPay { pay_details } => breez_sdk_spark::SendAction::LnurlPay {
+                pay_details: pay_details.into(),
+            },
+            SendAction::LightningAddress { address_details } => {
+                breez_sdk_spark::SendAction::LightningAddress {
+                    address_details: address_details.into(),
+                }
+            }
+        }
+    }
+}
+
+impl From<breez_sdk_spark::ReceiveAction> for ReceiveAction {
+    fn from(action: breez_sdk_spark::ReceiveAction) -> Self {
+        match action {
+            breez_sdk_spark::ReceiveAction::LnurlWithdraw { withdraw_details } => {
+                ReceiveAction::LnurlWithdraw {
+                    withdraw_details: withdraw_details.into(),
+                }
+            }
+        }
+    }
+}
+
+impl From<ReceiveAction> for breez_sdk_spark::ReceiveAction {
+    fn from(action: ReceiveAction) -> Self {
+        match action {
+            ReceiveAction::LnurlWithdraw { withdraw_details } => {
+                breez_sdk_spark::ReceiveAction::LnurlWithdraw {
+                    withdraw_details: withdraw_details.into(),
+                }
+            }
+        }
+    }
+}
