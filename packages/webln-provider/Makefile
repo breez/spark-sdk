@@ -4,7 +4,7 @@ build:
 	npm install && npm run build
 
 test:
-	npm test
+	npm install && npm test
 
 check: test
 

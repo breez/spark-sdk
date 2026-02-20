@@ -5,8 +5,10 @@ library;
 enum LnurlType {
   /// LNURL-pay request
   pay,
+
   /// LNURL-withdraw request
   withdraw,
+
   /// LNURL-auth request
   auth,
 }
@@ -54,11 +56,7 @@ class LnurlUserResponse {
   /// Optional comment (for pay)
   final String? comment;
 
-  const LnurlUserResponse({
-    required this.approved,
-    this.amountSats,
-    this.comment,
-  });
+  const LnurlUserResponse({required this.approved, this.amountSats, this.comment});
 
   /// Creates a rejected response
   static const LnurlUserResponse rejected = LnurlUserResponse(approved: false);

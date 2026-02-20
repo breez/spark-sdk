@@ -183,13 +183,13 @@ class WebLnController {
       // Get pubkey by signing a message (SDK doesn't expose pubkey via getInfo)
       final pubkey = await _getNodePubkey();
 
-      await _respond(id, result: {
-        'node': {
-          'pubkey': pubkey,
-          'alias': '',
+      await _respond(
+        id,
+        result: {
+          'node': {'pubkey': pubkey, 'alias': ''},
+          'methods': _supportedMethods,
         },
-        'methods': _supportedMethods,
-      });
+      );
     } catch (e) {
       await _respond(id, error: WebLnErrorCode.internalError);
     }
@@ -202,10 +202,7 @@ class WebLnController {
     }
 
     final response = await sdk.signMessage(
-      request: const SignMessageRequest(
-        message: 'webln_pubkey_request',
-        compact: true,
-      ),
+      request: const SignMessageRequest(message: 'webln_pubkey_request', compact: true),
     );
     _cachedPubkey = response.pubkey;
     return response.pubkey;
@@ -239,18 +236,13 @@ class WebLnController {
 
       // Prepare and send payment
       final prepared = await sdk.prepareSendPayment(
-        request: PrepareSendPaymentRequest(
-          paymentRequest: paymentRequest,
-        ),
+        request: PrepareSendPaymentRequest(paymentRequest: paymentRequest),
       );
 
       final result = await sdk.sendPayment(
         request: SendPaymentRequest(
           prepareResponse: prepared,
-          options: SendPaymentOptions_Bolt11Invoice(
-            preferSpark: false,
-            completionTimeoutSecs: 60,
-          ),
+          options: SendPaymentOptions_Bolt11Invoice(preferSpark: false, completionTimeoutSecs: 60),
         ),
       );
 
@@ -261,9 +253,7 @@ class WebLnController {
         preimage = details.htlcDetails.preimage ?? '';
       }
 
-      await _respond(id, result: {
-        'preimage': preimage,
-      });
+      await _respond(id, result: {'preimage': preimage});
     } on SdkError catch (e) {
       if (e is SdkError_InsufficientFunds) {
         await _respond(id, error: WebLnErrorCode.insufficientFunds);
@@ -294,16 +284,11 @@ class WebLnController {
 
       final response = await sdk.receivePayment(
         request: ReceivePaymentRequest(
-          paymentMethod: ReceivePaymentMethod_Bolt11Invoice(
-            amountSats: amountSats,
-            description: memo ?? '',
-          ),
+          paymentMethod: ReceivePaymentMethod_Bolt11Invoice(amountSats: amountSats, description: memo ?? ''),
         ),
       );
 
-      await _respond(id, result: {
-        'paymentRequest': response.paymentRequest,
-      });
+      await _respond(id, result: {'paymentRequest': response.paymentRequest});
     } catch (e) {
       await _respond(id, error: WebLnErrorCode.internalError);
     }
@@ -317,13 +302,8 @@ class WebLnController {
     }
 
     try {
-      final response = await sdk.signMessage(
-        request: SignMessageRequest(message: message, compact: true),
-      );
-      await _respond(id, result: {
-        'message': message,
-        'signature': response.signature,
-      });
+      final response = await sdk.signMessage(request: SignMessageRequest(message: message, compact: true));
+      await _respond(id, result: {'message': message, 'signature': response.signature});
     } catch (e) {
       await _respond(id, error: WebLnErrorCode.internalError);
     }
@@ -341,11 +321,7 @@ class WebLnController {
     try {
       final pubkey = await _getNodePubkey();
       final response = await sdk.checkMessage(
-        request: CheckMessageRequest(
-          message: message,
-          pubkey: pubkey,
-          signature: signature,
-        ),
+        request: CheckMessageRequest(message: message, pubkey: pubkey, signature: signature),
       );
 
       if (response.isValid) {
@@ -383,13 +359,15 @@ class WebLnController {
   }
 
   Future<void> _handleLnurlPay(String id, LnurlPayRequestDetails data) async {
-    final lnurlResponse = await onLnurlRequest(LnurlRequest(
-      type: LnurlType.pay,
-      domain: data.domain,
-      minAmountSats: (data.minSendable.toInt() / 1000).round(),
-      maxAmountSats: (data.maxSendable.toInt() / 1000).round(),
-      metadata: data.metadataStr,
-    ));
+    final lnurlResponse = await onLnurlRequest(
+      LnurlRequest(
+        type: LnurlType.pay,
+        domain: data.domain,
+        minAmountSats: (data.minSendable.toInt() / 1000).round(),
+        maxAmountSats: (data.maxSendable.toInt() / 1000).round(),
+        metadata: data.metadataStr,
+      ),
+    );
 
     if (!lnurlResponse.approved) {
       await _respond(id, error: WebLnErrorCode.userRejected);
@@ -405,9 +383,7 @@ class WebLnController {
         ),
       );
 
-      final result = await sdk.lnurlPay(
-        request: LnurlPayRequest(prepareResponse: prepared),
-      );
+      final result = await sdk.lnurlPay(request: LnurlPayRequest(prepareResponse: prepared));
 
       // Extract preimage from payment details
       String preimage = '';
@@ -416,10 +392,7 @@ class WebLnController {
         preimage = details.htlcDetails.preimage ?? '';
       }
 
-      await _respond(id, result: {
-        'status': 'OK',
-        'preimage': preimage,
-      });
+      await _respond(id, result: {'status': 'OK', 'preimage': preimage});
     } on SdkError catch (e) {
       if (e is SdkError_InsufficientFunds) {
         await _respond(id, error: WebLnErrorCode.insufficientFunds);
@@ -432,15 +405,15 @@ class WebLnController {
   }
 
   Future<void> _handleLnurlWithdraw(String id, LnurlWithdrawRequestDetails data) async {
-    final lnurlResponse = await onLnurlRequest(LnurlRequest(
-      type: LnurlType.withdraw,
-      domain: data.callback.split('/').length > 2
-          ? Uri.parse(data.callback).host
-          : data.callback,
-      minAmountSats: (data.minWithdrawable.toInt() / 1000).round(),
-      maxAmountSats: (data.maxWithdrawable.toInt() / 1000).round(),
-      defaultDescription: data.defaultDescription,
-    ));
+    final lnurlResponse = await onLnurlRequest(
+      LnurlRequest(
+        type: LnurlType.withdraw,
+        domain: data.callback.split('/').length > 2 ? Uri.parse(data.callback).host : data.callback,
+        minAmountSats: (data.minWithdrawable.toInt() / 1000).round(),
+        maxAmountSats: (data.maxWithdrawable.toInt() / 1000).round(),
+        defaultDescription: data.defaultDescription,
+      ),
+    );
 
     if (!lnurlResponse.approved) {
       await _respond(id, error: WebLnErrorCode.userRejected);
@@ -461,10 +434,7 @@ class WebLnController {
   }
 
   Future<void> _handleLnurlAuth(String id, LnurlAuthRequestDetails data) async {
-    final lnurlResponse = await onLnurlRequest(LnurlRequest(
-      type: LnurlType.auth,
-      domain: data.domain,
-    ));
+    final lnurlResponse = await onLnurlRequest(LnurlRequest(type: LnurlType.auth, domain: data.domain));
 
     if (!lnurlResponse.approved) {
       await _respond(id, error: WebLnErrorCode.userRejected);
