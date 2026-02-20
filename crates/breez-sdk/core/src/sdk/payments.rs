@@ -477,7 +477,7 @@ impl BreezSdk {
                     Some(InvoiceDescription::Memo(description.clone())),
                     None,
                     expiry_secs,
-                    *self.prefer_spark_over_lightning.lock().await,
+                    self.config_service.prefer_spark_over_lightning().await,
                 )
                 .await?
                 .invoice
@@ -1015,7 +1015,10 @@ impl BreezSdk {
                 prefer_spark,
                 completion_timeout_secs,
             }) => (prefer_spark, completion_timeout_secs),
-            _ => (*self.prefer_spark_over_lightning.lock().await, None),
+            _ => (
+                self.config_service.prefer_spark_over_lightning().await,
+                None,
+            ),
         };
         let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
             (true, Some(fee), _) => fee,

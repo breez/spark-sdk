@@ -1,4 +1,5 @@
 mod api;
+mod config_service;
 mod deposits;
 mod helpers;
 mod init;
@@ -21,8 +22,9 @@ use tokio_with_wasm::alias as tokio;
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    nostr::NostrClient, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
-    stable_balance::StableBalance, token_conversion::TokenConverter,
+    nostr::NostrClient, persist::Storage, sdk::config_service::ConfigService,
+    signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
+    token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -105,6 +107,8 @@ impl ServiceShutdown {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
     pub(crate) config: Config,
+    /// Runtime-mutable configuration. Use getters for current values.
+    pub(crate) config_service: Arc<ConfigService>,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) storage: Arc<dyn Storage>,
     pub(crate) chain_service: Arc<dyn BitcoinChainService>,
@@ -124,11 +128,12 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) sync_signing_client: Option<SigningClient>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    /// Running stable balance service instance, if enabled. Can be replaced
+    /// or disabled at runtime when its mutable config is updated.
     pub(crate) stable_balance: Arc<Mutex<Option<Arc<StableBalance>>>>,
+    /// Shutdown handle for the current stable balance service. Used to stop
+    /// the service before it is replaced, disabled, or the SDK shuts down.
     pub(crate) stable_balance_shutdown: Arc<Mutex<Option<ServiceShutdown>>>,
-    pub(crate) max_deposit_claim_fee: Arc<Mutex<Option<crate::MaxFee>>>,
-    pub(crate) prefer_spark_over_lightning: Arc<Mutex<bool>>,
-    pub(crate) sync_interval_secs: Arc<Mutex<u32>>,
 }
 
 pub(crate) struct BreezSdkParams {

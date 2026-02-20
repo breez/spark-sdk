@@ -5,9 +5,8 @@ use tracing::{error, info};
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, MaxDepositClaimFeeUpdate, OptimizationProgress, SignMessageRequest,
-    SignMessageResponse, StableBalanceConfig, StableBalanceConfigUpdate, UpdateUserSettingsRequest,
-    UserSettings,
+    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
+    StableBalanceConfig, UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -71,39 +70,15 @@ impl BreezSdk {
 
     /// Updates SDK configuration at runtime.
     ///
-    /// Only fields set to `Some` are applied; `None` fields are left unchanged.
-    /// For service-backed fields like `stable_balance_config`, the old service is
-    /// stopped and a new one is started with the updated configuration.
+    /// Only fields set are applied. For service-backed fields like `stable_balance_config`,
+    /// the old service is stopped and a new one is started with the updated configuration.
     pub async fn update_config(&self, request: crate::UpdateConfigRequest) -> Result<(), SdkError> {
-        if let Some(update) = request.stable_balance_config {
-            match update {
-                StableBalanceConfigUpdate::Set { config } => {
-                    self.apply_stable_balance_config(Some(config)).await?;
-                }
-                StableBalanceConfigUpdate::Unset => {
-                    self.apply_stable_balance_config(None).await?;
-                }
-            }
-        }
+        let changes = self.config_service.update(&request).await;
 
-        if let Some(update) = request.max_deposit_claim_fee {
-            let mut fee = self.max_deposit_claim_fee.lock().await;
-            match update {
-                MaxDepositClaimFeeUpdate::Set { fee: new_fee } => {
-                    *fee = Some(new_fee);
-                }
-                MaxDepositClaimFeeUpdate::Unset => {
-                    *fee = None;
-                }
-            }
-        }
-
-        if let Some(prefer_spark) = request.prefer_spark_over_lightning {
-            *self.prefer_spark_over_lightning.lock().await = prefer_spark;
-        }
-
-        if let Some(secs) = request.sync_interval_secs {
-            *self.sync_interval_secs.lock().await = secs;
+        // Handle stable balance service lifecycle if its config changed
+        if changes.stable_balance_config {
+            let config = self.config_service.stable_balance_config().await;
+            self.apply_stable_balance_config(config).await?;
         }
 
         info!("SDK configuration updated");

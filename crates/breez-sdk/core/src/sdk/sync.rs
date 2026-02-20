@@ -33,7 +33,6 @@ impl BreezSdk {
         let mut sync_trigger_receiver = sdk.sync_coordinator.subscribe();
         let mut last_sync_time = SystemTime::now();
 
-        let sync_interval_secs = Arc::clone(&self.sync_interval_secs);
         tokio::spawn(async move {
             let balance_watcher =
                 BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
@@ -90,7 +89,7 @@ impl BreezSdk {
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
-                        let sync_interval = u64::from(*sync_interval_secs.lock().await);
+                        let sync_interval = u64::from(sdk.config_service.sync_interval_secs().await);
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
                             sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
                         }
@@ -249,7 +248,7 @@ impl BreezSdk {
     #[allow(clippy::too_many_lines)]
     pub(super) async fn sync_wallet_internal(&self, request: &SyncRequest) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let sync_interval_secs = u64::from(*self.sync_interval_secs.lock().await);
+        let sync_interval_secs = u64::from(self.config_service.sync_interval_secs().await);
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -426,7 +425,7 @@ impl BreezSdk {
 
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
-        let max_deposit_claim_fee = self.max_deposit_claim_fee.lock().await.clone();
+        let max_deposit_claim_fee = self.config_service.max_deposit_claim_fee().await;
         for detailed_utxo in to_claim {
             match self
                 .claim_utxo(&detailed_utxo, max_deposit_claim_fee.clone())

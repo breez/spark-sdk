@@ -18,7 +18,8 @@ use crate::{
 };
 
 use super::{
-    BreezSdk, BreezSdkParams, ServiceShutdown, SyncCoordinator, helpers::validate_breez_api_key,
+    BreezSdk, BreezSdkParams, ServiceShutdown, SyncCoordinator, config_service::ConfigService,
+    helpers::validate_breez_api_key,
 };
 
 impl BreezSdk {
@@ -72,12 +73,11 @@ impl BreezSdk {
             };
         let sync_coordinator = SyncCoordinator::new();
 
-        let max_deposit_claim_fee = params.config.max_deposit_claim_fee.clone();
-        let prefer_spark_over_lightning = params.config.prefer_spark_over_lightning;
-        let sync_interval_secs = params.config.sync_interval_secs;
+        let config_service = Arc::new(ConfigService::new(&params.config));
 
         let sdk = Self {
             config: params.config,
+            config_service,
             spark_wallet: params.spark_wallet,
             storage: params.storage,
             chain_service: params.chain_service,
@@ -98,9 +98,6 @@ impl BreezSdk {
             buy_bitcoin_provider: params.buy_bitcoin_provider,
             stable_balance: Arc::new(Mutex::new(stable_balance)),
             stable_balance_shutdown: Arc::new(Mutex::new(stable_balance_shutdown)),
-            max_deposit_claim_fee: Arc::new(Mutex::new(max_deposit_claim_fee)),
-            prefer_spark_over_lightning: Arc::new(Mutex::new(prefer_spark_over_lightning)),
-            sync_interval_secs: Arc::new(Mutex::new(sync_interval_secs)),
         };
 
         sdk.start(initial_synced_sender);

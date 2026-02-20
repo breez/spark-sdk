@@ -24,7 +24,7 @@ impl BreezSdk {
 
         let max_fee = request
             .max_fee
-            .or(self.max_deposit_claim_fee.lock().await.clone());
+            .or(self.config_service.max_deposit_claim_fee().await);
         match self.claim_utxo(&detailed_utxo, max_fee).await {
             Ok(transfer) => {
                 self.storage
