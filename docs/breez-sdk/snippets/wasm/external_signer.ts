@@ -1,8 +1,4 @@
-import {
-  defaultExternalSigner,
-  connectWithSigner,
-  defaultConfig
-} from '@breeztech/breez-sdk-spark'
+import { BreezSdkSpark } from '@breeztech/breez-sdk-spark'
 import type { KeySetConfig } from '@breeztech/breez-sdk-spark'
 
 // ANCHOR: default-external-signer
@@ -15,20 +11,20 @@ const createSigner = () => {
   }
 
   // Create the default signer from the SDK
-  const signer = defaultExternalSigner(mnemonic, null, 'mainnet', keySetConfig)
+  const signer = BreezSdkSpark.defaultExternalSigner(mnemonic, null, 'mainnet', keySetConfig)
 
   return signer
 }
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-const exampleConnectWithSigner = async (signer: ReturnType<typeof defaultExternalSigner>) => {
+const exampleConnectWithSigner = async (signer: ReturnType<typeof BreezSdkSpark.defaultExternalSigner>) => {
   // Create the config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Connect using the external signer
-  const sdk = await connectWithSigner(
+  const sdk = await BreezSdkSpark.connectWithSigner(
     config,
     signer,
     'breez_spark_db' // For WASM, this is the IndexedDB database name

@@ -1,6 +1,6 @@
 <h1 id="initializing">
     <a class="header" href="#initializing">Initializing the SDK</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.connect">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdkSpark.html#method.connect">API docs</a>
 </h1>
 
 ## Basic Initialization
@@ -15,9 +15,9 @@ The easiest way to initialize the SDK is with the {{#name connect}} method. This
 For WASM Web, SDK storage is managed using IndexedDB.
 </div>
 
-The storage is used to persist the SDK’s state. If you run multiple SDK instances, each must have its own unique storage directory.
+The storage is used to persist the SDK's state. If you run multiple SDK instances, each must have its own unique storage directory.
 
-Once connected, you’re ready to start interacting with the SDK.
+Once connected, you're ready to start interacting with the SDK.
 
 {{#tabs getting_started:init-sdk}}
 
@@ -35,7 +35,7 @@ For advanced use cases where you need more control, you can configure the SDK us
 - [Storage](customizing.md#with-storage) and [Real-Time Storage](customizing.md#with-real-time-storage) to manage stored data
 - [Bitcoin Chain Service](customizing.md#with-chain-service) to provide network data
 - [LNURL Client](customizing.md#with-lnurl-client) to make REST requests
-- [Fiat Service](customizing.md#with-fiat-service) to provide Fiat currencies and exchange rates 
+- [Fiat Service](customizing.md#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](customizing.md#with-key-set) to alter the derivation path used
 - [Payment Observer](customizing.md#with-payment-observer) to be notified before payments occur
 
@@ -46,7 +46,7 @@ See [Customizing the SDK](customizing.md) for examples of this advanced initiali
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.disconnect">API docs</a>
 </h2>
 
-When you’re done using the SDK, call the disconnect method to release any resources in use.
+When you're done using the SDK, call the disconnect method to release any resources in use.
 
 This is particularly useful if you need to re-instantiate the SDK, such as when changing the mnemonic or updating configuration.
 

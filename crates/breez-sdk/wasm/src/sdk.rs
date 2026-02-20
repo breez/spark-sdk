@@ -56,6 +56,7 @@ pub async fn connect_with_signer(
 }
 
 #[wasm_bindgen(js_name = "defaultConfig")]
+#[allow(deprecated)]
 pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
 }
@@ -64,11 +65,13 @@ pub fn default_config(network: Network) -> Config {
 ///
 /// This creates a signer that can be used with `connectWithSigner` or `SdkBuilder.newWithSigner`.
 #[wasm_bindgen(js_name = "getSparkStatus")]
+#[allow(deprecated)]
 pub async fn get_spark_status() -> WasmResult<SparkStatus> {
     Ok(breez_sdk_spark::get_spark_status().await?.into())
 }
 
 #[wasm_bindgen(js_name = "defaultExternalSigner")]
+#[allow(deprecated)]
 pub fn default_external_signer(
     mnemonic: String,
     passphrase: Option<String>,

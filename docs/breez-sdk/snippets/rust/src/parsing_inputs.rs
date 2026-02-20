@@ -1,11 +1,11 @@
 use anyhow::Result;
 use breez_sdk_spark::*;
 
-async fn parse_input(sdk: &BreezSdk) -> Result<()> {
+async fn parse_input() -> Result<()> {
     // ANCHOR: parse-inputs
     let input = "an input to be parsed...";
 
-    match sdk.parse(input).await? {
+    match BreezSdkSpark::parse(input, None).await? {
         InputType::BitcoinAddress(details) => {
             println!("Input is Bitcoin address {}", details.address);
         }
@@ -65,7 +65,7 @@ async fn parse_input(sdk: &BreezSdk) -> Result<()> {
 pub(crate) async fn set_external_input_parsers() -> Result<()> {
     // ANCHOR: set-external-input-parsers
     // Create the default config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
     // Configure external parsers

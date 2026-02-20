@@ -119,6 +119,7 @@ async fn auth_sdk() -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.prefer_spark_over_lightning = true;

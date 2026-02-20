@@ -36,7 +36,7 @@ namespace BreezSdkSnippets
 
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };

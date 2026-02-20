@@ -65,6 +65,7 @@ async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = Some(lnurl_domain.to_string());
@@ -90,6 +91,7 @@ async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
 async fn create_sdk_with_rtsync(name: &str, seed: [u8; 32], sync_url: &str) -> Result<SdkInstance> {
     let temp_dir = TempDir::new(&format!("breez-sdk-{name}"))?;
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.prefer_spark_over_lightning = true;

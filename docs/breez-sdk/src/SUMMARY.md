@@ -48,6 +48,7 @@
   - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)
 - [Moving to production](guide/moving_to_production.md)
+- [Migration guide](guide/migration.md)
 
 ---
 

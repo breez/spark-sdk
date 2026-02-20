@@ -1,3 +1,4 @@
+mod app;
 #[cfg(feature = "uniffi")]
 pub mod bindings;
 mod chain;
@@ -11,6 +12,7 @@ mod models;
 mod nostr;
 mod persist;
 mod realtime_sync;
+#[allow(deprecated)] // sdk module defines and re-exports deprecated free functions
 mod sdk;
 mod sdk_builder;
 pub mod signer;
@@ -19,6 +21,7 @@ mod sync;
 pub mod token_conversion;
 mod utils;
 
+pub use app::BreezSdkSpark;
 pub use chain::{
     BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
     rest_client::{ChainApiType, RestClientChainService},
@@ -33,7 +36,10 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, UpdateDepositPayload,
     path::default_storage_path,
 };
-pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
+#[allow(deprecated)] // re-exporting deprecated free functions for backward compatibility
+pub use sdk::{
+    BreezSdk, BreezSparkClient, default_config, get_spark_status, init_logging, parse, parse_input,
+};
 pub use sdk_builder::SdkBuilder;
 pub use spark_wallet::KeySet;
 
@@ -46,11 +52,13 @@ pub use persist::postgres::{
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[allow(deprecated)] // re-exporting deprecated connect/connect_with_signer free functions
 pub use {
     persist::sqlite::SqliteStorage,
     sdk::{connect, connect_with_signer},
 };
 
+#[allow(deprecated)] // re-exporting deprecated free function for backward compatibility
 pub use sdk::default_external_signer;
 
 #[cfg(feature = "test-utils")]

@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         void ConfigureLightningAddress()
         {
             // ANCHOR: config-lightning-address
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "your-api-key",
                 lnurlDomain = "yourdomain.com"

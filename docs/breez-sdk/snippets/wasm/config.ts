@@ -1,9 +1,9 @@
-import { defaultConfig } from '@breeztech/breez-sdk-spark'
+import { BreezSdkSpark } from '@breeztech/breez-sdk-spark'
 
 const exampleConfigureSdk = async () => {
   // ANCHOR: max-deposit-claim-fee
   // Create the default config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Disable automatic claiming
@@ -25,7 +25,7 @@ const exampleConfigureSdk = async () => {
 const exampleConfigurePrivateEnabledDefault = async () => {
   // ANCHOR: private-enabled-default
   // Disable Spark private mode by default
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.privateEnabledDefault = false
   // ANCHOR_END: private-enabled-default
   console.log('Config:', config)
@@ -33,7 +33,7 @@ const exampleConfigurePrivateEnabledDefault = async () => {
 
 const exampleConfigureOptimizationConfiguration = async () => {
   // ANCHOR: optimization-configuration
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.optimizationConfig = { autoEnabled: true, multiplicity: 1 }
   // ANCHOR_END: optimization-configuration
   console.log('Config:', config)
@@ -41,7 +41,7 @@ const exampleConfigureOptimizationConfiguration = async () => {
 
 const exampleConfigureStableBalance = async () => {
   // ANCHOR: stable-balance-config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
 
   // Enable stable balance with auto-conversion to a specific token
   config.stableBalanceConfig = {

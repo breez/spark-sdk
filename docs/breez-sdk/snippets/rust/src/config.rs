@@ -5,7 +5,7 @@ use log::info;
 pub(crate) fn configure_sdk() -> Result<()> {
     // ANCHOR: max-deposit-claim-fee
     // Create the default config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
     // Disable automatic claiming
@@ -30,7 +30,7 @@ pub(crate) fn configure_sdk() -> Result<()> {
 pub(crate) fn configure_private_enabled_default() -> Result<()> {
     // ANCHOR: private-enabled-default
     // Disable Spark private mode by default
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.private_enabled_default = false;
     // ANCHOR_END: private-enabled-default
     info!("Config: {:?}", config);
@@ -39,7 +39,7 @@ pub(crate) fn configure_private_enabled_default() -> Result<()> {
 
 pub(crate) fn configure_optimization_configuration() -> Result<()> {
     // ANCHOR: optimization-configuration
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.optimization_config = OptimizationConfig {
         auto_enabled: true,
         multiplicity: 1,
@@ -51,7 +51,7 @@ pub(crate) fn configure_optimization_configuration() -> Result<()> {
 
 pub(crate) fn configure_stable_balance() -> Result<()> {
     // ANCHOR: stable-balance-config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
 
     // Enable stable balance with auto-conversion to a specific token
     config.stable_balance_config = Some(StableBalanceConfig {

@@ -6,7 +6,7 @@ class Config {
     fun configureSdk() {
         // ANCHOR: max-deposit-claim-fee
         // Create the default config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         // Disable automatic claiming
@@ -28,7 +28,7 @@ class Config {
     fun configurePrivateEnabledDefault() {
         // ANCHOR: private-enabled-default
         // Disable Spark private mode by default
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.privateEnabledDefault = false
         // ANCHOR_END: private-enabled-default
         println("Config: $config")
@@ -36,7 +36,7 @@ class Config {
 
     fun configureOptimizationConfiguration() {
         // ANCHOR: optimization-configuration
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.optimizationConfig = OptimizationConfig(autoEnabled = true, multiplicity = 1u)
         // ANCHOR_END: optimization-configuration
         println("Config: $config")
@@ -44,7 +44,7 @@ class Config {
 
     fun configureStableBalance() {
         // ANCHOR: stable-balance-config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
 
         // Enable stable balance with auto-conversion to a specific token
         config.stableBalanceConfig = StableBalanceConfig(

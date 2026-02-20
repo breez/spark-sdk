@@ -7,11 +7,11 @@ func initSdk() async throws -> BreezSdk {
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 
     // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
     // Connect to the SDK using the simplified connect method
-    let sdk = try await connect(
+    let sdk = try await BreezSdkSpark.connect(
         request: ConnectRequest(
             config: config,
             seed: seed,
@@ -44,7 +44,7 @@ class SdkLogger: Logger {
 }
 
 func logging() throws {
-    try initLogging(logDir: nil, appLogger: SdkLogger(), logFilter: nil)
+    try BreezSdkSpark.initLogging(logDir: nil, appLogger: SdkLogger(), logFilter: nil)
 }
 // ANCHOR_END: logging
 
@@ -95,7 +95,7 @@ func removeEventListener(sdk: BreezSdk, listenerId: String) async {
 
 // ANCHOR: spark-status
 func gettingStartedSparkStatus() async throws {
-    let sparkStatus = try await getSparkStatus()
+    let sparkStatus = try await BreezSdkSpark.getSparkStatus()
 
     switch sparkStatus.status {
     case .operational:

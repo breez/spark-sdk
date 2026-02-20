@@ -11,6 +11,7 @@ use tracing::info;
 
 #[fixture]
 fn persistent_sdk_private() -> ReinitializableSdkInstance {
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.private_enabled_default = true;
     ReinitializableSdkInstance::new(cfg, TempDir::new("breez-sdk-persistent-private").unwrap())
@@ -19,6 +20,7 @@ fn persistent_sdk_private() -> ReinitializableSdkInstance {
 
 #[fixture]
 fn persistent_sdk_non_private() -> ReinitializableSdkInstance {
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.private_enabled_default = false;
     ReinitializableSdkInstance::new(

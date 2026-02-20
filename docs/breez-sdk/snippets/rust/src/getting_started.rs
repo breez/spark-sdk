@@ -5,7 +5,7 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-pub(crate) async fn init_sdk() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk() -> Result<BreezSparkClient> {
     // ANCHOR: init-sdk
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -15,22 +15,22 @@ pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     };
 
     // Create the default config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
     // Connect to the SDK using the simplified connect method
-    let sdk = connect(ConnectRequest {
-        config,
-        seed,
-        storage_dir: "./.data".to_string(),
-    })
-    .await?;
+    let sdk = BreezSdkSpark::connect(ConnectRequest {
+            config,
+            seed,
+            storage_dir: "./.data".to_string(),
+        })
+        .await?;
 
     // ANCHOR_END: init-sdk
     Ok(sdk)
 }
 
-pub(crate) async fn getting_started_node_info(sdk: &BreezSdk) -> Result<()> {
+pub(crate) async fn getting_started_node_info(sdk: &BreezSparkClient) -> Result<()> {
     // ANCHOR: fetch-balance
     let info = sdk
         .get_info(GetInfoRequest {
@@ -51,7 +51,7 @@ pub(crate) fn getting_started_logging(data_dir: String) -> Result<()> {
     let data_dir_path = PathBuf::from(&data_dir);
     fs::create_dir_all(data_dir_path)?;
 
-    init_logging(Some(data_dir), None, None)?;
+    BreezSdkSpark::init_logging(Some(data_dir), None, None)?;
     // ANCHOR_END: logging
     Ok(())
 }
@@ -90,7 +90,7 @@ impl EventListener for SdkEventListener {
 }
 
 pub(crate) async fn add_event_listener(
-    sdk: &BreezSdk,
+    sdk: &BreezSparkClient,
     listener: Box<SdkEventListener>,
 ) -> Result<String> {
     let listener_id = sdk.add_event_listener(listener).await;
@@ -99,7 +99,7 @@ pub(crate) async fn add_event_listener(
 // ANCHOR_END: add-event-listener
 
 // ANCHOR: remove-event-listener
-pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> Result<()> {
+pub(crate) async fn remove_event_listener(sdk: &BreezSparkClient, listener_id: &str) -> Result<()> {
     sdk.remove_event_listener(listener_id).await;
     Ok(())
 }
@@ -107,7 +107,7 @@ pub(crate) async fn remove_event_listener(sdk: &BreezSdk, listener_id: &str) -> 
 
 // ANCHOR: spark-status
 pub(crate) async fn getting_started_spark_status() -> Result<()> {
-    let spark_status = get_spark_status().await?;
+    let spark_status = BreezSdkSpark::get_spark_status().await?;
 
     match spark_status.status {
         ServiceStatus::Operational => {
@@ -133,9 +133,8 @@ pub(crate) async fn getting_started_spark_status() -> Result<()> {
 // ANCHOR_END: spark-status
 
 // ANCHOR: disconnect
-pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
+pub(crate) async fn disconnect(sdk: &BreezSparkClient) -> Result<()> {
     sdk.disconnect().await?;
     Ok(())
 }
 // ANCHOR_END: disconnect
-

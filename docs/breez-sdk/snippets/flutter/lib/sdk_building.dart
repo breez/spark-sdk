@@ -9,7 +9,7 @@ Future<void> initSdkAdvanced() async {
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
-  final config = defaultConfig(network: Network.mainnet)
+  final config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
   // Build the SDK using the config, seed and default storage

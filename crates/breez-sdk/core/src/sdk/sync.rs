@@ -18,6 +18,7 @@ use crate::{
     },
 };
 
+#[allow(deprecated)] // parse_input deprecated since 0.10.0; used by sync_single_lnurl_metadata
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
     helpers::{BalanceWatcher, update_balances},
@@ -161,6 +162,7 @@ impl BreezSdk {
         }
     }
 
+    #[allow(deprecated)] // calls deprecated parse_input internally
     pub(super) async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
         if payment.payment_type != PaymentType::Receive {
             return;

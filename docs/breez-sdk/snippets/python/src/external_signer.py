@@ -1,7 +1,5 @@
 from breez_sdk_spark import (
-    default_config,
-    default_external_signer,
-    connect_with_signer,
+    BreezSdkSpark,
     BreezSdk,
     ConnectWithSignerRequest,
     ExternalSigner,
@@ -24,7 +22,7 @@ def create_signer() -> ExternalSigner:
         account_number=account_number,
     )
 
-    signer = default_external_signer(
+    signer = BreezSdkSpark.default_external_signer(
         mnemonic=mnemonic,
         passphrase=None,
         network=network,
@@ -37,11 +35,11 @@ def create_signer() -> ExternalSigner:
 # ANCHOR: connect-with-signer
 async def example_connect_with_signer(signer: ExternalSigner) -> BreezSdk:
     # Create the config
-    config = default_config(Network.MAINNET)
+    config = BreezSdkSpark.default_config(Network.MAINNET)
     config.api_key = "<breez api key>"
 
     # Connect using the external signer
-    sdk = await connect_with_signer(ConnectWithSignerRequest(
+    sdk = await BreezSdkSpark.connect_with_signer(ConnectWithSignerRequest(
         config=config,
         signer=signer,
         storage_dir="./.data"

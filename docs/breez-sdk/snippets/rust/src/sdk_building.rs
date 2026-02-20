@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use breez_sdk_spark::*;
 use log::info;
 
-pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk_advanced() -> Result<BreezSparkClient> {
     // ANCHOR: init-sdk-advanced
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -15,11 +15,11 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     };
 
     // Create the default config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
     // Build the SDK using the config, seed and default storage
-    let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
+    let builder = BreezSdkSpark::builder(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
     // let builder = builder.with_storage(<your storage implementation>)
     // let builder = builder.with_chain_service(<your chain service implementation>)
@@ -82,7 +82,7 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
 }
 // ANCHOR_END: with-payment-observer
 
-pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
+pub(crate) async fn init_sdk_postgres() -> Result<BreezSparkClient> {
     // ANCHOR: init-sdk-postgres
     // Construct the seed using mnemonic words or entropy bytes
     let mnemonic = "<mnemonic words>".to_string();
@@ -92,7 +92,7 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     };
 
     // Create the default config
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
     // Configure PostgreSQL storage
@@ -106,7 +106,7 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
 
     // Create the storage and build the SDK
     let storage = create_postgres_storage(postgres_config).await?;
-    let sdk = SdkBuilder::new(config, seed)
+    let sdk = BreezSdkSpark::builder(config, seed)
         .with_storage(storage)
         .build()
         .await?;

@@ -7,7 +7,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 
     // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
     // Build the SDK using the config, seed and default storage
@@ -46,13 +46,13 @@ func withKeySet(builder: SdkBuilder) async {
     let keySetType = KeySetType.default
     let useAddressIndex = false
     let optionalAccountNumber = UInt32(21)
-    
+
     let config = KeySetConfig(
         keySetType: keySetType,
         useAddressIndex: useAddressIndex,
         accountNumber: optionalAccountNumber
     )
-    
+
     await builder.withKeySet(config: config)
     // ANCHOR_END: with-key-set
 }
@@ -79,7 +79,7 @@ func initSdkPostgres() async throws -> BreezSdk {
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 
     // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
     // Configure PostgreSQL storage

@@ -8,7 +8,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: max-deposit-claim-fee
             // Create the default config with API key
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };
@@ -32,7 +32,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: private-enabled-default
             // Disable Spark private mode by default
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 privateEnabledDefault = false
             };
@@ -42,7 +42,7 @@ namespace BreezSdkSnippets
         void ConfigureOptimizationConfiguration()
         {
             // ANCHOR: optimization-configuration
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 optimizationConfig = new OptimizationConfig(autoEnabled: true, multiplicity: 1)
             };
@@ -52,7 +52,7 @@ namespace BreezSdkSnippets
         void ConfigureStableBalance()
         {
             // ANCHOR: stable-balance-config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 // Enable stable balance with auto-conversion to a specific token
                 stableBalanceConfig = new StableBalanceConfig(

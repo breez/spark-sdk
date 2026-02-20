@@ -102,7 +102,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: set-max-fee-to-recommended-fees
             // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };

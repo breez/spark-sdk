@@ -871,6 +871,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::GetSparkStatus => {
+            #[allow(deprecated)]
             let res = breez_sdk_spark::get_spark_status().await?;
             print_value(&res)?;
             Ok(true)

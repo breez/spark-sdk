@@ -10,33 +10,33 @@ class ExternalSigner {
         val keySetType = KeySetType.DEFAULT
         val useAddressIndex = false
         val accountNumber = 0U
-        
+
         val keySetConfig = KeySetConfig(
             keySetType = keySetType,
             useAddressIndex = useAddressIndex,
             accountNumber = accountNumber
         )
-        
-        val signer = defaultExternalSigner(
+
+        val signer = BreezSdkSpark.defaultExternalSigner(
             mnemonic = mnemonic,
             passphrase = null,
             network = network,
             keySetConfig = keySetConfig
         )
-        
+
         return signer
     }
     // ANCHOR_END: default-external-signer
-    
+
     // ANCHOR: connect-with-signer
     suspend fun connectWithSigner(signer: breez_sdk_spark.ExternalSigner) {
         // Create the config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
-        
+
         try {
             // Connect using the external signer
-            val sdk = connectWithSigner(ConnectWithSignerRequest(
+            val sdk = BreezSdkSpark.connectWithSigner(ConnectWithSignerRequest(
                 config = config,
                 signer = signer,
                 storageDir = "./.data"

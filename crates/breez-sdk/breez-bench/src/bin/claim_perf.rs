@@ -18,9 +18,9 @@ use tracing_subscriber::EnvFilter;
 
 use breez_sdk_itest::{RegtestFaucet, build_sdk_with_custom_config};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, ListPaymentsRequest, Network, PaymentStatus, PaymentType,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
-    SendPaymentRequest, SyncWalletRequest, default_config,
+    BreezSdk, BreezSdkSpark, GetInfoRequest, ListPaymentsRequest, Network, PaymentStatus,
+    PaymentType, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
+    SendPaymentRequest, SyncWalletRequest,
 };
 
 use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
@@ -127,7 +127,7 @@ async fn run_single_claim_benchmark(
     let sender_dir = TempDir::new("claim-bench-sender")?;
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
-    let mut sender_config = default_config(Network::Regtest);
+    let mut sender_config = BreezSdkSpark::default_config(Network::Regtest);
     sender_config.optimization_config.auto_enabled = false;
     let itest_sender = build_sdk_with_custom_config(
         sender_dir.path().to_string_lossy().to_string(),
@@ -142,7 +142,7 @@ async fn run_single_claim_benchmark(
 
     // 2. Create a temporary receiver just to get the Spark address, then disconnect it
     let receiver_dir = TempDir::new("claim-bench-receiver")?;
-    let mut temp_receiver_config = default_config(Network::Regtest);
+    let mut temp_receiver_config = BreezSdkSpark::default_config(Network::Regtest);
     temp_receiver_config.optimization_config.auto_enabled = false;
     let mut temp_receiver = build_sdk_with_custom_config(
         receiver_dir.path().to_string_lossy().to_string(),
@@ -248,7 +248,7 @@ async fn run_single_claim_benchmark(
         "Creating receiver with max_concurrent_claims={}...",
         concurrency
     );
-    let mut receiver_config = default_config(Network::Regtest);
+    let mut receiver_config = BreezSdkSpark::default_config(Network::Regtest);
     receiver_config.optimization_config.auto_enabled = false;
     receiver_config.max_concurrent_claims = concurrency;
 

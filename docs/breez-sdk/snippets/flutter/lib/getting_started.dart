@@ -14,13 +14,13 @@ Future<void> initSdk() async {
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 
   // Create the default config
-  final config = defaultConfig(network: Network.mainnet)
+  final config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
   final connectRequest =
       ConnectRequest(config: config, seed: seed, storageDir: "./.data");
 
-  final sdk = await connect(request: connectRequest);
+  final sdk = await BreezSdkSpark.connect(request: connectRequest);
   // ANCHOR_END: init-sdk
   print(sdk);
 }
@@ -39,7 +39,7 @@ Future<void> fetchBalance(BreezSdk sdk) async {
 
 // ANCHOR: spark-status
 Future<void> gettingStartedSparkStatus() async {
-  final sparkStatus = await getSparkStatus();
+  final sparkStatus = await BreezSdkSpark.getSparkStatus();
 
   switch (sparkStatus.status) {
     case ServiceStatus.operational:
@@ -63,7 +63,7 @@ Future<void> gettingStartedSparkStatus() async {
 }
 // ANCHOR_END: spark-status
 
-class BreezSdkSpark {
+class GettingStartedSnippets {
   // ANCHOR: logging
   StreamSubscription<LogEntry>? _logSubscription;
   Stream<LogEntry>? _logStream;
@@ -74,7 +74,7 @@ class BreezSdkSpark {
   // or singleton SDK service. It is recommended to use a single instance
   // of the SDK across your Flutter app.
   void initializeLogStream() {
-    _logStream ??= initLogging().asBroadcastStream();
+    _logStream ??= BreezSdkSpark.initLogging().asBroadcastStream();
   }
 
   final _logStreamController = StreamController<LogEntry>.broadcast();

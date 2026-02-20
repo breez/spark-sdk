@@ -1,13 +1,10 @@
 import logging
 from breez_sdk_spark import (
+    BreezSdkSpark,
     BreezSdk,
-    connect,
     ConnectRequest,
-    default_config,
     EventListener,
-    get_spark_status,
     GetInfoRequest,
-    init_logging,
     LogEntry,
     Logger,
     Network,
@@ -23,11 +20,11 @@ async def init_sdk():
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
     try:
         # Connect to the SDK using the simplified connect method
-        sdk = await connect(
+        sdk = await BreezSdkSpark.connect(
             request=ConnectRequest(config=config, seed=seed, storage_dir="./.data")
         )
         return sdk
@@ -59,7 +56,7 @@ class SdkLogger(Logger):
 
 def set_logger(logger: SdkLogger):
     try:
-        init_logging(log_dir=None, app_logger=logger, log_filter=None)
+        BreezSdkSpark.init_logging(log_dir=None, app_logger=logger, log_filter=None)
     except Exception as error:
         logging.error(error)
         raise
@@ -125,7 +122,7 @@ async def remove_event_listener(sdk: BreezSdk, listener_id: str):
 # ANCHOR: spark-status
 async def getting_started_spark_status():
     try:
-        spark_status = await get_spark_status()
+        spark_status = await BreezSdkSpark.get_spark_status()
 
         if spark_status.status == ServiceStatus.OPERATIONAL:
             logging.debug("Spark is fully operational")

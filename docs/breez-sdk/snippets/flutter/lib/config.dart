@@ -5,7 +5,7 @@ import 'dart:async';
 Future<void> configureMaxDepositClaimFee() async {
   // ANCHOR: max-deposit-claim-fee
   // Create the default config
-  var config = defaultConfig(network: Network.mainnet)
+  var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: "<breez api key>");
 
   // Disable automatic claiming
@@ -31,7 +31,7 @@ Future<void> configureMaxDepositClaimFee() async {
 Future<void> configurePrivateEnabledDefault() async {
   // ANCHOR: private-enabled-default
   // Disable Spark private mode by default
-  var config = defaultConfig(network: Network.mainnet)
+  var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
       .copyWith(privateEnabledDefault: false);
   // ANCHOR_END: private-enabled-default
   print(config);
@@ -39,7 +39,7 @@ Future<void> configurePrivateEnabledDefault() async {
 
 Future<void> configureOptimizationConfiguration() async {
   // ANCHOR: optimization-configuration
-  var config = defaultConfig(network: Network.mainnet).copyWith(
+  var config = BreezSdkSpark.defaultConfig(network: Network.mainnet).copyWith(
       optimizationConfig:
           OptimizationConfig(autoEnabled: true, multiplicity: 1));
   // ANCHOR_END: optimization-configuration
@@ -48,7 +48,7 @@ Future<void> configureOptimizationConfiguration() async {
 
 Future<void> configureStableBalance() async {
   // ANCHOR: stable-balance-config
-  var config = defaultConfig(network: Network.mainnet).copyWith(
+  var config = BreezSdkSpark.defaultConfig(network: Network.mainnet).copyWith(
       // Enable stable balance with auto-conversion to a specific token
       stableBalanceConfig: StableBalanceConfig(
           tokenIdentifier: "<token_identifier>",

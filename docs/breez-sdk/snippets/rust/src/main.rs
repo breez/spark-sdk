@@ -1,3 +1,7 @@
+// Some snippets still show deprecated free functions (default_config, etc.)
+// as part of older documentation examples alongside the new BreezSdkSpark:: API.
+#![allow(deprecated)]
+
 mod buying_bitcoin;
 mod config;
 mod external_signer;

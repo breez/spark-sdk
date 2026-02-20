@@ -36,6 +36,7 @@ pub async fn build_sdk_with_dir(
     seed_bytes: [u8; 32],
     temp_dir: Option<tempdir::TempDir>,
 ) -> Result<SdkInstance> {
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -150,6 +151,7 @@ pub async fn build_sdk_from_mnemonic(
     passphrase: Option<String>,
     temp_dir: Option<tempdir::TempDir>,
 ) -> Result<SdkInstance> {
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -199,6 +201,7 @@ pub async fn build_sdk_with_external_signer(
     mnemonic: String,
     temp_dir: Option<TempDir>,
 ) -> Result<SdkInstance> {
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut config = default_config(Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;
@@ -207,6 +210,7 @@ pub async fn build_sdk_with_external_signer(
     config.real_time_sync_server_url = None;
 
     // Create default external signer from mnemonic
+    #[allow(deprecated)] // default_external_signer deprecated since 0.10.0
     let signer = breez_sdk_spark::default_external_signer(
         mnemonic,
         None, // no passphrase
@@ -219,6 +223,7 @@ pub async fn build_sdk_with_external_signer(
     )?;
 
     // Use connect_with_signer instead of connect
+    #[allow(deprecated)] // connect_with_signer deprecated since 0.10.0
     let sdk = connect_with_signer(ConnectWithSignerRequest {
         config,
         signer,
@@ -847,6 +852,7 @@ pub async fn build_sdk_with_postgres(
     ))
     .await?;
 
+    #[allow(deprecated)]
     let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;

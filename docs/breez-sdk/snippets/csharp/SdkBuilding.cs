@@ -11,7 +11,7 @@ namespace BreezSdkSnippets
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
             // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };
@@ -89,7 +89,7 @@ namespace BreezSdkSnippets
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
 
             // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };
@@ -97,7 +97,7 @@ namespace BreezSdkSnippets
             // Configure PostgreSQL storage
             // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
             // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-            var postgresConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
+            var postgresConfig = BreezSdkSpark.DefaultPostgresStorageConfig(
                 connectionString: "host=localhost user=postgres dbname=spark"
             );
             // Optionally pool settings can be adjusted. Some examples:
@@ -108,7 +108,7 @@ namespace BreezSdkSnippets
             };
 
             // Create the storage and build the SDK
-            var storage = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
+            var storage = await BreezSdkSpark.CreatePostgresStorage(config: postgresConfig);
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithStorage(storage);
             var sdk = await builder.Build();

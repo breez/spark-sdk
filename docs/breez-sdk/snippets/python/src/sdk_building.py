@@ -1,8 +1,8 @@
 import logging
 import typing
 from breez_sdk_spark import (
+    BreezSdkSpark,
     create_postgres_storage,
-    default_config,
     default_postgres_storage_config,
     Network,
     ProvisionalPayment,
@@ -22,7 +22,7 @@ async def init_sdk_advanced():
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
     try:
         # Build the SDK using the config, seed and default storage
@@ -94,7 +94,7 @@ async def init_sdk_postgres():
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
 
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
 
     # Configure PostgreSQL storage

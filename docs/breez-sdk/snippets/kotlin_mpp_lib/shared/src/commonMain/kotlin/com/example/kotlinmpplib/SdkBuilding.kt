@@ -9,7 +9,7 @@ class SdkBuilding {
         val seed = Seed.Mnemonic(mnemonic, null)
 
         // Create the default config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         try {
@@ -29,7 +29,7 @@ class SdkBuilding {
         // ANCHOR_END: init-sdk-advanced
     }
 
-    suspend fun withRestChainService(builder: SdkBuilder) { 
+    suspend fun withRestChainService(builder: SdkBuilder) {
         // ANCHOR: with-rest-chain-service
         val url = "<your REST chain service URL>"
         val chainApiType = ChainApiType.MEMPOOL_SPACE
@@ -50,13 +50,13 @@ class SdkBuilding {
         val keySetType = KeySetType.DEFAULT
         val useAddressIndex = false
         val optionalAccountNumber = 21u
-        
+
         val keySetConfig = KeySetConfig(
             keySetType = keySetType,
             useAddressIndex = useAddressIndex,
             accountNumber = optionalAccountNumber
         )
-        
+
         builder.withKeySet(keySetConfig)
         // ANCHOR_END: with-key-set
     }
@@ -83,7 +83,7 @@ class SdkBuilding {
         val seed = Seed.Mnemonic(mnemonic, null)
 
         // Create the default config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         // Configure PostgreSQL storage

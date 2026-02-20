@@ -1,7 +1,7 @@
 import {
+  BreezSdkSpark,
   SdkBuilder,
   Seed,
-  defaultConfig,
   Network,
   ChainApiType,
   KeySetType,
@@ -18,7 +18,7 @@ const exampleGettingStartedAdvanced = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  const config = defaultConfig(Network.Mainnet)
+  const config = BreezSdkSpark.defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
   // Build the SDK using the config, seed and default storage

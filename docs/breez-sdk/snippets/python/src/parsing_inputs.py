@@ -1,14 +1,14 @@
 # pylint: disable=too-many-branches
 import logging
-from breez_sdk_spark import BreezSdk, InputType, default_config, ExternalInputParser, Network
+from breez_sdk_spark import BreezSdkSpark, InputType, ExternalInputParser, Network
 
 
-async def parse_input(sdk: BreezSdk):
+async def parse_input():
     # ANCHOR: parse-inputs
     input_str = "an input to be parsed..."
 
     try:
-        parsed_input = await sdk.parse(input=input_str)
+        parsed_input = await BreezSdkSpark.parse(input=input_str)
         if isinstance(parsed_input, InputType.BITCOIN_ADDRESS):
             details = parsed_input[0]
             logging.debug(f"Input is Bitcoin address {details.address}")
@@ -59,7 +59,7 @@ async def parse_input(sdk: BreezSdk):
 async def set_external_input_parsers():
     # ANCHOR: set-external-input-parsers
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
 
     # Configure external parsers

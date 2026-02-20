@@ -82,6 +82,7 @@ impl NostrSigner {
 
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(deprecated)] // tests use deprecated default_config free function
 mod tests {
     use std::sync::Arc;
 

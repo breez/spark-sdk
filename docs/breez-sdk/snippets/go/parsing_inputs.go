@@ -8,11 +8,11 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, error) {
+func ParseInput() (*breez_sdk_spark.InputType, error) {
 	// ANCHOR: parse-inputs
 	inputStr := "an input to be parsed..."
 
-	input, err := sdk.Parse(inputStr)
+	input, err := breez_sdk_spark.Parse(inputStr, nil)
 
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

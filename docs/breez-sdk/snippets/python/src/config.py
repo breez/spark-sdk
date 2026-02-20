@@ -1,6 +1,6 @@
 import logging
 from breez_sdk_spark import (
-    default_config,
+    BreezSdkSpark,
     Network,
     MaxFee,
     OptimizationConfig,
@@ -11,7 +11,7 @@ from breez_sdk_spark import (
 async def configure_sdk():
     # ANCHOR: max-deposit-claim-fee
     # Create the default config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
 
     # Disable automatic claiming
@@ -32,21 +32,21 @@ async def configure_sdk():
 async def configure_private_enabled_default():
     # ANCHOR: private-enabled-default
     # Disable Spark private mode by default
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.private_enabled_default = False
     # ANCHOR_END: private-enabled-default
     logging.info(f"Config: {config}")
 
 async def configure_optimization_configuration():
     # ANCHOR: optimization-configuration
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
     config.optimization_config = OptimizationConfig(auto_enabled=True, multiplicity=1)
     # ANCHOR_END: optimization-configuration
     logging.info(f"Config: {config}")
 
 async def configure_stable_balance():
     # ANCHOR: stable-balance-config
-    config = default_config(network=Network.MAINNET)
+    config = BreezSdkSpark.default_config(network=Network.MAINNET)
 
     # Enable stable balance with auto-conversion to a specific token
     config.stable_balance_config = StableBalanceConfig(

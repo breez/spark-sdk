@@ -1,4 +1,4 @@
-import { SdkBuilder, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { SdkBuilder, BreezSdkSpark } from '@breeztech/breez-sdk-spark'
 import type {
   ProvisionalPayment,
   Seed,
@@ -33,7 +33,7 @@ const exampleGettingStartedAdvanced = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Build the SDK using the config, seed and default storage

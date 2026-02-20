@@ -71,6 +71,7 @@ package-android: build-android
 	rm $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs langs/android/lib/src/main
 	cp -r $(FFI_DIR)kotlin/main/kotlin/breez_sdk_spark langs/android/lib/src/main/kotlin/
+	cp langs/kotlin-multiplatform/Breez.kt langs/android/lib/src/main/kotlin/breez_sdk_spark/
 	cd langs/android && ./gradlew assemble
 	mkdir -p $(FFI_DIR)android
 	cp langs/android/lib/build/outputs/aar/lib-release.aar $(FFI_DIR)android
@@ -133,11 +134,15 @@ build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-re
 # Package with dummy binaries (useful for testing)
 package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+	mkdir -p $(KMP_BASE)/commonMain/kotlin/breez_sdk_spark
+	cp langs/kotlin-multiplatform/Breez.kt $(KMP_BASE)/commonMain/kotlin/breez_sdk_spark/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 
 # Full package with all binaries
 package-kotlin-multiplatform: build-kotlin-multiplatform
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+	mkdir -p $(KMP_BASE)/commonMain/kotlin/breez_sdk_spark
+	cp langs/kotlin-multiplatform/Breez.kt $(KMP_BASE)/commonMain/kotlin/breez_sdk_spark/
 	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble

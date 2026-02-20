@@ -1,15 +1,12 @@
 import {
-  defaultConfig,
-  connect,
+  BreezSdkSpark,
   Network,
   SdkBuilder,
   type BreezSdk,
-  initLogging,
   type LogEntry,
   type SdkEvent,
   SdkEvent_Tags,
   Seed,
-  getSparkStatus,
   ServiceStatus
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
@@ -21,10 +18,10 @@ const exampleGettingStarted = async () => {
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 
   // Create the default config
-  const config = defaultConfig(Network.Mainnet)
+  const config = BreezSdkSpark.defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
-  const sdk = await connect({
+  const sdk = await BreezSdkSpark.connect({
     config,
     seed,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`
@@ -53,7 +50,7 @@ const exampleLogging = async () => {
   }
 
   const logger = new JsLogger()
-  initLogging(undefined, logger, undefined)
+  BreezSdkSpark.initLogging(undefined, logger, undefined)
   // ANCHOR_END: logging
 }
 
@@ -102,7 +99,7 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
 
 const exampleGetSparkStatus = async () => {
   // ANCHOR: spark-status
-  const sparkStatus = await getSparkStatus()
+  const sparkStatus = await BreezSdkSpark.getSparkStatus()
 
   switch (sparkStatus.status) {
     case ServiceStatus.Operational:

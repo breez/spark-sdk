@@ -1,9 +1,9 @@
 <h1 id="spark-status">
     <a class="header" href="#spark-status">Spark status</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.get_spark_status.html">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdkSpark.html#method.get_spark_status">API docs</a>
 </h1>
 
-The SDK provides a standalone function to check the current operational status of the Spark network. This function does not require an SDK instance and can be called at any time, for example before initializing the SDK.
+The SDK provides a method to check the current operational status of the Spark network. This method does not require an SDK instance and can be called at any time, for example before initializing the SDK.
 
 It returns the overall status of the Spark network, along with a timestamp of when the status was last updated.
 

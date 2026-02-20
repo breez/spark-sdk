@@ -9,12 +9,12 @@ class GettingStarted {
         val seed = Seed.Mnemonic(mnemonic, null)
 
         // Create the default config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         try {
             // Connect to the SDK using the simplified connect method
-            val sdk = connect(ConnectRequest(
+            val sdk = BreezSdkSpark.connect(ConnectRequest(
                 config = config,
                 seed = seed,
                 storageDir = "./.data"
@@ -48,7 +48,7 @@ class GettingStarted {
 
     fun setLogger(logger: SdkLogger) {
         try {
-            initLogging(null, logger, null)
+            BreezSdkSpark.initLogging(null, logger, null)
         } catch (e: Exception) {
             // handle error
         }
@@ -118,7 +118,7 @@ class GettingStarted {
     // ANCHOR: spark-status
     suspend fun gettingStartedSparkStatus() {
         try {
-            val sparkStatus = getSparkStatus()
+            val sparkStatus = BreezSdkSpark.getSparkStatus()
 
             when (sparkStatus.status) {
                 ServiceStatus.OPERATIONAL -> {

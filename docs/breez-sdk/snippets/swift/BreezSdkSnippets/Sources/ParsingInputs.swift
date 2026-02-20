@@ -1,12 +1,12 @@
 import BreezSdkSpark
 import Foundation
 
-func parseInput(sdk: BreezSdk) async throws {
+func parseInput() async throws {
     // ANCHOR: parse-inputs
     let input = "an input to be parsed..."
 
     do {
-        let inputType = try await sdk.parse(input: input)
+        let inputType = try await BreezSdkSpark.parse(input: input)
         switch inputType {
         case .bitcoinAddress(v1: let details):
             print("Input is Bitcoin address \(details.address)")
@@ -59,7 +59,7 @@ func parseInput(sdk: BreezSdk) async throws {
 func setExternalInputParsers() async {
     // ANCHOR: set-external-input-parsers
     // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
     // Configure external parsers

@@ -9,6 +9,8 @@ use crate::signer::external_types::{
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, SecretBytes, string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
+#[allow(deprecated)]
+// default_config deprecated since 0.10.0; used by DefaultExternalSigner::new
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
 
 /// Default implementation of `ExternalSigner` that uses the internal `BreezSignerImpl`.
@@ -30,6 +32,7 @@ impl DefaultExternalSigner {
     /// * `use_address_index` - Whether to use address index in derivation
     /// * `account_number` - Optional account number for key derivation
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    #[allow(deprecated)] // calls deprecated default_config to build internal config
     pub fn new(
         mnemonic: String,
         passphrase: Option<String>,
@@ -355,6 +358,7 @@ impl ExternalSigner for DefaultExternalSigner {
 }
 
 #[cfg(test)]
+#[allow(deprecated)] // tests use deprecated default_config free function
 mod tests {
     use super::*;
     use crate::models::KeySetType;

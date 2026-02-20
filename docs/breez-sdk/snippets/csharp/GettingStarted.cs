@@ -11,12 +11,12 @@ namespace BreezSdkSnippets
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
             // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };
             // Connect to the SDK using the simplified connect method
-            var sdk = await BreezSdkSparkMethods.Connect(
+            var sdk = await BreezSdkSpark.Connect(
                 request: new ConnectRequest(
                     config: config,
                     seed: seed,
@@ -48,7 +48,7 @@ namespace BreezSdkSnippets
 
         void SetLogger(SdkLogger logger)
         {
-            BreezSdkSparkMethods.InitLogging(logDir: null, appLogger: logger, logFilter: null);
+            BreezSdkSpark.InitLogging(logDir: null, appLogger: logger, logFilter: null);
         }
         // ANCHOR_END: logging
 
@@ -118,7 +118,7 @@ namespace BreezSdkSnippets
         // ANCHOR: spark-status
         async Task GetSparkStatus()
         {
-            var sparkStatus = await BreezSdkSparkMethods.GetSparkStatus();
+            var sparkStatus = await BreezSdkSpark.GetSparkStatus();
 
             switch (sparkStatus.status)
             {

@@ -1,12 +1,9 @@
 import {
+  BreezSdkSpark,
   type BreezSdk,
-  connect,
-  defaultConfig,
-  getSparkStatus,
-  initLogging,
+  SdkBuilder,
   type LogEntry,
   type SdkEvent,
-  SdkBuilder,
   type Seed
 } from '@breeztech/breez-sdk-spark'
 
@@ -18,7 +15,7 @@ const exampleGettingStarted = async () => {
   // Call init when using the SDK in a web environment before calling any other SDK
   // methods. This is not needed when using the SDK in a Node.js/Deno environment.
   //
-  // import init, { BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
+  // import init, { BreezSdkSpark } from '@breeztech/breez-sdk-spark'
   await init()
 
   // Construct the seed using mnemonic words or entropy bytes
@@ -26,11 +23,11 @@ const exampleGettingStarted = async () => {
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
   // Create the default config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Connect to the SDK using the simplified connect method
-  const sdk = await connect({
+  const sdk = await BreezSdkSpark.connect({
     config,
     seed,
     storageDir: './.data'
@@ -59,7 +56,7 @@ const exampleLogging = async () => {
   }
 
   const logger = new JsLogger()
-  await initLogging(logger)
+  await BreezSdkSpark.initLogging(logger)
   // ANCHOR_END: logging
 }
 
@@ -125,7 +122,7 @@ const exampleRemoveEventListener = async (sdk: BreezSdk, listenerId: string) => 
 
 const exampleGetSparkStatus = async () => {
   // ANCHOR: spark-status
-  const sparkStatus = await getSparkStatus()
+  const sparkStatus = await BreezSdkSpark.getSparkStatus()
 
   switch (sparkStatus.status) {
     case 'operational': {

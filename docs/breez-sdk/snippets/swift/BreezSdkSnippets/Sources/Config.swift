@@ -3,7 +3,7 @@ import BreezSdkSpark
 func configureSdk() async throws {
     // ANCHOR: max-deposit-claim-fee
     // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
     // Disable automatic claiming
@@ -25,7 +25,7 @@ func configureSdk() async throws {
 func configurePrivateEnabledDefault() async throws {
     // ANCHOR: private-enabled-default
     // Disable Spark private mode by default
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.privateEnabledDefault = false
     // ANCHOR_END: private-enabled-default
     print("Config: \(config)")
@@ -33,7 +33,7 @@ func configurePrivateEnabledDefault() async throws {
 
 func configureOptimizationConfiguration() async throws {
     // ANCHOR: optimization-configuration
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
     config.optimizationConfig = OptimizationConfig(autoEnabled: true, multiplicity: 1)
     // ANCHOR_END: optimization-configuration
     print("Config: \(config)")
@@ -41,7 +41,7 @@ func configureOptimizationConfiguration() async throws {
 
 func configureStableBalance() async throws {
     // ANCHOR: stable-balance-config
-    var config = defaultConfig(network: Network.mainnet)
+    var config = BreezSdkSpark.defaultConfig(network: Network.mainnet)
 
     // Enable stable balance with auto-conversion to a specific token
     config.stableBalanceConfig = StableBalanceConfig(

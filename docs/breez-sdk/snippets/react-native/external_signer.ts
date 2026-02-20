@@ -1,7 +1,5 @@
 import {
-  defaultExternalSigner,
-  connectWithSigner,
-  defaultConfig,
+  BreezSdkSpark,
   Network,
   KeySetType
 } from '@breeztech/breez-sdk-spark-react-native'
@@ -18,20 +16,20 @@ const createSigner = () => {
   }
 
   // Create the default signer from the SDK
-  const signer = defaultExternalSigner(mnemonic, undefined, Network.Mainnet, keySetConfig)
+  const signer = BreezSdkSpark.defaultExternalSigner(mnemonic, undefined, Network.Mainnet, keySetConfig)
 
   return signer
 }
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-const exampleConnectWithSigner = async (signer: ReturnType<typeof defaultExternalSigner>) => {
+const exampleConnectWithSigner = async (signer: ReturnType<typeof BreezSdkSpark.defaultExternalSigner>) => {
   // Create the config
-  const config = defaultConfig(Network.Mainnet)
+  const config = BreezSdkSpark.defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
   // Connect using the external signer
-  const sdk = await connectWithSigner({
+  const sdk = await BreezSdkSpark.connectWithSigner({
     config,
     signer,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`

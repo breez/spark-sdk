@@ -1,10 +1,10 @@
-import { defaultConfig, Seed, type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { BreezSdkSpark, type Seed, type BreezSdk } from '@breeztech/breez-sdk-spark'
 
-const parseInputs = async (sdk: BreezSdk) => {
+const parseInputs = async () => {
   // ANCHOR: parse-inputs
   const input = 'an input to be parsed...'
 
-  const parsed = await sdk.parse(input)
+  const parsed = await BreezSdkSpark.parse(input)
 
   switch (parsed.type) {
     case 'bitcoinAddress':
@@ -68,7 +68,7 @@ const parseInputs = async (sdk: BreezSdk) => {
 const exampleSetExternalInputParsers = async () => {
   // ANCHOR: set-external-input-parsers
   // Create the default config
-  const config = defaultConfig('mainnet')
+  const config = BreezSdkSpark.defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
   // Configure external parsers

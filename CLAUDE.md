@@ -53,9 +53,9 @@ make clippy-fix         # Fix clippy issues
 
 ### Crate Structure
 
-- **crates/breez-sdk/core** - Main SDK library with public API (`BreezSdk`)
+- **crates/breez-sdk/core** - Main SDK library with public API (`BreezSdkSpark` namespace, `BreezSparkClient` client type)
 - **crates/breez-sdk/common** - Shared utilities, LNURL support, networking, sync protocol
-- **crates/breez-sdk/bindings** - UniFFI bindings for Go, Kotlin, Python, React Native, Swift
+- **crates/breez-sdk/bindings** - UniFFI bindings for Go, Kotlin, Python, React Native, Swift, C#
 - **crates/breez-sdk/wasm** - WebAssembly bindings for JavaScript/TypeScript
 - **crates/breez-sdk/cli** - Command-line interface for testing
 - **crates/spark** - Low-level Spark protocol (addresses, signing, operators, tokens)
@@ -69,10 +69,36 @@ make clippy-fix         # Fix clippy issues
 - `BitcoinChainService` trait - Blockchain provider interface
 - `EventEmitter` - Broadcasts `SdkEvent` (Synced, PaymentSucceeded, PaymentFailed, etc.)
 
+### Public API Namespace
+
+The SDK uses a `BreezSdkSpark` namespace struct to group all static/global entry points:
+
+```rust
+// Rust
+let config = BreezSdkSpark::default_config(Network::Mainnet);
+let client: BreezSparkClient = BreezSdkSpark::connect(request).await?;
+```
+
+All platforms expose the same `BreezSdkSpark.method()` pattern. The namespace is implemented differently per platform:
+
+| Platform | Mechanism |
+|----------|-----------|
+| Rust | `BreezSdkSpark` struct in `core/src/app.rs` |
+| WASM | `#[wasm_bindgen]` struct in `wasm/src/breez.rs` |
+| Flutter | `#[frb]` struct in `packages/flutter/rust/src/breez.rs` |
+| Kotlin | Hand-written `object` in `bindings/langs/kotlin-multiplatform/Breez.kt` |
+| Python | Hand-written class in `bindings/langs/python/src/breez_sdk_spark/breez.py` |
+| React Native | Hand-written TS class in `packages/react-native/src/Breez.ts` |
+| C# | `global_methods_class_name = "BreezSdkSpark"` in `bindings/uniffi.toml` |
+| Go | Package name `breez_sdk_spark` serves as namespace naturally |
+| Swift | Module name `BreezSdkSpark` serves as namespace naturally |
+
+> **Note:** Free functions (`default_config()`, `connect()`, etc.) are deprecated since 0.10.0. Use `BreezSdkSpark::` methods and `BreezSparkClient` instead.
+
 ### Data Flow
 
 ```
-BreezSdk (API) → SparkWallet (wallet ops) → Spark (protocol) → Operators (gRPC)
+BreezSparkClient (API) → SparkWallet (wallet ops) → Spark (protocol) → Operators (gRPC)
      ↓
 Storage → SyncedStorage → Breez Sync Service (multi-device)
 ```
@@ -86,6 +112,17 @@ When changing the SDK's public interface, update these files:
 3. **crates/breez-sdk/wasm/src/sdk.rs** - Update WASM interface
 4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
 5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
+
+When adding new top-level static functions to `BreezSdkSpark`, also update:
+
+6. **crates/breez-sdk/core/src/app.rs** - Add method to `BreezSdkSpark` impl
+7. **crates/breez-sdk/wasm/src/breez.rs** - Add `#[wasm_bindgen]` static method
+8. **packages/flutter/rust/src/breez.rs** - Add `#[frb]` static method
+9. **crates/breez-sdk/bindings/langs/kotlin-multiplatform/Breez.kt** - Add to `object BreezSdkSpark`
+10. **crates/breez-sdk/bindings/langs/python/src/breez_sdk_spark/breez.py** - Add `@staticmethod`
+11. **packages/react-native/src/Breez.ts** - Add static method to `BreezSdkSpark` class
+
+Go, Swift, and C# auto-derive the namespace from package/module/config — no manual wrapper update needed.
 
 ## Documentation Inline Syntax
 
@@ -160,25 +197,25 @@ See working examples in `docs/breez-sdk/snippets/` - these are compiled/tested a
 **Minimal TypeScript example:**
 
 ```typescript
-import { connect, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { BreezSdkSpark } from '@breeztech/breez-sdk-spark'
 
-const config = defaultConfig('mainnet')
+const config = BreezSdkSpark.defaultConfig('mainnet')
 config.apiKey = '<your api key>'
 
-const sdk = await connect({
+const client = await BreezSdkSpark.connect({
   config,
   seed: { type: 'mnemonic', mnemonic: '<12/24 words>', passphrase: undefined },
   storageDir: './.data'
 })
 
-const info = await sdk.getInfo({ ensureSynced: true })
+const info = await client.getInfo({ ensureSynced: true })
 // info.balanceSats, info.tokenBalances
 
 // To get addresses:
-// const lnAddress = await sdk.getLightningAddress()
-// const sparkAddr = await sdk.receivePayment({ paymentMethod: { type: 'sparkAddress' } })
+// const lnAddress = await client.getLightningAddress()
+// const sparkAddr = await client.receivePayment({ paymentMethod: { type: 'sparkAddress' } })
 
-await sdk.disconnect()
+await client.disconnect()
 ```
 
 **Minimal Rust example:**
@@ -186,33 +223,43 @@ await sdk.disconnect()
 ```rust
 use breez_sdk_spark::*;
 
-let mut config = default_config(Network::Mainnet);
+let mut config = BreezSdkSpark::default_config(Network::Mainnet);
 config.api_key = Some("<your api key>".to_string());
 
-let sdk = connect(ConnectRequest {
+let client: BreezSparkClient = BreezSdkSpark::connect(ConnectRequest {
     config,
     seed: Seed::Mnemonic { mnemonic: "<words>".into(), passphrase: None },
     storage_dir: "./.data".to_string(),
 }).await?;
 
-let info = sdk.get_info(GetInfoRequest { ensure_synced: Some(true) }).await?;
+let info = client.get_info(GetInfoRequest { ensure_synced: Some(true) }).await?;
 // info.balance_sats, info.token_balances
 
-sdk.disconnect().await?;
+client.disconnect().await?;
 ```
 
 ### Core API Methods
 
+**`BreezSdkSpark` namespace (static):**
+
 | Method | Description |
 |--------|-------------|
-| `connect(config, seed, storageDir)` | Initialize SDK |
+| `BreezSdkSpark.defaultConfig(network)` | Get default config for a network |
+| `BreezSdkSpark.connect(request)` | Connect and get a `BreezSparkClient` |
+| `BreezSdkSpark.parse(input)` | Parse any input (invoice, address, LNURL) |
+| `BreezSdkSpark.initLogging(...)` | Initialize SDK logging subsystem |
+| `BreezSdkSpark.getSparkStatus()` | Check Spark network status |
+
+**`BreezSparkClient` instance methods:**
+
+| Method | Description |
+|--------|-------------|
 | `disconnect()` | Clean shutdown |
 | `getInfo()` | Get balance (sats) and token balances |
 | `getLightningAddress()` | Get registered lightning address |
 | `receivePayment(paymentMethod)` | Generate invoice, BTC address, or Spark address |
 | `sendPayment(prepareResponse)` | Send payment (call prepareSendPayment first) |
 | `prepareSendPayment(destination)` | Prepare a payment, get fees |
-| `parse(input)` | Parse any input (invoice, address, LNURL) |
 | `listPayments(filter)` | Get transaction history |
 | `addEventListener(listener)` | Subscribe to events |
 | `buyBitcoin(request)` | Get MoonPay URL to buy Bitcoin |
@@ -255,13 +302,15 @@ Working code examples for all platforms are in `docs/breez-sdk/snippets/`:
 
 7. **Lightning address registration** - Call `registerLightningAddress()` to get a Lightning address; it's not automatic
 
+8. **Deprecated free functions** - `default_config()`, `connect()`, `parse_input()`, `init_logging()`, `get_spark_status()` are deprecated since 0.10.0. Use `BreezSdkSpark::method()` equivalents. `BreezSdk` is deprecated in favor of `BreezSparkClient`.
+
 ### Networks
 
 | Network | Config | Use Case |
 |---------|--------|----------|
-| `mainnet` | `defaultConfig('mainnet')` | Production |
-| `testnet` | `defaultConfig('testnet')` | Testing with testnet Bitcoin |
-| `regtest` | `defaultConfig('regtest')` | Development (no API key needed, use [Lightspark faucet](https://app.lightspark.com/regtest-faucet)) |
+| `mainnet` | `BreezSdkSpark.defaultConfig('mainnet')` | Production |
+| `testnet` | `BreezSdkSpark.defaultConfig('testnet')` | Testing with testnet Bitcoin |
+| `regtest` | `BreezSdkSpark.defaultConfig('regtest')` | Development (no API key needed, use [Lightspark faucet](https://app.lightspark.com/regtest-faucet)) |
 
 **Regtest** is recommended for development - free to use, no real value, supports Spark payments, deposits, withdrawals, and token issuance.
 
@@ -281,7 +330,7 @@ The SDK throws `SdkError` with these variants:
 
 ```typescript
 try {
-  await sdk.sendPayment({ prepareResponse })
+  await client.sendPayment({ prepareResponse })
 } catch (error) {
   if (error.message.includes('InsufficientFunds')) {
     // Handle insufficient balance
@@ -293,39 +342,39 @@ try {
 
 | Operation | Flow |
 |-----------|------|
-| **LNURL-Pay** | `parse(url)` → check `type === 'lnurlPay'` or `'lightningAddress'` → `prepareLnurlPay()` → `lnurlPay()` |
-| **LNURL-Withdraw** | `parse(url)` → check `type === 'lnurlWithdraw'` → `lnurlWithdraw({ amountSats, withdrawRequest })` |
-| **LNURL-Auth** | `parse(url)` → check `type === 'lnurlAuth'` → show domain to user → `lnurlAuth(requestData)` |
+| **LNURL-Pay** | `BreezSdkSpark.parse(url)` → check `type === 'lnurlPay'` or `'lightningAddress'` → `prepareLnurlPay()` → `lnurlPay()` |
+| **LNURL-Withdraw** | `BreezSdkSpark.parse(url)` → check `type === 'lnurlWithdraw'` → `lnurlWithdraw({ amountSats, withdrawRequest })` |
+| **LNURL-Auth** | `BreezSdkSpark.parse(url)` → check `type === 'lnurlAuth'` → show domain to user → `lnurlAuth(requestData)` |
 
 ### Token Operations
 
 **Receiving tokens:**
 ```typescript
 // Get token balances
-const info = await sdk.getInfo({ ensureSynced: true })
+const info = await client.getInfo({ ensureSynced: true })
 for (const [tokenId, balance] of Object.entries(info.tokenBalances)) {
   console.log(`${balance.tokenMetadata.ticker}: ${balance.balance}`)
 }
 
 // Receive via Spark invoice
-const response = await sdk.receivePayment({
+const response = await client.receivePayment({
   paymentMethod: { type: 'sparkInvoice', tokenIdentifier: '<token id>', amount: '1000' }
 })
 ```
 
 **Sending tokens:**
 ```typescript
-const prepareResponse = await sdk.prepareSendPayment({
+const prepareResponse = await client.prepareSendPayment({
   paymentRequest: '<spark address or invoice>',
   tokenIdentifier: '<token id>',
   amount: BigInt(1000)
 })
-await sdk.sendPayment({ prepareResponse })
+await client.sendPayment({ prepareResponse })
 ```
 
 **Issuing tokens (for token issuers):**
 ```typescript
-const issuer = sdk.getTokenIssuer()
+const issuer = client.getTokenIssuer()
 const metadata = await issuer.createIssuerToken({
   name: 'My Token', ticker: 'MTK', decimals: 6, isFreezable: false, maxSupply: BigInt(1_000_000)
 })

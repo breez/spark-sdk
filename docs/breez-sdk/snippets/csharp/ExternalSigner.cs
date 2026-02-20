@@ -19,7 +19,7 @@ namespace BreezSdkSnippets
                 accountNumber: accountNumber
             );
 
-            var signer = BreezSdkSparkMethods.DefaultExternalSigner(
+            var signer = BreezSdkSpark.DefaultExternalSigner(
                 mnemonic: mnemonic,
                 passphrase: null,
                 network: network,
@@ -34,13 +34,13 @@ namespace BreezSdkSnippets
         public static async Task<BreezSdk> ConnectWithSigner(ExternalSigner signer)
         {
             // Create the config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>"
             };
 
             // Connect using the external signer
-            var sdk = await BreezSdkSparkMethods.ConnectWithSigner(new ConnectWithSignerRequest(
+            var sdk = await BreezSdkSpark.ConnectWithSigner(new ConnectWithSignerRequest(
                 config: config,
                 signer: signer,
                 storageDir: "./.data"

@@ -18,9 +18,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use breez_sdk_spark::{
-    BreezSdk, EventListener, GetInfoRequest, Network, PaymentType, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent, Seed, SendPaymentRequest,
-    SyncWalletRequest, default_config,
+    BreezSdk, BreezSdkSpark, EventListener, GetInfoRequest, Network, PaymentType,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent,
+    Seed, SendPaymentRequest, SyncWalletRequest,
 };
 use tokio::sync::mpsc;
 
@@ -631,7 +631,7 @@ async fn initialize_regtest_sdk_pair(
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
 
-    let mut sender_config = default_config(Network::Regtest);
+    let mut sender_config = BreezSdkSpark::default_config(Network::Regtest);
     if let Some(multiplicity) = sender_multiplicity {
         sender_config.optimization_config.multiplicity = multiplicity;
     }
@@ -645,7 +645,7 @@ async fn initialize_regtest_sdk_pair(
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
-    let mut receiver_config = default_config(Network::Regtest);
+    let mut receiver_config = BreezSdkSpark::default_config(Network::Regtest);
     receiver_config.optimization_config.multiplicity = receiver_multiplicity;
 
     let itest_receiver =
@@ -694,7 +694,7 @@ async fn initialize_mainnet_sdk(
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
         .map(|var| var.into_string().expect("Expected valid API key string"));
 
-    let mut config = default_config(Network::Mainnet);
+    let mut config = BreezSdkSpark::default_config(Network::Mainnet);
     config.api_key = breez_api_key;
     if let Some(multiplicity) = multiplicity {
         config.optimization_config.multiplicity = multiplicity;

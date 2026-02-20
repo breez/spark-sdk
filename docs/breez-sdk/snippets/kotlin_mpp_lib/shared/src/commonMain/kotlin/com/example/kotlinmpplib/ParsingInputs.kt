@@ -3,12 +3,12 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class ParsingInputs {
-    suspend fun parseInput(sdk: BreezSdk) {
+    suspend fun parseInput() {
         // ANCHOR: parse-inputs
         val input = "an input to be parsed..."
 
         try {
-            val inputType = sdk.parse(input)
+            val inputType = BreezSdkSpark.parse(input)
             when (inputType) {
                 is InputType.BitcoinAddress -> {
                     println("Input is Bitcoin address ${inputType.v1.address}")
@@ -68,7 +68,7 @@ class ParsingInputs {
     suspend fun setExternalInputParsers() {
         // ANCHOR: set-external-input-parsers
         // Create the default config
-        val config = defaultConfig(Network.MAINNET)
+        val config = BreezSdkSpark.defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
         // Configure external parsers

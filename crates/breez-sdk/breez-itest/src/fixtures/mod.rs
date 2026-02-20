@@ -3,6 +3,7 @@ pub mod docker;
 pub mod lnurl;
 
 use anyhow::Result;
+#[allow(deprecated)] // default_config deprecated since 0.10.0
 use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, default_config};
 use rand::RngCore;
 use rstest::fixture;
@@ -48,6 +49,7 @@ pub async fn bob_no_fee_sdk() -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.max_deposit_claim_fee = None;
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
@@ -60,6 +62,7 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 0 });
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
@@ -99,6 +102,7 @@ pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.stable_balance_config = Some(StableBalanceConfig {
         token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
@@ -118,6 +122,7 @@ pub async fn alice_sdk_stable_balance_with_reserve() -> Result<SdkInstance> {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
 
+    #[allow(deprecated)] // default_config deprecated since 0.10.0
     let mut cfg = default_config(Network::Regtest);
     cfg.stable_balance_config = Some(StableBalanceConfig {
         token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"

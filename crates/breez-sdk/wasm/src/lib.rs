@@ -1,3 +1,4 @@
+mod breez;
 mod error;
 mod event;
 mod issuer;

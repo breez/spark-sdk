@@ -17,8 +17,8 @@ use tracing_subscriber::EnvFilter;
 
 use breez_sdk_itest::{RegtestFaucet, build_sdk_with_custom_config};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
+    BreezSdk, BreezSdkSpark, GetInfoRequest, Network, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest,
 };
 
 use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
@@ -560,7 +560,7 @@ async fn initialize_sdk_pair(
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
 
-    let mut sender_config = default_config(Network::Regtest);
+    let mut sender_config = BreezSdkSpark::default_config(Network::Regtest);
     // Disable auto-optimization if requested, or if we're doing pre-optimization
     // (to avoid auto-opt triggering after funding)
     if no_auto_optimize || pre_optimize.is_some() {
@@ -579,7 +579,7 @@ async fn initialize_sdk_pair(
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
-    let mut receiver_config = default_config(Network::Regtest);
+    let mut receiver_config = BreezSdkSpark::default_config(Network::Regtest);
     // Disable auto-optimization for receiver if requested
     receiver_config.optimization_config.auto_enabled = false;
     let itest_receiver =

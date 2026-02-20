@@ -4,12 +4,12 @@ namespace BreezSdkSnippets
 {
     class ParsingInputs
     {
-        async Task ParseInput(BreezSdk sdk)
+        async Task ParseInput()
         {
             // ANCHOR: parse-inputs
             var inputStr = "an input to be parsed...";
 
-            var parsedInput = await sdk.Parse(input: inputStr);
+            var parsedInput = await BreezSdkSpark.Parse(input: inputStr, externalInputParsers: null);
             switch (parsedInput)
             {
                 case InputType.BitcoinAddress bitcoinAddress:
@@ -78,7 +78,7 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: set-external-input-parsers
             // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            var config = BreezSdkSpark.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>",
                 externalInputParsers = new List<ExternalInputParser>
