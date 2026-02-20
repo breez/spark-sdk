@@ -55,6 +55,7 @@ class SdkEventListener: EventListener {
         case .synced(let syncUpdate):
             // Data has been synchronized with the network. The syncUpdate field
             // describes what was synced (.balanceUpdated, .paymentsUpdated, or .fullSync).
+            // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
             break
         case .unclaimedDeposits(let unclaimedDeposits):
             // SDK was unable to claim some deposits automatically

@@ -336,7 +336,7 @@ impl BreezSdk {
     /// Registers a listener that fires only for `Synced` events.
     ///
     /// The callback receives a [`SyncUpdate`] describing what was synced:
-    /// - [`SyncUpdate::BalanceUpdated`] -- wallet balance was fetched
+    /// - [`SyncUpdate::BalanceUpdated`] -- wallet balance was fetched (with optional inline data)
     /// - [`SyncUpdate::PaymentsUpdated`] -- payment history was synced
     /// - [`SyncUpdate::FullSync`] -- complete sync finished
     ///
@@ -348,7 +348,11 @@ impl BreezSdk {
     /// # async fn example(sdk: &breez_sdk_spark::BreezSdk) {
     /// use breez_sdk_spark::SyncUpdate;
     /// let id = sdk.on_sync(|update| match update {
-    ///     SyncUpdate::BalanceUpdated => println!("Balance ready"),
+    ///     SyncUpdate::BalanceUpdated { balance } => {
+    ///         if let Some(b) = balance {
+    ///             println!("Balance: {} sats", b.balance_sats);
+    ///         }
+    ///     }
     ///     SyncUpdate::PaymentsUpdated => println!("Payments ready"),
     ///     SyncUpdate::FullSync => println!("Everything synced"),
     /// }).await;

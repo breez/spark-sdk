@@ -74,6 +74,7 @@ class SdkListener(EventListener):
         if isinstance(event, SdkEvent.SYNCED):
             # Data has been synchronized with the network. The sync_update field
             # describes what was synced (BALANCE_UPDATED, PAYMENTS_UPDATED, or FULL_SYNC).
+            # BALANCE_UPDATED carries an optional balance snapshot for zero-cost UI updates.
             sync_update = event.sync_update
         elif isinstance(event, SdkEvent.UNCLAIMED_DEPOSITS):
             # SDK was unable to claim some deposits automatically

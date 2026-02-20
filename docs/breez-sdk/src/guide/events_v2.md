@@ -18,15 +18,15 @@ display balance and payments quickly without waiting for the full periodic sync.
 Each sub-task emits a {{#enum SdkEvent::Synced}} event with a `SyncUpdate` value
 describing what was synced:
 
-| `SyncUpdate` variant | Meaning |
-|---|---|
-| `BalanceUpdated` | Wallet balance was fetched and cached (fast, early) |
-| `PaymentsUpdated` | Payment history was synced to local storage (fast, early) |
-| `FullSync` | Complete sync finished (wallet, payments, deposits, metadata) |
+| `SyncUpdate` variant | Payload | Meaning |
+|---|---|---|
+| `BalanceUpdated` | `balance: Option<BalanceState>` | Wallet balance was fetched and cached. During startup, `balance` is `Some(...)` with `balance_sats` and `token_balances`. During periodic sync, it is `None`. |
+| `PaymentsUpdated` | — | Payment history was synced to local storage (fast, early) |
+| `FullSync` | — | Complete sync finished (wallet, payments, deposits, metadata) |
 
 **Typical startup sequence:**
 
-1. `Synced { sync_update: BalanceUpdated }` — balance is ready, show it in UI
+1. `Synced { sync_update: BalanceUpdated { balance: Some(...) } }` — balance is ready with inline data, show it in UI immediately
 2. `Synced { sync_update: PaymentsUpdated }` — payment list is ready
 3. `Synced { sync_update: FullSync }` — everything is done, dismiss loading indicators
 

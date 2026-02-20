@@ -81,6 +81,7 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	case breez_sdk_spark.SdkEventSynced:
 		// Data has been synchronized with the network. The SyncUpdate field
 		// describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+		// BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
 		_ = event.SyncUpdate
 	case breez_sdk_spark.SdkEventUnclaimedDeposits:
 		// SDK was unable to claim some deposits automatically

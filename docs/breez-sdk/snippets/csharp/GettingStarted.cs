@@ -62,6 +62,7 @@ namespace BreezSdkSnippets
                     case SdkEvent.Synced syncedEvent:
                         // Data has been synchronized with the network. The SyncUpdate field
                         // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+                        // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
                         var syncUpdate = syncedEvent.syncUpdate;
                         break;
 

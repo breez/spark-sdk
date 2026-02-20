@@ -19,8 +19,14 @@ async fn typed_event_listeners(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: on-sync
     // Listen only for Synced events (Rust only)
     let sync_listener_id = sdk
-        .on_sync(|update| {
-            info!("Sync update: {update:?}");
+        .on_sync(|update| match update {
+            SyncUpdate::BalanceUpdated { balance } => {
+                if let Some(b) = balance {
+                    info!("Balance: {} sats", b.balance_sats);
+                }
+            }
+            SyncUpdate::PaymentsUpdated => info!("Payments synced"),
+            SyncUpdate::FullSync => info!("Full sync complete"),
         })
         .await;
     // ANCHOR_END: on-sync

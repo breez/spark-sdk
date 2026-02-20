@@ -64,6 +64,7 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       if (event.tag === SdkEvent_Tags.Synced) {
         // Data has been synchronized with the network. The syncUpdate field
         // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+        // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
         const syncUpdate = event.inner.syncUpdate
       } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
         // SDK was unable to claim some deposits automatically

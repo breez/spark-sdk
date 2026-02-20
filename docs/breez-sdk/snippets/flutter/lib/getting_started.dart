@@ -118,6 +118,7 @@ class BreezSdkSpark {
         case SdkEvent_Synced(:final syncUpdate):
           // Data has been synchronized with the network. The syncUpdate field
           // describes what was synced (balanceUpdated, paymentsUpdated, or fullSync).
+          // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
           break;
         case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
           // SDK was unable to claim some deposits automatically

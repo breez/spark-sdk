@@ -400,7 +400,7 @@ impl BreezSdk {
 
     /// Synchronizes wallet state to persistent storage, making sure we have the latest balances and payments.
     pub(super) async fn sync_wallet_state_to_storage(&self) -> Result<(), SdkError> {
-        update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
+        let _balance = update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
 
         let initial_sync_complete = *self.initial_synced_watcher.borrow();
         let sync_service = SparkSyncService::new(

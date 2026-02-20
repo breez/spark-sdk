@@ -13,7 +13,7 @@ use x509_parser::parse_x509_certificate;
 use crate::{
     PaymentDetails, WaitForPaymentIdentifier,
     error::SdkError,
-    events::{EventListener, SdkEvent},
+    events::{BalanceState, EventListener, SdkEvent},
     models::Payment,
     persist::{CachedAccountInfo, ObjectCacheRepository, StaticDepositAddress, Storage},
 };
@@ -71,7 +71,7 @@ impl EventListener for BalanceWatcher {
         match event {
             SdkEvent::PaymentSucceeded { .. } | SdkEvent::ClaimedDeposits { .. } => {
                 match update_balances(self.spark_wallet.clone(), self.storage.clone()).await {
-                    Ok(()) => info!("Balance updated successfully"),
+                    Ok(_) => info!("Balance updated successfully"),
                     Err(e) => error!("Failed to update balance: {e:?}"),
                 }
             }
@@ -83,7 +83,7 @@ impl EventListener for BalanceWatcher {
 pub(crate) async fn update_balances(
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
-) -> Result<(), SdkError> {
+) -> Result<BalanceState, SdkError> {
     let balance_sats = spark_wallet.get_balance().await?;
     let token_balances = spark_wallet
         .get_token_balances()
@@ -93,10 +93,14 @@ pub(crate) async fn update_balances(
         .collect();
     let object_repository = ObjectCacheRepository::new(storage.clone());
 
+    let balance_state = BalanceState {
+        balance_sats,
+        token_balances,
+    };
     object_repository
         .save_account_info(&CachedAccountInfo {
-            balance_sats,
-            token_balances,
+            balance_sats: balance_state.balance_sats,
+            token_balances: balance_state.token_balances.clone(),
         })
         .await?;
     let identity_public_key = spark_wallet.get_identity_public_key();
@@ -104,7 +108,7 @@ pub(crate) async fn update_balances(
         "Balance updated successfully {} for identity {}",
         balance_sats, identity_public_key
     );
-    Ok(())
+    Ok(balance_state)
 }
 
 pub(crate) struct InternalEventListener {

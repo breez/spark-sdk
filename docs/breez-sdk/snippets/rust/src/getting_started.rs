@@ -66,6 +66,7 @@ impl EventListener for SdkEventListener {
             SdkEvent::Synced { sync_update } => {
                 // Data has been synchronized with the network. The sync_update field
                 // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+                // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
             }
             SdkEvent::UnclaimedDeposits { unclaimed_deposits } => {
                 // SDK was unable to claim some deposits automatically

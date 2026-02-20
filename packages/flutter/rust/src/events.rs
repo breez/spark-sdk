@@ -1,11 +1,23 @@
+use std::collections::HashMap;
+
 use crate::frb_generated::StreamSink;
-use breez_sdk_spark::{DepositInfo, EventListener, Payment, SyncUpdate};
+use breez_sdk_spark::{
+    BalanceState, DepositInfo, EventListener, Payment, SyncUpdate, TokenBalance,
+};
 pub use breez_sdk_spark::{OptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
+#[frb(mirror(BalanceState))]
+pub struct _BalanceState {
+    pub balance_sats: u64,
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
 #[frb(mirror(SyncUpdate))]
 pub enum _SyncUpdate {
-    BalanceUpdated,
+    BalanceUpdated {
+        balance: Option<BalanceState>,
+    },
     PaymentsUpdated,
     FullSync,
 }

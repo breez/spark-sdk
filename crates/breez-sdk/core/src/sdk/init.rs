@@ -122,11 +122,13 @@ impl BreezSdk {
         tokio::spawn(async move {
             let fetch_balance = async {
                 match update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
-                    Ok(()) => {
+                    Ok(balance) => {
                         info!("instant_wallet_load: balance updated, emitting Synced");
                         sdk.event_emitter
                             .emit(&SdkEvent::Synced {
-                                sync_update: SyncUpdate::BalanceUpdated,
+                                sync_update: SyncUpdate::BalanceUpdated {
+                                    balance: Some(balance),
+                                },
                             })
                             .await;
                     }

@@ -56,9 +56,15 @@ mod serde_option_u128_as_string {
     }
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BalanceState)]
+pub struct BalanceState {
+    pub balance_sats: u64,
+    pub token_balances: HashMap<String, TokenBalance>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncUpdate)]
 pub enum SyncUpdate {
-    BalanceUpdated,
+    BalanceUpdated { balance: Option<BalanceState> },
     PaymentsUpdated,
     FullSync,
 }

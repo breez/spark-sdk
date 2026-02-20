@@ -62,6 +62,7 @@ class GettingStarted {
                 is SdkEvent.Synced -> {
                     // Data has been synchronized with the network. The syncUpdate field
                     // describes what was synced (BalanceUpdated, PaymentsUpdated, or FullSync).
+                    // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
                     val syncUpdate = e.syncUpdate
                 }
                 is SdkEvent.UnclaimedDeposits -> {

@@ -8,17 +8,39 @@ use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-use crate::{DepositInfo, Payment};
+use std::collections::HashMap;
+
+use crate::{DepositInfo, Payment, TokenBalance};
+
+/// Balance snapshot included in [`SyncUpdate::BalanceUpdated`] events.
+///
+/// When the SDK emits a `BalanceUpdated` event during instant wallet load,
+/// this struct carries the fetched balance data inline so clients can
+/// update their UI without an extra round-trip to [`BreezSdk::get_info()`].
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BalanceState {
+    /// The wallet balance in satoshis.
+    pub balance_sats: u64,
+    /// Token balances keyed by token identifier.
+    pub token_balances: HashMap<String, TokenBalance>,
+}
 
 /// Describes what was synchronized in a [`SdkEvent::Synced`] event.
 ///
 /// Clients can match on specific variants to react to individual sync stages
 /// (e.g., show the balance before the full payment history is ready).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum SyncUpdate {
     /// Wallet balance was fetched and cached.
-    BalanceUpdated,
+    ///
+    /// During instant wallet load (startup), `balance` is `Some(...)` containing
+    /// the fetched balance data. During periodic sync, `balance` is `None`.
+    BalanceUpdated {
+        /// The balance snapshot, if available inline.
+        balance: Option<BalanceState>,
+    },
     /// Payment history was synced to local storage.
     PaymentsUpdated,
     /// Complete sync finished (wallet, payments, deposits, metadata).
@@ -268,7 +290,7 @@ impl EventEmitter {
         } else if effective.wallet_state {
             SyncUpdate::PaymentsUpdated
         } else {
-            SyncUpdate::BalanceUpdated
+            SyncUpdate::BalanceUpdated { balance: None }
         };
 
         self.emit(&SdkEvent::Synced { sync_update }).await;

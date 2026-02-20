@@ -71,6 +71,7 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
         case 'synced': {
           // Data has been synchronized with the network. The syncUpdate field
           // describes what was synced ('balanceUpdated', 'paymentsUpdated', or 'fullSync').
+          // BalanceUpdated carries an optional balance snapshot for zero-cost UI updates.
           const syncUpdate = event.syncUpdate
           break
         }
