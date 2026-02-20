@@ -116,7 +116,7 @@ impl SparkSyncService {
                 if should_emit {
                     // Fetch the payment to include already stored metadata
                     self.event_emitter
-                        .get_emit_payment(self.storage.clone(), payment.clone())
+                        .get_and_emit_payment(payment.clone())
                         .await;
                 }
             }
@@ -351,7 +351,7 @@ impl SparkSyncService {
             if should_emit {
                 // Fetch the payment to include already stored metadata
                 self.event_emitter
-                    .get_emit_payment(self.storage.clone(), payment.clone())
+                    .get_and_emit_payment(payment.clone())
                     .await;
             }
         }

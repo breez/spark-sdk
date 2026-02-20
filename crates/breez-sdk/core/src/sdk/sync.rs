@@ -136,9 +136,7 @@ impl BreezSdk {
                     let _ = self.lnurl_preimage_trigger.send(());
 
                     // Fetch the payment to include already stored metadata
-                    self.event_emitter
-                        .get_emit_payment(self.storage.clone(), payment)
-                        .await;
+                    self.event_emitter.get_and_emit_payment(payment).await;
                 }
                 self.sync_coordinator
                     .trigger_sync_no_wait(super::SyncType::WalletState, true)
@@ -156,9 +154,7 @@ impl BreezSdk {
                     self.sync_single_lnurl_metadata(&mut payment).await;
 
                     // Fetch the payment to include already stored metadata
-                    self.event_emitter
-                        .get_emit_payment(self.storage.clone(), payment)
-                        .await;
+                    self.event_emitter.get_and_emit_payment(payment).await;
                 }
                 self.sync_coordinator
                     .trigger_sync_no_wait(super::SyncType::WalletState, true)

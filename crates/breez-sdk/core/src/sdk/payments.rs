@@ -1226,7 +1226,7 @@ impl BreezSdk {
                                     error!("Failed to update payment in storage: {e:?}");
                                 }
                                 // Fetch the payment to include already stored metadata
-                                event_emitter.get_emit_payment(storage.clone(), payment.clone()).await;
+                                event_emitter.get_and_emit_payment(payment.clone()).await;
                                 sync_coordinator
                                     .trigger_sync_no_wait(SyncType::WalletState, true)
                                     .await;

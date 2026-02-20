@@ -477,6 +477,8 @@ impl SdkBuilder {
                 (storage, None)
             };
 
+        event_emitter.set_storage(Arc::clone(&storage));
+
         // Create the MoonPay provider for buying Bitcoin
         let buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi> =
             Arc::new(MoonpayProvider::new(breez_server.clone()));
