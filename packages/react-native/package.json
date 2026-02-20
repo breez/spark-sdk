@@ -16,6 +16,16 @@
         "types": "./lib/typescript/commonjs/src/index.d.ts",
         "default": "./lib/commonjs/index.js"
       }
+    },
+    "./webln": {
+      "import": {
+        "types": "./lib/typescript/module/src/webln/index.d.ts",
+        "default": "./lib/module/webln/index.js"
+      },
+      "require": {
+        "types": "./lib/typescript/commonjs/src/webln/index.d.ts",
+        "default": "./lib/commonjs/webln/index.js"
+      }
     }
   },
   "files": [
@@ -45,6 +55,7 @@
   "scripts": {
     "clean": "del-cli android/generated ios/generated lib plugin/build",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
+    "test": "jest",
     "plugin:build": "EXPO_NONINTERACTIVE=true expo-module build plugin",
     "plugin:clean": "expo-module clean plugin",
     "plugin:watch": "expo-module build plugin",
@@ -111,7 +122,13 @@
   },
   "peerDependencies": {
     "react": "*",
-    "react-native": "*"
+    "react-native": "*",
+    "react-native-webview": ">=11.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-native-webview": {
+      "optional": true
+    }
   },
   "packageManager": "yarn@3.6.1",
   "jest": {

@@ -13,9 +13,11 @@
         "@breeztech/breez-sdk-spark-react-native": "../../../../packages/react-native",
         "react": "19.0.0",
         "react-native": "0.78.0",
-        "react-native-fs": "^2.20.0"
+        "react-native-fs": "^2.20.0",
+        "react-native-webview": "^13.8.0"
     },
     "devDependencies": {
+        "@types/react": "^19.0.0",
         "@types/react-native": "^0.73.0",
         "@typescript-eslint/eslint-plugin": "^6.4.0",
         "@typescript-eslint/parser": "^6.10.0",

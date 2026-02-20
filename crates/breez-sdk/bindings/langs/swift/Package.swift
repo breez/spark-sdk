@@ -22,5 +22,8 @@ let package = Package(
             dependencies: [
                 "breez_sdk_sparkFFI", .product(name: "BigNumber", package: "Swift-BigInt"),
             ]),
+        .testTarget(
+            name: "BreezSdkSparkTests",
+            dependencies: ["BreezSdkSpark"]),
     ]
 )

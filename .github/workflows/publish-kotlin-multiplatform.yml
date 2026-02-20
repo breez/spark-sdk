@@ -90,6 +90,15 @@ jobs:
           name: bindings-kotlin-multiplatform
           path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Update embedded WebLN provider
+        working-directory: crates/breez-sdk/bindings
+        run: make copy-kmp-webln-provider
+
       - name: Build Kotlin Multiplatform project
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
         env:

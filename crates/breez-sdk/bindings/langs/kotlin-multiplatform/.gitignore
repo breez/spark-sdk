@@ -48,8 +48,15 @@ breez-sdk-spark-kmp/src/androidMain/jniLibs/
 breez-sdk-spark-kmp/src/jvmMain/jniLibs/
 breez-sdk-spark-kmp/src/lib/*
 
-breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark
-breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark
-breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark
-breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark
+# Generated SDK bindings (exclude contents, then include webln)
+breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark/*
+!breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark/webln/
+breez-sdk-spark-kmp/src/commonTest/kotlin/breez_sdk_spark/*
+!breez-sdk-spark-kmp/src/commonTest/kotlin/breez_sdk_spark/webln/
+breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark/*
+!breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark/webln/
+breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark/*
+!breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark/webln/
+breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark/*
+!breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark/webln/
 breez-sdk-spark-kmp/src/nativeInterop/cinterop/headers/*

@@ -87,6 +87,27 @@ When changing the SDK's public interface, update these files:
 4. **packages/flutter/rust/src/models.rs** - Update mirrored structs/enums
 5. **packages/flutter/rust/src/sdk.rs** - Update Flutter interface
 
+## WebLN Bindings
+
+The SDK includes WebLN support for mobile WebViews. When modifying these SDK methods, also update the WebLN platform bindings:
+
+| SDK Method | WebLn Method |
+|------------|--------------|
+| `sign_message()` | `getInfo()` (for pubkey), `signMessage()` |
+| `check_message()` | `verifyMessage()` |
+| `parse()` | `sendPayment()`, `lnurl()` |
+| `prepare_send_payment()` / `send_payment()` | `sendPayment()` |
+| `receive_payment()` | `makeInvoice()` |
+| `prepare_lnurl_pay()` / `lnurl_pay()` | `lnurl()` (pay flow) |
+| `lnurl_withdraw()` | `lnurl()` (withdraw flow) |
+| `lnurl_auth()` | `lnurl()` (auth flow) |
+
+Files to update:
+- `packages/flutter/lib/src/webln/` - Flutter WebView controller
+- `packages/react-native/src/webln/` - React Native WebView component
+- `crates/breez-sdk/bindings/langs/android/.../webln/` - Android WebView controller
+- `crates/breez-sdk/bindings/langs/swift/.../WebLn/` - iOS WebView controller
+
 ## Documentation Inline Syntax
 
 When writing mdbook documentation in `docs/breez-sdk/src/`, use these preprocessor macros for language-aware inline code that adapts to the selected language tab:

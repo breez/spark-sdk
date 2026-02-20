@@ -67,7 +67,7 @@ build-android: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-li
 		--crate-configs breez_sdk_spark=../core/uniffi.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
 
-package-android: build-android
+package-android: build-android copy-android-webln-provider
 	rm $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs langs/android/lib/src/main
 	cp -r $(FFI_DIR)kotlin/main/kotlin/breez_sdk_spark langs/android/lib/src/main/kotlin/
@@ -97,7 +97,7 @@ build-aarch64-apple-darwin: install-target-aarch64-apple-darwin
 build-x86_64-apple-darwin: install-target-x86_64-apple-darwin
 	cargo lipo --release --targets x86_64-apple-darwin
 
-package-xcframework-no-binaries: bindings-swift
+package-xcframework-no-binaries: bindings-swift copy-ios-webln-provider
 	mkdir -p langs/swift/Sources/BreezSdkSpark
 	mv $(FFI_DIR)swift/*.swift langs/swift/Sources/BreezSdkSpark/
 	# WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
@@ -131,12 +131,12 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
 # Package with dummy binaries (useful for testing)
-package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
+package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only copy-kmp-webln-provider
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 
 # Full package with all binaries
-package-kotlin-multiplatform: build-kotlin-multiplatform
+package-kotlin-multiplatform: build-kotlin-multiplatform copy-kmp-webln-provider
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/
@@ -162,3 +162,56 @@ package-nuget-no-binaries: bindings-csharp
 	rm -f langs/csharp/src/*.cs
 	cp $(FFI_DIR)csharp/breez_sdk_spark.cs langs/csharp/src/
 	cd langs/csharp/src && dotnet pack -c Release
+
+## WebLN Provider
+WEBLN_PROVIDER_DIR := ../../../packages/webln-provider
+WEBLN_JS := $(WEBLN_PROVIDER_DIR)/dist/webln-provider.min.js
+
+# Build WebLN provider JS
+build-webln-provider:
+	$(MAKE) -C $(WEBLN_PROVIDER_DIR) build
+
+# Macro for embedding WebLN provider in Kotlin sources (Android/KMP)
+# Usage: $(call embed-kotlin-webln-provider,<output-path>,<target-name>,<make-target>)
+define embed-kotlin-webln-provider
+	@echo "Embedding WebLN provider in $(2)..."
+	@ESCAPED_JS=$$(cat $(WEBLN_JS) | sed 's/\$$/$${"$$"}/g') && \
+	printf '%s\n' \
+		'package breez_sdk_spark.webln' \
+		'' \
+		'/**' \
+		' * Embedded WebLN provider JavaScript.' \
+		' *' \
+		' * This script is auto-generated from packages/webln-provider/dist/webln-provider.min.js' \
+		' * To update, run: make $(3)' \
+		' */' \
+		"internal const val WEBLN_PROVIDER_SCRIPT: String = \"\"\"$$ESCAPED_JS\"\"\"" \
+	> $(1)
+endef
+
+# Embed WebLN provider in Android source
+ANDROID_WEBLN_SCRIPT := langs/android/lib/src/main/kotlin/breez_sdk_spark/webln/WebLnProviderScript.kt
+copy-android-webln-provider: build-webln-provider
+	$(call embed-kotlin-webln-provider,$(ANDROID_WEBLN_SCRIPT),Android,copy-android-webln-provider)
+
+# Embed WebLN provider in iOS/Swift source
+SWIFT_WEBLN_SCRIPT := langs/swift/Sources/BreezSdkSpark/WebLn/WebLnProviderScript.swift
+copy-ios-webln-provider: build-webln-provider
+	@echo "Embedding WebLN provider in Swift..."
+	@JS_CONTENT=$$(cat $(WEBLN_JS)) && \
+	printf '%s\n' \
+		'import Foundation' \
+		'' \
+		'/**' \
+		' * Embedded WebLN provider JavaScript.' \
+		' *' \
+		' * This script is auto-generated from packages/webln-provider/dist/webln-provider.min.js' \
+		' * To update, run: make copy-ios-webln-provider' \
+		' */' \
+		"internal let weblnProviderScript: String = #\"$$JS_CONTENT\"#" \
+	> $(SWIFT_WEBLN_SCRIPT)
+
+# Embed WebLN provider in Kotlin Multiplatform source
+KMP_WEBLN_SCRIPT := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/commonMain/kotlin/breez_sdk_spark/webln/WebLnProviderScript.kt
+copy-kmp-webln-provider: build-webln-provider
+	$(call embed-kotlin-webln-provider,$(KMP_WEBLN_SCRIPT),KMP,copy-kmp-webln-provider)

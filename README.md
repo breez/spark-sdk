@@ -116,12 +116,12 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Fiat on-ramp
 - [x] BTC <> USDB swaps
 - [x] Hodl invoice support
+- [x] WebLN
 - [ ] Seedless restore 
 - [ ] Stable balance
 - [ ] USDT support
 - [ ] USDC support 
 - [ ] NWC
-- [ ] WebLN
 - [ ] Bolt12
 - [ ] Add additional fees via a dedicated portal
 

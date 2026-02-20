@@ -87,6 +87,15 @@ jobs:
           name: bindings-kotlin
           path: crates/breez-sdk/bindings/langs/android/lib/src/main/kotlin
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build and copy WebLN provider
+        working-directory: crates/breez-sdk/bindings
+        run: make copy-android-webln-provider
+
       - name: Build Android project
         working-directory: crates/breez-sdk/bindings/langs/android
         env:

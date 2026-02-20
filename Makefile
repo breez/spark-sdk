@@ -69,3 +69,12 @@ claude-check:
 
 open-core-rustdocs:
 	cd crates/breez-sdk/core && cargo doc --no-deps --open
+
+# WebLN targets
+webln-build:
+	$(MAKE) -C packages/webln-provider build
+
+webln-test:
+	$(MAKE) -C packages/webln-provider test
+
+webln-check: webln-test

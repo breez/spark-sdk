@@ -110,6 +110,15 @@ jobs:
           name: bindings-dynamic-darwin-universal
           path: darwin-universal
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build and copy WebLN provider
+        working-directory: build/crates/breez-sdk/bindings
+        run: make copy-ios-webln-provider
+
       - name: Copy swift bindings
         run: |
           mkdir -p build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark

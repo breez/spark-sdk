@@ -344,3 +344,73 @@ jobs:
       - name: Run Check doc snippets
         run: |
           cargo xtask check-doc-snippets -p csharp
+
+  webln-build:
+    name: WebLN (Build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run WebLN tests
+        run: make webln-test
+
+      - name: Update Flutter and React Native bindings
+        working-directory: packages/webln-provider
+        run: make update-package-bindings
+
+      - name: Copy to Android
+        working-directory: crates/breez-sdk/bindings
+        run: make copy-android-webln-provider
+
+      - name: Copy to iOS
+        working-directory: crates/breez-sdk/bindings
+        run: make copy-ios-webln-provider
+
+      - name: Copy to KMP
+        working-directory: crates/breez-sdk/bindings
+        run: make copy-kmp-webln-provider
+
+      - name: Check git status
+        uses: ./.github/actions/check-git-status
+
+  webln-flutter:
+    name: WebLN (Flutter)
+    needs: webln-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.38.9
+
+      - name: Run WebLN type tests
+        working-directory: packages/flutter
+        run: flutter test test/webln_types_test.dart
+
+  webln-react-native:
+    name: WebLN (React Native)
+    needs: webln-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: packages/react-native
+        run: yarn --mode=skip-build
+
+      - name: Run WebLN type tests
+        working-directory: packages/react-native
+        run: yarn test --testPathPattern="webln"

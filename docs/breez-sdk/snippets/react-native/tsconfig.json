@@ -15,13 +15,15 @@
     "strict": true,
     "target": "ES2021",
     "lib": ["ES2021"],
+    "jsx": "react-jsx",
     "paths": {},
-    "types": ["@types/node"],
+    "types": ["node", "react", "react-native"],
     "noEmit": true,
     "allowJs": true
   },
   "include": [
     "**/*.ts",
-    ".eslintrc.js",
+    "**/*.tsx",
+    ".eslintrc.js"
   ]
 }
