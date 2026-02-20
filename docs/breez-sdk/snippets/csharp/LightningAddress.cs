@@ -61,11 +61,11 @@ namespace BreezSdkSnippets
             // ANCHOR_END: get-lightning-address
         }
 
-        async Task DeleteLightningAddress(BreezSdk sdk)
+        async Task UnregisterLightningAddress(BreezSdk sdk)
         {
-            // ANCHOR: delete-lightning-address
-            await sdk.DeleteLightningAddress();
-            // ANCHOR_END: delete-lightning-address
+            // ANCHOR: unregister-lightning-address
+            await sdk.UnregisterLightningAddress();
+            // ANCHOR_END: unregister-lightning-address
         }
 
         async Task AccessSenderComment(BreezSdk sdk)

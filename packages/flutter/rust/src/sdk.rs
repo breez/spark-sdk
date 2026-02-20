@@ -173,8 +173,14 @@ impl BreezSdk {
         self.inner.register_lightning_address(request).await
     }
 
+    pub async fn unregister_lightning_address(&self) -> Result<(), SdkError> {
+        self.inner.unregister_lightning_address().await
+    }
+
+    #[deprecated(since = "0.1.0", note = "Use unregister_lightning_address instead")]
+    #[allow(deprecated)]
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
-        self.inner.delete_lightning_address().await
+        self.unregister_lightning_address().await
     }
 
     pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {

@@ -278,6 +278,8 @@ pub enum Command {
         /// Description in the lnurl response and the invoice.
         description: Option<String>,
     },
+    UnregisterLightningAddress,
+    #[command(hide = true)]
     DeleteLightningAddress,
     /// List fiat currencies
     ListFiatCurrencies,
@@ -809,7 +811,12 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
+        Command::UnregisterLightningAddress => {
+            sdk.unregister_lightning_address().await?;
+            Ok(true)
+        }
         Command::DeleteLightningAddress => {
+            #[allow(deprecated)]
             sdk.delete_lightning_address().await?;
             Ok(true)
         }

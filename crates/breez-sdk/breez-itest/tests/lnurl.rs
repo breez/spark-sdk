@@ -206,11 +206,13 @@ async fn test_03_get_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -
     Ok(())
 }
 
-/// Test deleting a Lightning address
+/// Test unregistering a Lightning address
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_04_delete_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -> Result<()> {
-    info!("=== Starting test_04_delete_lightning_address ===");
+async fn test_04_unregister_lightning_address(
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_04_unregister_lightning_address ===");
 
     let bob = bob_sdk.await?;
     let username = "bobdeletetest";
@@ -220,7 +222,7 @@ async fn test_04_delete_lightning_address(#[future] bob_sdk: Result<SdkInstance>
         .sdk
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
-            description: Some("Address to be deleted".to_string()),
+            description: Some("Address to be unregistered".to_string()),
         })
         .await?;
 
@@ -239,21 +241,21 @@ async fn test_04_delete_lightning_address(#[future] bob_sdk: Result<SdkInstance>
         register_response.lightning_address
     );
 
-    // Delete the address
-    bob.sdk.delete_lightning_address().await?;
+    // Unregister the address
+    bob.sdk.unregister_lightning_address().await?;
 
-    info!("Deleted Lightning address");
+    info!("Unregistered Lightning address");
 
     // Verify it's gone - should return None when trying to get it
     let get_result = bob.sdk.get_lightning_address().await?;
 
     assert!(
         get_result.is_none(),
-        "Expected None when getting deleted address"
+        "Expected None when getting unregistered address"
     );
-    info!("Confirmed Lightning address was deleted");
+    info!("Confirmed Lightning address was unregistered");
 
-    info!("=== Test test_04_delete_lightning_address PASSED ===");
+    info!("=== Test test_04_unregister_lightning_address PASSED ===");
     Ok(())
 }
 

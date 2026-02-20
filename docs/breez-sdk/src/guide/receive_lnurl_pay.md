@@ -77,13 +77,13 @@ You can retrieve information about the currently registered Lightning address.
 
 {{#tabs lightning_address:get-lightning-address}}
 
-<h3 id="deleting-address">
-    <a class="header" href="#deleting-address">Deleting a Lightning address</a>
+<h3 id="unregistering-address">
+    <a class="header" href="#unregistering-address">Unregistering a Lightning address</a>
 </h3>
 
-When a user no longer wants to use the Lightning address, you can delete it.
+When a user no longer wants to use the Lightning address, you can unregister it.
 
-{{#tabs lightning_address:delete-lightning-address}}
+{{#tabs lightning_address:unregister-lightning-address}}
 
 <h2 id="lnurl-metadata">
     <a class="header" href="#lnurl-metadata">Accessing LNURL payment metadata</a>

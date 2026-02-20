@@ -57,10 +57,10 @@ async def get_lightning_address(sdk: BreezSdk):
     # ANCHOR_END: get-lightning-address
 
 
-async def delete_lightning_address(sdk: BreezSdk):
-    # ANCHOR: delete-lightning-address
-    await sdk.delete_lightning_address()
-    # ANCHOR_END: delete-lightning-address
+async def unregister_lightning_address(sdk: BreezSdk):
+    # ANCHOR: unregister-lightning-address
+    await sdk.unregister_lightning_address()
+    # ANCHOR_END: unregister-lightning-address
 
 
 async def access_sender_comment(sdk: BreezSdk):

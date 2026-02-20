@@ -60,10 +60,10 @@ Future<(String, String, String, String, String)> getLightningAddress(
   return (lightningAddress, username, description, lnurlUrl, lnurlBech32);
 }
 
-Future<void> deleteLightningAddress(BreezSdk sdk) async {
-  // ANCHOR: delete-lightning-address
-  await sdk.deleteLightningAddress();
-  // ANCHOR_END: delete-lightning-address
+Future<void> unregisterLightningAddress(BreezSdk sdk) async {
+  // ANCHOR: unregister-lightning-address
+  await sdk.unregisterLightningAddress();
+  // ANCHOR_END: unregister-lightning-address
 }
 
 Future<void> accessSenderComment(BreezSdk sdk) async {

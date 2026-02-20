@@ -40,7 +40,7 @@ impl BreezSdk {
         self.register_lightning_address_internal(request).await
     }
 
-    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+    pub async fn unregister_lightning_address(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(address_info) = cache.fetch_lightning_address().await? else {
             return Ok(());
@@ -59,6 +59,11 @@ impl BreezSdk {
         client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
         Ok(())
+    }
+
+    /// Deprecated: Use [`unregister_lightning_address`](Self::unregister_lightning_address) instead.
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        self.unregister_lightning_address().await
     }
 }
 

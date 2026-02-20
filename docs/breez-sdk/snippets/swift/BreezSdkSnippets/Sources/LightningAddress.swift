@@ -51,10 +51,10 @@ func getLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: get-lightning-address
 }
 
-func deleteLightningAddress(sdk: BreezSdk) async throws {
-    // ANCHOR: delete-lightning-address
-    try await sdk.deleteLightningAddress()
-    // ANCHOR_END: delete-lightning-address
+func unregisterLightningAddress(sdk: BreezSdk) async throws {
+    // ANCHOR: unregister-lightning-address
+    try await sdk.unregisterLightningAddress()
+    // ANCHOR_END: unregister-lightning-address
 }
 
 func accessSenderComment(sdk: BreezSdk) async throws {

@@ -55,10 +55,10 @@ class LightningAddress {
         // ANCHOR_END: get-lightning-address
     }
 
-    suspend fun deleteLightningAddress(sdk: BreezSdk) {
-        // ANCHOR: delete-lightning-address
-        sdk.deleteLightningAddress()
-        // ANCHOR_END: delete-lightning-address
+    suspend fun unregisterLightningAddress(sdk: BreezSdk) {
+        // ANCHOR: unregister-lightning-address
+        sdk.unregisterLightningAddress()
+        // ANCHOR_END: unregister-lightning-address
     }
 
     suspend fun accessSenderComment(sdk: BreezSdk) {

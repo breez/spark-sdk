@@ -91,9 +91,9 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
-func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
-	// ANCHOR: delete-lightning-address
-	err := sdk.DeleteLightningAddress()
+func UnregisterLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: unregister-lightning-address
+	err := sdk.UnregisterLightningAddress()
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -102,7 +102,7 @@ func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 		}
 		return err
 	}
-	// ANCHOR_END: delete-lightning-address
+	// ANCHOR_END: unregister-lightning-address
 
 	return nil
 }

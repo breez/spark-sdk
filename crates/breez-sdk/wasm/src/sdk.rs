@@ -253,9 +253,16 @@ impl BreezSdk {
             .into())
     }
 
+    #[wasm_bindgen(js_name = "unregisterLightningAddress")]
+    pub async fn unregister_lightning_address(&self) -> WasmResult<()> {
+        Ok(self.sdk.unregister_lightning_address().await?)
+    }
+
+    #[deprecated(since = "0.1.0", note = "Use unregister_lightning_address instead")]
+    #[allow(deprecated)]
     #[wasm_bindgen(js_name = "deleteLightningAddress")]
     pub async fn delete_lightning_address(&self) -> WasmResult<()> {
-        Ok(self.sdk.delete_lightning_address().await?)
+        self.unregister_lightning_address().await
     }
 
     #[wasm_bindgen(js_name = "listFiatCurrencies")]

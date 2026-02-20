@@ -52,10 +52,10 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: get-lightning-address
 }
 
-const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {
-  // ANCHOR: delete-lightning-address
-  await sdk.deleteLightningAddress()
-  // ANCHOR_END: delete-lightning-address
+const exampleUnregisterLightningAddress = async (sdk: BreezSdk) => {
+  // ANCHOR: unregister-lightning-address
+  await sdk.unregisterLightningAddress()
+  // ANCHOR_END: unregister-lightning-address
 }
 
 const exampleAccessSenderComment = async (sdk: BreezSdk) => {

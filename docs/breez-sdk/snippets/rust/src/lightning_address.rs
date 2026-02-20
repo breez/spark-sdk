@@ -43,10 +43,10 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 
-pub async fn delete_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
-    // ANCHOR: delete-lightning-address
-    sdk.delete_lightning_address().await?;
-    // ANCHOR_END: delete-lightning-address
+pub async fn unregister_lightning_address(sdk: &BreezSdk) -> anyhow::Result<()> {
+    // ANCHOR: unregister-lightning-address
+    sdk.unregister_lightning_address().await?;
+    // ANCHOR_END: unregister-lightning-address
     Ok(())
 }
 
