@@ -301,14 +301,11 @@ async fn test_02_htlc_refund(
         && details.status == SparkHtlcStatus::Returned
     ));
 
-    // Verify Alice's balance went back to the initial balance
-    let alice_balance_after_refund = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
+    // Verify Alice's balance went back to the initial balance.
+    // The HTLC refund leaf transfer may not have fully settled yet,
+    // so poll until the balance is restored.
+    let alice_balance_after_refund =
+        wait_for_balance(&alice.sdk, Some(alice_balance), None, 30).await?;
     assert_eq!(alice_balance_after_refund, alice_balance);
 
     info!("=== Test test_02_htlc_refund PASSED ===");
