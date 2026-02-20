@@ -78,27 +78,44 @@ impl SyncRequest {
 /// signals the service independently of the global shutdown.
 pub(crate) struct ServiceShutdown {
     sender: watch::Sender<()>,
+    forwarder_handle: tokio::task::JoinHandle<()>,
 }
 
 impl ServiceShutdown {
     /// Creates a new shutdown linked to the global shutdown.
     /// Returns `(self, receiver)` — pass the receiver to the service being started.
-    pub(crate) fn new(global_shutdown: &watch::Sender<()>) -> (Self, watch::Receiver<()>) {
+    pub(crate) fn new(shutdown_tx: &watch::Sender<()>) -> (Self, watch::Receiver<()>) {
         let (tx, rx) = watch::channel(());
-        let mut global_rx = global_shutdown.subscribe();
+        let mut shutdown_rx = shutdown_tx.subscribe();
         let tx_clone = tx.clone();
-        tokio::spawn(async move {
-            let _ = global_rx.changed().await;
+        let forwarder_handle = tokio::spawn(async move {
+            let _ = shutdown_rx.changed().await;
             let _ = tx_clone.send(());
         });
-        (Self { sender: tx }, rx)
+        (
+            Self {
+                sender: tx,
+                forwarder_handle,
+            },
+            rx,
+        )
     }
 
     /// Signal this service to shut down and wait for it to observe the signal.
     pub(crate) async fn send(self) {
+        self.forwarder_handle.abort();
         let _ = self.sender.send(());
         self.sender.closed().await;
     }
+}
+
+/// Immutable configuration values that never change after initialization.
+/// Prevents accidental reads of mutable values that should go through `ConfigService`.
+#[derive(Clone, Debug)]
+pub(crate) struct StaticConfig {
+    pub network: Network,
+    pub lnurl_domain: Option<String>,
+    pub private_enabled_default: bool,
 }
 
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
@@ -106,7 +123,8 @@ impl ServiceShutdown {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
-    pub(crate) config: Config,
+    /// Immutable config values set at initialization.
+    pub(crate) static_config: StaticConfig,
     /// Runtime-mutable configuration. Use getters for current values.
     pub(crate) config_service: Arc<ConfigService>,
     pub(crate) spark_wallet: Arc<SparkWallet>,

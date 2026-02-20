@@ -1,6 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::{str::FromStr, sync::Arc};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
@@ -73,6 +73,7 @@ impl BreezSdk {
     /// Only fields set are applied. For service-backed fields like `stable_balance_config`,
     /// the old service is stopped and a new one is started with the updated configuration.
     pub async fn update_config(&self, request: crate::UpdateConfigRequest) -> Result<(), SdkError> {
+        debug!("Updating SDK configuration: {:?}", request);
         let changes = self.config_service.update(&request).await;
 
         // Handle stable balance service lifecycle if its config changed
@@ -339,13 +340,16 @@ impl BreezSdk {
         &self,
         config: Option<StableBalanceConfig>,
     ) -> Result<(), SdkError> {
+        // Acquire both locks up front to avoid a window where stable_balance is None
+        // while we're reconfiguring.
+        let mut shutdown_guard = self.stable_balance_shutdown.lock().await;
+        let mut stable_balance_guard = self.stable_balance.lock().await;
+
         // Stop the existing service if running
-        let maybe_shutdown = self.stable_balance_shutdown.lock().await.take();
-        if let Some(shutdown) = maybe_shutdown {
+        if let Some(shutdown) = shutdown_guard.take() {
             shutdown.send().await;
         }
-        // Clear the old service reference
-        *self.stable_balance.lock().await = None;
+        *stable_balance_guard = None;
 
         // Start a new service if config is provided
         if let Some(config) = config {
@@ -357,8 +361,8 @@ impl BreezSdk {
                 shutdown_rx,
                 self.sync_signing_client.clone(),
             ));
-            *self.stable_balance.lock().await = Some(stable_balance);
-            *self.stable_balance_shutdown.lock().await = Some(shutdown);
+            *stable_balance_guard = Some(stable_balance);
+            *shutdown_guard = Some(shutdown);
         }
 
         Ok(())

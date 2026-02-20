@@ -8,7 +8,7 @@ The SDK supports various configuration options to customize its behavior. During
 - [Connection configuration](#initial-configuration) — options set before connecting to the SDK
 - [Updating the configuration](#updating-the-configuration) — changing options after the SDK is connected
 
-## Connection configuration
+## Initial configuration
 
 These options are set when creating the configuration object before connecting to the SDK.
 

@@ -18,8 +18,8 @@ use crate::{
 };
 
 use super::{
-    BreezSdk, BreezSdkParams, ServiceShutdown, SyncCoordinator, config_service::ConfigService,
-    helpers::validate_breez_api_key,
+    BreezSdk, BreezSdkParams, ServiceShutdown, StaticConfig, SyncCoordinator,
+    config_service::ConfigService, helpers::validate_breez_api_key,
 };
 
 impl BreezSdk {
@@ -76,7 +76,11 @@ impl BreezSdk {
         let config_service = Arc::new(ConfigService::new(&params.config));
 
         let sdk = Self {
-            config: params.config,
+            static_config: StaticConfig {
+                network: params.config.network,
+                lnurl_domain: params.config.lnurl_domain.clone(),
+                private_enabled_default: params.config.private_enabled_default,
+            },
             config_service,
             spark_wallet: params.spark_wallet,
             storage: params.storage,
@@ -131,7 +135,7 @@ impl BreezSdk {
     fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
         tokio::spawn(async move {
-            if sdk.config.lnurl_domain.is_none() {
+            if sdk.static_config.lnurl_domain.is_none() {
                 return;
             }
 
@@ -301,7 +305,7 @@ impl BreezSdk {
     }
 
     async fn initialize_spark_private_mode(&self) -> Result<(), SdkError> {
-        if !self.config.private_enabled_default {
+        if !self.static_config.private_enabled_default {
             ObjectCacheRepository::new(self.storage.clone())
                 .save_spark_private_mode_initialized()
                 .await?;
