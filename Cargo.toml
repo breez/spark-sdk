@@ -99,8 +99,8 @@ reqwest = { version = "0.12.23", default-features = false, features = ["json", "
 rstest = "0.26.1"
 rstest_reuse = "0.7.0"
 # We want to match the rusqlite version used by ldk-node and the rest of the ecosystem
-rusqlite = { version = "0.31.0", features = ["backup", "bundled"] }
-rusqlite_migration = { version = "1.2.0" }
+rusqlite = { version = "0.32.1", features = ["backup", "bundled"] }
+rusqlite_migration = { version = "1.3.1" }
 rustls = { version = "0.23.28", default-features = false, features = ["ring"] }
 rustyline = "16.0.0"
 serde = "1.0.219"
