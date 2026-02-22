@@ -63,14 +63,6 @@ impl TaggedHasher {
         self
     }
 
-    /// Adds a u32 value to the hash computation.
-    ///
-    /// The value is converted to u64 and serialized as `[8-byte BE length (always 8)][8-byte BE value]`.
-    #[must_use]
-    pub fn add_u32(self, value: u32) -> Self {
-        self.add_u64(u64::from(value))
-    }
-
     /// Adds a map of string keys to byte values to the hash computation.
     ///
     /// The map is hashed in a deterministic order: first the count of entries,

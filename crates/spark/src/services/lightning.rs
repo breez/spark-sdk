@@ -10,7 +10,6 @@ use crate::ssp::{
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
-use crate::utils::tagged_hasher::TaggedHasher;
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
@@ -395,21 +394,6 @@ impl LightningService {
                 encrypted_shares.insert(operator_identifier, encrypted);
             }
 
-            // Create signing payload using TaggedHasher
-            let signable_message =
-                TaggedHasher::new(&["spark", "store_preimage_share", "signing payload"])
-                    .add_bytes(&payment_hash.to_byte_array())
-                    .add_map_string_to_bytes(&encrypted_shares)
-                    .add_u32(threshold)
-                    .add_string(&invoice_string)
-                    .signable_message();
-
-            // Sign the payload
-            let signature = self
-                .signer
-                .sign_message_ecdsa_with_identity_key(&signable_message)
-                .await?;
-
             // Send V2 request to coordinator
             let coordinator = self.operator_pool.get_coordinator();
 
@@ -421,7 +405,6 @@ impl LightningService {
                     threshold,
                     invoice_string,
                     user_identity_public_key: identity_pubkey.serialize().to_vec(),
-                    user_signature: signature.serialize_der().to_vec(),
                 })
                 .await
                 .map_err(|e: crate::operator::rpc::OperatorRpcError| {
