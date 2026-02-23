@@ -37,8 +37,8 @@ that categorises the result:
 
 ## Static parsing (no SDK instance)
 
-You can also parse inputs without an SDK connection using the static
-{{#name parse_action}} method on the {{#name Breez}} namespace:
+You can also parse inputs without an SDK connection using the
+{{#name parse_action}} free function:
 
 <custom-tabs category="lang">
 <div slot="title">Rust</div>

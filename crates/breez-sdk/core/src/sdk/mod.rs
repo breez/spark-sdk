@@ -124,6 +124,18 @@ pub async fn parse_input(
     .into())
 }
 
+/// Parses a payment input string and returns a structured [`ParsedAction`](crate::ParsedAction).
+///
+/// This is a higher-level alternative to [`parse_input`] that categorizes the
+/// result into Send, Receive, Authenticate, Multi, or Unsupported actions.
+pub async fn parse_action(
+    input: &str,
+    external_input_parsers: Option<Vec<ExternalInputParser>>,
+) -> Result<crate::ParsedAction, SdkError> {
+    let input_type = parse_input(input, external_input_parsers).await?;
+    Ok(crate::ParsedAction::from(input_type))
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(
     log_dir: Option<String>,

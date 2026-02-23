@@ -85,6 +85,15 @@ pub fn default_external_signer(
     Ok(crate::signer::DefaultSigner::new(signer))
 }
 
+/// Parses a payment input string and returns a structured [`ParsedAction`].
+///
+/// This is a higher-level alternative to [`parse`] that categorizes the
+/// result into Send, Receive, Authenticate, Multi, or Unsupported actions.
+#[wasm_bindgen(js_name = "parseAction")]
+pub async fn parse_action(input: &str) -> WasmResult<ParsedAction> {
+    Ok(breez_sdk_spark::parse_action(input, None).await?.into())
+}
+
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]

@@ -84,8 +84,8 @@ async fn parse_action_example(sdk: &BreezSdk) -> Result<()> {
 async fn parse_action_static_example() -> Result<()> {
     let input = "lnbc100n1...";
 
-    // Use Breez::parse_action() without an SDK instance
-    let action = Breez::parse_action(input, None).await?;
+    // Use parse_action() without an SDK instance
+    let action = parse_action(input, None).await?;
     match action {
         ParsedAction::Send(send) => {
             println!("Can send to: {}", send.payment_request());

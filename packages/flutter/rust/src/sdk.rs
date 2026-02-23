@@ -33,6 +33,13 @@ pub fn init_logging(
     breez_sdk_spark::init_logging(log_dir, Some(app_logger), log_filter)
 }
 
+pub async fn parse_action(
+    input: String,
+    external_input_parsers: Option<Vec<ExternalInputParser>>,
+) -> Result<ParsedAction, SdkError> {
+    breez_sdk_spark::parse_action(&input, external_input_parsers).await
+}
+
 pub struct BreezSdk {
     pub(crate) inner: Arc<breez_sdk_spark::BreezSdk>,
 }

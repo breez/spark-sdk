@@ -1,5 +1,4 @@
-import type { BreezSdk, ParsedAction, SendAction } from '@breeztech/breez-sdk-spark'
-import { Breez } from '@breeztech/breez-sdk-spark'
+import { type BreezSdk, type ParsedAction, type SendAction, parseAction } from '@breeztech/breez-sdk-spark'
 
 // ANCHOR: parse-action
 const parseActionExample = async (sdk: BreezSdk): Promise<void> => {
@@ -34,8 +33,8 @@ const parseActionExample = async (sdk: BreezSdk): Promise<void> => {
 const parseActionStaticExample = async (): Promise<void> => {
   const input = 'lnbc100n1...'
 
-  // Use Breez.parseAction() without an SDK instance
-  const action = await Breez.parseAction(input)
+  // Use parseAction() without an SDK instance
+  const action = await parseAction(input)
 
   if (action.type === 'send') {
     console.log('Can send payment')
