@@ -8,7 +8,7 @@ use tracing::{error, info};
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository},
-    utils::token::token_transaction_to_payments,
+    utils::{payments::get_payment_and_emit_event, token::token_transaction_to_payments},
 };
 
 const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
@@ -115,8 +115,7 @@ impl SparkSyncService {
 
                 if should_emit {
                     // Fetch the payment to include already stored metadata
-                    self.event_emitter
-                        .get_and_emit_payment(payment.clone())
+                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
                         .await;
                 }
             }
@@ -350,8 +349,7 @@ impl SparkSyncService {
 
             if should_emit {
                 // Fetch the payment to include already stored metadata
-                self.event_emitter
-                    .get_and_emit_payment(payment.clone())
+                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
                     .await;
             }
         }

@@ -1,18 +1,14 @@
 use core::fmt;
 use std::{
     collections::BTreeMap,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{DepositInfo, Payment, Storage, utils::payments::get_payment_with_conversion_details};
+use crate::{DepositInfo, Payment};
 
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
@@ -156,7 +152,6 @@ pub trait EventListener: Send + Sync {
 pub struct EventEmitter {
     has_real_time_sync: bool,
     rtsync_failed: AtomicBool,
-    storage: OnceLock<Arc<dyn Storage>>,
     listener_index: AtomicU64,
     listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
@@ -168,17 +163,10 @@ impl EventEmitter {
         Self {
             has_real_time_sync,
             rtsync_failed: AtomicBool::new(false),
-            storage: OnceLock::new(),
             listener_index: AtomicU64::new(0),
             listeners: RwLock::new(BTreeMap::new()),
             synced_event_buffer: Mutex::new(Some(InternalSyncedEvent::default())),
         }
-    }
-
-    /// Set the storage backend for payment event emission.
-    /// Must be called once after storage is fully initialized.
-    pub fn set_storage(&self, storage: Arc<dyn Storage>) {
-        let _ = self.storage.set(storage);
     }
 
     /// Add a listener to receive events
@@ -221,27 +209,6 @@ impl EventEmitter {
         for listener in listeners.values() {
             listener.on_event(event.clone()).await;
         }
-    }
-
-    /// Gets the payment from storage to include already stored metadata and conversion details.
-    /// Emit the appropriate event based on its status. Falls back to the provided
-    /// payment if the storage lookup fails.
-    pub(crate) async fn get_and_emit_payment(&self, payment: Payment) {
-        let payment = if let Some(storage) = self.storage.get() {
-            match get_payment_with_conversion_details(payment.id.clone(), Arc::clone(storage)).await
-            {
-                Ok(payment) => payment,
-                Err(e) => {
-                    warn!("Failed to fetch payment from storage: {e:?}");
-                    payment
-                }
-            }
-        } else {
-            warn!("Storage not set on EventEmitter, emitting payment as-is");
-            payment
-        };
-        info!("Emitting payment event: {payment:?}");
-        self.emit(&SdkEvent::from_payment(payment)).await;
     }
 
     pub async fn emit_synced(&self, synced: &InternalSyncedEvent) {

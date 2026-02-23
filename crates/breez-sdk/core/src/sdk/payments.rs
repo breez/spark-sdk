@@ -25,8 +25,8 @@ use crate::{
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
-    utils::payments::get_payment_with_conversion_details,
     utils::{
+        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
         send_payment_validation::validate_prepare_send_payment_request,
         token::map_and_persist_token_transaction,
     },
@@ -1226,7 +1226,7 @@ impl BreezSdk {
                                     error!("Failed to update payment in storage: {e:?}");
                                 }
                                 // Fetch the payment to include already stored metadata
-                                event_emitter.get_and_emit_payment(payment.clone()).await;
+                                get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
                                 sync_coordinator
                                     .trigger_sync_no_wait(SyncType::WalletState, true)
                                     .await;

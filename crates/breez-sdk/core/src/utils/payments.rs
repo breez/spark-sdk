@@ -1,8 +1,28 @@
 use std::sync::Arc;
 
-use tracing::warn;
+use tracing::{info, warn};
 
-use crate::{Payment, Storage, error::SdkError};
+use crate::{EventEmitter, Payment, Storage, error::SdkError, events::SdkEvent};
+
+/// Gets the payment from storage to include already stored metadata and conversion details.
+/// Emits the appropriate event based on its status. Falls back to the provided
+/// payment if the storage lookup fails.
+pub(crate) async fn get_payment_and_emit_event(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment: Payment,
+) {
+    let payment =
+        match get_payment_with_conversion_details(payment.id.clone(), Arc::clone(storage)).await {
+            Ok(payment) => payment,
+            Err(e) => {
+                warn!("Failed to fetch payment from storage: {e:?}");
+                payment
+            }
+        };
+    info!("Emitting payment event: {payment:?}");
+    event_emitter.emit(&SdkEvent::from_payment(payment)).await;
+}
 
 /// Gets a payment from storage by ID to include already stored payment metadata
 /// and then enriches it with conversion details by looking up related payments.
