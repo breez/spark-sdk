@@ -619,7 +619,7 @@ pub struct OptimizationConfig {
 /// The SDK automatically detects when there's not enough Bitcoin balance to cover a
 /// payment and auto-populates the token-to-Bitcoin conversion options to facilitate
 /// the payment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct StableBalanceConfig {
     /// The token identifier to convert Bitcoin to (required).

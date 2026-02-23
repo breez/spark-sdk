@@ -54,16 +54,16 @@ const exampleConfigureStableBalance = async () => {
   console.log('Config:', config)
 }
 
-const exampleUpdateConfig = async (sdk: BreezSdk) => {
+const exampleUpdateConfig = (sdk: BreezSdk) => {
   // ANCHOR: update-config
   // Update the sync interval and prefer Spark over Lightning
-  await sdk.updateConfig({
+  sdk.updateConfig({
     syncIntervalSecs: 30,
     preferSparkOverLightning: true
   })
 
   // Enable stable balance with auto-conversion
-  await sdk.updateConfig({
+  sdk.updateConfig({
     stableBalanceConfig: {
       type: 'set',
       config: {
@@ -76,7 +76,7 @@ const exampleUpdateConfig = async (sdk: BreezSdk) => {
   })
 
   // Disable stable balance and update max deposit claim fee
-  await sdk.updateConfig({
+  sdk.updateConfig({
     maxDepositClaimFee: {
       type: 'set',
       fee: { type: 'rate', satPerVbyte: 5 }

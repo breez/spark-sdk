@@ -16,6 +16,10 @@ impl<T> ExpiringCell<T> {
             inner: RwLock::new(None),
         }
     }
+
+    pub async fn clear(&self) {
+        *self.inner.write().await = None;
+    }
 }
 
 impl<T: Clone> ExpiringCell<T> {
@@ -85,6 +89,17 @@ mod tests {
 
         let cached_value = cell.get().await;
         assert_eq!(cached_value, None);
+    }
+
+    #[macros::async_test_all]
+    async fn test_expiring_cell_clear() {
+        let cell: ExpiringCell<String> = ExpiringCell::new();
+
+        cell.set("test_value".to_string(), 1000).await;
+        assert_eq!(cell.get().await, Some("test_value".to_string()));
+
+        cell.clear().await;
+        assert_eq!(cell.get().await, None);
     }
 
     #[macros::async_test_all]

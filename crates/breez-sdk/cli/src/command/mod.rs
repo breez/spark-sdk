@@ -1006,7 +1006,7 @@ pub(crate) async fn execute_command(
                     sync_interval_secs: Some(secs),
                 },
             };
-            sdk.update_config(request).await?;
+            sdk.update_config(request)?;
             Ok(true)
         }
         Command::Issuer(issuer_command) => {

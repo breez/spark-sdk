@@ -221,11 +221,9 @@ impl BreezSdk {
         self.inner.update_user_settings(request).await
     }
 
-    pub async fn update_config(
-        &self,
-        request: UpdateConfigRequest,
-    ) -> Result<(), SdkError> {
-        self.inner.update_config(request).await
+    #[frb(sync)]
+    pub fn update_config(&self, request: UpdateConfigRequest) -> Result<(), SdkError> {
+        self.inner.update_config(request)
     }
 
     #[frb(sync)]

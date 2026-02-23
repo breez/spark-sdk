@@ -1,11 +1,12 @@
 use flashnet::{FlashnetConfig, IntegratorConfig};
 use std::sync::Arc;
-use tokio::sync::{Mutex, OnceCell, broadcast, watch};
+use tokio::sync::{OnceCell, broadcast, watch};
 use tokio_with_wasm::alias as tokio;
 use tracing::{error, info};
 
 use crate::{
     AssetFilter, Network, PaymentDetails, PaymentStatus, PaymentType, SetLnurlMetadataItem,
+    config_service::ConfigService,
     error::SdkError,
     lnurl::PublishZapReceiptRequest,
     models::ListPaymentsRequest,
@@ -17,10 +18,7 @@ use crate::{
     },
 };
 
-use super::{
-    BreezSdk, BreezSdkParams, ServiceShutdown, StaticConfig, SyncCoordinator,
-    config_service::ConfigService, helpers::validate_breez_api_key,
-};
+use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -55,32 +53,19 @@ impl BreezSdk {
             params.shutdown_sender.subscribe(),
         ));
 
-        // Create StableBalance if configured (spawns its own auto-convert background task)
-        let (stable_balance, stable_balance_shutdown) =
-            match params.config.stable_balance_config.as_ref() {
-                Some(config) => {
-                    let (shutdown, shutdown_rx) = ServiceShutdown::new(&params.shutdown_sender);
-                    let stable_balance = Arc::new(StableBalance::new(
-                        config.clone(),
-                        Arc::clone(&token_converter),
-                        Arc::clone(&params.spark_wallet),
-                        shutdown_rx,
-                        params.sync_signing_client.clone(),
-                    ));
-                    (Some(stable_balance), Some(shutdown))
-                }
-                None => (None, None),
-            };
         let sync_coordinator = SyncCoordinator::new();
 
         let config_service = Arc::new(ConfigService::new(&params.config));
 
+        let stable_balance = StableBalance::new(
+            Arc::clone(&token_converter),
+            Arc::clone(&params.spark_wallet),
+            params.sync_signing_client.clone(),
+            config_service.subscribe(),
+            params.shutdown_sender.subscribe(),
+        );
+
         let sdk = Self {
-            static_config: StaticConfig {
-                network: params.config.network,
-                lnurl_domain: params.config.lnurl_domain.clone(),
-                private_enabled_default: params.config.private_enabled_default,
-            },
             config_service,
             spark_wallet: params.spark_wallet,
             storage: params.storage,
@@ -98,10 +83,8 @@ impl BreezSdk {
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
             nostr_client: params.nostr_client,
             token_converter,
-            sync_signing_client: params.sync_signing_client,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
-            stable_balance: Arc::new(Mutex::new(stable_balance)),
-            stable_balance_shutdown: Arc::new(Mutex::new(stable_balance_shutdown)),
+            stable_balance,
         };
 
         sdk.start(initial_synced_sender);
@@ -135,7 +118,7 @@ impl BreezSdk {
     fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
         tokio::spawn(async move {
-            if sdk.static_config.lnurl_domain.is_none() {
+            if sdk.config_service.lnurl_domain().is_none() {
                 return;
             }
 
@@ -305,7 +288,7 @@ impl BreezSdk {
     }
 
     async fn initialize_spark_private_mode(&self) -> Result<(), SdkError> {
-        if !self.static_config.private_enabled_default {
+        if !self.config_service.private_enabled_default() {
             ObjectCacheRepository::new(self.storage.clone())
                 .save_spark_private_mode_initialized()
                 .await?;

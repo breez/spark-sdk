@@ -477,7 +477,7 @@ impl BreezSdk {
                     Some(InvoiceDescription::Memo(description.clone())),
                     None,
                     expiry_secs,
-                    self.config_service.prefer_spark_over_lightning().await,
+                    self.config_service.prefer_spark_over_lightning(),
                 )
                 .await?
                 .invoice
@@ -556,13 +556,10 @@ impl BreezSdk {
         }
 
         // Prevent auto-convert from running while this payment is in progress.
-        let maybe_stable_balance = self.stable_balance.lock().await.clone();
-        let _lock_guard = match (
-            &request.prepare_response.token_identifier,
-            &maybe_stable_balance,
-        ) {
-            (None, Some(sb)) => Some(sb.create_payment_lock_guard()),
-            _ => None,
+        let _lock_guard = if request.prepare_response.token_identifier.is_none() {
+            self.stable_balance.create_payment_lock_guard()
+        } else {
+            None
         };
 
         let amount = request.prepare_response.amount;
@@ -1015,10 +1012,7 @@ impl BreezSdk {
                 prefer_spark,
                 completion_timeout_secs,
             }) => (prefer_spark, completion_timeout_secs),
-            _ => (
-                self.config_service.prefer_spark_over_lightning().await,
-                None,
-            ),
+            _ => (self.config_service.prefer_spark_over_lightning(), None),
         };
         let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
             (true, Some(fee), _) => fee,
@@ -1309,15 +1303,10 @@ impl BreezSdk {
         token_identifier: Option<&String>,
         payment_amount: u128,
     ) -> Result<Option<ConversionOptions>, SdkError> {
-        let maybe_stable_balance = self.stable_balance.lock().await.clone();
-        if let Some(stable_balance) = &maybe_stable_balance {
-            stable_balance
-                .get_conversion_options(options, token_identifier, payment_amount)
-                .await
-                .map_err(Into::into)
-        } else {
-            Ok(options.cloned())
-        }
+        self.stable_balance
+            .get_conversion_options(options, token_identifier, payment_amount)
+            .await
+            .map_err(Into::into)
     }
 
     async fn convert_token_for_bitcoin_address(

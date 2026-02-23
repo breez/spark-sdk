@@ -57,7 +57,7 @@ class Config {
         println("Config: $config")
     }
 
-    suspend fun updateConfig(sdk: BreezSdk) {
+    fun updateConfig(sdk: BreezSdk) {
         // ANCHOR: update-config
         // Update the sync interval and prefer Spark over Lightning
         sdk.updateConfig(UpdateConfigRequest(

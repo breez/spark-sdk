@@ -1,20 +1,18 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 use tracing::{debug, error, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
     ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
-    StableBalanceConfig, UpdateUserSettingsRequest, UserSettings,
+    UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
     models::{GetInfoRequest, GetInfoResponse},
     persist::ObjectCacheRepository,
-    sdk::ServiceShutdown,
-    stable_balance::StableBalance,
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
@@ -70,18 +68,11 @@ impl BreezSdk {
 
     /// Updates SDK configuration at runtime.
     ///
-    /// Only fields set are applied. For service-backed fields like `stable_balance_config`,
-    /// the old service is stopped and a new one is started with the updated configuration.
-    pub async fn update_config(&self, request: crate::UpdateConfigRequest) -> Result<(), SdkError> {
+    /// Only fields set are applied. Services that subscribe to config changes
+    /// are notified automatically.
+    pub fn update_config(&self, request: crate::UpdateConfigRequest) -> Result<(), SdkError> {
         debug!("Updating SDK configuration: {:?}", request);
-        let changes = self.config_service.update(&request).await;
-
-        // Handle stable balance service lifecycle if its config changed
-        if changes.stable_balance_config {
-            let config = self.config_service.stable_balance_config().await;
-            self.apply_stable_balance_config(config).await?;
-        }
-
+        self.config_service.update(&request);
         info!("SDK configuration updated");
         Ok(())
     }
@@ -328,43 +319,5 @@ impl BreezSdk {
             .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
 
         Ok(BuyBitcoinResponse { url })
-    }
-}
-
-impl BreezSdk {
-    /// Applies a stable balance configuration change.
-    ///
-    /// `Some(config)` → stop old service (if any), start new one.
-    /// `None` → stop old service (if any), leave disabled.
-    pub(super) async fn apply_stable_balance_config(
-        &self,
-        config: Option<StableBalanceConfig>,
-    ) -> Result<(), SdkError> {
-        // Acquire both locks up front to avoid a window where stable_balance is None
-        // while we're reconfiguring.
-        let mut shutdown_guard = self.stable_balance_shutdown.lock().await;
-        let mut stable_balance_guard = self.stable_balance.lock().await;
-
-        // Stop the existing service if running
-        if let Some(shutdown) = shutdown_guard.take() {
-            shutdown.send().await;
-        }
-        *stable_balance_guard = None;
-
-        // Start a new service if config is provided
-        if let Some(config) = config {
-            let (shutdown, shutdown_rx) = ServiceShutdown::new(&self.shutdown_sender);
-            let stable_balance = Arc::new(StableBalance::new(
-                config,
-                Arc::clone(&self.token_converter),
-                Arc::clone(&self.spark_wallet),
-                shutdown_rx,
-                self.sync_signing_client.clone(),
-            ));
-            *stable_balance_guard = Some(stable_balance);
-            *shutdown_guard = Some(shutdown);
-        }
-
-        Ok(())
     }
 }

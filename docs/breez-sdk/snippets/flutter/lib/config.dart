@@ -60,16 +60,16 @@ Future<void> configureStableBalance() async {
   print(config);
 }
 
-Future<void> updateConfig(BreezSdk sdk) async {
+void updateConfig(BreezSdk sdk) {
   // ANCHOR: update-config
   // Update the sync interval and prefer Spark over Lightning
-  await sdk.updateConfig(
+  sdk.updateConfig(
       request: UpdateConfigRequest(
           syncIntervalSecs: 30,
           preferSparkOverLightning: true));
 
   // Enable stable balance with auto-conversion
-  await sdk.updateConfig(
+  sdk.updateConfig(
       request: UpdateConfigRequest(
           stableBalanceConfig: StableBalanceConfigUpdate_Set(
               config: StableBalanceConfig(
@@ -79,7 +79,7 @@ Future<void> updateConfig(BreezSdk sdk) async {
                   reservedSats: BigInt.from(1000)))));
 
   // Disable stable balance and update max deposit claim fee
-  await sdk.updateConfig(
+  sdk.updateConfig(
       request: UpdateConfigRequest(
           maxDepositClaimFee: MaxDepositClaimFeeUpdate_Set(
               fee: MaxFee.rate(satPerVbyte: BigInt.from(5))),

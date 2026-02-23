@@ -89,7 +89,7 @@ impl BreezSdk {
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();
-                        let sync_interval = u64::from(sdk.config_service.sync_interval_secs().await);
+                        let sync_interval = u64::from(sdk.config_service.sync_interval_secs());
                         if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
                             sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
                         }
@@ -248,7 +248,7 @@ impl BreezSdk {
     #[allow(clippy::too_many_lines)]
     pub(super) async fn sync_wallet_internal(&self, request: &SyncRequest) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let sync_interval_secs = u64::from(self.config_service.sync_interval_secs().await);
+        let sync_interval_secs = u64::from(self.config_service.sync_interval_secs());
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -381,8 +381,8 @@ impl BreezSdk {
             tokio::join!(sync_wallet, sync_lnurl, sync_deposits);
 
         // Trigger auto-conversion after sync
-        if wallet_state && let Some(stable_balance) = self.stable_balance.lock().await.clone() {
-            stable_balance.trigger_auto_convert();
+        if wallet_state {
+            self.stable_balance.trigger_auto_convert();
         }
 
         let elapsed = start_time.elapsed();
@@ -425,7 +425,7 @@ impl BreezSdk {
 
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
-        let max_deposit_claim_fee = self.config_service.max_deposit_claim_fee().await;
+        let max_deposit_claim_fee = self.config_service.max_deposit_claim_fee();
         for detailed_utxo in to_claim {
             match self
                 .claim_utxo(&detailed_utxo, max_deposit_claim_fee.clone())

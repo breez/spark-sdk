@@ -1,5 +1,4 @@
 mod api;
-mod config_service;
 mod deposits;
 mod helpers;
 mod init;
@@ -21,8 +20,8 @@ use tokio_with_wasm::alias as tokio;
 
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
-    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    nostr::NostrClient, persist::Storage, sdk::config_service::ConfigService,
+    config_service::ConfigService, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
+    logger, models::Config, nostr::NostrClient, persist::Storage,
     signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
     token_conversion::TokenConverter,
 };
@@ -71,61 +70,11 @@ impl SyncRequest {
     }
 }
 
-/// Manages a service-scoped shutdown channel linked to the global SDK shutdown.
-///
-/// When the global shutdown fires, the forwarder task propagates it to this
-/// service's dedicated channel. Calling [`shutdown`](ServiceShutdown::shutdown)
-/// signals the service independently of the global shutdown.
-pub(crate) struct ServiceShutdown {
-    sender: watch::Sender<()>,
-    forwarder_handle: tokio::task::JoinHandle<()>,
-}
-
-impl ServiceShutdown {
-    /// Creates a new shutdown linked to the global shutdown.
-    /// Returns `(self, receiver)` — pass the receiver to the service being started.
-    pub(crate) fn new(shutdown_tx: &watch::Sender<()>) -> (Self, watch::Receiver<()>) {
-        let (tx, rx) = watch::channel(());
-        let mut shutdown_rx = shutdown_tx.subscribe();
-        let tx_clone = tx.clone();
-        let forwarder_handle = tokio::spawn(async move {
-            let _ = shutdown_rx.changed().await;
-            let _ = tx_clone.send(());
-        });
-        (
-            Self {
-                sender: tx,
-                forwarder_handle,
-            },
-            rx,
-        )
-    }
-
-    /// Signal this service to shut down and wait for it to observe the signal.
-    pub(crate) async fn send(self) {
-        self.forwarder_handle.abort();
-        let _ = self.sender.send(());
-        self.sender.closed().await;
-    }
-}
-
-/// Immutable configuration values that never change after initialization.
-/// Prevents accidental reads of mutable values that should go through `ConfigService`.
-#[derive(Clone, Debug)]
-pub(crate) struct StaticConfig {
-    pub network: Network,
-    pub lnurl_domain: Option<String>,
-    pub private_enabled_default: bool,
-}
-
 /// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
 /// with request/response objects and comprehensive error handling.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct BreezSdk {
-    /// Immutable config values set at initialization.
-    pub(crate) static_config: StaticConfig,
-    /// Runtime-mutable configuration. Use getters for current values.
     pub(crate) config_service: Arc<ConfigService>,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) storage: Arc<dyn Storage>,
@@ -144,14 +93,8 @@ pub struct BreezSdk {
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) nostr_client: Arc<NostrClient>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
-    pub(crate) sync_signing_client: Option<SigningClient>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
-    /// Running stable balance service instance, if enabled. Can be replaced
-    /// or disabled at runtime when its mutable config is updated.
-    pub(crate) stable_balance: Arc<Mutex<Option<Arc<StableBalance>>>>,
-    /// Shutdown handle for the current stable balance service. Used to stop
-    /// the service before it is replaced, disabled, or the SDK shuts down.
-    pub(crate) stable_balance_shutdown: Arc<Mutex<Option<ServiceShutdown>>>,
+    pub(crate) stable_balance: Arc<StableBalance>,
 }
 
 pub(crate) struct BreezSdkParams {

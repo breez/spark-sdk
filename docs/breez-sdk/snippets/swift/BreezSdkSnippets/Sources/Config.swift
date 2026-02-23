@@ -54,16 +54,16 @@ func configureStableBalance() async throws {
     print("Config: \(config)")
 }
 
-func updateConfig(sdk: BreezSdk) async throws {
+func updateConfig(sdk: BreezSdk) throws {
     // ANCHOR: update-config
     // Update the sync interval and prefer Spark over Lightning
-    try await sdk.updateConfig(request: UpdateConfigRequest(
+    try sdk.updateConfig(request: UpdateConfigRequest(
         syncIntervalSecs: 30,
         preferSparkOverLightning: true
     ))
 
     // Enable stable balance with auto-conversion
-    try await sdk.updateConfig(request: UpdateConfigRequest(
+    try sdk.updateConfig(request: UpdateConfigRequest(
         stableBalanceConfig: .set(config: StableBalanceConfig(
             tokenIdentifier: "<token_identifier>",
             thresholdSats: 10_000,
@@ -73,7 +73,7 @@ func updateConfig(sdk: BreezSdk) async throws {
     ))
 
     // Disable stable balance and update max deposit claim fee
-    try await sdk.updateConfig(request: UpdateConfigRequest(
+    try sdk.updateConfig(request: UpdateConfigRequest(
         maxDepositClaimFee: .set(fee: .rate(satPerVbyte: 5)),
         stableBalanceConfig: .unset
     ))

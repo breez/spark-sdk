@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 
 use breez_sdk_common::sync::SigningClient;
 
+use crate::config_service::RuntimeConfig;
 use crate::realtime_sync::sync_lock::{LockCounter, SyncLockGuard};
 
 use crate::{
@@ -34,13 +35,12 @@ struct EffectiveValues {
 
 /// Manages stable balance auto-conversion behavior.
 ///
-/// This struct handles the business logic of when and how much to convert,
-/// while delegating the actual conversion mechanics to a `TokenConverter`.
-/// It coordinates with payment conversion flows to prevent race conditions.
-#[derive(Clone)]
+/// Handles the business logic of when and how much to convert, while
+/// delegating the actual conversion mechanics to a `TokenConverter`.
+/// Coordinates with payment conversion flows to prevent race conditions.
 pub(crate) struct StableBalance {
-    /// Configuration for stable balance behavior
-    config: StableBalanceConfig,
+    /// Watch receiver for reading current config on demand.
+    config_rx: watch::Receiver<RuntimeConfig>,
 
     /// Reference to the token converter for executing conversions
     token_converter: Arc<dyn TokenConverter>,
@@ -48,15 +48,15 @@ pub(crate) struct StableBalance {
     /// Reference to the spark wallet for balance queries
     spark_wallet: Arc<SparkWallet>,
 
-    /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
-    effective_values: Arc<ExpiringCell<EffectiveValues>>,
+    /// Cached effective values for auto-conversion (expires after TTL)
+    effective_values: ExpiringCell<EffectiveValues>,
 
     /// Tracks the number of in-flight payment conversions.
     /// Auto-convert is skipped while any payments are ongoing.
     ongoing_payments: Arc<LockCounter>,
 
     /// Notify to trigger auto-conversion
-    auto_convert_trigger: Arc<Notify>,
+    auto_convert_trigger: Notify,
 
     /// Optional signing client for coordinating across SDK instances.
     /// `None` when real-time sync is not configured.
@@ -64,61 +64,85 @@ pub(crate) struct StableBalance {
 }
 
 impl StableBalance {
-    /// Creates a new `StableBalance` instance and spawns the auto-convert background task.
+    /// Creates a new `StableBalance` and spawns a background task that monitors
+    /// config changes, auto-convert triggers, and shutdown signals.
     pub fn new(
-        config: StableBalanceConfig,
         token_converter: Arc<dyn TokenConverter>,
         spark_wallet: Arc<SparkWallet>,
-        shutdown_receiver: watch::Receiver<()>,
         signing_client: Option<SigningClient>,
-    ) -> Self {
-        let auto_convert_trigger = Arc::new(Notify::new());
+        config_rx: watch::Receiver<RuntimeConfig>,
+        shutdown_rx: watch::Receiver<()>,
+    ) -> Arc<Self> {
+        let task_config_rx = config_rx.clone();
+        let task_shutdown_rx = shutdown_rx;
 
-        let stable_balance = Self {
-            config,
+        let stable_balance = Arc::new(Self {
+            config_rx,
             token_converter,
             spark_wallet,
-            effective_values: Arc::new(ExpiringCell::new()),
+            effective_values: ExpiringCell::new(),
             ongoing_payments: Arc::new(LockCounter::new()),
-            auto_convert_trigger,
+            auto_convert_trigger: Notify::new(),
             signing_client,
-        };
+        });
 
-        // Spawn the background auto-convert task
-        stable_balance.spawn_auto_convert_task(shutdown_receiver);
-
+        stable_balance.spawn_background_task(task_config_rx, task_shutdown_rx);
         stable_balance
     }
 
-    /// Spawns the background task that handles auto-conversion triggers.
-    ///
-    /// The task:
-    /// 1. Waits for a trigger signal
-    /// 2. Executes auto-conversion if conditions are met
-    fn spawn_auto_convert_task(&self, mut shutdown_receiver: watch::Receiver<()>) {
-        info!("Auto-conversion task started");
-        let stable_balance = self.clone();
+    /// Spawns the background task that handles config changes, auto-conversion
+    /// triggers, and shutdown.
+    fn spawn_background_task(
+        self: &Arc<Self>,
+        mut config_rx: watch::Receiver<RuntimeConfig>,
+        mut shutdown_rx: watch::Receiver<()>,
+    ) {
+        info!("Stable balance background task started");
+        let stable_balance = Arc::clone(self);
 
         tokio::spawn(async move {
-            loop {
-                // Wait for a trigger or shutdown
-                tokio::select! {
-                    _ = shutdown_receiver.changed() => {
-                        info!("Auto-conversion task shutdown signal received");
-                        return;
-                    }
-                    () = stable_balance.auto_convert_trigger.notified() => {}
-                }
+            let mut last_config = config_rx.borrow().stable_balance_config.clone();
 
-                if let Err(e) = stable_balance.auto_convert().await {
-                    warn!("Auto-conversion failed: {e:?}");
+            loop {
+                tokio::select! {
+                    changed = config_rx.changed() => {
+                        if changed.is_err() {
+                            info!("Stable balance config channel closed, shutting down");
+                            break;
+                        }
+
+                        let new_config = config_rx.borrow_and_update().stable_balance_config.clone();
+                        if new_config != last_config {
+                            info!("StableBalance: config changed");
+                            stable_balance.effective_values.clear().await;
+                            last_config = new_config;
+                        }
+                    }
+                    () = stable_balance.auto_convert_trigger.notified() => {
+                        if let Err(e) = stable_balance.auto_convert().await {
+                            warn!("Auto-conversion failed: {e:?}");
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        info!("Stable balance shutdown signal received");
+                        break;
+                    }
                 }
             }
         });
     }
 
+    /// Returns the current stable balance config, if set.
+    fn config(&self) -> Option<StableBalanceConfig> {
+        self.config_rx.borrow().stable_balance_config.clone()
+    }
+
     /// Executes auto-conversion if the balance exceeds the threshold.
     async fn auto_convert(&self) -> Result<bool, ConversionError> {
+        let Some(config) = self.config() else {
+            return Ok(false);
+        };
+
         // 1. Check no payments are ongoing
         let ongoing = self.ongoing_payments.get();
         if ongoing > 0 {
@@ -127,7 +151,7 @@ impl StableBalance {
         }
 
         // 2. Check if balance exceeds the trigger amount
-        let (threshold, reserved) = self.get_or_init_effective_values().await?;
+        let (threshold, reserved) = self.get_or_init_effective_values(&config).await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
         let trigger_amount = reserved.saturating_add(threshold);
         if balance_sats < trigger_amount {
@@ -171,12 +195,12 @@ impl StableBalance {
 
         info!(
             "Auto-conversion triggered: converting {amount_to_convert} sats to {} (keeping {reserved} sats reserved)",
-            self.config.token_identifier,
+            config.token_identifier,
         );
 
         let options = ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
-            max_slippage_bps: self.config.max_slippage_bps,
+            max_slippage_bps: config.max_slippage_bps,
             completion_timeout_secs: None,
         };
 
@@ -185,7 +209,7 @@ impl StableBalance {
             .convert(
                 &options,
                 &ConversionPurpose::AutoConversion,
-                Some(&self.config.token_identifier),
+                Some(&config.token_identifier),
                 ConversionAmount::AmountIn(u128::from(amount_to_convert)),
             )
             .await?;
@@ -207,7 +231,10 @@ impl StableBalance {
     /// - Effective reserved: user value if set, otherwise `min_from_amount`
     ///
     /// Values are cached with a TTL and will be refreshed after expiration.
-    async fn get_or_init_effective_values(&self) -> Result<(u64, u64), ConversionError> {
+    async fn get_or_init_effective_values(
+        &self,
+        config: &StableBalanceConfig,
+    ) -> Result<(u64, u64), ConversionError> {
         // Return cached values if not expired
         if let Some(values) = self.effective_values.get().await {
             return Ok((values.threshold, values.reserved));
@@ -218,7 +245,7 @@ impl StableBalance {
             .token_converter
             .fetch_limits(&FetchConversionLimitsRequest {
                 conversion_type: ConversionType::FromBitcoin,
-                token_identifier: Some(self.config.token_identifier.clone()),
+                token_identifier: Some(config.token_identifier.clone()),
             })
             .await?;
 
@@ -226,13 +253,13 @@ impl StableBalance {
             u64::try_from(limits.min_from_amount.unwrap_or(0)).unwrap_or(u64::MAX);
 
         // Compute effective threshold: max(user_threshold, min_from_amount)
-        let threshold = match self.config.threshold_sats {
+        let threshold = match config.threshold_sats {
             Some(t) if t >= min_from_amount => t,
             Some(_) | None => min_from_amount,
         };
 
         // Compute effective reserved: user value if set, otherwise min_from_amount
-        let reserved = self.config.reserved_sats.unwrap_or(min_from_amount);
+        let reserved = config.reserved_sats.unwrap_or(min_from_amount);
 
         // Cache with TTL
         self.effective_values
@@ -261,14 +288,19 @@ impl StableBalance {
 
     /// Creates a lock guard that prevents auto-conversion while held.
     ///
+    /// Returns `None` if stable balance is inactive (no guard needed since
+    /// auto-conversion won't run). Returns `Some(guard)` if active.
+    ///
     /// Auto-convert is skipped while any guard is active. When the
     /// last guard is dropped, the distributed lock is released (if configured).
-    pub fn create_payment_lock_guard(&self) -> SyncLockGuard {
-        SyncLockGuard::new(
+    pub fn create_payment_lock_guard(&self) -> Option<SyncLockGuard> {
+        self.config()?;
+
+        Some(SyncLockGuard::new(
             PAYMENT_LOCK_NAME.to_string(),
             Arc::clone(&self.ongoing_payments),
             self.signing_client.clone(),
-        )
+        ))
     }
 
     /// Gets conversion options for a payment if auto-population is needed.
@@ -276,6 +308,7 @@ impl StableBalance {
     /// Returns `Some(ConversionOptions)` if:
     /// - No explicit options were provided
     /// - The payment is not a token payment (`token_identifier` is None)
+    /// - Stable balance is active
     /// - The current sats balance is insufficient for the payment amount
     ///
     /// In this case, returns options to convert from the configured stable token to Bitcoin.
@@ -295,7 +328,11 @@ impl StableBalance {
             return Ok(None);
         }
 
-        let (_, reserved) = self.get_or_init_effective_values().await?;
+        let Some(config) = self.config() else {
+            return Ok(None);
+        };
+
+        let (_, reserved) = self.get_or_init_effective_values(&config).await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
         let effective_balance = balance_sats.min(reserved);
 
@@ -313,9 +350,9 @@ impl StableBalance {
         );
         Ok(Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
-                from_token_identifier: self.config.token_identifier.clone(),
+                from_token_identifier: config.token_identifier.clone(),
             },
-            max_slippage_bps: self.config.max_slippage_bps,
+            max_slippage_bps: config.max_slippage_bps,
             completion_timeout_secs: None,
         }))
     }

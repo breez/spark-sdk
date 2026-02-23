@@ -65,17 +65,17 @@ namespace BreezSdkSnippets
             // ANCHOR_END: stable-balance-config
         }
 
-        async Task UpdateConfig(BreezSdk sdk)
+        void UpdateConfig(BreezSdk sdk)
         {
             // ANCHOR: update-config
             // Update the sync interval and prefer Spark over Lightning
-            await sdk.UpdateConfig(new UpdateConfigRequest(
+            sdk.UpdateConfig(new UpdateConfigRequest(
                 syncIntervalSecs: 30,
                 preferSparkOverLightning: true
             ));
 
             // Enable stable balance with auto-conversion
-            await sdk.UpdateConfig(new UpdateConfigRequest(
+            sdk.UpdateConfig(new UpdateConfigRequest(
                 stableBalanceConfig: new StableBalanceConfigUpdate.Set(
                     config: new StableBalanceConfig(
                         tokenIdentifier: "<token_identifier>",
@@ -87,7 +87,7 @@ namespace BreezSdkSnippets
             ));
 
             // Disable stable balance and update max deposit claim fee
-            await sdk.UpdateConfig(new UpdateConfigRequest(
+            sdk.UpdateConfig(new UpdateConfigRequest(
                 maxDepositClaimFee: new MaxDepositClaimFeeUpdate.Set(
                     fee: new MaxFee.Rate(satPerVbyte: 5)
                 ),

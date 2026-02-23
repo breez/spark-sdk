@@ -2,6 +2,7 @@
 pub mod bindings;
 mod chain;
 mod common;
+mod config_service;
 mod error;
 mod events;
 mod issuer;

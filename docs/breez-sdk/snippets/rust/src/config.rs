@@ -65,15 +65,14 @@ pub(crate) fn configure_stable_balance() -> Result<()> {
     Ok(())
 }
 
-async fn update_config_example(sdk: &BreezSdk) -> Result<()> {
+fn update_config_example(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: update-config
     // Update the sync interval and prefer Spark over Lightning
     sdk.update_config(UpdateConfigRequest {
         sync_interval_secs: Some(30),
         prefer_spark_over_lightning: Some(true),
         ..Default::default()
-    })
-    .await?;
+    })?;
 
     // Enable stable balance with auto-conversion
     sdk.update_config(UpdateConfigRequest {
@@ -86,8 +85,7 @@ async fn update_config_example(sdk: &BreezSdk) -> Result<()> {
             },
         }),
         ..Default::default()
-    })
-    .await?;
+    })?;
 
     // Disable stable balance and update max deposit claim fee
     sdk.update_config(UpdateConfigRequest {
@@ -96,8 +94,7 @@ async fn update_config_example(sdk: &BreezSdk) -> Result<()> {
         }),
         stable_balance_config: Some(StableBalanceConfigUpdate::Unset),
         ..Default::default()
-    })
-    .await?;
+    })?;
     // ANCHOR_END: update-config
     Ok(())
 }

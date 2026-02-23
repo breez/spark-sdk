@@ -45,7 +45,7 @@ impl BreezSdk {
             amount_sats.saturating_mul(1_000),
             &request.comment,
             &request.pay_request.clone().into(),
-            self.static_config.network.into(),
+            self.config_service.network().into(),
             request.validate_success_action_url,
         )
         .await?
@@ -404,7 +404,7 @@ impl BreezSdk {
             amount_sats.saturating_mul(1_000), // convert to msats
             &request.comment,
             &request.pay_request.clone().into(),
-            self.static_config.network.into(),
+            self.config_service.network().into(),
             request.validate_success_action_url,
         )
         .await?;
@@ -438,7 +438,7 @@ impl BreezSdk {
             actual_amount.saturating_mul(1_000),
             &request.comment,
             &request.pay_request.clone().into(),
-            self.static_config.network.into(),
+            self.config_service.network().into(),
             request.validate_success_action_url,
         )
         .await?
