@@ -34,6 +34,10 @@ impl BreezSdk {
         Ok(cached.flatten())
     }
 
+    pub async fn sync_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        self.recover_lightning_address().await
+    }
+
     pub async fn register_lightning_address(
         &self,
         request: RegisterLightningAddressRequest,
