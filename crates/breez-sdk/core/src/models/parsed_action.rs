@@ -1,7 +1,9 @@
 use crate::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt12InvoiceDetails,
-    Bolt12OfferDetails, InputType, LightningAddressDetails, LnurlAuthRequestDetails,
-    LnurlPayRequestDetails, LnurlWithdrawRequestDetails, SparkAddressDetails, SparkInvoiceDetails,
+    Bolt12OfferDetails, ConversionOptions, FeePolicy, InputType, LightningAddressDetails,
+    LnurlAuthRequestDetails, LnurlPayRequestDetails, LnurlPayResponse, LnurlWithdrawRequestDetails,
+    PrepareLnurlPayResponse, PrepareSendPaymentResponse, SendPaymentResponse, SparkAddressDetails,
+    SparkInvoiceDetails,
 };
 
 /// A high-level action derived from parsing user input.
@@ -91,6 +93,52 @@ pub struct AuthAction {
     pub action: Option<String>,
     /// The underlying LNURL-auth request details needed to complete authentication.
     pub request_data: LnurlAuthRequestDetails,
+}
+
+/// Options for [`BreezSdk::prepare_send`](crate::BreezSdk::prepare_send) that apply to
+/// specific payment types.
+///
+/// All fields are optional and ignored when not applicable to the payment type.
+#[derive(Clone, Debug, Default)]
+pub struct SendOptions {
+    /// Comment to include with LNURL-pay payments.
+    ///
+    /// Only applicable for [`SendAction::LnurlPay`] and [`SendAction::LightningAddress`].
+    /// The maximum comment length is specified in the LNURL-pay endpoint's
+    /// [`LnurlPayRequestDetails::comment_allowed`] field.
+    pub comment: Option<String>,
+    /// Whether to validate the success action URL returned by the LNURL-pay endpoint.
+    ///
+    /// When `true` (default), the SDK validates that the success action URL matches
+    /// the LNURL callback domain. Set to `false` to disable this validation.
+    /// Only applicable for [`SendAction::LnurlPay`] and [`SendAction::LightningAddress`].
+    pub validate_success_action_url: Option<bool>,
+    /// Conversion options for token-to-Bitcoin payments.
+    pub conversion_options: Option<ConversionOptions>,
+    /// How fees should be handled. Defaults to [`FeePolicy::FeesExcluded`] (fees added on top).
+    pub fee_policy: Option<FeePolicy>,
+}
+
+/// The result of [`BreezSdk::prepare_send`](crate::BreezSdk::prepare_send).
+///
+/// This unified response wraps the different preparation results depending on the
+/// payment type. Pass this to [`BreezSdk::send`](crate::BreezSdk::send) to execute
+/// the payment.
+#[derive(Clone, Debug)]
+pub enum PrepareSendActionResponse {
+    /// Standard payment preparation (Bolt11, Bolt12, Spark, Bitcoin).
+    Payment(Box<PrepareSendPaymentResponse>),
+    /// LNURL-pay payment preparation (LNURL-pay, Lightning Address).
+    LnurlPay(Box<PrepareLnurlPayResponse>),
+}
+
+/// The result of [`BreezSdk::send`](crate::BreezSdk::send).
+#[derive(Debug)]
+pub enum SendActionResponse {
+    /// Standard payment result.
+    Payment(SendPaymentResponse),
+    /// LNURL-pay payment result.
+    LnurlPay(LnurlPayResponse),
 }
 
 // --- Conversions ---

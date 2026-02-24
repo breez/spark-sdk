@@ -74,9 +74,22 @@ impl BreezSdk {
         action: SendAction,
         amount: Option<u128>,
         token_identifier: Option<String>,
-    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        options: Option<SendOptions>,
+    ) -> Result<PrepareSendActionResponse, SdkError> {
         self.inner
-            .prepare_send(&action, amount, token_identifier)
+            .prepare_send(&action, amount, token_identifier, options)
+            .await
+    }
+
+    /// Sends a payment using a prepared response from `prepare_send`.
+    pub async fn send(
+        &self,
+        prepare_response: PrepareSendActionResponse,
+        options: Option<SendPaymentOptions>,
+        idempotency_key: Option<String>,
+    ) -> Result<SendActionResponse, SdkError> {
+        self.inner
+            .send(prepare_response, options, idempotency_key)
             .await
     }
 

@@ -128,17 +128,44 @@ impl BreezSdk {
     }
 
     /// Prepares a send payment from a parsed `SendAction`.
+    ///
+    /// Routes LNURL-pay and Lightning Address actions to `prepareLnurlPay`,
+    /// and all other actions to `prepareSendPayment`.
+    /// Pass the result to `send()` to execute the payment.
     #[wasm_bindgen(js_name = "prepareSend")]
     pub async fn prepare_send(
         &self,
         action: SendAction,
         amount: Option<u64>,
         token_identifier: Option<String>,
-    ) -> WasmResult<PrepareSendPaymentResponse> {
+        options: Option<SendOptions>,
+    ) -> WasmResult<PrepareSendActionResponse> {
         let core_action: breez_sdk_spark::SendAction = action.into();
+        let core_options = options.map(Into::into);
         Ok(self
             .sdk
-            .prepare_send(&core_action, amount.map(u128::from), token_identifier)
+            .prepare_send(
+                &core_action,
+                amount.map(u128::from),
+                token_identifier,
+                core_options,
+            )
+            .await?
+            .into())
+    }
+
+    /// Sends a payment using a prepared response from `prepareSend`.
+    #[wasm_bindgen(js_name = "send")]
+    pub async fn send(
+        &self,
+        prepare_response: PrepareSendActionResponse,
+        options: Option<SendPaymentOptions>,
+        idempotency_key: Option<String>,
+    ) -> WasmResult<SendActionResponse> {
+        let core_options = options.map(Into::into);
+        Ok(self
+            .sdk
+            .send(prepare_response.into(), core_options, idempotency_key)
             .await?
             .into())
     }

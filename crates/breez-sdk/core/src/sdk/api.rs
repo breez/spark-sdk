@@ -5,9 +5,11 @@ use tracing::{error, info};
 use crate::{
     AuthAction, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, LnurlCallbackStatus, LnurlWithdrawRequest, OptimizationProgress,
-    ParsedAction, PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceiveAction, SendAction,
-    SignMessageRequest, SignMessageResponse, UpdateUserSettingsRequest, UserSettings,
+    ListFiatRatesResponse, LnurlCallbackStatus, LnurlPayRequest, LnurlWithdrawRequest,
+    OptimizationProgress, ParsedAction, PrepareLnurlPayRequest, PrepareSendActionResponse,
+    PrepareSendPaymentRequest, ReceiveAction, SendAction, SendActionResponse, SendOptions,
+    SendPaymentOptions, SendPaymentRequest, SignMessageRequest, SignMessageResponse,
+    UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -329,22 +331,123 @@ impl BreezSdk {
 
     /// Prepares a send payment from a [`SendAction`].
     ///
-    /// This is a convenience wrapper around [`prepare_send_payment()`](BreezSdk::prepare_send_payment)
-    /// that extracts the payment request string from the action.
+    /// This is a convenience wrapper that routes to the appropriate preparation method
+    /// based on the action type:
+    /// - For LNURL-pay and Lightning Address actions, routes to
+    ///   [`prepare_lnurl_pay()`](BreezSdk::prepare_lnurl_pay)
+    /// - For all other send actions, routes to
+    ///   [`prepare_send_payment()`](BreezSdk::prepare_send_payment)
+    ///
+    /// Pass the result to [`send()`](BreezSdk::send) to execute the payment.
+    ///
+    /// # Options
+    ///
+    /// Use [`SendOptions`] to customize LNURL-pay specific parameters like `comment`,
+    /// `validate_success_action_url`, `conversion_options`, and `fee_policy`.
+    /// For non-LNURL payments, only `conversion_options` and `fee_policy` are used.
     pub async fn prepare_send(
         &self,
         action: &SendAction,
         amount: Option<u128>,
         token_identifier: Option<String>,
-    ) -> Result<PrepareSendPaymentResponse, SdkError> {
-        self.prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: action.payment_request(),
-            amount,
-            token_identifier,
-            conversion_options: None,
-            fee_policy: None,
-        })
-        .await
+        options: Option<SendOptions>,
+    ) -> Result<PrepareSendActionResponse, SdkError> {
+        let options = options.unwrap_or_default();
+
+        match action {
+            SendAction::LnurlPay { pay_details } => {
+                let amount_sats: u64 = amount
+                    .ok_or(SdkError::InvalidInput(
+                        "Amount is required for LNURL-pay".to_string(),
+                    ))?
+                    .try_into()
+                    .map_err(|_| SdkError::InvalidInput("Amount overflow".to_string()))?;
+
+                let response = self
+                    .prepare_lnurl_pay(PrepareLnurlPayRequest {
+                        amount_sats,
+                        pay_request: pay_details.clone(),
+                        comment: options.comment,
+                        validate_success_action_url: options.validate_success_action_url,
+                        conversion_options: options.conversion_options,
+                        fee_policy: options.fee_policy,
+                    })
+                    .await?;
+
+                Ok(PrepareSendActionResponse::LnurlPay(Box::new(response)))
+            }
+            SendAction::LightningAddress { address_details } => {
+                let amount_sats: u64 = amount
+                    .ok_or(SdkError::InvalidInput(
+                        "Amount is required for Lightning Address".to_string(),
+                    ))?
+                    .try_into()
+                    .map_err(|_| SdkError::InvalidInput("Amount overflow".to_string()))?;
+
+                let response = self
+                    .prepare_lnurl_pay(PrepareLnurlPayRequest {
+                        amount_sats,
+                        pay_request: address_details.pay_request.clone(),
+                        comment: options.comment,
+                        validate_success_action_url: options.validate_success_action_url,
+                        conversion_options: options.conversion_options,
+                        fee_policy: options.fee_policy,
+                    })
+                    .await?;
+
+                Ok(PrepareSendActionResponse::LnurlPay(Box::new(response)))
+            }
+            _ => {
+                let response = self
+                    .prepare_send_payment(PrepareSendPaymentRequest {
+                        payment_request: action.payment_request(),
+                        amount,
+                        token_identifier,
+                        conversion_options: options.conversion_options,
+                        fee_policy: options.fee_policy,
+                    })
+                    .await?;
+
+                Ok(PrepareSendActionResponse::Payment(Box::new(response)))
+            }
+        }
+    }
+
+    /// Sends a payment using a prepared response from [`prepare_send()`](BreezSdk::prepare_send).
+    ///
+    /// This is a convenience wrapper that routes to the appropriate send method based
+    /// on the preparation result:
+    /// - [`PrepareSendActionResponse::Payment`] routes to
+    ///   [`send_payment()`](BreezSdk::send_payment)
+    /// - [`PrepareSendActionResponse::LnurlPay`] routes to
+    ///   [`lnurl_pay()`](BreezSdk::lnurl_pay)
+    pub async fn send(
+        &self,
+        prepare_response: PrepareSendActionResponse,
+        options: Option<SendPaymentOptions>,
+        idempotency_key: Option<String>,
+    ) -> Result<SendActionResponse, SdkError> {
+        match prepare_response {
+            PrepareSendActionResponse::Payment(prepare) => {
+                let response = self
+                    .send_payment(SendPaymentRequest {
+                        prepare_response: *prepare,
+                        options,
+                        idempotency_key,
+                    })
+                    .await?;
+                Ok(SendActionResponse::Payment(response))
+            }
+            PrepareSendActionResponse::LnurlPay(prepare) => {
+                let response = self
+                    .lnurl_pay(LnurlPayRequest {
+                        prepare_response: *prepare,
+                        idempotency_key,
+                    })
+                    .await?;
+                Ok(SendActionResponse::LnurlPay(response))
+            }
+        }
     }
 
     /// Executes an LNURL-withdraw from a [`ReceiveAction`].

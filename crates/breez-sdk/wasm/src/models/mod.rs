@@ -1478,3 +1478,88 @@ impl From<ReceiveAction> for breez_sdk_spark::ReceiveAction {
         }
     }
 }
+
+/// Options for `prepareSend` that apply to specific payment types.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct SendOptions {
+    pub comment: Option<String>,
+    #[serde(rename = "validateSuccessActionUrl")]
+    pub validate_success_action_url: Option<bool>,
+    #[serde(rename = "conversionOptions")]
+    pub conversion_options: Option<ConversionOptions>,
+    #[serde(rename = "feePolicy")]
+    pub fee_policy: Option<FeePolicy>,
+}
+
+impl From<SendOptions> for breez_sdk_spark::SendOptions {
+    fn from(opts: SendOptions) -> Self {
+        breez_sdk_spark::SendOptions {
+            comment: opts.comment,
+            validate_success_action_url: opts.validate_success_action_url,
+            conversion_options: opts.conversion_options.map(Into::into),
+            fee_policy: opts.fee_policy.map(Into::into),
+        }
+    }
+}
+
+/// The result of `prepareSend`.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum PrepareSendActionResponse {
+    Payment(PrepareSendPaymentResponse),
+    LnurlPay(PrepareLnurlPayResponse),
+}
+
+impl From<breez_sdk_spark::PrepareSendActionResponse> for PrepareSendActionResponse {
+    fn from(resp: breez_sdk_spark::PrepareSendActionResponse) -> Self {
+        match resp {
+            breez_sdk_spark::PrepareSendActionResponse::Payment(p) => {
+                PrepareSendActionResponse::Payment((*p).into())
+            }
+            breez_sdk_spark::PrepareSendActionResponse::LnurlPay(p) => {
+                PrepareSendActionResponse::LnurlPay((*p).into())
+            }
+        }
+    }
+}
+
+impl From<PrepareSendActionResponse> for breez_sdk_spark::PrepareSendActionResponse {
+    fn from(resp: PrepareSendActionResponse) -> Self {
+        match resp {
+            PrepareSendActionResponse::Payment(p) => {
+                breez_sdk_spark::PrepareSendActionResponse::Payment(Box::new(p.into()))
+            }
+            PrepareSendActionResponse::LnurlPay(p) => {
+                breez_sdk_spark::PrepareSendActionResponse::LnurlPay(Box::new(p.into()))
+            }
+        }
+    }
+}
+
+/// The result of `send`.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum SendActionResponse {
+    Payment(SendPaymentResponse),
+    LnurlPay(LnurlPayResponse),
+}
+
+impl From<breez_sdk_spark::SendActionResponse> for SendActionResponse {
+    fn from(resp: breez_sdk_spark::SendActionResponse) -> Self {
+        match resp {
+            breez_sdk_spark::SendActionResponse::Payment(p) => {
+                SendActionResponse::Payment(p.into())
+            }
+            breez_sdk_spark::SendActionResponse::LnurlPay(p) => {
+                SendActionResponse::LnurlPay(p.into())
+            }
+        }
+    }
+}

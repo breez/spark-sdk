@@ -251,6 +251,26 @@ pub struct _AuthAction {
     pub request_data: LnurlAuthRequestDetails,
 }
 
+#[frb(mirror(SendOptions))]
+pub struct _SendOptions {
+    pub comment: Option<String>,
+    pub validate_success_action_url: Option<bool>,
+    pub conversion_options: Option<ConversionOptions>,
+    pub fee_policy: Option<FeePolicy>,
+}
+
+#[frb(mirror(PrepareSendActionResponse))]
+pub enum _PrepareSendActionResponse {
+    Payment(Box<PrepareSendPaymentResponse>),
+    LnurlPay(Box<PrepareLnurlPayResponse>),
+}
+
+#[frb(mirror(SendActionResponse))]
+pub enum _SendActionResponse {
+    Payment(SendPaymentResponse),
+    LnurlPay(LnurlPayResponse),
+}
+
 #[frb(mirror(PaymentDetailsFilter))]
 pub enum _PaymentDetailsFilter {
     Spark {

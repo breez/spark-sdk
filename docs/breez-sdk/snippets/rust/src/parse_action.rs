@@ -16,27 +16,65 @@ async fn parse_action_example(sdk: &BreezSdk) -> Result<()> {
                 );
                 // Prepare and send the payment
                 let prepare_response = sdk
-                    .prepare_send(action, None, None)
+                    .prepare_send(action, None, None, None)
                     .await?;
-                let _payment = sdk
-                    .send_payment(SendPaymentRequest {
-                        prepare_response,
-                        options: None,
-                        idempotency_key: None,
-                    })
+                let _response = sdk
+                    .send(prepare_response, None, None)
                     .await?;
             }
             SendAction::SparkAddress { address_details } => {
                 println!("Spark address: {}", address_details.address);
+                // Spark addresses require an amount
+                let amount_sats = 1000;
+                let prepare_response = sdk
+                    .prepare_send(action, Some(amount_sats), None, None)
+                    .await?;
+                let _response = sdk
+                    .send(prepare_response, None, None)
+                    .await?;
             }
             SendAction::SparkInvoice { invoice_details } => {
                 println!("Spark invoice for {:?} sats", invoice_details.amount);
+                let prepare_response = sdk
+                    .prepare_send(action, None, None, None)
+                    .await?;
+                let _response = sdk
+                    .send(prepare_response, None, None)
+                    .await?;
             }
             SendAction::LnurlPay { pay_details } => {
                 println!(
                     "LNURL-Pay accepting {}-{} msats",
                     pay_details.min_sendable, pay_details.max_sendable
                 );
+                // LNURL-pay supports optional comment and other options
+                let amount_sats = 5_000;
+                let options = SendOptions {
+                    comment: Some("Great work!".to_string()),
+                    validate_success_action_url: Some(true),
+                    ..Default::default()
+                };
+                let prepare_response = sdk
+                    .prepare_send(action, Some(amount_sats), None, Some(options))
+                    .await?;
+                let _response = sdk
+                    .send(prepare_response, None, None)
+                    .await?;
+            }
+            SendAction::LightningAddress { address_details } => {
+                println!("Lightning address: {}", address_details.address);
+                // Lightning addresses also support LNURL-pay options
+                let amount_sats = 1_000;
+                let options = SendOptions {
+                    comment: Some("Thanks!".to_string()),
+                    ..Default::default()
+                };
+                let prepare_response = sdk
+                    .prepare_send(action, Some(amount_sats), None, Some(options))
+                    .await?;
+                let _response = sdk
+                    .send(prepare_response, None, None)
+                    .await?;
             }
             _ => println!("Other send destination"),
         },
