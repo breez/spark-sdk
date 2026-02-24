@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, params,
+    Connection, Row, ToSql, TransactionBehavior, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -556,7 +556,7 @@ impl Storage for SqliteStorage {
     #[allow(clippy::too_many_lines)]
     async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method) 
              VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -911,7 +911,9 @@ impl Storage for SqliteStorage {
         record: UnversionedRecordChange,
     ) -> Result<u64, StorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction().map_err(map_sqlite_error)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
 
         // This revision is a local queue id for pending rows, not a server revision.
         let local_revision: u64 = tx
@@ -952,7 +954,9 @@ impl Storage for SqliteStorage {
         local_revision: u64,
     ) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction().map_err(map_sqlite_error)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
 
         let rows_deleted = tx
             .execute(
@@ -1074,7 +1078,9 @@ impl Storage for SqliteStorage {
         }
 
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction().map_err(map_sqlite_error)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
 
         for record in records {
             tx.execute(
@@ -1233,7 +1239,9 @@ impl Storage for SqliteStorage {
 
     async fn update_record_from_incoming(&self, record: Record) -> Result<(), StorageError> {
         let mut connection = self.get_connection()?;
-        let tx = connection.transaction().map_err(map_sqlite_error)?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
 
         tx.execute(
             "INSERT OR REPLACE INTO sync_state (
