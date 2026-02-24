@@ -28,6 +28,8 @@ api_key_form_uri = "https://breez.technology/request-api-key/#contact-us-form-sd
 
 # Basic llmstxt.org format output
 [output.llms-txt]
+optional = true
 
 # Detailed llmstxt.org format output with additional information
 [output.llms-txt-full]
+optional = true
