@@ -54,6 +54,8 @@ x509-parser = { version = "0.16.0" }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }
 k256 = { workspace = true, features = ["arithmetic"] }
+breez-plugins = { git = "https://github.com/breez/sdk-plugins", branch = "main" }
+breez-nostr = { git = "https://github.com/breez/sdk-plugins", branch = "main", features = ["nip47"] }
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

@@ -15,7 +15,6 @@ members = [
   "crates/breez-sdk/lnurl-models",
   "crates/breez-sdk/breez-itest",
   "crates/breez-sdk/breez-bench",
-  "crates/breez-sdk/plugins/nwc",
   "crates/breez-sdk/wasm",
   "crates/flashnet",
   "crates/macros",

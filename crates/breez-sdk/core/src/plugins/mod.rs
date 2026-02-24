@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::sdk::SdkServices;
-
+mod nostr;
 mod storage;
 
 pub use storage::*;

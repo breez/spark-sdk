@@ -28,7 +28,11 @@ use spark_wallet::{
     ExitSpeed, InvoiceDescription, ListTokenTransactionsRequest, ListTransfersRequest, Preimage,
     SparkAddress, SparkWallet, TransferId, TransferTokenOutput, WalletEvent, WalletTransfer,
 };
-use std::{collections::{HashMap, HashSet}, str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+};
 use tracing::{debug, error, info, trace, warn};
 use web_time::{Duration, SystemTime};
 
@@ -75,7 +79,7 @@ use crate::{
         CachedAccountInfo, ObjectCacheRepository, PaymentMetadata, StaticDepositAddress, Storage,
         UpdateDepositPayload,
     },
-    plugin::{Plugin, PluginStorage},
+    plugins::{Plugin, PluginStorage},
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::DepositChainSyncer,
@@ -469,7 +473,7 @@ impl BreezSdk {
                         info!("Plugin shutdown signal received");
                         plugin.on_stop().await;
                     }
-                    _ = plugin.on_start(services, Arc::new(storage)) => {}
+                    () = plugin.on_start(services, Arc::new(storage)) => {}
                 }
             });
         }
