@@ -23,7 +23,7 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 <h2 id="with-postgres-storage">
     <a class="header" href="#with-postgres-storage">With PostgreSQL Storage</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.create_postgres_storage.html">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_storage">API docs</a>
 </h2>
 
 The SDK includes a PostgreSQL storage implementation as an alternative. This is useful for environments where file-based storage may not be suitable.

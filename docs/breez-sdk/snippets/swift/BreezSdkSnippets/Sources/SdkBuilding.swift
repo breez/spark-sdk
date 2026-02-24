@@ -92,10 +92,9 @@ func initSdkPostgres() async throws -> BreezSdk {
     postgresConfig.maxPoolSize = UInt32(8) // Max connections in pool
     postgresConfig.waitTimeoutSecs = UInt64(30) // Timeout waiting for connection
 
-    // Create the storage and build the SDK
-    let storage = try await createPostgresStorage(config: postgresConfig)
+    // Build the SDK with PostgreSQL storage
     let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withStorage(storage: storage)
+    await builder.withPostgresStorage(config: postgresConfig)
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-postgres
 

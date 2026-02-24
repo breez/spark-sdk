@@ -95,10 +95,9 @@ class SdkBuilding {
         postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
 
         try {
-            // Create the storage and build the SDK
-            val storage = createPostgresStorage(postgresConfig)
+            // Build the SDK with PostgreSQL storage
             val builder = SdkBuilder(config, seed)
-            builder.withStorage(storage)
+            builder.withPostgresStorage(postgresConfig)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

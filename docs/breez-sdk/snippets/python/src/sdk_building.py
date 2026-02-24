@@ -1,7 +1,6 @@
 import logging
 import typing
 from breez_sdk_spark import (
-    create_postgres_storage,
     default_config,
     default_postgres_storage_config,
     Network,
@@ -108,10 +107,9 @@ async def init_sdk_postgres():
     postgres_config.wait_timeout_secs = 30  # Timeout waiting for connection
 
     try:
-        # Create the storage and build the SDK
-        storage = await create_postgres_storage(config=postgres_config)
+        # Build the SDK with PostgreSQL storage
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_storage(storage=storage)
+        await builder.with_postgres_storage(config=postgres_config)
         sdk = await builder.build()
         return sdk
     except Exception as error:

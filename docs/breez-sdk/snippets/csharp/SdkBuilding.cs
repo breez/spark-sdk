@@ -107,10 +107,9 @@ namespace BreezSdkSnippets
                 waitTimeoutSecs = 30ul   // Timeout waiting for connection
             };
 
-            // Create the storage and build the SDK
-            var storage = await BreezSdkSparkMethods.CreatePostgresStorage(config: postgresConfig);
+            // Build the SDK with PostgreSQL storage
             var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithStorage(storage);
+            await builder.WithPostgresStorage(config: postgresConfig);
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }

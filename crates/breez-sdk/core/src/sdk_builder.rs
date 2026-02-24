@@ -54,6 +54,11 @@ pub struct SdkBuilder {
 
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
+    #[cfg(all(
+        feature = "postgres",
+        not(all(target_family = "wasm", target_os = "unknown"))
+    ))]
+    postgres_config: Option<crate::persist::postgres::PostgresStorageConfig>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
@@ -81,6 +86,11 @@ impl SdkBuilder {
             },
             storage_dir: None,
             storage: None,
+            #[cfg(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            ))]
+            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -101,6 +111,11 @@ impl SdkBuilder {
             signer_source: SignerSource::External(signer),
             storage_dir: None,
             storage: None,
+            #[cfg(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            ))]
+            postgres_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -149,6 +164,23 @@ impl SdkBuilder {
     /// - `storage`: The storage implementation to be used.
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Sets `PostgreSQL` storage to be used by the SDK.
+    /// The storage instance will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `PostgreSQL` storage configuration.
+    #[must_use]
+    #[cfg(all(
+        feature = "postgres",
+        not(all(target_family = "wasm", target_os = "unknown"))
+    ))]
+    pub fn with_postgres_storage(
+        mut self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Self {
+        self.postgres_config = Some(config);
         self
     }
 
@@ -293,11 +325,28 @@ impl SdkBuilder {
         };
 
         // Validate storage configuration
-        match (self.storage.is_some(), self.storage_dir.is_some()) {
-            (false, false) => {
-                return Err(SdkError::Generic("No storage configured".to_string()));
-            }
-            (true, true) => {
+        #[cfg(all(
+            feature = "postgres",
+            not(all(target_family = "wasm", target_os = "unknown"))
+        ))]
+        let has_postgres = self.postgres_config.is_some();
+        #[cfg(not(all(
+            feature = "postgres",
+            not(all(target_family = "wasm", target_os = "unknown"))
+        )))]
+        let has_postgres = false;
+
+        let storage_count = [
+            self.storage.is_some(),
+            self.storage_dir.is_some(),
+            has_postgres,
+        ]
+        .into_iter()
+        .filter(|&v| v)
+        .count();
+        match storage_count {
+            0 => return Err(SdkError::Generic("No storage configured".to_string())),
+            2.. => {
                 return Err(SdkError::Generic(
                     "Multiple storage configurations provided".to_string(),
                 ));
@@ -325,7 +374,26 @@ impl SdkBuilder {
                 ));
             }
         } else {
-            return Err(SdkError::Generic("No storage configured".to_string()));
+            #[cfg(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            ))]
+            if let Some(postgres_config) = self.postgres_config {
+                Arc::new(
+                    crate::persist::postgres::PostgresStorage::new(postgres_config)
+                        .await
+                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                )
+            } else {
+                return Err(SdkError::Generic("No storage configured".to_string()));
+            }
+            #[cfg(not(all(
+                feature = "postgres",
+                not(all(target_family = "wasm", target_os = "unknown"))
+            )))]
+            {
+                return Err(SdkError::Generic("No storage configured".to_string()));
+            }
         };
 
         let breez_server = Arc::new(

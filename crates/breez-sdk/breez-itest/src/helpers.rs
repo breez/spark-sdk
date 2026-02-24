@@ -862,13 +862,6 @@ pub async fn build_sdk_with_postgres(
     connection_string: &str,
     seed_bytes: [u8; 32],
 ) -> Result<SdkInstance> {
-    use breez_sdk_spark::{create_postgres_storage, default_postgres_storage_config};
-
-    let storage = create_postgres_storage(default_postgres_storage_config(
-        connection_string.to_string(),
-    ))
-    .await?;
-
     let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;
@@ -886,7 +879,9 @@ pub async fn build_sdk_with_postgres(
     let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_storage(storage)
+        .with_postgres_storage(breez_sdk_spark::default_postgres_storage_config(
+            connection_string.to_string(),
+        ))
         .build()
         .await?;
 

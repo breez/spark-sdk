@@ -5,8 +5,8 @@ use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig,
-    create_postgres_storage, default_config, default_postgres_storage_config,
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, default_config,
+    default_postgres_storage_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -127,9 +127,8 @@ async fn run_interactive_mode(
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
     if let Some(connection_string) = postgres_connection_string {
-        let postgres_config = default_postgres_storage_config(connection_string);
-        let storage = create_postgres_storage(postgres_config).await?;
-        sdk_builder = sdk_builder.with_storage(storage);
+        sdk_builder =
+            sdk_builder.with_postgres_storage(default_postgres_storage_config(connection_string));
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }

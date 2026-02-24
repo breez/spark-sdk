@@ -36,35 +36,6 @@ use super::{Payment, Storage, StorageError};
 /// Derived from ASCII bytes of "MIGR" (`0x4D49_4752`).
 const MIGRATION_LOCK_ID: i64 = 0x4D49_4752;
 
-/// Creates a `PostgreSQL` storage instance for use with the SDK builder.
-///
-/// Returns a `Storage` trait object backed by the `PostgreSQL` connection pool.
-///
-/// # Arguments
-///
-/// * `config` - Configuration for the `PostgreSQL` connection pool
-///
-/// # Example
-///
-/// ```ignore
-/// use breez_sdk_core::{create_postgres_storage, default_postgres_storage_config};
-///
-/// let storage = create_postgres_storage(default_postgres_storage_config(
-///     "host=localhost user=postgres dbname=spark".to_string()
-/// )).await?;
-///
-/// let sdk = SdkBuilder::new(config, seed)
-///     .with_storage(storage)
-///     .build()
-///     .await?;
-/// ```
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn create_postgres_storage(
-    config: PostgresStorageConfig,
-) -> Result<Arc<dyn Storage>, StorageError> {
-    Ok(Arc::new(PostgresStorage::new(config).await?))
-}
-
 /// Creates a `PostgresStorageConfig` with the given connection string and default pool settings.
 ///
 /// This is a convenience function for creating a config with sensible defaults from deadpool.
