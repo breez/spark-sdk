@@ -12,6 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 use macros::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::{
     AssetFilter, ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo,
@@ -438,6 +439,26 @@ impl ObjectCacheRepository {
         ObjectCacheRepository { storage }
     }
 
+    /// Parses a cached value, clearing stale entries on failure.
+    ///
+    /// All cached values have recovery paths (network re-fetch, re-sync, etc.),
+    /// so returning `None` on corrupt/outdated data is safe and preferred over erroring.
+    async fn parse_or_clear<T, E: std::fmt::Display>(
+        &self,
+        key: &str,
+        value: &str,
+        parse: impl FnOnce(&str) -> Result<T, E>,
+    ) -> Result<Option<T>, StorageError> {
+        match parse(value) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                warn!("Failed to parse cached '{key}', clearing stale entry: {e}");
+                self.storage.delete_cached_item(key.to_string()).await?;
+                Ok(None)
+            }
+        }
+    }
+
     pub(crate) async fn save_account_info(
         &self,
         value: &CachedAccountInfo,
@@ -456,7 +477,10 @@ impl ObjectCacheRepository {
             .get_cached_item(ACCOUNT_INFO_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(ACCOUNT_INFO_KEY, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -474,7 +498,10 @@ impl ObjectCacheRepository {
             .get_cached_item(SYNC_OFFSET_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(SYNC_OFFSET_KEY, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -490,12 +517,13 @@ impl ObjectCacheRepository {
     }
 
     pub(crate) async fn fetch_tx(&self, txid: &str) -> Result<Option<CachedTx>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(format!("{TX_CACHE_KEY}-{txid}"))
-            .await?;
+        let key = format!("{TX_CACHE_KEY}-{txid}");
+        let value = self.storage.get_cached_item(key.clone()).await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(&key, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -521,7 +549,12 @@ impl ObjectCacheRepository {
             .get_cached_item(STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(STATIC_DEPOSIT_ADDRESS_CACHE_KEY, &value, |v| {
+                    serde_json::from_str(v)
+                })
+                .await
+            }
             None => Ok(None),
         }
     }
@@ -562,7 +595,10 @@ impl ObjectCacheRepository {
             .get_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(LIGHTNING_ADDRESS_KEY, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -584,12 +620,13 @@ impl ObjectCacheRepository {
         &self,
         identifier: &str,
     ) -> Result<Option<TokenMetadata>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(format!("{TOKEN_METADATA_KEY_PREFIX}{identifier}"))
-            .await?;
+        let key = format!("{TOKEN_METADATA_KEY_PREFIX}{identifier}");
+        let value = self.storage.get_cached_item(key.clone()).await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(&key, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -612,12 +649,13 @@ impl ObjectCacheRepository {
         &self,
         identifier: &str,
     ) -> Result<Option<PaymentMetadata>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}",))
-            .await?;
+        let key = format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}");
+        let value = self.storage.get_cached_item(key.clone()).await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                self.parse_or_clear(&key, &value, |v| serde_json::from_str(v))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -672,9 +710,10 @@ impl ObjectCacheRepository {
             .get_cached_item(LNURL_METADATA_UPDATED_AFTER_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(value.parse().map_err(|_| {
-                StorageError::Serialization("invalid lnurl_metadata_updated_after".to_string())
-            })?),
+            Some(value) => Ok(self
+                .parse_or_clear(LNURL_METADATA_UPDATED_AFTER_KEY, &value, str::parse)
+                .await?
+                .unwrap_or(0)),
             None => Ok(0),
         }
     }
@@ -685,9 +724,10 @@ impl ObjectCacheRepository {
             .get_cached_item(LAST_SYNC_TIME_KEY.to_string())
             .await?;
         match value {
-            Some(v) => Ok(Some(v.parse().map_err(|_| {
-                StorageError::Serialization("invalid last_sync_time".to_string())
-            })?)),
+            Some(v) => {
+                self.parse_or_clear(LAST_SYNC_TIME_KEY, &v, str::parse)
+                    .await
+            }
             None => Ok(None),
         }
     }
