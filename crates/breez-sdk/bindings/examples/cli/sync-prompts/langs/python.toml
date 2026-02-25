@@ -1,0 +1,89 @@
+# Python CLI sync prompt configuration
+#
+# This file defines Python-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "Python"
+lang_id   = "python"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/python/"
+
+# Workflow-level settings
+workflow_name = "Sync Python CLI from Rust CLI"
+concurrency_group = "sync-python-cli"
+job_name = "sync-python-cli"
+step_name = "Sync Python CLI"
+
+# File layout
+serialization_file = "serialization.py"
+issuer_file = "issuer.py"
+subgroup_path_pattern = "src/breez_cli/<name>.py"
+cli_binary = "breez-cli"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'print a "not yet supported" message in the handler'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "parser builders, and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "installation steps, commands (`breez-cli` instead of `cargo run --`), and Python-specific configuration"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "venv instructions, or pip install sections — those are Python-only"
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
+Bash(gh pr create:*),Bash(gh pr list:*)"""
+
+[file_mapping]
+content = """
+| Rust source | Python target |
+|-------------|---------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/main.py` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/commands.py` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/issuer.py` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/persistence.py` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/python/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → Python kebab-case names
+- New commands need: `_build_<cmd>_parser()`, `_handle_<cmd>()`, registry entry, `COMMAND_NAMES` entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `p.add_argument("-x", "--long-name", ...)`
+- `Option<T>` → `default=None`
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `action="store_true", default=False`
+- `Vec<T>` → `nargs="*", default=None`
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `await sdk.method(request=Request(field1=val, field2=val))`
+
+**Enums:**
+- `EnumType::Variant { field }` → `EnumType.VARIANT(field=field)`
+- `EnumType::Variant` (unit) → `EnumType.VARIANT` (no parens)
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `await session.prompt_async(prompt)`
+
+**Output:**
+- `print_value(&v)?` → `print_value(v)`
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `print("msg"); return`
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- Python: main REPL checks `cmd_name == "group"` and calls `dispatch_group_command(args, ...)`
+- Each group has its own file with `COMMAND_NAMES`, `build_registry()`, parser builders, handlers
+
+**Python-specific UniFFI quirks:**
+- The SDK fires events from Rust background threads. Use `uniffi_set_event_loop(asyncio.get_running_loop())` at startup to register the asyncio event loop.
+- All trait interface callbacks (e.g., `EventListener.on_event`) must be `async def` because UniFFI wraps them with `await`.
+- Python UniFFI enum variant names use SCREAMING_SNAKE_CASE (e.g., `InputType.LNURL_PAY`).
+- Python UniFFI enum variant fields use snake_case (e.g., `input_type.data`).
+"""

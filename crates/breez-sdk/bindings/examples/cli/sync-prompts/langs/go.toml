@@ -1,0 +1,93 @@
+# Go CLI sync prompt configuration
+#
+# This file defines Go-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "Go"
+lang_id   = "go"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/go/"
+
+# Workflow-level settings
+workflow_name = "Sync Go CLI from Rust CLI"
+concurrency_group = "sync-go-cli"
+job_name = "sync-go-cli"
+step_name = "Sync Go CLI"
+
+# File layout
+serialization_file = "serialization.go"
+issuer_file = "issuer.go"
+subgroup_path_pattern = "<name>.go"
+cli_binary = "./breez-cli"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'use `handleNotYetSupported` as the handler'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "build and run commands (`make run` instead of `cargo run --`)"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "go build instructions, or Go-specific notes"
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
+Bash(gh pr create:*),Bash(gh pr list:*)"""
+
+[file_mapping]
+content = """
+| Rust source | Go target |
+|-------------|-----------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/main.go` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/commands.go` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/issuer.go` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/persistence.go` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/go/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → Go kebab-case command names in registry
+- New commands need: `handleXxx` function, `BuildCommandRegistry()` entry, `CommandNames` entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `fs.String("x", default, desc)` + `fs.StringVar(&v, "long-name", default, desc)`
+- `Option<T>` → pointer type (`*string`, `*uint64`)
+- `Vec<T>` → `stringSliceFlag` custom type (implements `flag.Value`)
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `fs.Bool("name", false, desc)`
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `sdk.Method(breez_sdk_spark.MethodRequest{Field1: val, Field2: val})`
+- Return types: `result, err := sdk.Method(req)` with `if err != nil { return err }`
+
+**Enums:**
+- `EnumType::Variant { field }` → `breez_sdk_spark.EnumTypeVariant{Field: field}`
+- `EnumType::Variant` (unit) → `breez_sdk_spark.EnumTypeVariant{}`
+- Pattern match → `switch v := val.(type) { case breez_sdk_spark.EnumTypeVariant: ... }`
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `readlinePrompt(rl, prompt)` or `readlineWithDefault(rl, prompt, default)`
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)`
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `return fmt.Errorf("msg")`
+
+**SDK version:**
+The Go CLI uses the published Go SDK. You can check available SDK methods by reading the Go source in the module cache (e.g. `go/pkg/mod/github.com/breez/breez-sdk-spark-go@*/breez_sdk_spark/breez_sdk_spark.go`). All commands should be fully implemented — do not use stub handlers.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- Go: main REPL checks `cmdName == "group"` and calls `DispatchGroupCommand(args, rl)`
+- Each group has its own file with `CommandNames`, `BuildRegistry()`, dispatch function, handlers
+
+**Go-specific UniFFI quirks:**
+- Go UniFFI enum variants use `Field0` for unnamed fields (e.g., `InputTypeLnurlPay.Field0` not `.Data`)
+- `u128` type alias is `*big.Int` — so `Amount u128` means `Amount *big.Int`, and `Amount *u128` means `Amount **big.Int`
+- Go UniFFI bindings return `*SdkError` which is a typed nil on success. Use `liftError(err)` to convert to untyped nil before `err != nil` checks.
+"""
