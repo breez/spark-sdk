@@ -312,3 +312,24 @@ jobs:
       publish: ${{ needs.setup.outputs.publish == 'true' }}
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  notify-glow-web:
+    name: Notify glow-web of new release
+    needs:
+      - setup
+      - publish-wasm
+    if: |
+      always()
+      && needs.setup.outputs.publish == 'true'
+      && needs.publish-wasm.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch to glow-web
+        env:
+          # Requires a PAT with repo scope on breez/glow-web
+          GH_TOKEN: ${{ secrets.GLOW_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/breez/glow-web/dispatches \
+            --method POST \
+            -f event_type=sdk-release \
+            -f "client_payload[version]=${{ inputs.package-version }}"
