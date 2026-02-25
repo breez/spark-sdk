@@ -1,0 +1,102 @@
+# Dart CLI sync prompt configuration
+#
+# This file defines Dart-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "Dart"
+lang_id   = "dart"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/dart/"
+
+# Workflow-level settings
+workflow_name = "Sync Dart CLI from Rust CLI"
+concurrency_group = "sync-dart-cli"
+job_name = "sync-dart-cli"
+step_name = "Sync Dart CLI"
+
+# File layout
+serialization_file = "serialization.dart"
+issuer_file = "issuer.dart"
+subgroup_path_pattern = "lib/<name>.dart"
+cli_binary = "dart run bin/breez_cli.dart"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'print a "not yet supported" message in the handler'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "setup commands (`make run` instead of `cargo run --`), and Dart-specific configuration"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "Flutter pub get instructions, or Dart/FRB-specific notes"
+
+# Build check command (syntax validation without SDK installed)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-dart"
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
+Bash(gh pr create:*),Bash(gh pr list:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-dart:*)"""
+
+[file_mapping]
+content = """
+| Rust source | Dart target |
+|-------------|-------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/cli.dart` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/commands.dart` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/issuer.dart` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/persistence.dart` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/dart/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → Dart kebab-case command names in registry
+- New commands need: handler function, `buildCommandRegistry()` entry, `commandNames` entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `..addOption('long-name', abbr: 'x')`
+- `Option<T>` → nullable Dart type, `results.option('name')` returns `String?`
+- `Vec<T>` → `..addMultiOption('name')`, returns `List<String>`
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `..addFlag('name', defaultsTo: false)`
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `await sdk.methodName(request: RequestType(field1: val, field2: val))`
+- Method names are camelCase: `get_info` → `getInfo`, `prepare_send_payment` → `prepareSendPayment`
+
+**Enums:**
+- `EnumType::Variant { field }` → `EnumType.variant(field: field)` (factory constructor)
+- `EnumType::Variant` (unit) → `EnumType.variant` or `EnumType.variant()` (depends on variant)
+- Pattern match → `if (val is EnumType_Variant)` or `switch (val) { case EnumType_Variant(): ... }`
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `prompt(message)` or `prompt(message, defaultValue: 'y')` (uses stdin.readLineSync)
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)`
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `print("msg"); return;`
+
+**SDK version:**
+The Dart CLI uses the Flutter/FRB SDK bindings (breez_sdk_spark_flutter). Reference the Flutter snippets in `docs/breez-sdk/snippets/flutter/lib/` for exact API patterns. All commands should be fully implemented — do not use stub handlers.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- Dart: main REPL checks `cmdName == 'group'` and calls `dispatchGroupCommand(args, ...)`
+- Each group has its own file with `commandNames`, registry, dispatch function, handlers
+
+**Dart/FRB-specific quirks:**
+- `await BreezSdkSparkLib.init()` must be called once before any SDK usage.
+- FRB enum variants use sealed class pattern: `InputType_LnurlPay`, `SdkEvent_Synced`, etc.
+- Unnamed fields use `.field0` accessor (e.g., `InputType_LnurlPay.field0` is the `LnurlPayRequestDetails`).
+- `u128` maps to Dart `BigInt` — use `BigInt.parse(str)` and `BigInt.from(int)`.
+- Config is immutable — use `.copyWith()` to modify: `defaultConfig(network: Network.regtest).copyWith(apiKey: key)`.
+- Events come from `sdk.addEventListener()` which returns a `Stream<SdkEvent>`, not callbacks.
+- `SdkBuilder` pattern for advanced init: `SdkBuilder(config:, seed:)` → `builder.withDefaultStorage(storageDir:)` → `await builder.build()`.
+- No `uniffi_set_event_loop` needed — Dart handles async natively.
+"""
