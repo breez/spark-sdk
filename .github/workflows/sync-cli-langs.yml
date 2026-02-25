@@ -8,8 +8,8 @@ on:
       - 'crates/breez-sdk/cli/README.md'
   workflow_dispatch:
     inputs:
-      languages:
-        description: 'JSON array of languages to sync (remove what you do not want)'
+      languages-to-sync:
+        description: 'Array of languages to sync (remove what you do not want)'
         required: true
         type: string
         default: '["python", "go"]'
@@ -19,15 +19,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  detect-changes:
-    name: Detect Rust CLI changes
+  setup:
+    name: Setup
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      has_changes: ${{ steps.check.outputs.has_changes }}
-      diff_summary: ${{ steps.check.outputs.diff_summary }}
-      sync_python: ${{ steps.languages.outputs.sync_python }}
-      sync_go: ${{ steps.languages.outputs.sync_go }}
+      diff_summary: ${{ steps.diff.outputs.diff_summary }}
+      python: ${{ contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'python') }}
+      go: ${{ contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'go') }}
 
     steps:
       - name: Checkout repository
@@ -35,84 +34,36 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Check for Rust CLI changes
-        id: check
+      - name: Compute diff summary
+        id: diff
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual trigger — running sync"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            {
-              echo "diff_summary<<EODIFF"
-              git diff --stat HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md' || echo "Manual trigger (workflow_dispatch)"
-              echo "EODIFF"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md' || echo "")
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "No Rust CLI changes detected"
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Rust CLI changes detected:"
-            echo "$CHANGED_FILES"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            {
-              echo "diff_summary<<EODIFF"
-              git diff --stat HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'
-              echo "EODIFF"
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Determine languages to sync
-        id: languages
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            LANGS='${{ inputs.languages }}'
-          else
-            # On push, sync all languages
-            LANGS='["python", "go"]'
-          fi
-
-          echo "Languages to sync: $LANGS"
-
-          if echo "$LANGS" | jq -e 'index("python")' > /dev/null 2>&1; then
-            echo "sync_python=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "sync_python=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if echo "$LANGS" | jq -e 'index("go")' > /dev/null 2>&1; then
-            echo "sync_go=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "sync_go=false" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "diff_summary<<EODIFF"
+            git diff --stat HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md' || echo "Manual trigger"
+            echo "EODIFF"
+          } >> "$GITHUB_OUTPUT"
 
   sync-python:
     name: Sync Python CLI
-    needs: detect-changes
-    if: >-
-      needs.detect-changes.outputs.has_changes == 'true' &&
-      needs.detect-changes.outputs.sync_python == 'true'
+    needs: setup
+    if: needs.setup.outputs.python == 'true'
     uses: ./.github/workflows/sync-python-cli.yml
     with:
-      diff_summary: ${{ needs.detect-changes.outputs.diff_summary }}
+      diff_summary: ${{ needs.setup.outputs.diff_summary }}
     secrets: inherit
 
   sync-go:
     name: Sync Go CLI
-    needs: detect-changes
-    if: >-
-      needs.detect-changes.outputs.has_changes == 'true' &&
-      needs.detect-changes.outputs.sync_go == 'true'
+    needs: setup
+    if: needs.setup.outputs.go == 'true'
     uses: ./.github/workflows/sync-go-cli.yml
     with:
-      diff_summary: ${{ needs.detect-changes.outputs.diff_summary }}
+      diff_summary: ${{ needs.setup.outputs.diff_summary }}
     secrets: inherit
 
   summary:
     name: Sync Summary
-    needs: [detect-changes, sync-python, sync-go]
+    needs: [setup, sync-python, sync-go]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -121,23 +72,7 @@ jobs:
         run: |
           echo "## CLI Sync Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ needs.detect-changes.outputs.has_changes }}" != "true" ]; then
-            echo "No Rust CLI changes detected — all syncs skipped." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
           echo "| Language | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ needs.detect-changes.outputs.sync_python }}" = "true" ]; then
-            echo "| Python | ${{ needs.sync-python.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "| Python | skipped |" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          if [ "${{ needs.detect-changes.outputs.sync_go }}" = "true" ]; then
-            echo "| Go | ${{ needs.sync-go.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "| Go | skipped |" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "| Python | ${{ needs.sync-python.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Go | ${{ needs.sync-go.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
