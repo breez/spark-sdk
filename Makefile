@@ -64,6 +64,12 @@ itest:
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
+sync-prompts-check:
+	python3 crates/breez-sdk/bindings/examples/cli/sync-prompts/generate.py --check
+
+sync-prompts-generate:
+	python3 crates/breez-sdk/bindings/examples/cli/sync-prompts/generate.py
+
 claude-check:
 	make fmt-check clippy-check cargo-test
 

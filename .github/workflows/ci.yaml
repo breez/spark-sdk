@@ -175,7 +175,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify generated workflow files are up-to-date
-        run: python3 crates/breez-sdk/bindings/examples/cli/sync-prompts/generate.py --check
+        run: make sync-prompts-check
 
   docs-rust:
     name: Docs (rust)
