@@ -16,3 +16,14 @@ When a change is made to the Rust CLI and merged to `main`, the [sync-cli-langs]
 | [Go](langs/go/) | `langs/go/` | Active |
 
 More languages (Swift, Kotlin, Flutter, WASM, React Native, C#) will be added over time.
+
+## Sync Prompts
+
+The `sync-prompts/` directory contains a template-based generator that produces per-language GitHub Actions workflow YAML. Each language is defined by a TOML config under `sync-prompts/langs/`.
+
+```bash
+make sync-prompts-check      # Verify generated workflows are up-to-date
+make sync-prompts-generate    # Regenerate workflows from templates
+```
+
+To add a new language, create `sync-prompts/langs/<lang>.toml` (use an existing one as reference) and run `make sync-prompts-generate`.
