@@ -7,12 +7,33 @@ use crate::{
     persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
-use super::{BreezSdk, SyncType};
+use super::{BreezSdk, SdkServices, SyncType};
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
-    pub async fn claim_deposit(
+/// Trait defining deposit-related operations.
+#[macros::async_trait]
+pub(crate) trait DepositsService {
+    /// Claims a deposit from a specific UTXO
+    async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> Result<ClaimDepositResponse, SdkError>;
+
+    /// Refunds a deposit to a specified address
+    async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> Result<RefundDepositResponse, SdkError>;
+
+    /// Lists all unclaimed deposits
+    async fn list_unclaimed_deposits(
+        &self,
+        request: ListUnclaimedDepositsRequest,
+    ) -> Result<ListUnclaimedDepositsResponse, SdkError>;
+}
+
+#[macros::async_trait]
+impl DepositsService for SdkServices {
+    async fn claim_deposit(
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
@@ -53,7 +74,7 @@ impl BreezSdk {
         }
     }
 
-    pub async fn refund_deposit(
+    async fn refund_deposit(
         &self,
         request: RefundDepositRequest,
     ) -> Result<RefundDepositResponse, SdkError> {
@@ -93,11 +114,60 @@ impl BreezSdk {
     }
 
     #[allow(unused_variables)]
-    pub async fn list_unclaimed_deposits(
+    async fn list_unclaimed_deposits(
         &self,
         request: ListUnclaimedDepositsRequest,
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+}
+
+#[macros::async_trait]
+impl DepositsService for BreezSdk {
+    async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> Result<ClaimDepositResponse, SdkError> {
+        self.services.claim_deposit(request).await
+    }
+
+    async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> Result<RefundDepositResponse, SdkError> {
+        self.services.refund_deposit(request).await
+    }
+
+    async fn list_unclaimed_deposits(
+        &self,
+        request: ListUnclaimedDepositsRequest,
+    ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
+        self.services.list_unclaimed_deposits(request).await
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
+impl BreezSdk {
+    pub async fn claim_deposit(
+        &self,
+        request: ClaimDepositRequest,
+    ) -> Result<ClaimDepositResponse, SdkError> {
+        DepositsService::claim_deposit(self, request).await
+    }
+
+    pub async fn refund_deposit(
+        &self,
+        request: RefundDepositRequest,
+    ) -> Result<RefundDepositResponse, SdkError> {
+        DepositsService::refund_deposit(self, request).await
+    }
+
+    pub async fn list_unclaimed_deposits(
+        &self,
+        request: ListUnclaimedDepositsRequest,
+    ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
+        DepositsService::list_unclaimed_deposits(self, request).await
     }
 }

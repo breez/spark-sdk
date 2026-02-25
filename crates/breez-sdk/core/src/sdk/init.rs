@@ -15,11 +15,14 @@ use crate::{
     },
 };
 
-use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
+use super::{
+    BreezSdk, BreezSdkParams, SdkServices, SyncCoordinator, api::ApiService,
+    helpers::validate_breez_api_key, lightning_address::LightningAddressService,
+};
 
-impl BreezSdk {
-    /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+impl SdkServices {
+    /// Creates a new instance of the `SdkServices`
+    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Arc<Self>, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.
         if !matches!(params.config.network, Network::Regtest) {
@@ -62,7 +65,7 @@ impl BreezSdk {
         });
         let sync_coordinator = SyncCoordinator::new();
 
-        let sdk = Self {
+        let services = Arc::new(Self {
             config: params.config,
             spark_wallet: params.spark_wallet,
             storage: params.storage,
@@ -81,10 +84,10 @@ impl BreezSdk {
             token_converter,
             stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
-        };
+        });
 
-        sdk.start(initial_synced_sender);
-        Ok(sdk)
+        services.start(initial_synced_sender);
+        Ok(services)
     }
 
     /// Starts the SDK's background tasks
@@ -94,19 +97,19 @@ impl BreezSdk {
     /// 2. `periodic_sync`: syncs the wallet with the Spark network
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
     /// 4. `spawn_lnurl_preimage_publisher`: publishes lnurl preimages for completed payments
-    pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+    pub(super) fn start(self: &Arc<Self>, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
         self.spawn_lnurl_preimage_publisher();
     }
 
-    fn spawn_spark_private_mode_initialization(&self) {
-        let sdk = self.clone();
+    fn spawn_spark_private_mode_initialization(self: &Arc<Self>) {
+        let services = Arc::clone(self);
         let span = tracing::Span::current();
         tokio::spawn(
             async move {
-                if let Err(e) = sdk.ensure_spark_private_mode_initialized().await {
+                if let Err(e) = services.ensure_spark_private_mode_initialized().await {
                     error!("Failed to initialize spark private mode: {e:?}");
                 }
             }
@@ -115,15 +118,15 @@ impl BreezSdk {
     }
 
     /// Refreshes the user's lightning address on the server on startup.
-    fn try_recover_lightning_address(&self) {
-        let sdk = self.clone();
+    fn try_recover_lightning_address(self: &Arc<Self>) {
+        let services = Arc::clone(self);
         let span = tracing::Span::current();
         tokio::spawn(async move {
-            if sdk.config.lnurl_domain.is_none() {
+            if services.config.lnurl_domain.is_none() {
                 return;
             }
 
-            match sdk.recover_lightning_address().await {
+            match services.recover_lightning_address().await {
                 Ok(None) => info!("no lightning address to recover on startup"),
                 Ok(Some(value)) => info!(
                     "recovered lightning address on startup: address: {}, lnurl url: {}, lnurl bech32: {}",
@@ -172,5 +175,13 @@ impl BreezSdk {
             .await?;
         info!("Spark private mode initialized: enabled");
         Ok(())
+    }
+}
+
+impl BreezSdk {
+    /// Creates a new instance of the `BreezSdk`
+    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+        let services = SdkServices::init_and_start(params)?;
+        Ok(Self { services })
     }
 }

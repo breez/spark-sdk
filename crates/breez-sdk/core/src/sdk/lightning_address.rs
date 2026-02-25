@@ -5,12 +5,42 @@ use crate::{
     error::SdkError, persist::ObjectCacheRepository,
 };
 
-use super::BreezSdk;
+use super::{BreezSdk, SdkServices};
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
-    pub async fn check_lightning_address_available(
+/// Trait defining lightning address operations.
+#[macros::async_trait]
+pub(crate) trait LightningAddressService {
+    /// Checks if a lightning address username is available
+    async fn check_lightning_address_available(
+        &self,
+        req: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError>;
+
+    /// Gets the current lightning address info, if any
+    async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError>;
+
+    /// Registers a new lightning address
+    async fn register_lightning_address(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError>;
+
+    /// Deletes the lightning address
+    async fn delete_lightning_address(&self) -> Result<(), SdkError>;
+
+    /// Recovers a lightning address from the server (internal use)
+    async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError>;
+
+    /// Registers a lightning address (internal use, skips spark private mode check)
+    async fn register_lightning_address_internal(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError>;
+}
+
+#[macros::async_trait]
+impl LightningAddressService for SdkServices {
+    async fn check_lightning_address_available(
         &self,
         req: CheckLightningAddressRequest,
     ) -> Result<bool, SdkError> {
@@ -25,7 +55,7 @@ impl BreezSdk {
         Ok(available)
     }
 
-    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+    async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let cached = cache.fetch_lightning_address().await?;
         if cached.is_none() && self.lnurl_server_client.is_some() {
@@ -34,7 +64,7 @@ impl BreezSdk {
         Ok(cached.flatten())
     }
 
-    pub async fn register_lightning_address(
+    async fn register_lightning_address(
         &self,
         request: RegisterLightningAddressRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
@@ -44,7 +74,7 @@ impl BreezSdk {
         self.register_lightning_address_internal(request).await
     }
 
-    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+    async fn delete_lightning_address(&self) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(address_info) = cache.fetch_lightning_address().await?.flatten() else {
             return Ok(());
@@ -64,14 +94,8 @@ impl BreezSdk {
         cache.delete_lightning_address().await?;
         Ok(())
     }
-}
 
-// Private lightning address methods
-impl BreezSdk {
-    /// Attempts to recover a lightning address from the lnurl server.
-    pub(super) async fn recover_lightning_address(
-        &self,
-    ) -> Result<Option<LightningAddressInfo>, SdkError> {
+    async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
 
         let Some(client) = &self.lnurl_server_client else {
@@ -93,7 +117,7 @@ impl BreezSdk {
         Ok(result)
     }
 
-    pub(super) async fn register_lightning_address_internal(
+    async fn register_lightning_address_internal(
         &self,
         request: RegisterLightningAddressRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
@@ -126,6 +150,70 @@ impl BreezSdk {
         };
         cache.save_lightning_address(&address_info).await?;
         Ok(address_info)
+    }
+}
+
+#[macros::async_trait]
+impl LightningAddressService for BreezSdk {
+    async fn check_lightning_address_available(
+        &self,
+        req: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        self.services.check_lightning_address_available(req).await
+    }
+
+    async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        self.services.get_lightning_address().await
+    }
+
+    async fn register_lightning_address(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        self.services.register_lightning_address(request).await
+    }
+
+    async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        self.services.delete_lightning_address().await
+    }
+
+    async fn recover_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        self.services.recover_lightning_address().await
+    }
+
+    async fn register_lightning_address_internal(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        self.services
+            .register_lightning_address_internal(request)
+            .await
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
+impl BreezSdk {
+    pub async fn check_lightning_address_available(
+        &self,
+        req: CheckLightningAddressRequest,
+    ) -> Result<bool, SdkError> {
+        LightningAddressService::check_lightning_address_available(self, req).await
+    }
+
+    pub async fn get_lightning_address(&self) -> Result<Option<LightningAddressInfo>, SdkError> {
+        LightningAddressService::get_lightning_address(self).await
+    }
+
+    pub async fn register_lightning_address(
+        &self,
+        request: RegisterLightningAddressRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        LightningAddressService::register_lightning_address(self, request).await
+    }
+
+    pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
+        LightningAddressService::delete_lightning_address(self).await
     }
 }
 

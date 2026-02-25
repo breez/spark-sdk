@@ -19,30 +19,40 @@ use crate::{
 };
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SdkServices, SyncRequest, SyncType,
+    api::ApiService,
     helpers::{BalanceWatcher, update_balances},
     parse_input,
 };
 
-impl BreezSdk {
-    pub(super) fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut subscription = sdk.spark_wallet.subscribe_events();
-        let sync_coordinator = sdk.sync_coordinator.clone();
-        let mut sync_trigger_receiver = sdk.sync_coordinator.subscribe();
+/// Trait defining sync operations.
+#[macros::async_trait]
+pub(crate) trait SyncService {
+    /// Synchronizes the wallet with the Spark network
+    async fn sync_wallet(&self, request: SyncWalletRequest)
+    -> Result<SyncWalletResponse, SdkError>;
+}
+
+// Internal sync methods for SdkServices
+impl SdkServices {
+    pub(super) fn periodic_sync(self: &Arc<Self>, initial_synced_sender: watch::Sender<bool>) {
+        let services = Arc::clone(self);
+        let mut shutdown_receiver = services.shutdown_sender.subscribe();
+        let mut subscription = services.spark_wallet.subscribe_events();
+        let sync_coordinator = services.sync_coordinator.clone();
+        let mut sync_trigger_receiver = services.sync_coordinator.subscribe();
         let mut last_sync_time = SystemTime::now();
 
-        let sync_interval = u64::from(self.config.sync_interval_secs);
+        let sync_interval = u64::from(services.config.sync_interval_secs);
         let span = tracing::Span::current();
         tokio::spawn(async move {
             let balance_watcher =
-                BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
-            let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
+                BalanceWatcher::new(services.spark_wallet.clone(), services.storage.clone());
+            let balance_watcher_id = services.add_event_listener(Box::new(balance_watcher)).await;
             loop {
                 tokio::select! {
                     _ = shutdown_receiver.changed() => {
-                        if !sdk.remove_event_listener(&balance_watcher_id).await {
+                        if !services.remove_event_listener(&balance_watcher_id).await {
                             error!("Failed to remove balance watcher listener");
                         }
                         info!("Deposit tracking loop shutdown signal received");
@@ -53,7 +63,7 @@ impl BreezSdk {
                             Ok(event) => {
                                 info!("Received event: {event}");
                                 trace!("Received event: {:?}", event);
-                                sdk.handle_wallet_event(event).await;
+                                services.handle_wallet_event(event).await;
                             }
                             Err(e) => {
                                 error!("Failed to receive event: {e:?}");
@@ -65,10 +75,10 @@ impl BreezSdk {
                             continue;
                         };
                         info!("Sync trigger changed: {:?}", &sync_request);
-                        let cloned_sdk = sdk.clone();
+                        let cloned_services = Arc::clone(&services);
                         let initial_synced_sender = initial_synced_sender.clone();
                         if let Some(true) = Box::pin(run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
-                            if let Err(e) = cloned_sdk.sync_wallet_internal(&sync_request).await {
+                            if let Err(e) = cloned_services.sync_wallet_internal(&sync_request).await {
                                 error!("Failed to sync wallet: {e:?}");
                                 let () = sync_request.reply(Some(e)).await;
                                 return false;
@@ -114,7 +124,7 @@ impl BreezSdk {
             WalletEvent::Synced => {
                 info!("Synced");
                 self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::Full, true)
+                    .trigger_sync_no_wait(SyncType::Full, true)
                     .await;
             }
             WalletEvent::TransferClaimed(transfer) => {
@@ -140,7 +150,7 @@ impl BreezSdk {
                         .await;
                 }
                 self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::WalletState, true)
+                    .trigger_sync_no_wait(SyncType::WalletState, true)
                     .await;
             }
             WalletEvent::TransferClaimStarting(transfer) => {
@@ -159,7 +169,7 @@ impl BreezSdk {
                         .await;
                 }
                 self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::WalletState, true)
+                    .trigger_sync_no_wait(SyncType::WalletState, true)
                     .await;
             }
             WalletEvent::Optimization(event) => {
@@ -586,19 +596,40 @@ impl BreezSdk {
     }
 }
 
+// Trait implementation for SdkServices
+#[macros::async_trait]
+impl SyncService for SdkServices {
+    async fn sync_wallet(
+        &self,
+        _request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
+        // Use the coordinator to coalesce duplicate sync requests
+        self.sync_coordinator
+            .trigger_sync_and_wait(SyncType::Full, true)
+            .await?;
+        Ok(SyncWalletResponse {})
+    }
+}
+
+// Trait implementation for BreezSdk - delegates to SdkServices
+#[macros::async_trait]
+impl SyncService for BreezSdk {
+    async fn sync_wallet(
+        &self,
+        request: SyncWalletRequest,
+    ) -> Result<SyncWalletResponse, SdkError> {
+        self.services.sync_wallet(request).await
+    }
+}
+
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
     /// Synchronizes the wallet with the Spark network
-    #[allow(unused_variables)]
     pub async fn sync_wallet(
         &self,
         request: SyncWalletRequest,
     ) -> Result<SyncWalletResponse, SdkError> {
-        // Use the coordinator to coalesce duplicate sync requests
-        self.sync_coordinator
-            .trigger_sync_and_wait(super::SyncType::Full, true)
-            .await?;
-        Ok(SyncWalletResponse {})
+        SyncService::sync_wallet(self, request).await
     }
 }

@@ -36,14 +36,51 @@ use tokio_with_wasm::alias as tokio;
 use web_time::SystemTime;
 
 use super::{
-    BreezSdk, SyncType,
+    BreezSdk, SdkServices, SyncType,
+    api::ApiService,
     helpers::{InternalEventListener, get_or_create_deposit_address, is_payment_match},
 };
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
-    pub async fn receive_payment(
+/// Trait for payment operations
+#[macros::async_trait]
+pub(crate) trait PaymentsService {
+    async fn receive_payment(
+        &self,
+        request: ReceivePaymentRequest,
+    ) -> Result<ReceivePaymentResponse, SdkError>;
+
+    async fn claim_htlc_payment(
+        &self,
+        request: ClaimHtlcPaymentRequest,
+    ) -> Result<ClaimHtlcPaymentResponse, SdkError>;
+
+    async fn prepare_send_payment(
+        &self,
+        request: PrepareSendPaymentRequest,
+    ) -> Result<PrepareSendPaymentResponse, SdkError>;
+
+    async fn send_payment(
+        &self,
+        request: SendPaymentRequest,
+    ) -> Result<SendPaymentResponse, SdkError>;
+
+    async fn fetch_conversion_limits(
+        &self,
+        request: FetchConversionLimitsRequest,
+    ) -> Result<FetchConversionLimitsResponse, SdkError>;
+
+    async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<ListPaymentsResponse, SdkError>;
+
+    async fn get_payment(&self, request: GetPaymentRequest)
+    -> Result<GetPaymentResponse, SdkError>;
+}
+
+#[macros::async_trait]
+impl PaymentsService for SdkServices {
+    async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
@@ -108,7 +145,7 @@ impl BreezSdk {
         }
     }
 
-    pub async fn claim_htlc_payment(
+    async fn claim_htlc_payment(
         &self,
         request: ClaimHtlcPaymentRequest,
     ) -> Result<ClaimHtlcPaymentResponse, SdkError> {
@@ -141,7 +178,7 @@ impl BreezSdk {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn prepare_send_payment(
+    async fn prepare_send_payment(
         &self,
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
@@ -362,7 +399,7 @@ impl BreezSdk {
         }
     }
 
-    pub async fn send_payment(
+    async fn send_payment(
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
@@ -370,7 +407,7 @@ impl BreezSdk {
         Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 
-    pub async fn fetch_conversion_limits(
+    async fn fetch_conversion_limits(
         &self,
         request: FetchConversionLimitsRequest,
     ) -> Result<FetchConversionLimitsResponse, SdkError> {
@@ -380,20 +417,7 @@ impl BreezSdk {
             .map_err(Into::into)
     }
 
-    /// Lists payments from the storage with pagination
-    ///
-    /// This method provides direct access to the payment history stored in the database.
-    /// It returns payments in reverse chronological order (newest first).
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - Contains pagination parameters (offset and limit)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(ListPaymentsResponse)` - Contains the list of payments if successful
-    /// * `Err(SdkError)` - If there was an error accessing the storage
-    pub async fn list_payments(
+    async fn list_payments(
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
@@ -423,7 +447,7 @@ impl BreezSdk {
         Ok(ListPaymentsResponse { payments })
     }
 
-    pub async fn get_payment(
+    async fn get_payment(
         &self,
         request: GetPaymentRequest,
     ) -> Result<GetPaymentResponse, SdkError> {
@@ -448,8 +472,114 @@ impl BreezSdk {
     }
 }
 
-// Private payment methods
+#[macros::async_trait]
+impl PaymentsService for BreezSdk {
+    async fn receive_payment(
+        &self,
+        request: ReceivePaymentRequest,
+    ) -> Result<ReceivePaymentResponse, SdkError> {
+        self.services.receive_payment(request).await
+    }
+
+    async fn claim_htlc_payment(
+        &self,
+        request: ClaimHtlcPaymentRequest,
+    ) -> Result<ClaimHtlcPaymentResponse, SdkError> {
+        self.services.claim_htlc_payment(request).await
+    }
+
+    async fn prepare_send_payment(
+        &self,
+        request: PrepareSendPaymentRequest,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        self.services.prepare_send_payment(request).await
+    }
+
+    async fn send_payment(
+        &self,
+        request: SendPaymentRequest,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        self.services.send_payment(request).await
+    }
+
+    async fn fetch_conversion_limits(
+        &self,
+        request: FetchConversionLimitsRequest,
+    ) -> Result<FetchConversionLimitsResponse, SdkError> {
+        self.services.fetch_conversion_limits(request).await
+    }
+
+    async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<ListPaymentsResponse, SdkError> {
+        self.services.list_payments(request).await
+    }
+
+    async fn get_payment(
+        &self,
+        request: GetPaymentRequest,
+    ) -> Result<GetPaymentResponse, SdkError> {
+        self.services.get_payment(request).await
+    }
+}
+
+// Public API
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    pub async fn receive_payment(
+        &self,
+        request: ReceivePaymentRequest,
+    ) -> Result<ReceivePaymentResponse, SdkError> {
+        PaymentsService::receive_payment(self, request).await
+    }
+
+    pub async fn claim_htlc_payment(
+        &self,
+        request: ClaimHtlcPaymentRequest,
+    ) -> Result<ClaimHtlcPaymentResponse, SdkError> {
+        PaymentsService::claim_htlc_payment(self, request).await
+    }
+
+    pub async fn prepare_send_payment(
+        &self,
+        request: PrepareSendPaymentRequest,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        PaymentsService::prepare_send_payment(self, request).await
+    }
+
+    pub async fn send_payment(
+        &self,
+        request: SendPaymentRequest,
+    ) -> Result<SendPaymentResponse, SdkError> {
+        PaymentsService::send_payment(self, request).await
+    }
+
+    pub async fn fetch_conversion_limits(
+        &self,
+        request: FetchConversionLimitsRequest,
+    ) -> Result<FetchConversionLimitsResponse, SdkError> {
+        PaymentsService::fetch_conversion_limits(self, request).await
+    }
+
+    pub async fn list_payments(
+        &self,
+        request: ListPaymentsRequest,
+    ) -> Result<ListPaymentsResponse, SdkError> {
+        PaymentsService::list_payments(self, request).await
+    }
+
+    pub async fn get_payment(
+        &self,
+        request: GetPaymentRequest,
+    ) -> Result<GetPaymentResponse, SdkError> {
+        PaymentsService::get_payment(self, request).await
+    }
+}
+
+// Private payment methods on SdkServices
+impl SdkServices {
     async fn receive_bolt11_invoice(
         &self,
         description: String,

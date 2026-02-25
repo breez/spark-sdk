@@ -16,46 +16,93 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
-use super::{BreezSdk, helpers::get_or_create_deposit_address, parse_input};
+use super::{
+    BreezSdk, SdkServices, helpers::get_or_create_deposit_address,
+    lightning_address::LightningAddressService, parse_input,
+};
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
+/// Trait defining the core API methods of the SDK.
+#[macros::async_trait]
+pub(crate) trait ApiService {
     /// Registers a listener to receive SDK events
-    ///
-    /// # Arguments
-    ///
-    /// * `listener` - An implementation of the `EventListener` trait
-    ///
-    /// # Returns
-    ///
-    /// A unique identifier for the listener, which can be used to remove it later
-    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+    async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String;
+
+    /// Removes a previously registered event listener
+    async fn remove_event_listener(&self, id: &str) -> bool;
+
+    /// Stops the SDK's background tasks
+    async fn disconnect(&self) -> Result<(), SdkError>;
+
+    /// Parses an input string into an `InputType`
+    async fn parse(&self, input: &str) -> Result<InputType, SdkError>;
+
+    /// Returns the balance of the wallet in satoshis
+    async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError>;
+
+    /// List fiat currencies for which there is a known exchange rate
+    async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError>;
+
+    /// List the latest rates of fiat currencies
+    async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError>;
+
+    /// Get the recommended BTC fees
+    async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError>;
+
+    /// Returns the metadata for the given token identifiers
+    async fn get_tokens_metadata(
+        &self,
+        request: GetTokensMetadataRequest,
+    ) -> Result<GetTokensMetadataResponse, SdkError>;
+
+    /// Signs a message with the wallet's identity key
+    async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> Result<SignMessageResponse, SdkError>;
+
+    /// Verifies a message signature against the provided public key
+    async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError>;
+
+    /// Returns the user settings for the wallet
+    async fn get_user_settings(&self) -> Result<UserSettings, SdkError>;
+
+    /// Updates the user settings for the wallet
+    async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError>;
+
+    /// Returns an instance of the `TokenIssuer` for managing token issuance
+    fn get_token_issuer(&self) -> TokenIssuer;
+
+    /// Starts leaf optimization in the background
+    fn start_leaf_optimization(&self);
+
+    /// Cancels the ongoing leaf optimization
+    async fn cancel_leaf_optimization(&self) -> Result<(), SdkError>;
+
+    /// Returns the current optimization progress snapshot
+    fn get_leaf_optimization_progress(&self) -> OptimizationProgress;
+
+    /// Initiates a Bitcoin purchase flow via an external provider
+    async fn buy_bitcoin(&self, request: BuyBitcoinRequest)
+    -> Result<BuyBitcoinResponse, SdkError>;
+}
+
+#[macros::async_trait]
+impl ApiService for SdkServices {
+    async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
         self.event_emitter.add_listener(listener).await
     }
 
-    /// Removes a previously registered event listener
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The listener ID returned from `add_event_listener`
-    ///
-    /// # Returns
-    ///
-    /// `true` if the listener was found and removed, `false` otherwise
-    pub async fn remove_event_listener(&self, id: &str) -> bool {
+    async fn remove_event_listener(&self, id: &str) -> bool {
         self.event_emitter.remove_listener(id).await
     }
 
-    /// Stops the SDK's background tasks
-    ///
-    /// This method stops the background tasks started by the `start()` method.
-    /// It should be called before your application terminates to ensure proper cleanup.
-    ///
-    /// # Returns
-    ///
-    /// Result containing either success or an `SdkError` if the background task couldn't be stopped
-    pub async fn disconnect(&self) -> Result<(), SdkError> {
+    async fn disconnect(&self) -> Result<(), SdkError> {
         info!("Disconnecting Breez SDK");
         self.shutdown_sender
             .send(())
@@ -66,13 +113,12 @@ impl BreezSdk {
         Ok(())
     }
 
-    pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
+    async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
         parse_input(input, Some(self.external_input_parsers.clone())).await
     }
 
-    /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
-    pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+    async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
         if request.ensure_synced.unwrap_or_default() {
             self.initial_synced_watcher
                 .clone()
@@ -94,9 +140,7 @@ impl BreezSdk {
         })
     }
 
-    /// List fiat currencies for which there is a known exchange rate,
-    /// sorted by the canonical name of the currency.
-    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+    async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
         let currencies = self
             .fiat_service
             .fetch_fiat_currencies()
@@ -107,8 +151,7 @@ impl BreezSdk {
         Ok(ListFiatCurrenciesResponse { currencies })
     }
 
-    /// List the latest rates of fiat currencies, sorted by name.
-    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+    async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
         let rates = self
             .fiat_service
             .fetch_fiat_rates()
@@ -119,18 +162,11 @@ impl BreezSdk {
         Ok(ListFiatRatesResponse { rates })
     }
 
-    /// Get the recommended BTC fees based on the configured chain service.
-    pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
+    async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
         Ok(self.chain_service.recommended_fees().await?)
     }
 
-    /// Returns the metadata for the given token identifiers.
-    ///
-    /// Results are not guaranteed to be in the same order as the input token identifiers.
-    ///
-    /// If the metadata is not found locally in cache, it will be queried from
-    /// the Spark network and then cached.
-    pub async fn get_tokens_metadata(
+    async fn get_tokens_metadata(
         &self,
         request: GetTokensMetadataRequest,
     ) -> Result<GetTokensMetadataResponse, SdkError> {
@@ -149,10 +185,7 @@ impl BreezSdk {
         })
     }
 
-    /// Signs a message with the wallet's identity key. The message is SHA256
-    /// hashed before signing. The returned signature will be hex encoded in
-    /// DER format by default, or compact format if specified.
-    pub async fn sign_message(
+    async fn sign_message(
         &self,
         request: SignMessageRequest,
     ) -> Result<SignMessageResponse, SdkError> {
@@ -172,10 +205,7 @@ impl BreezSdk {
         })
     }
 
-    /// Verifies a message signature against the provided public key. The message
-    /// is SHA256 hashed before verification. The signature can be hex encoded
-    /// in either DER or compact format.
-    pub async fn check_message(
+    async fn check_message(
         &self,
         request: CheckMessageRequest,
     ) -> Result<CheckMessageResponse, SdkError> {
@@ -197,10 +227,7 @@ impl BreezSdk {
         Ok(CheckMessageResponse { is_valid })
     }
 
-    /// Returns the user settings for the wallet.
-    ///
-    /// Some settings are fetched from the Spark network so network requests are performed.
-    pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+    async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
         // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
         self.ensure_spark_private_mode_initialized().await?;
 
@@ -213,10 +240,7 @@ impl BreezSdk {
         })
     }
 
-    /// Updates the user settings for the wallet.
-    ///
-    /// Some settings are updated on the Spark network so network requests may be performed.
-    pub async fn update_user_settings(
+    async fn update_user_settings(
         &self,
         request: UpdateUserSettingsRequest,
     ) -> Result<(), SdkError> {
@@ -249,9 +273,249 @@ impl BreezSdk {
         Ok(())
     }
 
+    fn get_token_issuer(&self) -> TokenIssuer {
+        TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
+    }
+
+    fn start_leaf_optimization(&self) {
+        self.spark_wallet.start_leaf_optimization();
+    }
+
+    async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
+        self.spark_wallet.cancel_leaf_optimization().await?;
+        Ok(())
+    }
+
+    fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.spark_wallet.get_leaf_optimization_progress().into()
+    }
+
+    async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        let address =
+            get_or_create_deposit_address(&self.spark_wallet, self.storage.clone(), true).await?;
+
+        let url = self
+            .buy_bitcoin_provider
+            .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
+            .await
+            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
+
+        Ok(BuyBitcoinResponse { url })
+    }
+}
+
+#[macros::async_trait]
+impl ApiService for BreezSdk {
+    async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+        self.services.add_event_listener(listener).await
+    }
+
+    async fn remove_event_listener(&self, id: &str) -> bool {
+        self.services.remove_event_listener(id).await
+    }
+
+    async fn disconnect(&self) -> Result<(), SdkError> {
+        self.services.disconnect().await
+    }
+
+    async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
+        self.services.parse(input).await
+    }
+
+    async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+        self.services.get_info(request).await
+    }
+
+    async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+        self.services.list_fiat_currencies().await
+    }
+
+    async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+        self.services.list_fiat_rates().await
+    }
+
+    async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
+        self.services.recommended_fees().await
+    }
+
+    async fn get_tokens_metadata(
+        &self,
+        request: GetTokensMetadataRequest,
+    ) -> Result<GetTokensMetadataResponse, SdkError> {
+        self.services.get_tokens_metadata(request).await
+    }
+
+    async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> Result<SignMessageResponse, SdkError> {
+        self.services.sign_message(request).await
+    }
+
+    async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError> {
+        self.services.check_message(request).await
+    }
+
+    async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+        self.services.get_user_settings().await
+    }
+
+    async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
+        self.services.update_user_settings(request).await
+    }
+
+    fn get_token_issuer(&self) -> TokenIssuer {
+        self.services.get_token_issuer()
+    }
+
+    fn start_leaf_optimization(&self) {
+        self.services.start_leaf_optimization();
+    }
+
+    async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
+        self.services.cancel_leaf_optimization().await
+    }
+
+    fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
+        self.services.get_leaf_optimization_progress()
+    }
+
+    async fn buy_bitcoin(
+        &self,
+        request: BuyBitcoinRequest,
+    ) -> Result<BuyBitcoinResponse, SdkError> {
+        self.services.buy_bitcoin(request).await
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
+impl BreezSdk {
+    /// Registers a listener to receive SDK events
+    ///
+    /// # Arguments
+    ///
+    /// * `listener` - An implementation of the `EventListener` trait
+    ///
+    /// # Returns
+    ///
+    /// A unique identifier for the listener, which can be used to remove it later
+    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+        ApiService::add_event_listener(self, listener).await
+    }
+
+    /// Removes a previously registered event listener
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The listener ID returned from `add_event_listener`
+    ///
+    /// # Returns
+    ///
+    /// `true` if the listener was found and removed, `false` otherwise
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        ApiService::remove_event_listener(self, id).await
+    }
+
+    /// Stops the SDK's background tasks
+    ///
+    /// This method stops the background tasks started by the `start()` method.
+    /// It should be called before your application terminates to ensure proper cleanup.
+    ///
+    /// # Returns
+    ///
+    /// Result containing either success or an `SdkError` if the background task couldn't be stopped
+    pub async fn disconnect(&self) -> Result<(), SdkError> {
+        ApiService::disconnect(self).await
+    }
+
+    pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
+        ApiService::parse(self, input).await
+    }
+
+    /// Returns the balance of the wallet in satoshis
+    pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
+        ApiService::get_info(self, request).await
+    }
+
+    /// List fiat currencies for which there is a known exchange rate,
+    /// sorted by the canonical name of the currency.
+    pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
+        ApiService::list_fiat_currencies(self).await
+    }
+
+    /// List the latest rates of fiat currencies, sorted by name.
+    pub async fn list_fiat_rates(&self) -> Result<ListFiatRatesResponse, SdkError> {
+        ApiService::list_fiat_rates(self).await
+    }
+
+    /// Get the recommended BTC fees based on the configured chain service.
+    pub async fn recommended_fees(&self) -> Result<RecommendedFees, SdkError> {
+        ApiService::recommended_fees(self).await
+    }
+
+    /// Returns the metadata for the given token identifiers.
+    ///
+    /// Results are not guaranteed to be in the same order as the input token identifiers.
+    ///
+    /// If the metadata is not found locally in cache, it will be queried from
+    /// the Spark network and then cached.
+    pub async fn get_tokens_metadata(
+        &self,
+        request: GetTokensMetadataRequest,
+    ) -> Result<GetTokensMetadataResponse, SdkError> {
+        ApiService::get_tokens_metadata(self, request).await
+    }
+
+    /// Signs a message with the wallet's identity key. The message is SHA256
+    /// hashed before signing. The returned signature will be hex encoded in
+    /// DER format by default, or compact format if specified.
+    pub async fn sign_message(
+        &self,
+        request: SignMessageRequest,
+    ) -> Result<SignMessageResponse, SdkError> {
+        ApiService::sign_message(self, request).await
+    }
+
+    /// Verifies a message signature against the provided public key. The message
+    /// is SHA256 hashed before verification. The signature can be hex encoded
+    /// in either DER or compact format.
+    pub async fn check_message(
+        &self,
+        request: CheckMessageRequest,
+    ) -> Result<CheckMessageResponse, SdkError> {
+        ApiService::check_message(self, request).await
+    }
+
+    /// Returns the user settings for the wallet.
+    ///
+    /// Some settings are fetched from the Spark network so network requests are performed.
+    pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
+        ApiService::get_user_settings(self).await
+    }
+
+    /// Updates the user settings for the wallet.
+    ///
+    /// Some settings are updated on the Spark network so network requests may be performed.
+    pub async fn update_user_settings(
+        &self,
+        request: UpdateUserSettingsRequest,
+    ) -> Result<(), SdkError> {
+        ApiService::update_user_settings(self, request).await
+    }
+
     /// Returns an instance of the [`TokenIssuer`] for managing token issuance.
     pub fn get_token_issuer(&self) -> TokenIssuer {
-        TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
+        ApiService::get_token_issuer(self)
     }
 
     /// Starts leaf optimization in the background.
@@ -260,7 +524,7 @@ impl BreezSdk {
     /// immediately. Progress is reported via events.
     /// If optimization is already running, no new task will be started.
     pub fn start_leaf_optimization(&self) {
-        self.spark_wallet.start_leaf_optimization();
+        ApiService::start_leaf_optimization(self);
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -272,13 +536,12 @@ impl BreezSdk {
     ///
     /// If no optimization is running, this method returns immediately.
     pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
-        self.spark_wallet.cancel_leaf_optimization().await?;
-        Ok(())
+        ApiService::cancel_leaf_optimization(self).await
     }
 
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.spark_wallet.get_leaf_optimization_progress().into()
+        ApiService::get_leaf_optimization_progress(self)
     }
 
     /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).
@@ -298,15 +561,6 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let address =
-            get_or_create_deposit_address(&self.spark_wallet, self.storage.clone(), true).await?;
-
-        let url = self
-            .buy_bitcoin_provider
-            .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
-
-        Ok(BuyBitcoinResponse { url })
+        ApiService::buy_bitcoin(self, request).await
     }
 }

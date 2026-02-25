@@ -5,8 +5,9 @@ use tracing::{Instrument, debug, error, info};
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
-    LnurlWithdrawResponse, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, SendPaymentMethod, SetLnurlMetadataItem, WaitForPaymentIdentifier,
+    LnurlWithdrawResponse, Payment, PaymentDetails, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod, SetLnurlMetadataItem,
+    WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -19,12 +20,35 @@ use crate::{
 };
 use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 
-use super::{BreezSdk, helpers::process_success_action};
+use super::{
+    BreezSdk, SdkServices, api::ApiService, helpers::process_success_action,
+    payments::PaymentsService,
+};
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-#[allow(clippy::needless_pass_by_value)]
-impl BreezSdk {
-    pub async fn prepare_lnurl_pay(
+/// Trait for LNURL operations
+#[macros::async_trait]
+pub(crate) trait LnurlService {
+    async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError>;
+
+    async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError>;
+
+    async fn lnurl_withdraw(
+        &self,
+        request: LnurlWithdrawRequest,
+    ) -> Result<LnurlWithdrawResponse, SdkError>;
+
+    async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError>;
+}
+
+#[macros::async_trait]
+impl LnurlService for SdkServices {
+    async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
@@ -94,7 +118,7 @@ impl BreezSdk {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+    async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
 
         let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
@@ -231,32 +255,7 @@ impl BreezSdk {
         })
     }
 
-    /// Performs an LNURL withdraw operation for the amount of satoshis to
-    /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
-    /// details can be obtained from calling [`BreezSdk::parse`].
-    ///
-    /// The method generates a Lightning invoice for the withdraw amount, stores
-    /// the LNURL withdraw metadata, and performs the LNURL withdraw using  the generated
-    /// invoice.
-    ///
-    /// If the `completion_timeout_secs` parameter is provided and greater than 0, the
-    /// method will wait for the payment to be completed within that period. If the
-    /// withdraw is completed within the timeout, the `payment` field in the response
-    /// will be set with the payment details. If the `completion_timeout_secs`
-    /// parameter is not provided or set to 0, the method will not wait for the payment
-    /// to be completed. If the withdraw is not completed within the
-    /// timeout, the `payment` field will be empty.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The LNURL withdraw request
-    ///
-    /// # Returns
-    ///
-    /// Result containing either:
-    /// * `LnurlWithdrawResponse` - The payment details if the withdraw request was successful
-    /// * `SdkError` - If there was an error during the withdraw process
-    pub async fn lnurl_withdraw(
+    async fn lnurl_withdraw(
         &self,
         request: LnurlWithdrawRequest,
     ) -> Result<LnurlWithdrawResponse, SdkError> {
@@ -339,12 +338,7 @@ impl BreezSdk {
         })
     }
 
-    /// Performs LNURL-auth with the service.
-    ///
-    /// This method implements the LNURL-auth protocol as specified in LUD-04 and LUD-05.
-    /// It derives a domain-specific linking key, signs the challenge, and sends the
-    /// authentication request to the service.
-    pub async fn lnurl_auth(
+    async fn lnurl_auth(
         &self,
         request_data: LnurlAuthRequestDetails,
     ) -> Result<LnurlCallbackStatus, SdkError> {
@@ -364,8 +358,95 @@ impl BreezSdk {
     }
 }
 
-// Private LNURL methods
+#[macros::async_trait]
+impl LnurlService for BreezSdk {
+    async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        self.services.prepare_lnurl_pay(request).await
+    }
+
+    async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        self.services.lnurl_pay(request).await
+    }
+
+    async fn lnurl_withdraw(
+        &self,
+        request: LnurlWithdrawRequest,
+    ) -> Result<LnurlWithdrawResponse, SdkError> {
+        self.services.lnurl_withdraw(request).await
+    }
+
+    async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError> {
+        self.services.lnurl_auth(request_data).await
+    }
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+#[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    pub async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        LnurlService::prepare_lnurl_pay(self, request).await
+    }
+
+    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        LnurlService::lnurl_pay(self, request).await
+    }
+
+    /// Performs an LNURL withdraw operation for the amount of satoshis to
+    /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
+    /// details can be obtained from calling [`BreezSdk::parse`].
+    ///
+    /// The method generates a Lightning invoice for the withdraw amount, stores
+    /// the LNURL withdraw metadata, and performs the LNURL withdraw using  the generated
+    /// invoice.
+    ///
+    /// If the `completion_timeout_secs` parameter is provided and greater than 0, the
+    /// method will wait for the payment to be completed within that period. If the
+    /// withdraw is completed within the timeout, the `payment` field in the response
+    /// will be set with the payment details. If the `completion_timeout_secs`
+    /// parameter is not provided or set to 0, the method will not wait for the payment
+    /// to be completed. If the withdraw is not completed within the
+    /// timeout, the `payment` field will be empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The LNURL withdraw request
+    ///
+    /// # Returns
+    ///
+    /// Result containing either:
+    /// * `LnurlWithdrawResponse` - The payment details if the withdraw request was successful
+    /// * `SdkError` - If there was an error during the withdraw process
+    pub async fn lnurl_withdraw(
+        &self,
+        request: LnurlWithdrawRequest,
+    ) -> Result<LnurlWithdrawResponse, SdkError> {
+        LnurlService::lnurl_withdraw(self, request).await
+    }
+
+    /// Performs LNURL-auth with the service.
+    ///
+    /// This method implements the LNURL-auth protocol as specified in LUD-04 and LUD-05.
+    /// It derives a domain-specific linking key, signs the challenge, and sends the
+    /// authentication request to the service.
+    pub async fn lnurl_auth(
+        &self,
+        request_data: LnurlAuthRequestDetails,
+    ) -> Result<LnurlCallbackStatus, SdkError> {
+        LnurlService::lnurl_auth(self, request_data).await
+    }
+}
+
+// Private LNURL methods on SdkServices
+impl SdkServices {
     /// Prepares an LNURL pay `FeesIncluded` operation using a double-query approach.
     ///
     /// This method:
@@ -498,14 +579,19 @@ impl BreezSdk {
             return;
         }
 
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut trigger_receiver = sdk.lnurl_preimage_trigger.clone().subscribe();
+        let storage = self.storage.clone();
+        let lnurl_server_client = self.lnurl_server_client.clone();
+        let config_support_lnurl_verify = self.config.support_lnurl_verify;
+        let mut shutdown_receiver = self.shutdown_sender.subscribe();
+        let mut trigger_receiver = self.lnurl_preimage_trigger.clone().subscribe();
         let span = tracing::Span::current();
 
         tokio::spawn(
             async move {
-                if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
+                if let Err(e) =
+                    Self::process_pending_lnurl_preimages_static(&storage, lnurl_server_client.as_ref())
+                        .await
+                {
                     error!("Failed to process pending LNURL preimages on startup: {e:?}");
                 }
 
@@ -516,9 +602,10 @@ impl BreezSdk {
                             return;
                         }
                         _ = trigger_receiver.recv() => {
-                            if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
-                                error!("Failed to process pending LNURL preimages: {e:?}");
-                            }
+                            if config_support_lnurl_verify
+                                && let Err(e) = Self::process_pending_lnurl_preimages_static(&storage, lnurl_server_client.as_ref()).await {
+                                    error!("Failed to process pending LNURL preimages: {e:?}");
+                                }
                         }
                     }
                 }
@@ -527,16 +614,18 @@ impl BreezSdk {
         );
     }
 
-    async fn process_pending_lnurl_preimages(&self) -> Result<(), SdkError> {
-        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
+    async fn process_pending_lnurl_preimages_static(
+        storage: &std::sync::Arc<dyn crate::persist::Storage>,
+        lnurl_server_client: Option<&std::sync::Arc<dyn crate::lnurl::LnurlServerClient>>,
+    ) -> Result<(), SdkError> {
+        let Some(lnurl_server_client) = lnurl_server_client else {
             return Ok(());
         };
 
-        let limit = 100;
+        let limit: u32 = 100;
         loop {
             // Query only payments that need their preimage sent to the server
-            let pending = self
-                .storage
+            let pending: Vec<Payment> = storage
                 .list_payments(StorageListPaymentsRequest {
                     type_filter: Some(vec![PaymentType::Receive]),
                     status_filter: Some(vec![PaymentStatus::Completed]),
@@ -571,7 +660,9 @@ impl BreezSdk {
                 };
 
                 // Notify the LNURL server about the paid invoice
-                if let Err(e) = lnurl_server_client.notify_invoice_paid(&preimage).await {
+                let notify_result: Result<(), crate::lnurl::LnurlServerError> =
+                    lnurl_server_client.notify_invoice_paid(&preimage).await;
+                if let Err(e) = notify_result {
                     error!(
                         "Failed to notify invoice paid for payment_hash {}: {}",
                         htlc_details.payment_hash, e
@@ -585,8 +676,7 @@ impl BreezSdk {
                 );
 
                 // Update the LNURL metadata to mark the preimage as sent
-                if let Err(e) = self
-                    .storage
+                if let Err(e) = storage
                     .set_lnurl_metadata(vec![SetLnurlMetadataItem {
                         payment_hash: htlc_details.payment_hash.clone(),
                         sender_comment: metadata.sender_comment,

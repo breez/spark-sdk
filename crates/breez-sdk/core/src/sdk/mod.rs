@@ -69,11 +69,10 @@ impl SyncRequest {
     }
 }
 
-/// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
-/// with request/response objects and comprehensive error handling.
+/// Internal services struct that holds all SDK components.
+/// This is crate-scoped and contains the actual implementation.
 #[derive(Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct BreezSdk {
+pub(crate) struct SdkServices {
     pub(crate) config: Config,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) storage: Arc<dyn Storage>,
@@ -93,6 +92,16 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+}
+
+/// `BreezSDK` is a wrapper around `SparkSDK` that provides a more structured API
+/// with request/response objects and comprehensive error handling.
+///
+/// This is a facade that delegates all operations to the internal `SdkServices`.
+#[derive(Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+pub struct BreezSdk {
+    pub(crate) services: Arc<SdkServices>,
 }
 
 pub(crate) struct BreezSdkParams {
