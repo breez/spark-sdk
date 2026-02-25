@@ -48,7 +48,14 @@ features and configuration options, but with {{LANG_NAME}}-specific syntax and u
 ONLY modify files under: `{{TARGET_DIR}}`
 Do NOT modify any other files.
 
-### Step 5: Verify and create PR
+### Step 5: Build check
+After making changes, verify the code is syntactically valid:
+```bash
+{{BUILD_CHECK}}
+```
+If any check fails, fix the errors before proceeding.
+
+### Step 6: Verify and create PR
 After making changes:
 1. Read back each modified file to verify correctness
 2. Create a branch and PR:
@@ -62,5 +69,5 @@ gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
   --base main
 ```
 
-### Step 6: No-op check
+### Step 7: No-op check
 If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."

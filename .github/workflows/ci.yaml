@@ -168,6 +168,15 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
 
+  sync-prompts:
+    name: Sync prompts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify generated workflow files are up-to-date
+        run: python3 crates/breez-sdk/bindings/examples/cli/sync-prompts/generate.py --check
+
   docs-rust:
     name: Docs (rust)
     runs-on: ubuntu-latest

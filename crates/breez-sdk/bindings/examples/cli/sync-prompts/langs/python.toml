@@ -33,10 +33,14 @@ doc_build_instructions = "installation steps, commands (`breez-cli` instead of `
 # Documentation: what language-specific content to preserve
 doc_preserve_items = "venv instructions, or pip install sections — those are Python-only"
 
+# Build check command (syntax validation without SDK installed)
+build_check = "python3 -m py_compile crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/*.py"
+
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
-Bash(gh pr create:*),Bash(gh pr list:*)"""
+Bash(gh pr create:*),Bash(gh pr list:*),
+Bash(python3 -m py_compile:*)"""
 
 [file_mapping]
 content = """

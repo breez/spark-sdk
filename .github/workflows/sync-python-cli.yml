@@ -64,7 +64,8 @@ jobs:
             --allowed-tools
             Read,Write,Edit,Glob,Grep,
             Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
-            Bash(gh pr create:*),Bash(gh pr list:*)
+            Bash(gh pr create:*),Bash(gh pr list:*),
+            Bash(python3 -m py_compile:*)
           prompt: |
             ## Task: Sync Python CLI with Rust CLI changes
 
@@ -158,7 +159,14 @@ jobs:
             ONLY modify files under: `crates/breez-sdk/bindings/examples/cli/langs/python/`
             Do NOT modify any other files.
 
-            ### Step 5: Verify and create PR
+            ### Step 5: Build check
+            After making changes, verify the code is syntactically valid:
+            ```bash
+            python3 -m py_compile crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/*.py
+            ```
+            If any check fails, fix the errors before proceeding.
+
+            ### Step 6: Verify and create PR
             After making changes:
             1. Read back each modified file to verify correctness
             2. Create a branch and PR:
@@ -172,7 +180,7 @@ jobs:
               --base main
             ```
 
-            ### Step 6: No-op check
+            ### Step 7: No-op check
             If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No Python CLI changes needed."
 
       - name: Summary
