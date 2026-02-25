@@ -65,7 +65,7 @@ jobs:
             Read,Write,Edit,Glob,Grep,
             Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
             Bash(gh pr create:*),Bash(gh pr list:*),
-            Bash(cd crates/breez-sdk/bindings/examples/cli/langs/go:*),Bash(gofmt:*)
+            Bash(make -C crates/breez-sdk/bindings/examples/cli check-go:*)
           prompt: |
             ## Task: Sync Go CLI with Rust CLI changes
 
@@ -168,7 +168,7 @@ jobs:
             ### Step 5: Build check
             After making changes, verify the code is syntactically valid:
             ```bash
-            cd crates/breez-sdk/bindings/examples/cli/langs/go && gofmt -e *.go > /dev/null
+            make -C crates/breez-sdk/bindings/examples/cli check-go
             ```
             If any check fails, fix the errors before proceeding.
 

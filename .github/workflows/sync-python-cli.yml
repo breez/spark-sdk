@@ -65,7 +65,7 @@ jobs:
             Read,Write,Edit,Glob,Grep,
             Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
             Bash(gh pr create:*),Bash(gh pr list:*),
-            Bash(python3 -m py_compile:*)
+            Bash(make -C crates/breez-sdk/bindings/examples/cli check-python:*)
           prompt: |
             ## Task: Sync Python CLI with Rust CLI changes
 
@@ -162,7 +162,7 @@ jobs:
             ### Step 5: Build check
             After making changes, verify the code is syntactically valid:
             ```bash
-            python3 -m py_compile crates/breez-sdk/bindings/examples/cli/langs/python/src/breez_cli/*.py
+            make -C crates/breez-sdk/bindings/examples/cli check-python
             ```
             If any check fails, fix the errors before proceeding.
 

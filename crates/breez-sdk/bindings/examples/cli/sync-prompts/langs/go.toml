@@ -34,13 +34,13 @@ doc_build_instructions = "build and run commands (`make run` instead of `cargo r
 doc_preserve_items = "go build instructions, or Go-specific notes"
 
 # Build check command (syntax validation without SDK installed)
-build_check = "cd crates/breez-sdk/bindings/examples/cli/langs/go && gofmt -e *.go > /dev/null"
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-go"
 
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
 Bash(gh pr create:*),Bash(gh pr list:*),
-Bash(cd crates/breez-sdk/bindings/examples/cli/langs/go:*),Bash(gofmt:*)"""
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-go:*)"""
 
 [file_mapping]
 content = """
