@@ -1,13 +1,21 @@
-# Breez SDK CLI — Dart
+# Breez SDK - Spark CLI (Dart)
 
-A Dart port of the [Rust CLI](../../../cli/) for the Breez SDK with Spark.
+Interactive CLI client for the [Breez SDK](../../../../../../../README.md) with Spark, written in Dart.
 
-This CLI uses the [breez_sdk_spark_flutter](../../../../packages/flutter) package (Flutter/Dart bindings via `flutter_rust_bridge`).
+> **Note:** The [Rust CLI](../../../../../cli/) is the source of truth. This CLI is an automated port that mirrors its commands, arguments, and behavior. Changes should be made to the Rust CLI first — a [sync workflow](../../../../../../../.github/workflows/sync-dart-cli.yml) will open a PR to update this CLI automatically.
+
+This CLI uses the [breez_sdk_spark_flutter](../../../../../../../packages/flutter) package (Flutter/Dart bindings via `flutter_rust_bridge`).
 
 ## Prerequisites
 
 - **Dart** >= 3.7
-- **Flutter** >= 3.27 (needed for `flutter pub get`)
+- **Flutter** >= 3.27
+
+### Additional prerequisites for local bindings
+
+- **Rust** toolchain
+- **[just](https://just.systems/)** command runner
+- `flutter_rust_bridge_codegen` (installed automatically by `make setup`)
 
 ## Quick Start
 
@@ -21,7 +29,7 @@ make run               # dart run bin/breez_cli.dart (regtest)
 ### Using local bindings
 
 ```bash
-make setup             # flutter pub get (uses local path dependency)
+make setup             # builds Flutter/FRB bindings + flutter pub get
 make run               # dart run bin/breez_cli.dart (regtest)
 ```
 

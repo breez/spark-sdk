@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'commands.dart';
+import 'helpers.dart';
 import 'issuer.dart';
 import 'persistence.dart';
 import 'serialization.dart';
@@ -13,7 +15,9 @@ Future<void> runCli({
   required String network,
   int? accountNumber,
 }) async {
-  await BreezSdkSparkLib.init();
+  await BreezSdkSparkLib.init(
+    externalLibrary: ExternalLibrary.open(_nativeLibPath()),
+  );
 
   final dir = Directory(dataDir);
   if (!dir.existsSync()) {
@@ -31,11 +35,11 @@ Future<void> runCli({
   }
 
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
-  final builder = SdkBuilder(config: config, seed: seed);
-  builder.withDefaultStorage(storageDir: dataDir);
+  var builder = SdkBuilder(config: config, seed: seed);
+  builder = builder.withDefaultStorage(storageDir: dataDir);
 
   if (accountNumber != null) {
-    builder.withKeySet(
+    builder = builder.withKeySet(
       config: KeySetConfig(
         keySetType: KeySetType.default_,
         useAddressIndex: false,
@@ -191,4 +195,11 @@ String prompt(String message, {String? defaultValue}) {
   final line = stdin.readLineSync()?.trim() ?? '';
   if (line.isEmpty && defaultValue != null) return defaultValue;
   return line;
+}
+
+/// Resolve the path to the native library built by `make setup`.
+String _nativeLibPath() {
+  final ext = Platform.isMacOS ? 'dylib' : 'so';
+  return '../../../../../../../packages/flutter/rust/target/release/'
+      'libbreez_sdk_spark_flutter.$ext';
 }

@@ -4,21 +4,25 @@ import 'package:args/args.dart';
 import 'package:breez_cli/cli.dart';
 
 Future<void> main(List<String> arguments) async {
-  final parser = ArgParser()
-    ..addOption(
-      'data-dir',
-      abbr: 'd',
-      defaultsTo: './.data',
-      help: 'Path to the data directory',
-    )
-    ..addOption(
-      'network',
-      defaultsTo: 'regtest',
-      allowed: ['regtest', 'mainnet'],
-      help: 'Network to use',
-    )
-    ..addOption('account-number', help: 'Account number for the Spark signer')
-    ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
+  final parser =
+      ArgParser()
+        ..addOption(
+          'data-dir',
+          abbr: 'd',
+          defaultsTo: './.data',
+          help: 'Path to the data directory',
+        )
+        ..addOption(
+          'network',
+          defaultsTo: 'regtest',
+          allowed: ['regtest', 'mainnet'],
+          help: 'Network to use',
+        )
+        ..addOption(
+          'account-number',
+          help: 'Account number for the Spark signer',
+        )
+        ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
   try {
@@ -41,9 +45,8 @@ Future<void> main(List<String> arguments) async {
   final dataDir = results.option('data-dir')!;
   final network = results.option('network')!;
   final accountNumberStr = results.option('account-number');
-  final accountNumber = accountNumberStr != null
-      ? int.parse(accountNumberStr)
-      : null;
+  final accountNumber =
+      accountNumberStr != null ? int.parse(accountNumberStr) : null;
 
   await runCli(
     dataDir: dataDir,

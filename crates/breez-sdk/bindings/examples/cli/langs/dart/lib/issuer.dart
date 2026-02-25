@@ -114,8 +114,8 @@ Future<void> _handleCreateToken(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = ArgParser()
-    ..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
+  final parser =
+      ArgParser()..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
   final results = parser.parse(args);
 
   if (results.rest.length < 4) {

@@ -232,11 +232,13 @@ PaymentStatus? _parsePaymentStatus(String s) {
 }
 
 SparkHtlcStatus? _parseHtlcStatus(String s) {
-  switch (s.toLowerCase()) {
-    case 'waiting_for_preimage':
+  switch (s) {
+    case 'WaitingForPreimage':
       return SparkHtlcStatus.waitingForPreimage;
-    case 'preimage_received':
-      return SparkHtlcStatus.preimageReceived;
+    case 'PreimageShared':
+      return SparkHtlcStatus.preimageShared;
+    case 'Returned':
+      return SparkHtlcStatus.returned;
     default:
       return null;
   }
@@ -260,36 +262,39 @@ Future<void> _handleListPayments(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('list-payments')
-    ..addMultiOption('type-filter', abbr: 't')
-    ..addMultiOption('status-filter', abbr: 's')
-    ..addOption('asset-filter', abbr: 'a')
-    ..addMultiOption('spark-htlc-status-filter')
-    ..addOption('tx-hash')
-    ..addOption('tx-type')
-    ..addOption('from-timestamp')
-    ..addOption('to-timestamp')
-    ..addOption('limit', abbr: 'l', defaultsTo: '10')
-    ..addOption('offset', abbr: 'o', defaultsTo: '0')
-    ..addOption('sort-ascending');
+  final parser =
+      _parser('list-payments')
+        ..addMultiOption('type-filter', abbr: 't')
+        ..addMultiOption('status-filter', abbr: 's')
+        ..addOption('asset-filter', abbr: 'a')
+        ..addMultiOption('spark-htlc-status-filter')
+        ..addOption('tx-hash')
+        ..addOption('tx-type')
+        ..addOption('from-timestamp')
+        ..addOption('to-timestamp')
+        ..addOption('limit', abbr: 'l', defaultsTo: '10')
+        ..addOption('offset', abbr: 'o', defaultsTo: '0')
+        ..addOption('sort-ascending');
   final results = parser.parse(args);
 
   List<PaymentType>? typeFilter;
   final typeFilterValues = results.multiOption('type-filter');
   if (typeFilterValues.isNotEmpty) {
-    typeFilter = typeFilterValues
-        .map(_parsePaymentType)
-        .whereType<PaymentType>()
-        .toList();
+    typeFilter =
+        typeFilterValues
+            .map(_parsePaymentType)
+            .whereType<PaymentType>()
+            .toList();
   }
 
   List<PaymentStatus>? statusFilter;
   final statusFilterValues = results.multiOption('status-filter');
   if (statusFilterValues.isNotEmpty) {
-    statusFilter = statusFilterValues
-        .map(_parsePaymentStatus)
-        .whereType<PaymentStatus>()
-        .toList();
+    statusFilter =
+        statusFilterValues
+            .map(_parsePaymentStatus)
+            .whereType<PaymentStatus>()
+            .toList();
   }
 
   AssetFilter? assetFilter;
@@ -305,10 +310,11 @@ Future<void> _handleListPayments(
   final paymentDetailsFilter = <PaymentDetailsFilter>[];
   final htlcStatusValues = results.multiOption('spark-htlc-status-filter');
   if (htlcStatusValues.isNotEmpty) {
-    final statuses = htlcStatusValues
-        .map(_parseHtlcStatus)
-        .whereType<SparkHtlcStatus>()
-        .toList();
+    final statuses =
+        htlcStatusValues
+            .map(_parseHtlcStatus)
+            .whereType<SparkHtlcStatus>()
+            .toList();
     if (statuses.isNotEmpty) {
       paymentDetailsFilter.add(
         PaymentDetailsFilter.spark(htlcStatus: statuses),
@@ -337,12 +343,10 @@ Future<void> _handleListPayments(
       typeFilter: typeFilter,
       statusFilter: statusFilter,
       assetFilter: assetFilter,
-      paymentDetailsFilter: paymentDetailsFilter.isNotEmpty
-          ? paymentDetailsFilter
-          : null,
-      fromTimestamp: fromTimestampStr != null
-          ? BigInt.parse(fromTimestampStr)
-          : null,
+      paymentDetailsFilter:
+          paymentDetailsFilter.isNotEmpty ? paymentDetailsFilter : null,
+      fromTimestamp:
+          fromTimestampStr != null ? BigInt.parse(fromTimestampStr) : null,
       toTimestamp: toTimestampStr != null ? BigInt.parse(toTimestampStr) : null,
       sortAscending: _parseBool(results.option('sort-ascending')),
     ),
@@ -357,14 +361,15 @@ Future<void> _handleReceive(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('receive')
-    ..addOption('method', abbr: 'm', mandatory: true)
-    ..addOption('description', abbr: 'd')
-    ..addOption('amount', abbr: 'a')
-    ..addOption('token-identifier', abbr: 't')
-    ..addOption('expiry-secs', abbr: 'e')
-    ..addOption('sender-public-key', abbr: 's')
-    ..addFlag('hodl', defaultsTo: false);
+  final parser =
+      _parser('receive')
+        ..addOption('method', abbr: 'm', mandatory: true)
+        ..addOption('description', abbr: 'd')
+        ..addOption('amount', abbr: 'a')
+        ..addOption('token-identifier', abbr: 't')
+        ..addOption('expiry-secs', abbr: 'e')
+        ..addOption('sender-public-key', abbr: 's')
+        ..addFlag('hodl', defaultsTo: false);
   final results = parser.parse(args);
 
   final method = results.option('method')!.toLowerCase();
@@ -442,15 +447,16 @@ Future<void> _handlePay(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('pay')
-    ..addOption('payment-request', abbr: 'r', mandatory: true)
-    ..addOption('amount', abbr: 'a')
-    ..addOption('token-identifier', abbr: 't')
-    ..addOption('idempotency-key', abbr: 'i')
-    ..addFlag('from-bitcoin', defaultsTo: false)
-    ..addOption('from-token')
-    ..addOption('convert-max-slippage-bps', abbr: 's')
-    ..addFlag('fees-included', defaultsTo: false);
+  final parser =
+      _parser('pay')
+        ..addOption('payment-request', abbr: 'r', mandatory: true)
+        ..addOption('amount', abbr: 'a')
+        ..addOption('token-identifier', abbr: 't')
+        ..addOption('idempotency-key', abbr: 'i')
+        ..addFlag('from-bitcoin', defaultsTo: false)
+        ..addOption('from-token')
+        ..addOption('convert-max-slippage-bps', abbr: 's')
+        ..addFlag('fees-included', defaultsTo: false);
   final results = parser.parse(args);
 
   final paymentRequest = results.option('payment-request')!;
@@ -495,8 +501,8 @@ Future<void> _handlePay(
     final est = prepareResponse.conversionEstimate!;
     final units =
         prepareResponse.paymentMethod is SendPaymentMethod_BitcoinAddress
-        ? 'sats'
-        : 'token base units';
+            ? 'sats'
+            : 'token base units';
     print(
       'Estimated conversion of ${est.amount} $units with a ${est.fee} $units fee',
     );
@@ -526,13 +532,14 @@ Future<void> _handleLnurlPay(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('lnurl-pay')
-    ..addOption('comment', abbr: 'c')
-    ..addOption('validate', abbr: 'v')
-    ..addOption('idempotency-key', abbr: 'i')
-    ..addOption('from-token')
-    ..addOption('convert-max-slippage-bps', abbr: 's')
-    ..addFlag('fees-included', defaultsTo: false);
+  final parser =
+      _parser('lnurl-pay')
+        ..addOption('comment', abbr: 'c')
+        ..addOption('validate', abbr: 'v')
+        ..addOption('idempotency-key', abbr: 'i')
+        ..addOption('from-token')
+        ..addOption('convert-max-slippage-bps', abbr: 's')
+        ..addFlag('fees-included', defaultsTo: false);
   final results = parser.parse(args);
 
   // The LNURL is the first positional argument (remaining args)
@@ -570,8 +577,9 @@ Future<void> _handleLnurlPay(
     return;
   }
 
-  final minSendable = (payRequest.minSendable / 1000).ceil();
-  final maxSendable = payRequest.maxSendable ~/ 1000;
+  final _k = BigInt.from(1000);
+  final minSendable = (payRequest.minSendable + _k - BigInt.one) ~/ _k;
+  final maxSendable = payRequest.maxSendable ~/ _k;
   final amountStr = prompt(
     'Amount to pay (min $minSendable sat, max $maxSendable sat): ',
   );
@@ -639,8 +647,10 @@ Future<void> _handleLnurlWithdraw(
   }
 
   final withdrawRequest = parsed.field0;
-  final minWithdrawable = (withdrawRequest.minWithdrawable / 1000).ceil();
-  final maxWithdrawable = withdrawRequest.maxWithdrawable ~/ 1000;
+  final _k = BigInt.from(1000);
+  final minWithdrawable =
+      (withdrawRequest.minWithdrawable + _k - BigInt.one) ~/ _k;
+  final maxWithdrawable = withdrawRequest.maxWithdrawable ~/ _k;
   final amountStr = prompt(
     'Amount to withdraw (min $minWithdrawable sat, max $maxWithdrawable sat): ',
   );
@@ -713,10 +723,11 @@ Future<void> _handleClaimDeposit(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('claim-deposit')
-    ..addOption('fee-sat')
-    ..addOption('sat-per-vbyte')
-    ..addOption('recommended-fee-leeway');
+  final parser =
+      _parser('claim-deposit')
+        ..addOption('fee-sat')
+        ..addOption('sat-per-vbyte')
+        ..addOption('recommended-fee-leeway');
   final results = parser.parse(args);
 
   if (results.rest.length < 2) {
@@ -779,9 +790,10 @@ Future<void> _handleRefundDeposit(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('refund-deposit')
-    ..addOption('fee-sat')
-    ..addOption('sat-per-vbyte');
+  final parser =
+      _parser('refund-deposit')
+        ..addOption('fee-sat')
+        ..addOption('sat-per-vbyte');
   final results = parser.parse(args);
 
   if (results.rest.length < 3) {
@@ -843,9 +855,10 @@ Future<void> _handleBuyBitcoin(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  final parser = _parser('buy-bitcoin')
-    ..addOption('locked-amount-sat')
-    ..addOption('redirect-url');
+  final parser =
+      _parser('buy-bitcoin')
+        ..addOption('locked-amount-sat')
+        ..addOption('redirect-url');
   final results = parser.parse(args);
 
   final lockedStr = results.option('locked-amount-sat');

@@ -11,4 +11,4 @@ dependencies:
   bip39: ^1.0.6
   crypto: ^3.0.0
   breez_sdk_spark_flutter:
-    path: ../../../../packages/flutter
+    path: ../../../../../../../packages/flutter
