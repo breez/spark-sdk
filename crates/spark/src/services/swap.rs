@@ -290,7 +290,7 @@ impl Swap {
             .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
         let inbound_transfer = Transfer::try_from(inbound_transfer)?;
 
-        let claimed_nodes = self
+        let claim_result = self
             .transfer_service
             .claim_transfer(&inbound_transfer, None)
             .await
@@ -300,6 +300,6 @@ impl Swap {
 
         // TODO: in case of error the js sdk cancels initiated transfers
 
-        Ok(claimed_nodes)
+        Ok(claim_result.nodes)
     }
 }

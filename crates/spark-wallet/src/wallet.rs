@@ -23,7 +23,8 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
+        ClaimTransferResult, CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo,
+        DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafOptimizer,
         LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
         OptimizationEvent, OptimizationEventHandler, OptimizationProgress, Preimage,
@@ -1728,6 +1729,9 @@ async fn claim_pending_transfers(
                 debug!("Claiming transfer {}: {}", i + 1, transfer.id);
                 let result = claim_transfer(&transfer, &transfer_service, &tree_service).await;
                 match &result {
+                    Ok(r) if r.already_claimed => {
+                        debug!("Transfer already claimed, skipping: {}", transfer.id);
+                    }
                     Ok(_) => debug!("Successfully claimed transfer: {}", transfer.id),
                     Err(e) => warn!("Failed to claim transfer {}: {:?}", transfer.id, e),
                 }
@@ -1738,14 +1742,16 @@ async fn claim_pending_transfers(
         .collect()
         .await;
 
-    // Collect successful claims, log failures (best-effort)
+    // Collect newly claimed transfers, skip already-claimed and failures
     let mut successful_items = Vec::new();
 
     for (transfer, result) in claim_results {
-        if result.is_ok() {
-            let mut completed = transfer;
-            completed.status = TransferStatus::Completed;
-            successful_items.push(completed);
+        if let Ok(claim_result) = result {
+            if !claim_result.already_claimed {
+                let mut completed = transfer;
+                completed.status = TransferStatus::Completed;
+                successful_items.push(completed);
+            }
         }
         // Failures already logged above, continue with others
     }
@@ -1878,14 +1884,14 @@ async fn claim_transfer(
     transfer: &Transfer,
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
-) -> Result<Vec<TreeNode>, SparkWalletError> {
+) -> Result<ClaimTransferResult, SparkWalletError> {
     trace!("Claiming transfer with id: {}", transfer.id);
-    let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
+    let result = transfer_service.claim_transfer(transfer, None).await?;
 
     trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
+    tree_service.insert_leaves(result.nodes.clone()).await?;
 
-    Ok(result_nodes)
+    Ok(result)
 }
 
 /// Event handler that bridges OptimizationEvent to WalletEvent.
@@ -2123,21 +2129,26 @@ impl BackgroundProcessor {
             ));
 
         trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        let claim_result =
+            claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
         trace!("Claimed transfer from event");
 
-        // Update transfer status before notifying listeners
-        let mut claimed_transfer = transfer;
-        claimed_transfer.status = TransferStatus::Completed;
-        self.event_manager
-            .notify_listeners(WalletEvent::TransferClaimed(WalletTransfer::from_transfer(
-                claimed_transfer,
-                ssp_transfer,
-                htlc,
-                self.identity_public_key,
-                self.ssp_client.identity_public_key(),
-            )));
-        self.maybe_start_optimization();
+        if !claim_result.already_claimed {
+            // Update transfer status before notifying listeners
+            let mut claimed_transfer = transfer;
+            claimed_transfer.status = TransferStatus::Completed;
+            self.event_manager
+                .notify_listeners(WalletEvent::TransferClaimed(
+                    WalletTransfer::from_transfer(
+                        claimed_transfer,
+                        ssp_transfer,
+                        htlc,
+                        self.identity_public_key,
+                        self.ssp_client.identity_public_key(),
+                    ),
+                ));
+            self.maybe_start_optimization();
+        }
 
         Ok(())
     }

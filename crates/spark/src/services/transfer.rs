@@ -68,6 +68,14 @@ pub struct LeafRefundSigningData {
     pub connector_prev_out: Option<bitcoin::TxOut>,
 }
 
+/// Result of a claim transfer operation
+pub struct ClaimTransferResult {
+    /// The claimed tree nodes
+    pub nodes: Vec<TreeNode>,
+    /// Whether the transfer had already been claimed before this call
+    pub already_claimed: bool,
+}
+
 /// Configuration for claiming transfers
 pub struct ClaimTransferConfig {
     pub max_retries: u32,
@@ -682,7 +690,7 @@ impl TransferService {
         &self,
         transfer: &Transfer,
         config: Option<ClaimTransferConfig>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
+    ) -> Result<ClaimTransferResult, ServiceError> {
         let config = config.unwrap_or_default();
 
         let mut retry_count = 0;
@@ -716,7 +724,10 @@ impl TransferService {
                 Ok(leaves) => leaves,
                 Err(ServiceError::NoLeavesToClaim) => {
                     debug!("There are no leaves to claim for this transfer");
-                    return Ok(Vec::new());
+                    return Ok(ClaimTransferResult {
+                        nodes: Vec::new(),
+                        already_claimed: false,
+                    });
                 }
                 Err(e) => {
                     error!("Failed to prepare leaves for claiming: {}", e);
@@ -774,7 +785,7 @@ impl TransferService {
         &self,
         transfer: &Transfer,
         leaves_to_claim: Vec<LeafKeyTweak>,
-    ) -> Result<Vec<TreeNode>, ServiceError> {
+    ) -> Result<ClaimTransferResult, ServiceError> {
         trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
         // Check if we need to apply key tweaks first
         let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
@@ -820,7 +831,10 @@ impl TransferService {
                     .map(|n| n.1.try_into())
                     .collect::<Result<Vec<TreeNode>, ServiceError>>()?;
                 debug!("Fetched nodes from coordinator: {:?}", nodes);
-                return Ok(nodes);
+                return Ok(ClaimTransferResult {
+                    nodes,
+                    already_claimed: true,
+                });
             }
             Err(e) => {
                 debug!("Failed to claim transfer sign refunds: {}", e);
@@ -838,7 +852,10 @@ impl TransferService {
                 e
             })?;
         debug!("Finalize node signatures successful.");
-        Ok(finalized_nodes)
+        Ok(ClaimTransferResult {
+            nodes: finalized_nodes,
+            already_claimed: false,
+        })
     }
 
     /// Claims transfer by applying key tweaks across all operators
