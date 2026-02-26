@@ -105,6 +105,10 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// An optimization event occurred
 		optimizationEvent := event.OptimizationEvent
 		_ = optimizationEvent
+	case breez_sdk_spark.SdkEventLightningAddressChanged:
+		// The lightning address has changed
+		lightningAddress := event.LightningAddress
+		_ = lightningAddress
 	default:
 		// Handle any future event types
 	}

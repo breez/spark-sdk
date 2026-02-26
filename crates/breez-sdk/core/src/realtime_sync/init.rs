@@ -16,11 +16,13 @@ pub struct RealTimeSyncParams {
     pub storage: Arc<dyn Storage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
     pub event_emitter: Arc<EventEmitter>,
+    pub lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 pub struct RealTimeSyncResult {
     pub storage: Arc<dyn Storage>,
     pub signing_client: SigningClient,
+    pub sync_service: Arc<SyncService>,
 }
 
 pub async fn init_and_start_real_time_sync(
@@ -34,6 +36,7 @@ pub async fn init_and_start_real_time_sync(
         Arc::clone(&params.storage),
         Arc::clone(&sync_service),
         params.event_emitter,
+        params.lightning_address_trigger,
     ));
 
     synced_storage.initial_setup();
@@ -63,5 +66,6 @@ pub async fn init_and_start_real_time_sync(
     Ok(RealTimeSyncResult {
         storage,
         signing_client,
+        sync_service,
     })
 }

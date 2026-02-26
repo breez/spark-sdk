@@ -81,6 +81,8 @@ impl BreezSdk {
             token_converter,
             stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
+            sync_service: params.sync_service,
+            lightning_address_trigger: params.lightning_address_trigger,
         };
 
         sdk.start(initial_synced_sender);
@@ -99,6 +101,7 @@ impl BreezSdk {
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
         self.spawn_lnurl_preimage_publisher();
+        self.spawn_lightning_address_sync_listener();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {

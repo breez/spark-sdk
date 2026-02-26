@@ -94,6 +94,11 @@ namespace BreezSdkSnippets
                         var optimization = optimizationEvent.optimizationEvent;
                         break;
 
+                    case SdkEvent.LightningAddressChanged lightningAddressChangedEvent:
+                        // The lightning address has changed
+                        var lightningAddress = lightningAddressChangedEvent.lightningAddress;
+                        break;
+
                     default:
                         // Handle any future event types
                         break;

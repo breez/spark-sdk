@@ -25,17 +25,19 @@ use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
-enum RecordType {
+pub(crate) enum RecordType {
     PaymentMetadata,
     Contact,
+    LightningAddress,
 }
 
 impl RecordType {
     #[allow(clippy::match_same_arms)] // Arms will diverge as types evolve independently.
-    const fn schema_version(&self) -> SchemaVersion {
+    pub(crate) const fn schema_version(&self) -> SchemaVersion {
         match self {
             Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
             Self::Contact => SchemaVersion::new(1, 0, 0),
+            Self::LightningAddress => SchemaVersion::new(1, 0, 0),
         }
     }
 }
@@ -45,6 +47,7 @@ impl Display for RecordType {
         let s = match self {
             RecordType::PaymentMetadata => "PaymentMetadata",
             RecordType::Contact => "Contact",
+            RecordType::LightningAddress => "LightningAddress",
         };
         write!(f, "{s}")
     }
@@ -57,11 +60,13 @@ impl FromStr for RecordType {
         match s {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
             "Contact" => Ok(RecordType::Contact),
+            "LightningAddress" => Ok(RecordType::LightningAddress),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
 }
 
+pub(crate) const LIGHTNING_ADDRESS_DATA_ID: &str = "current";
 const DELETED_AT_FIELD: &str = "deleted_at";
 
 /// Internal sync model for contacts
@@ -81,6 +86,7 @@ pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
     event_emitter: Arc<EventEmitter>,
+    lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 #[macros::async_trait]
@@ -130,11 +136,13 @@ impl SyncedStorage {
         inner: Arc<dyn Storage>,
         sync_service: Arc<SyncService>,
         event_emitter: Arc<EventEmitter>,
+        lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
     ) -> Self {
         SyncedStorage {
             inner,
             sync_service,
             event_emitter,
+            lightning_address_trigger,
         }
     }
 
@@ -259,6 +267,10 @@ impl SyncedStorage {
                 self.handle_contact_change(change.new_state.data, change.new_state.id.data_id)
                     .await
             }
+            RecordType::LightningAddress => {
+                let _ = self.lightning_address_trigger.send(());
+                Ok(())
+            }
         }?;
         Ok(RecordOutcome::Completed)
     }
@@ -293,6 +305,7 @@ impl SyncedStorage {
                 self.handle_contact_change(change.change.updated_fields, change.change.id.data_id)
                     .await
             }
+            RecordType::LightningAddress => Ok(()),
         }
     }
 
@@ -565,7 +578,8 @@ mod tests {
         );
         let sync_service = Arc::new(SyncService::new(sync_storage));
         let event_emitter = Arc::new(EventEmitter::new(true));
-        SyncedStorage::new(storage, sync_service, event_emitter)
+        let (la_trigger, _) = tokio::sync::broadcast::channel(16);
+        SyncedStorage::new(storage, sync_service, event_emitter, la_trigger)
     }
 
     fn make_incoming_change(

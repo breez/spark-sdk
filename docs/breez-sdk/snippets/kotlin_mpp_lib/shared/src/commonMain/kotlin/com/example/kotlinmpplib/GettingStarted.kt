@@ -87,6 +87,10 @@ class GettingStarted {
                     // An optimization event occurred
                     val optimizationEvent = e.optimizationEvent
                 }
+                is SdkEvent.LightningAddressChanged -> {
+                    // The lightning address has changed
+                    val lightningAddress = e.lightningAddress
+                }
                 else -> {
                     // Handle any future event types
                 }

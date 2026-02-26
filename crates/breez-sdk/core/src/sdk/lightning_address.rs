@@ -1,8 +1,14 @@
+use breez_sdk_common::sync::{RecordChangeRequest, RecordId};
 use lnurl_models::sanitize_username;
+use tokio_with_wasm::alias as tokio;
+use tracing::error;
 
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
-    error::SdkError, persist::ObjectCacheRepository,
+    error::SdkError,
+    events::SdkEvent,
+    persist::ObjectCacheRepository,
+    realtime_sync::{LIGHTNING_ADDRESS_DATA_ID, RecordType},
 };
 
 use super::BreezSdk;
@@ -62,6 +68,7 @@ impl BreezSdk {
 
         client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
+        self.push_lightning_address_sync().await;
         Ok(())
     }
 }
@@ -125,7 +132,72 @@ impl BreezSdk {
             username,
         };
         cache.save_lightning_address(&address_info).await?;
+        self.push_lightning_address_sync().await;
         Ok(address_info)
+    }
+
+    async fn push_lightning_address_sync(&self) {
+        let Some(sync_service) = &self.sync_service else {
+            return;
+        };
+        if let Err(e) = sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(
+                    RecordType::LightningAddress.to_string(),
+                    LIGHTNING_ADDRESS_DATA_ID,
+                ),
+                schema_version: RecordType::LightningAddress.schema_version(),
+                updated_fields: std::collections::HashMap::new(),
+            })
+            .await
+        {
+            error!("Failed to push lightning address sync signal: {e:?}");
+        }
+    }
+
+    pub(super) fn spawn_lightning_address_sync_listener(&self) {
+        let sdk = self.clone();
+        let mut shutdown = sdk.shutdown_sender.subscribe();
+        let mut trigger = sdk.lightning_address_trigger.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                let triggered = tokio::select! {
+                    _ = shutdown.changed() => return,
+                    result = trigger.recv() => {
+                        match result {
+                            // Lagged means we missed messages; still need to recover.
+                            Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        }
+                    }
+                };
+
+                if triggered {
+                    let cache = ObjectCacheRepository::new(sdk.storage.clone());
+                    let old = cache
+                        .fetch_lightning_address()
+                        .await
+                        .ok()
+                        .flatten()
+                        .flatten();
+                    match sdk.recover_lightning_address().await {
+                        Ok(new) => {
+                            if old != new {
+                                sdk.event_emitter
+                                    .emit(&SdkEvent::LightningAddressChanged {
+                                        lightning_address: new,
+                                    })
+                                    .await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to recover lightning address after sync trigger: {e:?}");
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

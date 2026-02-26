@@ -12,7 +12,11 @@ mod sync_coordinator;
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
-use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService, sync::SigningClient};
+use breez_sdk_common::{
+    buy::BuyBitcoinProviderApi,
+    fiat::FiatService,
+    sync::{SigningClient, SyncService},
+};
 use platform_utils::HttpClient;
 use spark_wallet::SparkWallet;
 use std::sync::Arc;
@@ -94,6 +98,8 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    pub(crate) sync_service: Option<Arc<SyncService>>,
+    pub(crate) lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -109,6 +115,8 @@ pub(crate) struct BreezSdkParams {
     pub event_emitter: Arc<EventEmitter>,
     pub sync_signing_client: Option<SigningClient>,
     pub buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    pub sync_service: Option<Arc<SyncService>>,
+    pub lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 pub async fn parse_input(
