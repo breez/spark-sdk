@@ -70,7 +70,7 @@ def set_logger(logger: SdkLogger):
 
 # ANCHOR: add-event-listener
 class SdkListener(EventListener):
-    def on_event(self, event: SdkEvent):
+    async def on_event(self, event: SdkEvent):
         if isinstance(event, SdkEvent.SYNCED):
             # Data has been synchronized with the network. When this event is received,
             # it is recommended to refresh the payment list and wallet balance.
