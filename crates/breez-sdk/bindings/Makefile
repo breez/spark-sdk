@@ -120,6 +120,13 @@ package-xcframework: build-ios-universal build-darwin-universal package-xcframew
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 KOTLIN_PACKAGE := kotlin/breez_sdk_spark
 
+# Build KMP bindings using host binary (no Android NDK needed)
+build-kotlin-multiplatform-bindgen-host: install-uniffi-bindgen-gobley build-release
+	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
+		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
+		$(BIN_PATH)
+
 # Build only the minimum needed for uniffi-bindgen (one Android arch)
 build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android
 	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
@@ -130,8 +137,12 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 # Build all binaries + run bindgen
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
-# Package with dummy binaries (useful for testing)
-package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
+# Package with dummy binaries using host binary (no Android NDK needed, works on Linux)
+package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-host
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+
+# Package with dummy binaries using Android binary (requires Android NDK)
+package-kotlin-multiplatform-dummy-binaries-ndk: build-kotlin-multiplatform-bindgen-only
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 

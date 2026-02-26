@@ -264,7 +264,7 @@ jobs:
 
   docs-kotlin-mpp:
     name: Docs (kotlin-mpp)
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -272,9 +272,6 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
 
       - name: Setup Java
         uses: actions/setup-java@v3

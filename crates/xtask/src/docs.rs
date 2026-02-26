@@ -274,7 +274,7 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
     let workspace_root = env::current_dir()?;
 
     if !skip_binding_gen {
-        println!("Building Kotlin MPP Bindings");
+        println!("Building Kotlin MPP Bindings (using host binary)");
 
         let bindings_dir = workspace_root.join("crates/breez-sdk/bindings");
         let status = Command::new("make")
@@ -288,9 +288,13 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
             );
         }
 
+        // Publish only JVM and metadata variants to Maven Local.
+        // This avoids requiring iOS/Android toolchains and works on Linux.
         let kotlin_mpp_dir = bindings_dir.join("langs/kotlin-multiplatform");
         let status = Command::new("./gradlew")
-            .arg("publishToMavenLocal")
+            .arg(":breez-sdk-spark-kmp:publishJvmPublicationToMavenLocal")
+            .arg(":breez-sdk-spark-kmp:publishKotlinMultiplatformPublicationToMavenLocal")
+            .arg(":breez-sdk-spark-kmp-plugin:publishToMavenLocal")
             .arg("-PlibraryVersion=0.0.0-local-docs")
             .current_dir(&kotlin_mpp_dir)
             .status()?;
@@ -304,14 +308,17 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
 
     println!("Checking doc snippets Kotlin MPP");
 
+    // Compile only the JVM target to validate the Kotlin bindings.
+    // This checks commonMain + jvmMain source sets without requiring
+    // iOS toolchains (macOS) or Android SDK.
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
     let status = Command::new("./gradlew")
-        .arg("build")
+        .arg(":shared:compileKotlinJvm")
         .current_dir(&kotlin_snippets_dir)
         .status()?;
     if !status.success() {
         anyhow::bail!(
-            "Failed to run './gradlew build' in {:?}",
+            "Failed to run './gradlew :shared:compileKotlinJvm' in {:?}",
             kotlin_snippets_dir
         );
     }
