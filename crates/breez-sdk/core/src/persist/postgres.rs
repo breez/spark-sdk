@@ -1176,7 +1176,7 @@ impl Storage for PostgresStorage {
             .query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
             .await?;
 
-        Ok(row.map(|r| r.get(0)))
+        Ok(row.map(|r| r.get("value")))
     }
 
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
@@ -1260,7 +1260,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(30);
+            let parent_payment_id: String = row.get("parent_payment_id");
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1307,20 +1307,20 @@ impl Storage for PostgresStorage {
 
         let mut deposits = Vec::new();
         for row in rows {
-            let claim_error_json: Option<serde_json::Value> = row.get(3);
+            let claim_error_json: Option<serde_json::Value> = row.get("claim_error");
             let claim_error: Option<DepositClaimError> = from_json_opt(claim_error_json)?;
 
             deposits.push(DepositInfo {
-                txid: row.get(0),
-                vout: u32::try_from(row.get::<_, i32>(1))?,
+                txid: row.get("txid"),
+                vout: u32::try_from(row.get::<_, i32>("vout"))?,
                 amount_sats: row
-                    .get::<_, Option<i64>>(2)
+                    .get::<_, Option<i64>>("amount_sats")
                     .map(u64::try_from)
                     .transpose()?
                     .unwrap_or(0),
                 claim_error,
-                refund_tx: row.get(4),
-                refund_tx_id: row.get(5),
+                refund_tx: row.get("refund_tx"),
+                refund_tx_id: row.get("refund_tx_id"),
             });
         }
         Ok(deposits)
@@ -1519,11 +1519,13 @@ impl Storage for PostgresStorage {
 
         let mut results = Vec::new();
         for row in rows {
-            let parent = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(8) {
+            let parent = if let Some(existing_data) =
+                row.get::<_, Option<serde_json::Value>>("existing_data")
+            {
                 Some(Record {
-                    id: RecordId::new(row.get(0), row.get(1)),
-                    schema_version: row.get(6),
-                    revision: u64::try_from(row.get::<_, i64>(9))?,
+                    id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                    schema_version: row.get("existing_schema_version"),
+                    revision: u64::try_from(row.get::<_, i64>("existing_revision"))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1531,11 +1533,13 @@ impl Storage for PostgresStorage {
                 None
             };
             let change = RecordChange {
-                id: RecordId::new(row.get(0), row.get(1)),
-                schema_version: row.get(2),
-                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
-                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                local_revision: u64::try_from(row.get::<_, i64>(5))?,
+                id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                schema_version: row.get("schema_version"),
+                updated_fields: serde_json::from_value(
+                    row.get::<_, serde_json::Value>("updated_fields_json"),
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                local_revision: u64::try_from(row.get::<_, i64>("revision"))?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1550,7 +1554,7 @@ impl Storage for PostgresStorage {
             .query_one("SELECT revision FROM sync_revision", &[])
             .await
             .map_err(|e| StorageError::Connection(e.to_string()))?
-            .get(0);
+            .get("revision");
 
         Ok(u64::try_from(revision)?)
     }
@@ -1626,12 +1630,13 @@ impl Storage for PostgresStorage {
 
         let mut results = Vec::new();
         for row in rows {
-            let old_state = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(7)
+            let old_state = if let Some(existing_data) =
+                row.get::<_, Option<serde_json::Value>>("existing_data")
             {
                 Some(Record {
-                    id: RecordId::new(row.get(0), row.get(1)),
-                    schema_version: row.get(5),
-                    revision: u64::try_from(row.get::<_, i64>(8))?,
+                    id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                    schema_version: row.get("existing_schema_version"),
+                    revision: u64::try_from(row.get::<_, i64>("existing_revision"))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1639,11 +1644,11 @@ impl Storage for PostgresStorage {
                 None
             };
             let new_state = Record {
-                id: RecordId::new(row.get(0), row.get(1)),
-                schema_version: row.get(2),
-                data: serde_json::from_value(row.get::<_, serde_json::Value>(3))
+                id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                schema_version: row.get("schema_version"),
+                data: serde_json::from_value(row.get::<_, serde_json::Value>("data"))
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                revision: u64::try_from(row.get::<_, i64>(4))?,
+                revision: u64::try_from(row.get::<_, i64>("revision"))?,
             };
             results.push(IncomingChange {
                 new_state,
@@ -1671,11 +1676,13 @@ impl Storage for PostgresStorage {
             .map_err(|e| StorageError::Connection(e.to_string()))?;
 
         if let Some(row) = row {
-            let parent = if let Some(existing_data) = row.get::<_, Option<serde_json::Value>>(8) {
+            let parent = if let Some(existing_data) =
+                row.get::<_, Option<serde_json::Value>>("existing_data")
+            {
                 Some(Record {
-                    id: RecordId::new(row.get(0), row.get(1)),
-                    schema_version: row.get(6),
-                    revision: u64::try_from(row.get::<_, i64>(9))?,
+                    id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                    schema_version: row.get("existing_schema_version"),
+                    revision: u64::try_from(row.get::<_, i64>("existing_revision"))?,
                     data: serde_json::from_value(existing_data)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
                 })
@@ -1683,11 +1690,13 @@ impl Storage for PostgresStorage {
                 None
             };
             let change = RecordChange {
-                id: RecordId::new(row.get(0), row.get(1)),
-                schema_version: row.get(2),
-                updated_fields: serde_json::from_value(row.get::<_, serde_json::Value>(4))
-                    .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                local_revision: u64::try_from(row.get::<_, i64>(5))?,
+                id: RecordId::new(row.get("record_type"), row.get("data_id")),
+                schema_version: row.get("schema_version"),
+                updated_fields: serde_json::from_value(
+                    row.get::<_, serde_json::Value>("updated_fields_json"),
+                )
+                .map_err(|e| StorageError::Serialization(e.to_string()))?,
+                local_revision: u64::try_from(row.get::<_, i64>("revision"))?,
             };
             return Ok(Some(OutgoingChange { change, parent }));
         }
@@ -1743,7 +1752,6 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-29 are used by `map_payment`, index 30 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1785,11 +1793,11 @@ const SELECT_PAYMENT_SQL: &str = "
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
-    let withdraw_tx_id: Option<String> = row.get(7);
-    let deposit_tx_id: Option<String> = row.get(8);
-    let spark: Option<bool> = row.get(9);
-    let lightning_invoice: Option<String> = row.get(10);
-    let token_metadata: Option<serde_json::Value> = row.get(20);
+    let withdraw_tx_id: Option<String> = row.get("withdraw_tx_id");
+    let deposit_tx_id: Option<String> = row.get("deposit_tx_id");
+    let spark: Option<bool> = row.get("spark");
+    let lightning_invoice: Option<String> = row.get("lightning_invoice");
+    let token_metadata: Option<serde_json::Value> = row.get("token_metadata");
 
     let details = match (
         lightning_invoice,
@@ -1799,11 +1807,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(11);
-            let destination_pubkey: String = row.get(12);
-            let description: Option<String> = row.get(13);
-            let preimage: Option<String> = row.get(14);
-            let htlc_status_str: Option<String> = row.get(15);
+            let payment_hash: String = row.get("lightning_payment_hash");
+            let destination_pubkey: String = row.get("lightning_destination_pubkey");
+            let description: Option<String> = row.get("lightning_description");
+            let preimage: Option<String> = row.get("lightning_preimage");
+            let htlc_status_str: Option<String> = row.get("lightning_htlc_status");
             let htlc_status: SparkHtlcStatus = htlc_status_str
                 .ok_or_else(|| {
                     StorageError::Implementation(
@@ -1814,19 +1822,20 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse()
                         .map_err(|e: String| StorageError::Serialization(e))
                 })?;
-            let htlc_expiry_time: i64 = row.get(16);
+            let htlc_expiry_time: i64 = row.get("lightning_htlc_expiry_time");
             let htlc_details = SparkHtlcDetails {
                 payment_hash,
                 preimage,
                 expiry_time: u64::try_from(htlc_expiry_time)?,
                 status: htlc_status,
             };
-            let lnurl_pay_info_json: Option<serde_json::Value> = row.get(17);
-            let lnurl_withdraw_info_json: Option<serde_json::Value> = row.get(18);
-            let lnurl_nostr_zap_request: Option<String> = row.get(26);
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(27);
-            let lnurl_sender_comment: Option<String> = row.get(28);
-            let lnurl_payment_hash: Option<String> = row.get(29);
+            let lnurl_pay_info_json: Option<serde_json::Value> = row.get("lnurl_pay_info");
+            let lnurl_withdraw_info_json: Option<serde_json::Value> =
+                row.get("lnurl_withdraw_info");
+            let lnurl_nostr_zap_request: Option<String> = row.get("lnurl_nostr_zap_request");
+            let lnurl_nostr_zap_receipt: Option<String> = row.get("lnurl_nostr_zap_receipt");
+            let lnurl_sender_comment: Option<String> = row.get("lnurl_sender_comment");
+            let lnurl_payment_hash: Option<String> = row.get("lnurl_payment_hash");
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_opt(lnurl_pay_info_json)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -1854,11 +1863,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_json: Option<serde_json::Value> = row.get(24);
+            let invoice_details_json: Option<serde_json::Value> = row.get("spark_invoice_details");
             let invoice_details = from_json_opt(invoice_details_json)?;
-            let htlc_details_json: Option<serde_json::Value> = row.get(25);
+            let htlc_details_json: Option<serde_json::Value> = row.get("spark_htlc_details");
             let htlc_details = from_json_opt(htlc_details_json)?;
-            let conversion_info_json: Option<serde_json::Value> = row.get(19);
+            let conversion_info_json: Option<serde_json::Value> = row.get("conversion_info");
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1867,18 +1876,18 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type_str: String = row.get(22);
+            let tx_type_str: String = row.get("token_tx_type");
             let tx_type = tx_type_str
                 .parse()
                 .map_err(|e: String| StorageError::Serialization(e))?;
-            let invoice_details_json: Option<serde_json::Value> = row.get(23);
+            let invoice_details_json: Option<serde_json::Value> = row.get("token_invoice_details");
             let invoice_details = from_json_opt(invoice_details_json)?;
-            let conversion_info_json: Option<serde_json::Value> = row.get(19);
+            let conversion_info_json: Option<serde_json::Value> = row.get("conversion_info");
             let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Token {
                 metadata: serde_json::from_value(metadata)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                tx_hash: row.get(21),
+                tx_hash: row.get("token_tx_hash"),
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1887,14 +1896,14 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         _ => None,
     };
 
-    let payment_type_str: String = row.get(1);
-    let status_str: String = row.get(2);
-    let amount_str: String = row.get(3);
-    let fees_str: String = row.get(4);
-    let method_str: Option<String> = row.get(6);
+    let payment_type_str: String = row.get("payment_type");
+    let status_str: String = row.get("status");
+    let amount_str: String = row.get("amount");
+    let fees_str: String = row.get("fees");
+    let method_str: Option<String> = row.get("method");
 
     Ok(Payment {
-        id: row.get(0),
+        id: row.get("id"),
         payment_type: payment_type_str
             .parse()
             .map_err(|e: String| StorageError::Serialization(e))?,
@@ -1907,7 +1916,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         fees: fees_str
             .parse()
             .map_err(|_| StorageError::Serialization("invalid fees".to_string()))?,
-        timestamp: u64::try_from(row.get::<_, i64>(5))?,
+        timestamp: u64::try_from(row.get::<_, i64>("timestamp"))?,
         details,
         method: method_str.map_or(PaymentMethod::Lightning, |s| {
             s.trim_matches('"')

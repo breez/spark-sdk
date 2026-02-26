@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, TransactionBehavior, params,
+    Connection, Row, ToSql, TransactionBehavior, named_params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -85,8 +85,8 @@ impl SqliteStorage {
         let mut stmt = conn.prepare("SELECT payment_id, lnurl_pay_info FROM payment_metadata")?;
         let pay_infos: Vec<_> = stmt
             .query_map([], |row| {
-                let payment_id: String = row.get(0)?;
-                let lnurl_pay_info: Option<LnurlPayInfo> = row.get(1)?;
+                let payment_id: String = row.get("payment_id")?;
+                let lnurl_pay_info: Option<LnurlPayInfo> = row.get("lnurl_pay_info")?;
                 Ok((payment_id, lnurl_pay_info))
             })?
             .collect::<Result<_, _>>()?;
@@ -101,8 +101,11 @@ impl SqliteStorage {
 
         for pay_info in pay_infos {
             conn.execute(
-                "UPDATE payment_metadata SET lnurl_description = ? WHERE payment_id = ?",
-                params![pay_info.1, pay_info.0],
+                "UPDATE payment_metadata SET lnurl_description = :lnurl_description WHERE payment_id = :payment_id",
+                named_params! {
+                    ":lnurl_description": pay_info.1,
+                    ":payment_id": pay_info.0,
+                },
             )?;
         }
 
@@ -558,37 +561,43 @@ impl Storage for SqliteStorage {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET 
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+             VALUES (:id, :payment_type, :status, :amount, :fees, :timestamp, :method)
+             ON CONFLICT(id) DO UPDATE SET
                 payment_type=excluded.payment_type,
                 status=excluded.status,
                 amount=excluded.amount,
                 fees=excluded.fees,
                 timestamp=excluded.timestamp,
                 method=excluded.method",
-            params![
-                payment.id,
-                payment.payment_type.to_string(),
-                payment.status.to_string(),
-                U128SqlWrapper(payment.amount),
-                U128SqlWrapper(payment.fees),
-                payment.timestamp,
-                payment.method,
-            ],
+            named_params! {
+                ":id": payment.id,
+                ":payment_type": payment.payment_type.to_string(),
+                ":status": payment.status.to_string(),
+                ":amount": U128SqlWrapper(payment.amount),
+                ":fees": U128SqlWrapper(payment.fees),
+                ":timestamp": payment.timestamp,
+                ":method": payment.method,
+            },
         )?;
 
         match payment.details {
             Some(PaymentDetails::Withdraw { tx_id }) => {
                 tx.execute(
-                    "UPDATE payments SET withdraw_tx_id = ? WHERE id = ?",
-                    params![tx_id, payment.id],
+                    "UPDATE payments SET withdraw_tx_id = :withdraw_tx_id WHERE id = :id",
+                    named_params! {
+                        ":withdraw_tx_id": tx_id,
+                        ":id": payment.id,
+                    },
                 )?;
             }
             Some(PaymentDetails::Deposit { tx_id }) => {
                 tx.execute(
-                    "UPDATE payments SET deposit_tx_id = ? WHERE id = ?",
-                    params![tx_id, payment.id],
+                    "UPDATE payments SET deposit_tx_id = :deposit_tx_id WHERE id = :id",
+                    named_params! {
+                        ":deposit_tx_id": tx_id,
+                        ":id": payment.id,
+                    },
                 )?;
             }
             Some(PaymentDetails::Spark {
@@ -597,22 +606,22 @@ impl Storage for SqliteStorage {
                 ..
             }) => {
                 tx.execute(
-                    "UPDATE payments SET spark = 1 WHERE id = ?",
-                    params![payment.id],
+                    "UPDATE payments SET spark = 1 WHERE id = :id",
+                    named_params! { ":id": payment.id },
                 )?;
                 if invoice_details.is_some() || htlc_details.is_some() {
                     // Upsert both details together and avoid overwriting existing data with NULLs
                     tx.execute(
                         "INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
-                         VALUES (?, ?, ?)
+                         VALUES (:payment_id, :invoice_details, :htlc_details)
                          ON CONFLICT(payment_id) DO UPDATE SET
                             invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
                             htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)",
-                        params![
-                            payment.id,
-                            invoice_details.as_ref().map(serde_json::to_string).transpose()?,
-                            htlc_details.as_ref().map(serde_json::to_string).transpose()?,
-                        ],
+                        named_params! {
+                            ":payment_id": payment.id,
+                            ":invoice_details": invoice_details.as_ref().map(serde_json::to_string).transpose()?,
+                            ":htlc_details": htlc_details.as_ref().map(serde_json::to_string).transpose()?,
+                        },
                     )?;
                 }
             }
@@ -625,19 +634,19 @@ impl Storage for SqliteStorage {
             }) => {
                 tx.execute(
                     "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
-                     VALUES (?, ?, ?, ?, ?)
-                     ON CONFLICT(payment_id) DO UPDATE SET 
+                     VALUES (:payment_id, :metadata, :tx_hash, :tx_type, :invoice_details)
+                     ON CONFLICT(payment_id) DO UPDATE SET
                         metadata=excluded.metadata,
                         tx_hash=excluded.tx_hash,
                         tx_type=excluded.tx_type,
                         invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)",
-                    params![
-                        payment.id,
-                        serde_json::to_string(&metadata)?,
-                        tx_hash,
-                        tx_type.to_string(),
-                        invoice_details.as_ref().map(serde_json::to_string).transpose()?,
-                    ],
+                    named_params! {
+                        ":payment_id": payment.id,
+                        ":metadata": serde_json::to_string(&metadata)?,
+                        ":tx_hash": tx_hash,
+                        ":tx_type": tx_type.to_string(),
+                        ":invoice_details": invoice_details.as_ref().map(serde_json::to_string).transpose()?,
+                    },
                 )?;
             }
             Some(PaymentDetails::Lightning {
@@ -649,7 +658,7 @@ impl Storage for SqliteStorage {
             }) => {
                 tx.execute(
                     "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     VALUES (:payment_id, :invoice, :payment_hash, :destination_pubkey, :description, :preimage, :htlc_status, :htlc_expiry_time)
                      ON CONFLICT(payment_id) DO UPDATE SET
                         invoice=excluded.invoice,
                         payment_hash=excluded.payment_hash,
@@ -658,16 +667,16 @@ impl Storage for SqliteStorage {
                         preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
                         htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
                         htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
-                    params![
-                        payment.id,
-                        invoice,
-                        htlc_details.payment_hash,
-                        destination_pubkey,
-                        description,
-                        htlc_details.preimage,
-                        htlc_details.status.to_string(),
-                        htlc_details.expiry_time,
-                    ],
+                    named_params! {
+                        ":payment_id": payment.id,
+                        ":invoice": invoice,
+                        ":payment_hash": htlc_details.payment_hash,
+                        ":destination_pubkey": destination_pubkey,
+                        ":description": description,
+                        ":preimage": htlc_details.preimage,
+                        ":htlc_status": htlc_details.status.to_string(),
+                        ":htlc_expiry_time": htlc_details.expiry_time,
+                    },
                 )?;
             }
             None => {}
@@ -686,21 +695,21 @@ impl Storage for SqliteStorage {
 
         connection.execute(
             "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-             VALUES (?, ?, ?, ?, ?, ?)
+             VALUES (:payment_id, :parent_payment_id, :lnurl_pay_info, :lnurl_withdraw_info, :lnurl_description, :conversion_info)
              ON CONFLICT(payment_id) DO UPDATE SET
                 parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
                 lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
                 lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
                 lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
                 conversion_info = COALESCE(excluded.conversion_info, conversion_info)",
-            params![
-                payment_id,
-                metadata.parent_payment_id,
-                metadata.lnurl_pay_info,
-                metadata.lnurl_withdraw_info,
-                metadata.lnurl_description,
-                metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
-            ],
+            named_params! {
+                ":payment_id": payment_id,
+                ":parent_payment_id": metadata.parent_payment_id,
+                ":lnurl_pay_info": metadata.lnurl_pay_info,
+                ":lnurl_withdraw_info": metadata.lnurl_withdraw_info,
+                ":lnurl_description": metadata.lnurl_description,
+                ":conversion_info": metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
+            },
         )?;
 
         Ok(())
@@ -710,8 +719,8 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            params![key, value],
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (:key, :value)",
+            named_params! { ":key": key, ":value": value },
         )?;
 
         Ok(())
@@ -720,10 +729,10 @@ impl Storage for SqliteStorage {
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         let connection = self.get_connection()?;
 
-        let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = ?")?;
+        let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = :key")?;
 
-        let result = stmt.query_row(params![key], |row| {
-            let value_str: String = row.get(0)?;
+        let result = stmt.query_row(named_params! { ":key": key }, |row| {
+            let value_str: String = row.get("value")?;
             Ok(value_str)
         });
 
@@ -737,16 +746,19 @@ impl Storage for SqliteStorage {
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
 
-        connection.execute("DELETE FROM settings WHERE key = ?", params![key])?;
+        connection.execute(
+            "DELETE FROM settings WHERE key = :key",
+            named_params! { ":key": key },
+        )?;
 
         Ok(())
     }
 
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let connection = self.get_connection()?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.id = ?");
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.id = :id");
         let mut stmt = connection.prepare(&query)?;
-        let payment = stmt.query_row(params![id], map_payment)?;
+        let payment = stmt.query_row(named_params! { ":id": id }, map_payment)?;
         Ok(payment)
     }
 
@@ -755,9 +767,9 @@ impl Storage for SqliteStorage {
         invoice: String,
     ) -> Result<Option<Payment>, StorageError> {
         let connection = self.get_connection()?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE l.invoice = ?");
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE l.invoice = :invoice");
         let mut stmt = connection.prepare(&query)?;
-        let payment = stmt.query_row(params![invoice], map_payment);
+        let payment = stmt.query_row(named_params! { ":invoice": invoice }, map_payment);
         match payment {
             Ok(payment) => Ok(Some(payment)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -800,7 +812,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(30)?;
+            let parent_payment_id: String = row.get("parent_payment_id")?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -821,9 +833,13 @@ impl Storage for SqliteStorage {
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
-            "INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
-             VALUES (?, ?, ?)",
-            params![txid, vout, amount_sats,],
+            "INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats)
+             VALUES (:txid, :vout, :amount_sats)",
+            named_params! {
+                ":txid": txid,
+                ":vout": vout,
+                ":amount_sats": amount_sats,
+            },
         )?;
         Ok(())
     }
@@ -831,8 +847,8 @@ impl Storage for SqliteStorage {
     async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
-            "DELETE FROM unclaimed_deposits WHERE txid = ? AND vout = ?",
-            params![txid, vout],
+            "DELETE FROM unclaimed_deposits WHERE txid = :txid AND vout = :vout",
+            named_params! { ":txid": txid, ":vout": vout },
         )?;
         Ok(())
     }
@@ -841,14 +857,14 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         let mut stmt =
             connection.prepare("SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
-        let rows = stmt.query_map(params![], |row| {
+        let rows = stmt.query_map([], |row| {
             Ok(DepositInfo {
-                txid: row.get(0)?,
-                vout: row.get(1)?,
-                amount_sats: row.get(2)?,
-                claim_error: row.get(3)?,
-                refund_tx: row.get(4)?,
-                refund_tx_id: row.get(5)?,
+                txid: row.get("txid")?,
+                vout: row.get("vout")?,
+                amount_sats: row.get("amount_sats")?,
+                claim_error: row.get("claim_error")?,
+                refund_tx: row.get("refund_tx")?,
+                refund_tx_id: row.get("refund_tx_id")?,
             })
         })?;
         let mut deposits = Vec::new();
@@ -868,8 +884,12 @@ impl Storage for SqliteStorage {
         match payload {
             UpdateDepositPayload::ClaimError { error } => {
                 connection.execute(
-                    "UPDATE unclaimed_deposits SET claim_error = ? WHERE txid = ? AND vout = ?",
-                    params![error, txid, vout],
+                    "UPDATE unclaimed_deposits SET claim_error = :claim_error WHERE txid = :txid AND vout = :vout",
+                    named_params! {
+                        ":claim_error": error,
+                        ":txid": txid,
+                        ":vout": vout,
+                    },
                 )?;
             }
             UpdateDepositPayload::Refund {
@@ -877,8 +897,13 @@ impl Storage for SqliteStorage {
                 refund_tx,
             } => {
                 connection.execute(
-                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ? WHERE txid = ? AND vout = ?",
-                    params![refund_tx, refund_txid, txid, vout],
+                    "UPDATE unclaimed_deposits SET refund_tx = :refund_tx, refund_tx_id = :refund_tx_id WHERE txid = :txid AND vout = :vout",
+                    named_params! {
+                        ":refund_tx": refund_tx,
+                        ":refund_tx_id": refund_txid,
+                        ":txid": txid,
+                        ":vout": vout,
+                    },
                 )?;
             }
         }
@@ -893,14 +918,14 @@ impl Storage for SqliteStorage {
         for metadata in metadata {
             connection.execute(
                 "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
-                 VALUES (?, ?, ?, ?, ?)",
-                params![
-                    metadata.payment_hash,
-                    metadata.nostr_zap_request,
-                    metadata.nostr_zap_receipt,
-                    metadata.sender_comment,
-                    metadata.preimage,
-                ],
+                 VALUES (:payment_hash, :nostr_zap_request, :nostr_zap_receipt, :sender_comment, :preimage)",
+                named_params! {
+                    ":payment_hash": metadata.payment_hash,
+                    ":nostr_zap_request": metadata.nostr_zap_request,
+                    ":nostr_zap_receipt": metadata.nostr_zap_receipt,
+                    ":sender_comment": metadata.sender_comment,
+                    ":preimage": metadata.preimage,
+                },
             )?;
         }
         Ok(())
@@ -933,14 +958,14 @@ impl Storage for SqliteStorage {
             ,   updated_fields_json
             ,   revision
             )
-             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-            params![
-                record.id.r#type,
-                record.id.data_id,
-                record.schema_version.clone(),
-                serde_json::to_string(&record.updated_fields)?,
-                local_revision,
-            ],
+             VALUES (:record_type, :data_id, :schema_version, strftime('%s','now'), :updated_fields_json, :revision)",
+            named_params! {
+                ":record_type": record.id.r#type,
+                ":data_id": record.id.data_id,
+                ":schema_version": record.schema_version.clone(),
+                ":updated_fields_json": serde_json::to_string(&record.updated_fields)?,
+                ":revision": local_revision,
+            },
         )
         .map_err(map_sqlite_error)?;
 
@@ -960,8 +985,12 @@ impl Storage for SqliteStorage {
 
         let rows_deleted = tx
             .execute(
-                "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
-                params![record.id.r#type, record.id.data_id, local_revision],
+                "DELETE FROM sync_outgoing WHERE record_type = :record_type AND data_id = :data_id AND revision = :revision",
+                named_params! {
+                    ":record_type": record.id.r#type,
+                    ":data_id": record.id.data_id,
+                    ":revision": local_revision,
+                },
             )
             .map_err(map_sqlite_error)?;
 
@@ -982,20 +1011,20 @@ impl Storage for SqliteStorage {
             ,   data
             ,   revision
             )
-             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-            params![
-                record.id.r#type,
-                record.id.data_id,
-                record.schema_version.clone(),
-                serde_json::to_string(&record.data)?,
-                record.revision,
-            ],
+             VALUES (:record_type, :data_id, :schema_version, strftime('%s','now'), :data, :revision)",
+            named_params! {
+                ":record_type": record.id.r#type,
+                ":data_id": record.id.data_id,
+                ":schema_version": record.schema_version.clone(),
+                ":data": serde_json::to_string(&record.data)?,
+                ":revision": record.revision,
+            },
         )
         .map_err(map_sqlite_error)?;
 
         tx.execute(
-            "UPDATE sync_revision SET revision = MAX(revision, ?)",
-            params![record.revision],
+            "UPDATE sync_revision SET revision = MAX(revision, :revision)",
+            named_params! { ":revision": record.revision },
         )
         .map_err(map_sqlite_error)?;
 
@@ -1024,22 +1053,28 @@ impl Storage for SqliteStorage {
              FROM sync_outgoing o
              LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id
              ORDER BY o.revision ASC
-             LIMIT ?",
+             LIMIT :limit",
             )
             .map_err(map_sqlite_error)?;
-        let mut rows = stmt.query(params![limit]).map_err(map_sqlite_error)?;
+        let mut rows = stmt
+            .query(named_params! { ":limit": limit })
+            .map_err(map_sqlite_error)?;
         let mut results = Vec::new();
         while let Some(row) = rows.next().map_err(map_sqlite_error)? {
-            let parent = if let Some(existing_data) =
-                row.get::<_, Option<String>>(8).map_err(map_sqlite_error)?
+            let parent = if let Some(existing_data) = row
+                .get::<_, Option<String>>("existing_data")
+                .map_err(map_sqlite_error)?
             {
                 Some(Record {
                     id: RecordId::new(
-                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                        row.get::<_, String>("record_type")
+                            .map_err(map_sqlite_error)?,
+                        row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                     ),
-                    schema_version: row.get(6).map_err(map_sqlite_error)?,
-                    revision: row.get(9).map_err(map_sqlite_error)?,
+                    schema_version: row
+                        .get("existing_schema_version")
+                        .map_err(map_sqlite_error)?,
+                    revision: row.get("existing_revision").map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
@@ -1047,14 +1082,16 @@ impl Storage for SqliteStorage {
             };
             let change = RecordChange {
                 id: RecordId::new(
-                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    row.get::<_, String>("record_type")
+                        .map_err(map_sqlite_error)?,
+                    row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                 ),
-                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                schema_version: row.get("schema_version").map_err(map_sqlite_error)?,
                 updated_fields: serde_json::from_str(
-                    &row.get::<_, String>(4).map_err(map_sqlite_error)?,
+                    &row.get::<_, String>("updated_fields_json")
+                        .map_err(map_sqlite_error)?,
                 )?,
-                local_revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get("revision").map_err(map_sqlite_error)?,
             };
             results.push(OutgoingChange { change, parent });
         }
@@ -1066,7 +1103,9 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         let revision: u64 = connection
-            .query_row("SELECT revision FROM sync_revision", [], |row| row.get(0))
+            .query_row("SELECT revision FROM sync_revision", [], |row| {
+                row.get("revision")
+            })
             .map_err(map_sqlite_error)?;
 
         Ok(revision)
@@ -1092,14 +1131,14 @@ impl Storage for SqliteStorage {
                 ,   data
                 ,   revision
                 )
-                 VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-                params![
-                    record.id.r#type,
-                    record.id.data_id,
-                    record.schema_version.clone(),
-                    serde_json::to_string(&record.data)?,
-                    record.revision,
-                ],
+                 VALUES (:record_type, :data_id, :schema_version, strftime('%s','now'), :data, :revision)",
+                named_params! {
+                    ":record_type": record.id.r#type,
+                    ":data_id": record.id.data_id,
+                    ":schema_version": record.schema_version.clone(),
+                    ":data": serde_json::to_string(&record.data)?,
+                    ":revision": record.revision,
+                },
             )
             .map_err(map_sqlite_error)?;
         }
@@ -1113,8 +1152,12 @@ impl Storage for SqliteStorage {
 
         connection
             .execute(
-                "DELETE FROM sync_incoming WHERE record_type = ? AND data_id = ? AND revision = ?",
-                params![record.id.r#type, record.id.data_id, record.revision],
+                "DELETE FROM sync_incoming WHERE record_type = :record_type AND data_id = :data_id AND revision = :revision",
+                named_params! {
+                    ":record_type": record.id.r#type,
+                    ":data_id": record.id.data_id,
+                    ":revision": record.revision,
+                },
             )
             .map_err(map_sqlite_error)?;
 
@@ -1138,24 +1181,30 @@ impl Storage for SqliteStorage {
              FROM sync_incoming i
              LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
              ORDER BY i.revision ASC
-             LIMIT ?",
+             LIMIT :limit",
             )
             .map_err(map_sqlite_error)?;
 
-        let mut rows = stmt.query(params![limit]).map_err(map_sqlite_error)?;
+        let mut rows = stmt
+            .query(named_params! { ":limit": limit })
+            .map_err(map_sqlite_error)?;
         let mut results = Vec::new();
 
         while let Some(row) = rows.next().map_err(map_sqlite_error)? {
-            let parent = if let Some(existing_data) =
-                row.get::<_, Option<String>>(7).map_err(map_sqlite_error)?
+            let parent = if let Some(existing_data) = row
+                .get::<_, Option<String>>("existing_data")
+                .map_err(map_sqlite_error)?
             {
                 Some(Record {
                     id: RecordId::new(
-                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                        row.get::<_, String>("record_type")
+                            .map_err(map_sqlite_error)?,
+                        row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                     ),
-                    schema_version: row.get(5).map_err(map_sqlite_error)?,
-                    revision: row.get(8).map_err(map_sqlite_error)?,
+                    schema_version: row
+                        .get("existing_schema_version")
+                        .map_err(map_sqlite_error)?,
+                    revision: row.get("existing_revision").map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
@@ -1163,12 +1212,15 @@ impl Storage for SqliteStorage {
             };
             let record = Record {
                 id: RecordId::new(
-                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    row.get::<_, String>("record_type")
+                        .map_err(map_sqlite_error)?,
+                    row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                 ),
-                schema_version: row.get(2).map_err(map_sqlite_error)?,
-                data: serde_json::from_str(&row.get::<_, String>(3).map_err(map_sqlite_error)?)?,
-                revision: row.get(4).map_err(map_sqlite_error)?,
+                schema_version: row.get("schema_version").map_err(map_sqlite_error)?,
+                data: serde_json::from_str(
+                    &row.get::<_, String>("data").map_err(map_sqlite_error)?,
+                )?,
+                revision: row.get("revision").map_err(map_sqlite_error)?,
             };
             results.push(IncomingChange {
                 new_state: record,
@@ -1204,16 +1256,20 @@ impl Storage for SqliteStorage {
         let mut rows = stmt.query([]).map_err(map_sqlite_error)?;
 
         if let Some(row) = rows.next().map_err(map_sqlite_error)? {
-            let parent = if let Some(existing_data) =
-                row.get::<_, Option<String>>(8).map_err(map_sqlite_error)?
+            let parent = if let Some(existing_data) = row
+                .get::<_, Option<String>>("existing_data")
+                .map_err(map_sqlite_error)?
             {
                 Some(Record {
                     id: RecordId::new(
-                        row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                        row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                        row.get::<_, String>("record_type")
+                            .map_err(map_sqlite_error)?,
+                        row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                     ),
-                    schema_version: row.get(6).map_err(map_sqlite_error)?,
-                    revision: row.get(9).map_err(map_sqlite_error)?,
+                    schema_version: row
+                        .get("existing_schema_version")
+                        .map_err(map_sqlite_error)?,
+                    revision: row.get("existing_revision").map_err(map_sqlite_error)?,
                     data: serde_json::from_str(&existing_data)?,
                 })
             } else {
@@ -1221,14 +1277,16 @@ impl Storage for SqliteStorage {
             };
             let change = RecordChange {
                 id: RecordId::new(
-                    row.get::<_, String>(0).map_err(map_sqlite_error)?,
-                    row.get::<_, String>(1).map_err(map_sqlite_error)?,
+                    row.get::<_, String>("record_type")
+                        .map_err(map_sqlite_error)?,
+                    row.get::<_, String>("data_id").map_err(map_sqlite_error)?,
                 ),
-                schema_version: row.get(2).map_err(map_sqlite_error)?,
+                schema_version: row.get("schema_version").map_err(map_sqlite_error)?,
                 updated_fields: serde_json::from_str(
-                    &row.get::<_, String>(4).map_err(map_sqlite_error)?,
+                    &row.get::<_, String>("updated_fields_json")
+                        .map_err(map_sqlite_error)?,
                 )?,
-                local_revision: row.get(5).map_err(map_sqlite_error)?,
+                local_revision: row.get("revision").map_err(map_sqlite_error)?,
             };
 
             return Ok(Some(OutgoingChange { change, parent }));
@@ -1252,20 +1310,20 @@ impl Storage for SqliteStorage {
             ,   data
             ,   revision
             )
-             VALUES (?, ?, ?, strftime('%s','now'), ?, ?)",
-            params![
-                record.id.r#type,
-                record.id.data_id,
-                record.schema_version.clone(),
-                serde_json::to_string(&record.data)?,
-                record.revision,
-            ],
+             VALUES (:record_type, :data_id, :schema_version, strftime('%s','now'), :data, :revision)",
+            named_params! {
+                ":record_type": record.id.r#type,
+                ":data_id": record.id.data_id,
+                ":schema_version": record.schema_version.clone(),
+                ":data": serde_json::to_string(&record.data)?,
+                ":revision": record.revision,
+            },
         )
         .map_err(map_sqlite_error)?;
 
         tx.execute(
-            "UPDATE sync_revision SET revision = MAX(revision, ?)",
-            params![record.revision],
+            "UPDATE sync_revision SET revision = MAX(revision, :revision)",
+            named_params! { ":revision": record.revision },
         )
         .map_err(map_sqlite_error)?;
 
@@ -1275,7 +1333,6 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-29 are used by `map_payment`, index 30 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1317,11 +1374,11 @@ const SELECT_PAYMENT_SQL: &str = "
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
-    let withdraw_tx_id: Option<String> = row.get(7)?;
-    let deposit_tx_id: Option<String> = row.get(8)?;
-    let spark: Option<i32> = row.get(9)?;
-    let lightning_invoice: Option<String> = row.get(10)?;
-    let token_metadata: Option<String> = row.get(20)?;
+    let withdraw_tx_id: Option<String> = row.get("withdraw_tx_id")?;
+    let deposit_tx_id: Option<String> = row.get("deposit_tx_id")?;
+    let spark: Option<i32> = row.get("spark")?;
+    let lightning_invoice: Option<String> = row.get("lightning_invoice")?;
+    let token_metadata: Option<String> = row.get("token_metadata")?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
@@ -1330,31 +1387,32 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(11)?;
-            let destination_pubkey: String = row.get(12)?;
-            let description: Option<String> = row.get(13)?;
-            let preimage: Option<String> = row.get(14)?;
-            let htlc_status: SparkHtlcStatus =
-                row.get::<_, Option<SparkHtlcStatus>>(15)?.ok_or_else(|| {
+            let payment_hash: String = row.get("lightning_payment_hash")?;
+            let destination_pubkey: String = row.get("lightning_destination_pubkey")?;
+            let description: Option<String> = row.get("lightning_description")?;
+            let preimage: Option<String> = row.get("lightning_preimage")?;
+            let htlc_status: SparkHtlcStatus = row
+                .get::<_, Option<SparkHtlcStatus>>("lightning_htlc_status")?
+                .ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        15,
+                        0,
                         rusqlite::types::Type::Null,
                         "htlc_status is required for Lightning payments".into(),
                     )
                 })?;
-            let htlc_expiry_time: u64 = row.get(16)?;
+            let htlc_expiry_time: u64 = row.get("lightning_htlc_expiry_time")?;
             let htlc_details = SparkHtlcDetails {
                 payment_hash,
                 preimage,
                 expiry_time: htlc_expiry_time,
                 status: htlc_status,
             };
-            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(17)?;
-            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(18)?;
-            let lnurl_nostr_zap_request: Option<String> = row.get(26)?;
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(27)?;
-            let lnurl_sender_comment: Option<String> = row.get(28)?;
-            let lnurl_payment_hash: Option<String> = row.get(29)?;
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get("lnurl_pay_info")?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get("lnurl_withdraw_info")?;
+            let lnurl_nostr_zap_request: Option<String> = row.get("lnurl_nostr_zap_request")?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get("lnurl_nostr_zap_receipt")?;
+            let lnurl_sender_comment: Option<String> = row.get("lnurl_sender_comment")?;
+            let lnurl_payment_hash: Option<String> = row.get("lnurl_payment_hash")?;
             let lnurl_receive_metadata = if lnurl_payment_hash.is_some() {
                 Some(LnurlReceiveMetadata {
                     nostr_zap_request: lnurl_nostr_zap_request,
@@ -1377,17 +1435,17 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(24)?;
+            let invoice_details_str: Option<String> = row.get("spark_invoice_details")?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 24))
+                .map(|s| serde_json_from_str(&s, "spark_invoice_details"))
                 .transpose()?;
-            let htlc_details_str: Option<String> = row.get(25)?;
+            let htlc_details_str: Option<String> = row.get("spark_htlc_details")?;
             let htlc_details = htlc_details_str
-                .map(|s| serde_json_from_str(&s, 25))
+                .map(|s| serde_json_from_str(&s, "spark_htlc_details"))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(19)?;
+            let conversion_info_str: Option<String> = row.get("conversion_info")?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 19))
+                .map(|s: String| serde_json_from_str(&s, "conversion_info"))
                 .transpose()?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1396,18 +1454,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type: TokenTransactionType = row.get(22)?;
-            let invoice_details_str: Option<String> = row.get(23)?;
+            let tx_type: TokenTransactionType = row.get("token_tx_type")?;
+            let invoice_details_str: Option<String> = row.get("token_invoice_details")?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 23))
+                .map(|s| serde_json_from_str(&s, "token_invoice_details"))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(19)?;
+            let conversion_info_str: Option<String> = row.get("conversion_info")?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 19))
+                .map(|s: String| serde_json_from_str(&s, "conversion_info"))
                 .transpose()?;
             Some(PaymentDetails::Token {
-                metadata: serde_json_from_str(&metadata, 20)?,
-                tx_hash: row.get(21)?,
+                metadata: serde_json_from_str(&metadata, "token_metadata")?,
+                tx_hash: row.get("token_tx_hash")?,
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1416,18 +1474,24 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         _ => None,
     };
     Ok(Payment {
-        id: row.get(0)?,
-        payment_type: row.get::<_, String>(1)?.parse().map_err(|e: String| {
-            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into())
-        })?,
-        status: row.get::<_, String>(2)?.parse().map_err(|e: String| {
-            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
-        })?,
-        amount: row.get::<_, U128SqlWrapper>(3)?.0,
-        fees: row.get::<_, U128SqlWrapper>(4)?.0,
-        timestamp: row.get(5)?,
+        id: row.get("id")?,
+        payment_type: row
+            .get::<_, String>("payment_type")?
+            .parse()
+            .map_err(|e: String| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into())
+            })?,
+        status: row
+            .get::<_, String>("status")?
+            .parse()
+            .map_err(|e: String| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into())
+            })?,
+        amount: row.get::<_, U128SqlWrapper>("amount")?.0,
+        fees: row.get::<_, U128SqlWrapper>("fees")?.0,
+        timestamp: row.get("timestamp")?,
         details,
-        method: row.get(6)?,
+        method: row.get("method")?,
         conversion_details: None,
     })
 }
@@ -1567,12 +1631,16 @@ where
     }
 }
 
-fn serde_json_from_str<T>(value: &str, index: usize) -> Result<T, rusqlite::Error>
+fn serde_json_from_str<T>(value: &str, column: &str) -> Result<T, rusqlite::Error>
 where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_str(value).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(e))
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("Failed to deserialize column '{column}': {e}").into(),
+        )
     })
 }
 
