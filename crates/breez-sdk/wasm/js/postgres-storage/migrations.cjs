@@ -222,6 +222,18 @@ class PostgresMigrationManager {
           `CREATE INDEX IF NOT EXISTS idx_sync_incoming_revision ON sync_incoming(revision)`,
         ],
       },
+      {
+        name: "Create contacts table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS contacts (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            payment_identifier TEXT NOT NULL,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+          )`,
+        ],
+      },
     ];
   }
 }

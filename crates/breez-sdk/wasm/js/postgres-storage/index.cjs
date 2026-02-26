@@ -833,6 +833,101 @@ class PostgresStorage {
     };
   }
 
+  // ===== Contact Operations =====
+
+  async listContacts(request) {
+    try {
+      const offset = request.offset != null ? request.offset : 0;
+      const limit = request.limit != null ? request.limit : 4294967295;
+
+      const result = await this.pool.query(
+        `SELECT id, name, payment_identifier, created_at, updated_at
+         FROM contacts
+         ORDER BY name ASC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+
+      return result.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        paymentIdentifier: row.payment_identifier,
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
+      }));
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list contacts: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getContact(id) {
+    try {
+      const result = await this.pool.query(
+        `SELECT id, name, payment_identifier, created_at, updated_at
+         FROM contacts
+         WHERE id = $1`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        name: row.name,
+        paymentIdentifier: row.payment_identifier,
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
+      };
+    } catch (error) {
+      throw new StorageError(
+        `Failed to get contact: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async insertContact(contact) {
+    try {
+      await this.pool.query(
+        `INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT(id) DO UPDATE SET
+           name = EXCLUDED.name,
+           payment_identifier = EXCLUDED.payment_identifier,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          contact.id,
+          contact.name,
+          contact.paymentIdentifier,
+          contact.createdAt,
+          contact.updatedAt,
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(
+        `Failed to insert contact: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async deleteContact(id) {
+    try {
+      await this.pool.query("DELETE FROM contacts WHERE id = $1", [id]);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to delete contact: ${error.message}`,
+        error
+      );
+    }
+  }
+
   // ===== Sync Operations =====
 
   async syncAddOutgoingChange(record) {
