@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use breez_sdk_spark::*;
@@ -91,7 +92,7 @@ impl EventListener for SdkEventListener {
 
 pub(crate) async fn add_event_listener(
     sdk: &BreezSdk,
-    listener: Box<SdkEventListener>,
+    listener: Arc<SdkEventListener>,
 ) -> Result<String> {
     let listener_id = sdk.add_event_listener(listener).await;
     Ok(listener_id)

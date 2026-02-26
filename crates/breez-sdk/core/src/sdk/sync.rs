@@ -38,7 +38,7 @@ impl BreezSdk {
         tokio::spawn(async move {
             let balance_watcher =
                 BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
-            let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
+            let balance_watcher_id = sdk.add_event_listener(Arc::new(balance_watcher)).await;
             loop {
                 tokio::select! {
                     _ = shutdown_receiver.changed() => {

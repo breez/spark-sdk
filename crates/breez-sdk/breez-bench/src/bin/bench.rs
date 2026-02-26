@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -712,7 +713,7 @@ async fn initialize_mainnet_sdk(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     sdk.add_event_listener(event_listener).await;
 
     // Initial sync

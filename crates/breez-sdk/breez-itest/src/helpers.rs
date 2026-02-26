@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use bitcoin::hashes::{Hash as _, sha256};
 use breez_sdk_spark::*;
@@ -49,7 +51,7 @@ pub async fn build_sdk_with_dir(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes
@@ -113,7 +115,7 @@ pub async fn build_sdk_with_custom_config(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes
@@ -168,7 +170,7 @@ pub async fn build_sdk_from_mnemonic(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes
@@ -231,7 +233,7 @@ pub async fn build_sdk_with_external_signer(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes
@@ -887,7 +889,7 @@ pub async fn build_sdk_with_postgres(
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
+    let event_listener = Arc::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes

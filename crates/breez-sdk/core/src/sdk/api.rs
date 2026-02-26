@@ -1,5 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::{
@@ -30,7 +31,7 @@ impl BreezSdk {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
+    pub async fn add_event_listener(&self, listener: Arc<dyn EventListener>) -> String {
         self.event_emitter.add_listener(listener).await
     }
 

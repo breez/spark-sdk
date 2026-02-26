@@ -40,7 +40,7 @@ pub struct BreezSdk {
 impl BreezSdk {
     pub async fn add_event_listener(&self, listener: StreamSink<SdkEvent>) -> String {
         self.inner
-            .add_event_listener(Box::new(BindingEventListener { listener }))
+            .add_event_listener(Arc::new(BindingEventListener { listener }))
             .await
     }
 

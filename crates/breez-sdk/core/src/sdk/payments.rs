@@ -1,6 +1,7 @@
 use bitcoin::hashes::sha256;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -1151,7 +1152,7 @@ impl BreezSdk {
     ) -> Result<Payment, SdkError> {
         let (tx, mut rx) = mpsc::channel(20);
         let id = self
-            .add_event_listener(Box::new(InternalEventListener::new(tx)))
+            .add_event_listener(Arc::new(InternalEventListener::new(tx)))
             .await;
 
         // First check if we already have the completed payment in storage

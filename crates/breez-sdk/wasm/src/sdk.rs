@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::sync::Arc;
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use wasm_bindgen::prelude::*;
@@ -90,7 +91,7 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]
     pub async fn add_event_listener(&self, listener: EventListener) -> String {
         self.sdk
-            .add_event_listener(Box::new(WasmEventListener { listener }))
+            .add_event_listener(Arc::new(WasmEventListener { listener }))
             .await
     }
 

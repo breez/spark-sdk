@@ -1,6 +1,8 @@
 mod command;
 mod persist;
 
+use std::sync::Arc;
+
 use crate::command::CliHelper;
 use crate::persist::CliPersistence;
 use anyhow::{Result, anyhow};
@@ -142,7 +144,7 @@ async fn run_interactive_mode(
 
     let sdk = sdk_builder.build().await?;
 
-    let listener = Box::new(CliEventListener {});
+    let listener = Arc::new(CliEventListener {});
     sdk.add_event_listener(listener).await;
 
     let token_issuer = sdk.get_token_issuer();
