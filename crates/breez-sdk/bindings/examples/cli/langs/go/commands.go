@@ -85,7 +85,7 @@ func BuildCommandRegistry() map[string]Command {
 
 // PrintHelp prints available commands.
 func PrintHelp(registry map[string]Command) {
-	fmt.Println("\nAvailable commands:\n")
+	fmt.Println("\nAvailable commands:")
 	names := make([]string, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)

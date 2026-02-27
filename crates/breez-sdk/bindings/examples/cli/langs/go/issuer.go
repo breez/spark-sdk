@@ -74,7 +74,7 @@ func DispatchIssuerCommand(args []string, issuer *breez_sdk_spark.TokenIssuer, r
 	registry := BuildIssuerRegistry()
 
 	if len(args) == 0 || args[0] == "help" {
-		fmt.Println("\nIssuer subcommands:\n")
+		fmt.Println("\nIssuer subcommands:")
 		names := make([]string, 0, len(registry))
 		for name := range registry {
 			names = append(names, name)

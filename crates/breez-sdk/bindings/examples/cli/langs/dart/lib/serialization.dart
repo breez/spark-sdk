@@ -1,3 +1,7 @@
+// dart:mirrors is available at runtime (JIT via `dart run`) but not recognized
+// by `dart analyze` when Flutter packages are in the dependency tree.
+// ignore_for_file: uri_does_not_exist, undefined_function, undefined_class
+// ignore_for_file: type_test_with_undefined_name, undefined_identifier
 import 'dart:convert';
 import 'dart:mirrors';
 
@@ -36,9 +40,7 @@ Map<String, dynamic> _reflectFields(InstanceMirror mirror) {
       if (decl is VariableMirror && !decl.isStatic && !decl.isPrivate) {
         final name = MirrorSystem.getName(entry.key);
         if (!fields.containsKey(name)) {
-          fields[name] = objToSerializable(
-            mirror.getField(entry.key).reflectee,
-          );
+          fields[name] = objToSerializable(mirror.getField(entry.key).reflectee);
         }
       }
     }
