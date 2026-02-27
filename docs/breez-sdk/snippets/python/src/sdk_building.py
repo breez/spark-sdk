@@ -75,7 +75,7 @@ async def with_key_set(builder: SdkBuilder):
 
 # ANCHOR: with-payment-observer
 class ExamplePaymentObserver(PaymentObserver):
-    def before_send(self, payments: typing.List[ProvisionalPayment]):
+    async def before_send(self, payments: typing.List[ProvisionalPayment]):
         for payment in payments:
             logging.debug(f"About to send payment {payment.payment_id} of amount {payment.amount}")
 
