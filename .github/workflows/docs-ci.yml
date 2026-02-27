@@ -1,0 +1,93 @@
+name: Docs
+
+on:
+  workflow_call:
+
+jobs:
+  check-snippets:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: rust
+            runner: ubuntu-latest
+          - platform: wasm
+            runner: ubuntu-latest
+            node-version: "22"
+          - platform: flutter
+            runner: ubuntu-latest
+            flutter: true
+          - platform: go
+            runner: ubuntu-latest
+          - platform: python
+            runner: ubuntu-latest
+            python-version: "3.12"
+          - platform: kotlin-mpp
+            runner: macos-latest
+            java-version: "17"
+            cargo-ndk: true
+          - platform: swift
+            runner: macos-latest
+          - platform: react-native
+            runner: macos-latest
+            node-version: "22"
+            ios-targets: true
+          - platform: csharp
+            runner: ubuntu-latest
+            dotnet-version: "8.0.x"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        if: matrix.node-version
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup Flutter
+        if: matrix.flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.38.9
+
+      - name: Setup just
+        if: matrix.flutter
+        uses: extractions/setup-just@v3
+
+      - name: Setup Python
+        if: matrix.python-version
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup Java
+        if: matrix.java-version
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: ${{ matrix.java-version }}
+
+      - name: Install cargo-ndk
+        if: matrix.cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Install Rust targets (iOS)
+        if: matrix.ios-targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Setup .NET
+        if: matrix.dotnet-version
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet-version }}
+
+      - name: Check doc snippets
+        run: cargo xtask check-doc-snippets -p ${{ matrix.platform }}
