@@ -9,12 +9,9 @@ on:
         description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
         required: false
         type: string
-  workflow_call:
-    inputs:
-      base_sha:
-        description: 'Base commit SHA for diffing (from umbrella workflow or github.event.before)'
-        required: false
-        type: string
+  workflow_run:
+    workflows: ["Sync CLI Languages"]
+    types: [completed]
 
 concurrency:
   group: sync-python-cli-${{ github.sha }}
@@ -22,6 +19,9 @@ concurrency:
 
 jobs:
   sync-python-cli:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -39,9 +39,9 @@ jobs:
         id: diff-info
         run: |
           # Determine diff base. Priority:
-          # 1. Explicit base_sha from umbrella workflow or workflow_dispatch input
+          # 1. Explicit base-sha from workflow_dispatch input
           # 2. Auto-detect: last commit that touched this language CLI (= last sync point)
-          DIFF_BASE="${{ inputs.base_sha || inputs.base-sha }}"
+          DIFF_BASE="${{ inputs.base-sha }}"
           if [ -z "$DIFF_BASE" ] || [ "$DIFF_BASE" = "0000000000000000000000000000000000000000" ]; then
             DIFF_BASE=$(git log -1 --format=%H -- 'crates/breez-sdk/bindings/examples/cli/langs/python/')
             if [ -n "$DIFF_BASE" ]; then
