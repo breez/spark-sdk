@@ -1,5 +1,4 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
-import 'helper.dart';
 
 Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR: list-unclaimed-deposits
