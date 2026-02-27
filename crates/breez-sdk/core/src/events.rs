@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{
     collections::BTreeMap,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use serde::Serialize;
@@ -151,6 +151,7 @@ pub trait EventListener: Send + Sync {
 /// Event publisher that manages event listeners
 pub struct EventEmitter {
     has_real_time_sync: bool,
+    rtsync_failed: AtomicBool,
     listener_index: AtomicU64,
     listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
@@ -161,6 +162,7 @@ impl EventEmitter {
     pub fn new(has_real_time_sync: bool) -> Self {
         Self {
             has_real_time_sync,
+            rtsync_failed: AtomicBool::new(false),
             listener_index: AtomicU64::new(0),
             listeners: RwLock::new(BTreeMap::new()),
             synced_event_buffer: Mutex::new(Some(InternalSyncedEvent::default())),
@@ -222,7 +224,11 @@ impl EventEmitter {
 
             // The first synced event emitted should at least have the wallet synced.
             // Subsequent events might have only partial syncs.
-            if merged.wallet && (!self.has_real_time_sync || merged.storage_incoming.is_some()) {
+            if merged.wallet
+                && (!self.has_real_time_sync
+                    || merged.storage_incoming.is_some()
+                    || self.rtsync_failed.load(Ordering::Relaxed))
+            {
                 *mtx = None;
             } else {
                 *mtx = Some(merged);
@@ -243,6 +249,22 @@ impl EventEmitter {
 
         // Emit the merged event
         self.emit(&SdkEvent::Synced).await;
+    }
+
+    /// Notify that real-time sync has failed. If the first synced event is still
+    /// buffered and the wallet has already synced, release it immediately instead
+    /// of waiting for a remote pull that may never arrive.
+    pub async fn notify_rtsync_failed(&self) {
+        self.rtsync_failed.store(true, Ordering::Relaxed);
+
+        let mut mtx = self.synced_event_buffer.lock().await;
+        if let Some(buffered) = &*mtx
+            && buffered.wallet
+        {
+            *mtx = None;
+            drop(mtx);
+            self.emit(&SdkEvent::Synced).await;
+        }
     }
 }
 
@@ -443,6 +465,66 @@ mod tests {
                 deposits: false,
                 lnurl_metadata: false,
                 storage_incoming: Some(0),
+            })
+            .await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_rtsync_failed_emits_synced_on_wallet_alone() {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // Wallet synced but rtsync hasn't failed yet — should NOT emit
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
+            })
+            .await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // rtsync fails — should immediately release the buffered event
+        emitter.notify_rtsync_failed().await;
+
+        assert!(received.load(Ordering::Relaxed));
+    }
+
+    #[async_test_all]
+    async fn test_rtsync_failed_before_wallet_sync_emits_on_wallet() {
+        let emitter = EventEmitter::new(true);
+        let received = Arc::new(AtomicBool::new(false));
+
+        let listener = Box::new(TestListener {
+            received: received.clone(),
+        });
+
+        emitter.add_listener(listener).await;
+
+        // rtsync fails before wallet syncs — nothing to release yet
+        emitter.notify_rtsync_failed().await;
+
+        assert!(!received.load(Ordering::Relaxed));
+
+        // Wallet syncs — should emit immediately (rtsync already marked failed)
+        emitter
+            .emit_synced(&InternalSyncedEvent {
+                wallet: true,
+                wallet_state: false,
+                deposits: false,
+                lnurl_metadata: false,
+                storage_incoming: None,
             })
             .await;
 

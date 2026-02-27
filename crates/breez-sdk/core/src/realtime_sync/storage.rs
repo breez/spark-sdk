@@ -92,6 +92,10 @@ impl NewRecordHandler for SyncedStorage {
             .await;
         Ok(())
     }
+
+    async fn on_sync_failed(&self) {
+        self.event_emitter.notify_rtsync_failed().await;
+    }
 }
 
 impl SyncedStorage {
