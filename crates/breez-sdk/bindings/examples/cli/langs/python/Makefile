@@ -3,6 +3,16 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 CLI := $(VENV)/bin/breez-cli
 BINDINGS_DIR := ../../../..
+LANGS_PYTHON := $(BINDINGS_DIR)/langs/python
+RELEASE_DIR := $(BINDINGS_DIR)/../../../target/release
+
+UNAME := $(shell uname)
+ifeq ($(UNAME), Darwin)
+	LIB_EXT := dylib
+else ifeq ($(UNAME), Linux)
+	LIB_EXT := so
+endif
+LIB_FILE := libbreez_sdk_spark_bindings.$(LIB_EXT)
 
 .PHONY: help setup setup-published run run-mainnet clean
 
@@ -14,7 +24,9 @@ $(VENV)/bin/activate:
 
 setup: $(VENV)/bin/activate ## Build and install local Python bindings + CLI
 	cd $(BINDINGS_DIR) && $(MAKE) bindings-python
-	$(PIP) install $(BINDINGS_DIR)/ffi/python/
+	cp $(BINDINGS_DIR)/ffi/python/*.py $(LANGS_PYTHON)/src/breez_sdk_spark/
+	cp $(RELEASE_DIR)/$(LIB_FILE) $(LANGS_PYTHON)/src/breez_sdk_spark/
+	$(PIP) install $(LANGS_PYTHON)/
 	$(PIP) install -e .
 	@touch $(CLI)
 
