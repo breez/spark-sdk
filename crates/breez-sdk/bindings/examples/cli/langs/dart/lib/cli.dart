@@ -8,6 +8,7 @@ import 'commands.dart';
 import 'helpers.dart';
 import 'issuer.dart';
 import 'persistence.dart';
+import 'readline.dart';
 import 'serialization.dart';
 
 Future<void> runCli({
@@ -85,14 +86,24 @@ Future<void> _runRepl(
   stdout.writeln("Type 'help' for available commands or 'exit' to quit");
 
   final registry = buildCommandRegistry();
+  final allCommands = [
+    ...commandNames,
+    ...issuerCommandNames,
+    'exit',
+    'quit',
+    'help',
+  ];
+  final rl = Readline(
+    completions: allCommands,
+    historyFile: persistence.historyFile,
+  );
 
   while (true) {
     try {
-      stdout.write(promptStr);
-      final line = stdin.readLineSync()?.trim();
+      final line = rl.readLine(promptStr)?.trim();
       if (line == null) {
         // EOF (CTRL-D)
-        stdout.writeln('\nCTRL-D');
+        stdout.writeln('CTRL-D');
         break;
       }
       if (line.isEmpty) continue;
@@ -121,12 +132,14 @@ Future<void> _runRepl(
         );
       }
     } on StdinException {
-      stdout.writeln('\nCTRL-C');
+      stdout.writeln('');
       break;
     } catch (e) {
       stdout.writeln('Error: $e');
     }
   }
+
+  rl.close();
 
   try {
     await sdk.disconnect();
