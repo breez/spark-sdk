@@ -110,7 +110,7 @@ The Dart CLI uses the Flutter/FRB SDK bindings (breez_sdk_spark_flutter). Refere
 - FRB enum variants use sealed class pattern: `InputType_LnurlPay`, `SdkEvent_Synced`, etc.
 - Unnamed fields use `.field0` accessor (e.g., `InputType_LnurlPay.field0` is the `LnurlPayRequestDetails`).
 - `u128`/`u64` maps to Dart `BigInt` — use `BigInt.parse(str)` and `BigInt.from(int)`. **All arithmetic on BigInt must use BigInt operands**: `value ~/ BigInt.from(1000)`, NOT `value ~/ 1000`. For ceiling division: `(value + BigInt.from(divisor - 1)) ~/ BigInt.from(divisor)`.
-- FRB `Config` is immutable and does NOT have a `copyWith` method. The Dart CLI provides it via a `ConfigCopyWith` extension in `lib/helpers.dart`. If Config fields change upstream, update the extension to match.
+- FRB `Config` is immutable. The `breez_sdk_spark_flutter` package provides a `ConfigCopyWith` extension (in `lib/src/config_extensions.dart`) that adds `copyWith`. If Config fields change upstream, update the extension to match.
 - When parsing enum strings from user input, match the Rust `Display`/`FromStr` impl (PascalCase, e.g., `WaitingForPreimage`, `PreimageShared`), not snake_case.
 - Events come from `sdk.addEventListener()` which returns a `Stream<SdkEvent>`, not callbacks.
 - `SdkBuilder` methods that take `self` in Rust (like `withDefaultStorage`, `withKeySet`) **consume** the builder. You MUST capture the return value: `builder = builder.withDefaultStorage(storageDir: dir)`. Ignoring the return value causes a `DroppableDisposedException` at runtime.

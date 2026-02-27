@@ -5,7 +5,6 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'commands.dart';
-import 'helpers.dart';
 import 'issuer.dart';
 import 'persistence.dart';
 import 'readline.dart';
