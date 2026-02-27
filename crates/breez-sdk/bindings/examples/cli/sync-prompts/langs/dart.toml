@@ -76,6 +76,20 @@ content = """
 **Interactive prompts:**
 - `rl.readline(prompt)` → `prompt(message)` or `prompt(message, defaultValue: 'y')` (uses stdin.readLineSync)
 
+**REPL / Readline:**
+- The Dart CLI has a custom `Readline` class in `lib/readline.dart` (raw stdin mode) providing tab completion and persistent command history. No Dart packages exist for interactive REPL completion — `cli_completion` and `very_good_cli` are for non-interactive CLIs only.
+- The REPL loop in `cli.dart` uses `rl.readLine(promptStr)` instead of `stdin.readLineSync()`.
+- Completion list is assembled from `commandNames + issuerCommandNames + ['exit', 'quit', 'help']`. When adding a new command group, add its command names to this list.
+- History is saved to a file via `rl.close()` after the REPL loop exits.
+
+**Per-command help:**
+- Commands using `ArgParser` should parse via `_parseArgs(parser, args, usageString)` — it intercepts `help`/`--help`/`-h` before parsing and catches `ArgParserException` to show usage when mandatory args are missing.
+- Simple positional-arg commands should check `args.first == 'help' || args.first == '--help'` before proceeding.
+- Use the `help:` parameter on `addOption()` for important options (e.g., `--method` lists available values like "sparkaddress, sparkinvoice, bitcoin, bolt11").
+
+**Process exit:**
+- `bin/breez_cli.dart` must call `exit(0)` after `runCli()` returns. The native FFI library (flutter_rust_bridge) keeps background threads alive after `sdk.disconnect()`, preventing the Dart VM from exiting cleanly.
+
 **Output / Serialization:**
 - `print_value(&v)?` → `printValue(v)`
 - `serialization.dart` uses `dart:mirrors` to reflectively serialize any FRB-generated class to JSON. Do NOT add manual `toJson()` extensions — all public fields are discovered automatically via reflection. Keep the `objToSerializable` function generic and type-agnostic.
