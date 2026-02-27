@@ -149,14 +149,22 @@ Map<String, CommandEntry> buildCommandRegistry() {
 
 ArgParser _parser(String name) => ArgParser(usageLineLength: 80);
 
-/// Parse [args] with [parser], returning `null` if the user asked for help.
+/// Parse [args] with [parser], returning `null` if the user asked for help
+/// or if parsing fails (prints usage + error in that case).
 ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
   if (args.contains('help') || args.contains('--help') || args.contains('-h')) {
     print('Usage: $usage');
     print(parser.usage);
     return null;
   }
-  return parser.parse(args);
+  try {
+    return parser.parse(args);
+  } on ArgParserException catch (e) {
+    print('Usage: $usage');
+    print(parser.usage);
+    print('\nError: ${e.message}');
+    return null;
+  }
 }
 
 bool? _parseBool(String? value) {
@@ -375,7 +383,12 @@ Future<void> _handleReceive(
 ) async {
   final parser =
       _parser('receive')
-        ..addOption('method', abbr: 'm', mandatory: true)
+        ..addOption(
+          'method',
+          abbr: 'm',
+          mandatory: true,
+          help: 'sparkaddress, sparkinvoice, bitcoin, bolt11',
+        )
         ..addOption('description', abbr: 'd')
         ..addOption('amount', abbr: 'a')
         ..addOption('token-identifier', abbr: 't')
@@ -462,7 +475,12 @@ Future<void> _handlePay(
 ) async {
   final parser =
       _parser('pay')
-        ..addOption('payment-request', abbr: 'r', mandatory: true)
+        ..addOption(
+          'payment-request',
+          abbr: 'r',
+          mandatory: true,
+          help: 'Invoice, address, or LNURL to pay',
+        )
         ..addOption('amount', abbr: 'a')
         ..addOption('token-identifier', abbr: 't')
         ..addOption('idempotency-key', abbr: 'i')
