@@ -76,8 +76,9 @@ content = """
 **Interactive prompts:**
 - `rl.readline(prompt)` → `prompt(message)` or `prompt(message, defaultValue: 'y')` (uses stdin.readLineSync)
 
-**Output:**
+**Output / Serialization:**
 - `print_value(&v)?` → `printValue(v)`
+- `serialization.dart` uses `dart:mirrors` to reflectively serialize any FRB-generated class to JSON. Do NOT add manual `toJson()` extensions — all public fields are discovered automatically via reflection. Keep the `objToSerializable` function generic and type-agnostic.
 
 **Errors:**
 - `return Err(anyhow!("msg"))` → `print("msg"); return;`
