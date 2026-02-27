@@ -71,5 +71,6 @@ This Rust CLI is the source of truth. Automated ports are maintained in [`bindin
 |----------|------|
 | [Python](../bindings/examples/cli/langs/python/) | `bindings/examples/cli/langs/python/` |
 | [Go](../bindings/examples/cli/langs/go/) | `bindings/examples/cli/langs/go/` |
+| [Dart](../bindings/examples/cli/langs/dart/) | `bindings/examples/cli/langs/dart/` |
 
 Changes to this CLI trigger a [sync workflow](../../../.github/workflows/sync-cli-langs.yml) that automatically opens PRs to update each language port.
