@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import shlex
@@ -23,7 +22,6 @@ from breez_sdk_spark import (
     default_postgres_storage_config,
     init_logging,
 )
-from breez_sdk_spark.breez_sdk_spark import uniffi_set_event_loop
 
 try:
     from breez_sdk_spark import create_postgres_storage
@@ -67,10 +65,6 @@ def expand_path(path: str) -> Path:
 async def main(data_dir, network, account_number, postgres_connection_string,
                stable_balance_token_identifier, stable_balance_threshold):
     """CLI client for Breez SDK with Spark."""
-    # Register the asyncio event loop so UniFFI callbacks from Rust background
-    # threads (e.g. EventListener.on_event) can find it.
-    uniffi_set_event_loop(asyncio.get_running_loop())
-
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
