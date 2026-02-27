@@ -13,6 +13,9 @@ breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
 breez-sdk-common = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 
+# PostgreSQL for database creation utilities
+tokio-postgres.workspace = true
+
 # Async/test stack
 tokio = { workspace = true, features = ["full"] }
 async-trait.workspace = true

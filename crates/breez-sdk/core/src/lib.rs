@@ -41,7 +41,8 @@ pub use spark_wallet::KeySet;
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
 pub use persist::postgres::{
-    PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config,
+    PoolQueueMode, PostgresStorageConfig, PostgresTreeStore, create_postgres_storage,
+    create_postgres_tree_store, default_postgres_storage_config,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]

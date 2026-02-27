@@ -70,6 +70,14 @@ async fn test_renew_timelocks(#[future] wallets: WalletsFixture) -> Result<()> {
             "Sender should have zero balance after transfer"
         );
 
+        // Verify receiver has the full balance - this should be immediate since
+        // leaves are inserted before the TransferClaimed event is emitted
+        let receiver_balance_after = to_wallet.get_balance().await?;
+        assert_eq!(
+            receiver_balance_after, total_balance,
+            "Receiver should have the full balance after transfer"
+        );
+
         info!("Sending via Spark completed - TransferClaimed received");
         Ok(())
     };

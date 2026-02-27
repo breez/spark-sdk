@@ -98,7 +98,7 @@ pub fn select_leaves_by_exact_denominations(
 }
 
 /// Selects leaves from the tree that sum up to at least the target amount.
-pub(crate) fn select_leaves_by_minimum_amount(
+pub fn select_leaves_by_minimum_amount(
     leaves: &[TreeNode],
     target_amount_sat: u64,
 ) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {

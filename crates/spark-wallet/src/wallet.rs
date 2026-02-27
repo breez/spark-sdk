@@ -146,6 +146,10 @@ macro_rules! with_leafs_spent_retry {
                     continue;
                 }
                 Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
+                    warn!(
+                        "{} got leaf spending error: {:?}",
+                        $operation_name, e
+                    );
                     attempt += 1;
                     continue;
                 }
@@ -1879,12 +1883,8 @@ async fn claim_transfer(
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
-    trace!("Claiming transfer with id: {}", transfer.id);
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-
-    trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
-
+    let result_nodes = tree_service.insert_leaves(claimed_nodes).await?;
     Ok(result_nodes)
 }
 

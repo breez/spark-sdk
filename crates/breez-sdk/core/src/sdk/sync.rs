@@ -135,6 +135,14 @@ impl BreezSdk {
                     // couldn't process it. Now that the payment is completed, re-trigger.
                     let _ = self.lnurl_preimage_trigger.send(());
 
+                    // Update balance before emitting the event so that listeners can immediately
+                    // query the new balance.
+                    if let Err(e) =
+                        update_balances(self.spark_wallet.clone(), self.storage.clone()).await
+                    {
+                        error!("Failed to update balances before PaymentSucceeded event: {e:?}");
+                    }
+
                     self.event_emitter
                         .emit(&SdkEvent::PaymentSucceeded { payment })
                         .await;

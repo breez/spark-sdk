@@ -133,6 +133,255 @@ pub async fn build_sdk_with_custom_config(
     })
 }
 
+/// Modifies a PostgreSQL connection string to use a different database name.
+///
+/// Replaces or appends `dbname=<new_db_name>` to the connection string.
+/// This is useful when multiple SDK instances need separate databases.
+///
+/// # Arguments
+/// * `conn_str` - Original PostgreSQL connection string
+/// * `suffix` - Suffix to append to the database name
+///
+/// # Returns
+/// Modified connection string with the new database name
+/// Extracts the database name from a PostgreSQL connection string.
+fn extract_dbname(conn_str: &str) -> Option<String> {
+    for part in conn_str.split_whitespace() {
+        if let Some((key, value)) = part.split_once('=')
+            && key == "dbname"
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Creates a PostgreSQL connection string for the default 'postgres' database.
+/// This is used to connect and create other databases.
+fn postgres_admin_conn_str(conn_str: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    for part in conn_str.split_whitespace() {
+        if let Some((key, value)) = part.split_once('=') {
+            if key == "dbname" {
+                parts.push("dbname=postgres".to_string());
+            } else {
+                parts.push(format!("{key}={value}"));
+            }
+        }
+    }
+
+    // If no dbname was found, add postgres
+    if !parts.iter().any(|p| p.starts_with("dbname=")) {
+        parts.push("dbname=postgres".to_string());
+    }
+
+    parts.join(" ")
+}
+
+/// Ensures a PostgreSQL database exists, creating it if necessary.
+///
+/// Connects to the 'postgres' admin database and creates the target database
+/// if it doesn't exist. This is useful for benchmarks that need isolated
+/// databases for each SDK instance.
+///
+/// # Arguments
+/// * `conn_str` - PostgreSQL connection string for the target database
+///
+/// # Returns
+/// Ok if database exists or was created successfully
+pub async fn ensure_postgres_database_exists(conn_str: &str) -> Result<()> {
+    let db_name = extract_dbname(conn_str).unwrap_or_else(|| "postgres".to_string());
+    let admin_conn_str = postgres_admin_conn_str(conn_str);
+
+    info!("Ensuring database '{}' exists...", db_name);
+
+    // Connect to postgres admin database
+    let (client, connection) = tokio_postgres::connect(&admin_conn_str, tokio_postgres::NoTls)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to postgres admin database: {e}"))?;
+
+    // Spawn the connection handler
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            tracing::error!("Postgres connection error: {}", e);
+        }
+    });
+
+    // Check if database exists
+    let row = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
+            &[&db_name],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to check if database exists: {e}"))?;
+
+    let exists: bool = row.get(0);
+
+    if !exists {
+        info!("Creating database '{}'...", db_name);
+        // CREATE DATABASE cannot be run in a transaction, so we use simple_query
+        client
+            .simple_query(&format!("CREATE DATABASE {db_name}"))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create database '{}': {e}", db_name))?;
+        info!("Database '{}' created successfully", db_name);
+    } else {
+        info!("Database '{}' already exists", db_name);
+    }
+
+    Ok(())
+}
+
+/// Drops a PostgreSQL database if it exists.
+///
+/// Connects to the 'postgres' admin database and drops the target database
+/// if it exists. This is useful for cleaning up benchmark databases.
+///
+/// # Arguments
+/// * `conn_str` - PostgreSQL connection string for the target database
+///
+/// # Returns
+/// Ok if database was dropped or didn't exist
+pub async fn drop_postgres_database(conn_str: &str) -> Result<()> {
+    let db_name = extract_dbname(conn_str).unwrap_or_else(|| "postgres".to_string());
+
+    // Don't drop the postgres admin database
+    if db_name == "postgres" {
+        return Ok(());
+    }
+
+    let admin_conn_str = postgres_admin_conn_str(conn_str);
+
+    info!("Dropping database '{}' if exists...", db_name);
+
+    // Connect to postgres admin database
+    let (client, connection) = tokio_postgres::connect(&admin_conn_str, tokio_postgres::NoTls)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to postgres admin database: {e}"))?;
+
+    // Spawn the connection handler
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            tracing::error!("Postgres connection error: {}", e);
+        }
+    });
+
+    // Check if database exists
+    let row = client
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
+            &[&db_name],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to check if database exists: {e}"))?;
+
+    let exists: bool = row.get(0);
+
+    if exists {
+        // Terminate existing connections to the database
+        client
+            .simple_query(&format!(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}'"
+            ))
+            .await
+            .ok(); // Ignore errors - connections might already be gone
+
+        // DROP DATABASE cannot be run in a transaction, so we use simple_query
+        client
+            .simple_query(&format!("DROP DATABASE {db_name}"))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to drop database '{}': {e}", db_name))?;
+        info!("Database '{}' dropped successfully", db_name);
+    } else {
+        info!("Database '{}' does not exist, nothing to drop", db_name);
+    }
+
+    Ok(())
+}
+
+/// Build and initialize a BreezSDK instance with optional PostgreSQL tree store
+///
+/// Similar to `build_sdk_with_custom_config` but allows specifying a PostgreSQL
+/// connection string for the tree store. This is useful for benchmarks that want
+/// to test SDK performance with different tree store backends.
+///
+/// **Important**: Each SDK instance MUST use a separate database. The tree store
+/// tables don't have wallet identity separation, so sharing a database between
+/// multiple SDKs will cause conflicts.
+///
+/// # Arguments
+/// * `storage_dir` - Directory path for SDK storage
+/// * `seed_bytes` - 32-byte seed for deterministic wallet generation
+/// * `config` - SDK configuration to use
+/// * `temp_dir` - Optional TempDir to keep alive (prevents premature deletion)
+/// * `apply_sensible_test_defaults` - Whether to apply test defaults to config
+/// * `postgres_tree_store_connection` - Optional PostgreSQL connection string for tree store
+///
+/// # Returns
+/// An SdkInstance containing the SDK, event channel, and optional TempDir
+pub async fn build_sdk_with_tree_store_config(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
+    mut config: Config,
+    temp_dir: Option<tempdir::TempDir>,
+    apply_sensible_test_defaults: bool,
+    postgres_tree_store_connection: Option<String>,
+) -> Result<SdkInstance> {
+    // Apply sensible test defaults if not already configured
+    if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
+        // In regtest we don't need an API key; drop it if present to avoid network calls
+        config.api_key = None;
+    }
+    // Speed up tests and prefer spark routing
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    if apply_sensible_test_defaults {
+        config.real_time_sync_server_url = None;
+        config.lnurl_domain = None;
+    }
+
+    let seed = Seed::Entropy(seed_bytes.to_vec());
+
+    let mut builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+
+    // Add postgres tree store if connection string provided
+    if let Some(conn_str) = postgres_tree_store_connection {
+        // Ensure the database exists (create if necessary)
+        ensure_postgres_database_exists(&conn_str).await?;
+
+        // Create config with 30 connections to support high concurrency
+        let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
+        pg_config.max_pool_size = 30;
+
+        builder = builder.with_postgres_tree_store(pg_config);
+    }
+
+    let sdk = builder.build().await?;
+
+    // Set up event listener
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
 /// Build and initialize a BreezSDK instance from a BIP-39 mnemonic phrase
 ///
 /// This is used for wallet recovery testing, where we need to restore a wallet
@@ -303,6 +552,8 @@ pub async fn wait_for_balance(
 ) -> Result<u64> {
     wait_for(
         || async {
+            // Sync wallet to ensure we have the latest balance
+            sdk.sync_wallet(SyncWalletRequest {}).await?;
             let info = sdk
                 .get_info(GetInfoRequest {
                     ensure_synced: Some(false),
@@ -648,6 +899,49 @@ pub async fn wait_for_payment_succeeded_event(
     })
 }
 
+/// Wait for a PaymentSucceeded event matching both payment type and method.
+/// This is more specific than `wait_for_payment_succeeded_event` and should be
+/// used when multiple payments of the same type but different methods might arrive.
+pub async fn wait_for_payment_succeeded_event_with_method(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    payment_type: PaymentType,
+    payment_method: PaymentMethod,
+    timeout_secs: u64,
+) -> Result<Payment> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "PaymentSucceeded",
+        |event| match event {
+            SdkEvent::PaymentSucceeded { payment }
+                if payment.payment_type == payment_type && payment.method == payment_method =>
+            {
+                info!(
+                    "Received PaymentSucceeded event: {} sats, type: {:?}, method: {:?}",
+                    payment.amount, payment.payment_type, payment.method
+                );
+                Ok(Some(EventResult::PaymentSucceeded(Box::new(payment))))
+            }
+            SdkEvent::PaymentSucceeded { payment } => {
+                info!(
+                    "Ignored PaymentSucceeded event (wrong method): {} sats, type: {:?}, method: {:?}",
+                    payment.amount, payment.payment_type, payment.method
+                );
+                Ok(None)
+            }
+            other => {
+                info!("Ignored SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::PaymentSucceeded(payment) => Ok(*payment),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
+}
+
 pub async fn wait_for_payment_pending_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     payment_type: PaymentType,
@@ -878,10 +1172,13 @@ pub async fn build_sdk_with_postgres(
 
     let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
 
+    let postgres_config =
+        breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
+
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_postgres_storage(breez_sdk_spark::default_postgres_storage_config(
-            connection_string.to_string(),
-        ))
+        .with_postgres_storage(postgres_config.clone())
+        // Use PostgresTreeStore for tree state sharing across instances
+        .with_postgres_tree_store(postgres_config)
         .build()
         .await?;
 

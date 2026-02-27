@@ -4,7 +4,9 @@ mod service;
 mod store;
 
 pub use error::TreeServiceError;
-pub use select_helper::{select_leaves_by_target_amounts, with_reserved_leaves};
+pub use select_helper::{
+    select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
+};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
 pub use store::{
@@ -110,29 +112,94 @@ impl std::str::FromStr for TreeNodeStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TreeNode {
     pub id: TreeNodeId,
     pub tree_id: String,
     pub value: u64,
     pub parent_node_id: Option<TreeNodeId>,
+    #[serde(with = "tx_serde")]
     pub node_tx: Transaction,
     // TODO: improve model to only allow empty refunds txs on expected cases
+    #[serde(with = "opt_tx_serde")]
     pub refund_tx: Option<Transaction>,
     /// The direct transaction of the node, this transaction is for the watchtower to broadcast.
+    #[serde(with = "opt_tx_serde")]
     pub direct_tx: Option<Transaction>,
     /// The refund transaction of the node, this transaction is to pay to the user.
+    #[serde(with = "opt_tx_serde")]
     pub direct_refund_tx: Option<Transaction>,
     /// The refund transaction of the node, this transaction is to pay to the user.
+    #[serde(with = "opt_tx_serde")]
     pub direct_from_cpfp_refund_tx: Option<Transaction>,
     /// This vout is the vout to spend the previous transaction, which is in the
     /// parent node.
     pub vout: u32,
+    #[serde(with = "pubkey_serde")]
     pub verifying_public_key: PublicKey,
+    #[serde(with = "pubkey_serde")]
     pub owner_identity_public_key: PublicKey,
     /// The signing keyshare information of the node on the SE side.
     pub signing_keyshare: SigningKeyshare,
     pub status: TreeNodeStatus,
+}
+
+/// Serde module for `Transaction` (hex-encoded consensus bytes).
+mod tx_serde {
+    use bitcoin::Transaction;
+    use bitcoin::consensus::{deserialize as btc_deserialize, serialize as btc_serialize};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(tx: &Transaction, s: S) -> Result<S::Ok, S::Error> {
+        hex::encode(btc_serialize(tx)).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Transaction, D::Error> {
+        let hex_str = String::deserialize(d)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        btc_deserialize(&bytes).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Serde module for `Option<Transaction>`.
+mod opt_tx_serde {
+    use bitcoin::Transaction;
+    use bitcoin::consensus::{deserialize as btc_deserialize, serialize as btc_serialize};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(tx: &Option<Transaction>, s: S) -> Result<S::Ok, S::Error> {
+        tx.as_ref()
+            .map(|t| hex::encode(btc_serialize(t)))
+            .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Transaction>, D::Error> {
+        let opt: Option<String> = Option::deserialize(d)?;
+        match opt {
+            Some(hex_str) => {
+                let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+                let tx = btc_deserialize(&bytes).map_err(serde::de::Error::custom)?;
+                Ok(Some(tx))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+/// Serde module for `PublicKey` (hex-encoded compressed).
+mod pubkey_serde {
+    use bitcoin::secp256k1::PublicKey;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(pk: &PublicKey, s: S) -> Result<S::Ok, S::Error> {
+        hex::encode(pk.serialize()).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PublicKey, D::Error> {
+        let hex_str = String::deserialize(d)?;
+        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
+        PublicKey::from_slice(&bytes).map_err(serde::de::Error::custom)
+    }
 }
 
 impl TreeNode {
@@ -442,9 +509,17 @@ pub trait TreeStore: Send + Sync {
     /// adding or updating leaves as necessary. Reserved leaves may be
     /// updated with new data while maintaining their reservation status.
     ///
+    /// Only leaves that were added BEFORE `refresh_started_at` will be deleted
+    /// if they are not in the provided set. This prevents race conditions where
+    /// a leaf is added (e.g., from a payment) after the refresh started but
+    /// before it completed, which would otherwise cause the new leaf to be lost.
+    ///
     /// # Parameters
     ///
     /// * `leaves` - A slice of `TreeNode` objects that will replace all existing leaves
+    /// * `missing_operators_leaves` - Leaves that are missing from some operators
+    /// * `refresh_started_at` - The time when the refresh operation started. Leaves
+    ///   added after this time will be preserved even if not in the refresh data.
     ///
     /// # Returns
     ///
@@ -462,10 +537,14 @@ pub trait TreeStore: Send + Sync {
     ///
     /// ```
     /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
+    /// use web_time::SystemTime;
     ///
     /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode], missing_operators_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
-    /// // Replace all leaves with a new set
-    /// store.set_leaves(updated_leaves, missing_operators_leaves).await?;
+    /// // Capture time before querying operators
+    /// let refresh_started_at = SystemTime::now();
+    /// // ... query operators for leaves ...
+    /// // Replace all leaves with a new set, preserving any added after refresh started
+    /// store.set_leaves(updated_leaves, missing_operators_leaves, refresh_started_at).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -473,6 +552,7 @@ pub trait TreeStore: Send + Sync {
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: web_time::SystemTime,
     ) -> Result<(), TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the leaves to the available pool.
@@ -581,10 +661,10 @@ pub trait TreeStore: Send + Sync {
 
     /// Subscribe to balance change notifications.
     ///
-    /// Returns a `watch::Receiver` that will receive the current available
-    /// balance whenever it changes. Callers can use `changed().await` to
-    /// wait for balance changes.
-    fn subscribe_balance_changes(&self) -> watch::Receiver<u64>;
+    /// Returns a `watch::Receiver` that notifies when the balance changes.
+    /// Callers can use `changed().await` to wait for balance changes.
+    /// The value sent is not meaningful - only the notification matters.
+    fn subscribe_balance_changes(&self) -> watch::Receiver<()>;
 
     /// Updates a reservation after a swap operation.
     ///

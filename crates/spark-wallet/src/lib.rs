@@ -31,7 +31,13 @@ pub use spark::{
     },
     ssp::*,
     token::{SelectionStrategy, TokenMetadata, TokenOutputWithPrevOut},
-    tree::{SigningKeyshare, TreeNodeId},
+    tree::{
+        DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
+        Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
+        SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
+        TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
+        select_leaves_by_target_amounts,
+    },
     utils::{
         paging::{Order, PagingFilter, PagingResult},
         transactions::is_ephemeral_anchor_output,

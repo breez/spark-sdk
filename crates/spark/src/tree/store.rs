@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use web_time::SystemTime;
+
 use tokio_with_wasm::alias as tokio;
 use tokio_with_wasm::alias::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tracing::{trace, warn};
@@ -18,6 +20,12 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Grace period for preserving recently added leaves during refresh.
+/// Leaves added within this period before `refresh_started_at` are preserved
+/// to handle race conditions where a refresh starts right after a leaf is added
+/// but before operators have synced the new leaf data.
+pub const LEAF_PRESERVATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
 /// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
 /// The permit is automatically released when this entry is dropped.
@@ -37,8 +45,19 @@ struct LeavesState {
     leaves: HashMap<TreeNodeId, TreeNode>,
     missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
-    /// Leaf IDs that have been finalized (spent). Prevents re-adding during refresh.
-    spent_leaf_ids: HashSet<TreeNodeId>,
+    /// Leaf IDs that have been finalized (spent) with their spent timestamp.
+    /// Prevents re-adding during refresh. Cleaned up when leaf is no longer
+    /// in refresh data AND was spent before the refresh started.
+    spent_leaf_ids: HashMap<TreeNodeId, SystemTime>,
+    /// Timestamps for when each leaf was added/returned to the pool.
+    /// Used to determine which leaves can be deleted during refresh.
+    /// Leaves added AFTER a refresh started will be preserved even if
+    /// not in the refresh data.
+    leaf_added_at: HashMap<TreeNodeId, SystemTime>,
+    /// Timestamp of when the most recent swap finalization completed.
+    /// Used to detect if a refresh started before a swap finished,
+    /// which would cause stale data to be applied.
+    last_swap_completed_at: Option<SystemTime>,
 }
 
 impl LeavesState {
@@ -72,6 +91,7 @@ enum StoreCommand {
     SetLeaves {
         leaves: Vec<TreeNode>,
         missing_operators_leaves: Vec<TreeNode>,
+        refresh_started_at: SystemTime,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     TryReserveLeaves {
@@ -124,7 +144,7 @@ enum StoreCommand {
 pub struct InMemoryTreeStore {
     command_tx: mpsc::Sender<StoreCommand>,
     /// Watch channel for balance change notifications.
-    balance_changed_rx: watch::Receiver<u64>,
+    balance_changed_rx: watch::Receiver<()>,
     /// Semaphore to limit concurrent reservations.
     reservation_semaphore: Arc<Semaphore>,
     /// Maximum concurrent reservations (stored for trace logging).
@@ -136,11 +156,13 @@ pub struct InMemoryTreeStore {
 impl InMemoryTreeStore {
     /// Creates a new `InMemoryTreeStore` with default configuration.
     ///
-    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`] and [`DEFAULT_RESERVATION_TIMEOUT`].
+    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`], [`DEFAULT_RESERVATION_TIMEOUT`],
+    /// and [`LEAF_PRESERVATION_GRACE_PERIOD`].
     pub fn new() -> Self {
         Self::with_config(
             DEFAULT_MAX_CONCURRENT_RESERVATIONS,
             DEFAULT_RESERVATION_TIMEOUT,
+            LEAF_PRESERVATION_GRACE_PERIOD,
         )
     }
 
@@ -152,14 +174,25 @@ impl InMemoryTreeStore {
     ///   Additional reservation attempts will wait up to `reservation_timeout`.
     /// * `reservation_timeout` - How long to wait for a reservation permit before
     ///   returning [`TreeServiceError::ResourceBusy`].
-    pub fn with_config(max_concurrent_reservations: usize, reservation_timeout: Duration) -> Self {
+    /// * `leaf_preservation_grace_period` - Grace period for preserving recently added
+    ///   leaves during refresh. Leaves added within this period before `refresh_started_at`
+    ///   are preserved to handle race conditions with operator sync.
+    pub fn with_config(
+        max_concurrent_reservations: usize,
+        reservation_timeout: Duration,
+        leaf_preservation_grace_period: Duration,
+    ) -> Self {
         // Bounded channel provides backpressure under extreme load
         let (command_tx, command_rx) = mpsc::channel(1024);
-        let (balance_changed_tx, balance_changed_rx) = watch::channel(0u64);
+        let (balance_changed_tx, balance_changed_rx) = watch::channel(());
         let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
 
         // Spawn the processor task - it will exit when command_tx is dropped
-        tokio::spawn(Self::run_processor(command_rx, balance_changed_tx));
+        tokio::spawn(Self::run_processor(
+            command_rx,
+            balance_changed_tx,
+            leaf_preservation_grace_period,
+        ));
 
         Self {
             command_tx,
@@ -173,7 +206,8 @@ impl InMemoryTreeStore {
     /// Main processor loop that handles all commands sequentially.
     async fn run_processor(
         mut command_rx: mpsc::Receiver<StoreCommand>,
-        balance_changed_tx: watch::Sender<u64>,
+        balance_changed_tx: watch::Sender<()>,
+        leaf_preservation_grace_period: Duration,
     ) {
         let mut state = LeavesState::default();
 
@@ -198,10 +232,16 @@ impl InMemoryTreeStore {
                 StoreCommand::SetLeaves {
                     leaves,
                     missing_operators_leaves,
+                    refresh_started_at,
                     response_tx,
                 } => {
-                    let result =
-                        Self::process_set_leaves(&mut state, &leaves, &missing_operators_leaves);
+                    let result = Self::process_set_leaves(
+                        &mut state,
+                        &leaves,
+                        &missing_operators_leaves,
+                        refresh_started_at,
+                        leaf_preservation_grace_period,
+                    );
                     let _ = response_tx.send(result);
                 }
                 StoreCommand::TryReserveLeaves {
@@ -274,7 +314,8 @@ impl InMemoryTreeStore {
                     "Sending balance notification: available {}→{}, pending {}→{}, force={}",
                     balance_before, balance_after, pending_before, pending_after, force_notify
                 );
-                let _ = balance_changed_tx.send(balance_after);
+                // Send notification - subscribers only use this as a trigger, not the value
+                let _ = balance_changed_tx.send(());
             }
         }
     }
@@ -283,9 +324,30 @@ impl InMemoryTreeStore {
         state: &mut LeavesState,
         leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        state
-            .leaves
-            .extend(leaves.iter().map(|l| (l.id.clone(), l.clone())));
+        let now = SystemTime::now();
+        trace!(
+            "process_add_leaves: Adding {} leaves at {:?}",
+            leaves.len(),
+            now
+        );
+        for leaf in leaves {
+            // Remove from spent_leaf_ids if present - when we receive a leaf through
+            // add_leaves (e.g., from a claimed transfer), it's no longer "spent" from
+            // our perspective. This handles the case where the same leaf returns to us
+            // after we sent it to someone else.
+            if state.spent_leaf_ids.remove(&leaf.id).is_some() {
+                trace!(
+                    "Removed leaf {} from spent_leaf_ids (receiving it back)",
+                    leaf.id
+                );
+            }
+            trace!(
+                "Adding leaf {} with value {} at {:?}",
+                leaf.id, leaf.value, now
+            );
+            state.leaves.insert(leaf.id.clone(), leaf.clone());
+            state.leaf_added_at.insert(leaf.id.clone(), now);
+        }
         Ok(())
     }
 
@@ -332,29 +394,158 @@ impl InMemoryTreeStore {
         state: &mut LeavesState,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: SystemTime,
+        grace_period: Duration,
     ) -> Result<(), TreeServiceError> {
-        // Collect IDs from the new refresh to clean up stale spent entries
+        // Check if any swap reservation is currently active
+        let has_active_swap = state
+            .leaves_reservations
+            .values()
+            .any(|entry| entry.purpose == ReservationPurpose::Swap);
+
+        // Check if a swap completed after this refresh started.
+        // If so, the refresh data may be inconsistent (operators have new leaves,
+        // but we're about to apply stale data from before the swap completed).
+        let swap_completed_during_refresh = state
+            .last_swap_completed_at
+            .is_some_and(|completed_at| completed_at >= refresh_started_at);
+
+        if has_active_swap || swap_completed_during_refresh {
+            trace!(
+                "Skipping set_leaves: active_swap={}, swap_completed_during_refresh={}",
+                has_active_swap, swap_completed_during_refresh
+            );
+            return Ok(());
+        }
+
+        // Collect IDs from the new refresh for later use
         let refreshed_ids: HashSet<TreeNodeId> = leaves
             .iter()
             .chain(missing_operators_leaves.iter())
             .map(|l| l.id.clone())
             .collect();
 
-        // Remove spent IDs that are no longer in the refresh (already gone from operators)
-        state.spent_leaf_ids.retain(|id| refreshed_ids.contains(id));
+        // Remove spent entries for leaves that were spent BEFORE refresh started.
+        // If spent_at < refresh_started_at, operators had time to process the spend.
+        // Note: A spent leaf won't appear in `leaves` (coordinator processed the spend),
+        // it may only appear in `missing_operators_leaves` if returned (e.g., HTLC refund).
+        state
+            .spent_leaf_ids
+            .retain(|_id, spent_at| *spent_at >= refresh_started_at);
 
-        // Filter out leaves that were spent since refresh started
+        // Collect leaves to preserve (added recently relative to refresh start).
+        // These are leaves that were added by `add_leaves` or `finalize_reservation` or
+        // `update_reservation` while the refresh was in progress or shortly before.
+        // We use a grace period to handle race conditions where a refresh starts right
+        // after a leaf is added but before operators have synced the new leaf data.
+        let preserved_leaves: HashMap<TreeNodeId, TreeNode> = state
+            .leaves
+            .iter()
+            .filter(|(id, _)| {
+                state
+                    .leaf_added_at
+                    .get(*id)
+                    .map(|added_at| {
+                        let cutoff = *added_at + grace_period;
+                        let preserve = cutoff >= refresh_started_at;
+                        trace!(
+                            "Leaf {} preservation check: added_at={:?}, grace={:?}, cutoff={:?}, refresh_started={:?}, preserve={}",
+                            id, added_at, grace_period, cutoff, refresh_started_at, preserve
+                        );
+                        preserve
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|(id, leaf)| (id.clone(), leaf.clone()))
+            .collect();
+
+        let preserved_missing: HashMap<TreeNodeId, TreeNode> = state
+            .missing_operators_leaves
+            .iter()
+            .filter(|(id, _)| {
+                state
+                    .leaf_added_at
+                    .get(*id)
+                    .map(|added_at| *added_at + grace_period >= refresh_started_at)
+                    .unwrap_or(false)
+            })
+            .map(|(id, leaf)| (id.clone(), leaf.clone()))
+            .collect();
+
+        // Build new leaves map from refresh data, excluding spent
+        let now = SystemTime::now();
+
         state.leaves = leaves
             .iter()
-            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
+            .filter(|l| !state.spent_leaf_ids.contains_key(&l.id))
             .map(|l| (l.id.clone(), l.clone()))
             .collect();
+
+        // Update timestamps for refreshed leaves (they're now "confirmed")
+        for leaf in leaves {
+            if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                state.leaf_added_at.insert(leaf.id.clone(), now);
+            }
+        }
 
         state.missing_operators_leaves = missing_operators_leaves
             .iter()
-            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
+            .filter(|l| !state.spent_leaf_ids.contains_key(&l.id))
             .map(|l| (l.id.clone(), l.clone()))
             .collect();
+
+        // Update timestamps for missing operator leaves
+        for leaf in missing_operators_leaves {
+            if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                state.leaf_added_at.insert(leaf.id.clone(), now);
+            }
+        }
+
+        // Re-add preserved leaves (keep their original timestamps)
+        // These are leaves added after refresh started, so they should not be overwritten
+        let preserved_count = preserved_leaves.len() + preserved_missing.len();
+        trace!(
+            "set_leaves: Preserving {} leaves ({} regular, {} missing), refresh has {} leaves",
+            preserved_count,
+            preserved_leaves.len(),
+            preserved_missing.len(),
+            leaves.len()
+        );
+        for (id, leaf) in preserved_leaves {
+            // Skip if already in missing_operators_leaves to avoid double counting.
+            // This can happen when a leaf is returned (via add_leaves) and a refresh
+            // starts shortly after with coordinator/operator status mismatch.
+            if state.missing_operators_leaves.contains_key(&id) {
+                trace!(
+                    "Skipping preserved leaf {} with value {} (already in missing_operators_leaves)",
+                    id, leaf.value
+                );
+                continue;
+            }
+            trace!("Re-adding preserved leaf {} with value {}", id, leaf.value);
+            state.leaves.entry(id).or_insert(leaf);
+        }
+
+        for (id, leaf) in preserved_missing {
+            // Skip if already in leaves to avoid double counting
+            if state.leaves.contains_key(&id) {
+                trace!(
+                    "Skipping preserved missing leaf {} with value {} (already in leaves)",
+                    id, leaf.value
+                );
+                continue;
+            }
+            trace!(
+                "Re-adding preserved missing leaf {} with value {}",
+                id, leaf.value
+            );
+            state.missing_operators_leaves.entry(id).or_insert(leaf);
+        }
+
+        // Clean up timestamps for leaves no longer in store
+        state.leaf_added_at.retain(|id, _| {
+            state.leaves.contains_key(id) || state.missing_operators_leaves.contains_key(id)
+        });
 
         for (key, entry) in state.leaves_reservations.iter_mut() {
             // Try to update reserved leaves with fresh data from the pool.
@@ -380,11 +571,12 @@ impl InMemoryTreeStore {
             );
         }
         trace!(
-            "Updated {:?} leaves in the local state (filtered {} spent)",
+            "Updated {:?} leaves in the local state (filtered {} spent, preserved {} new)",
             state.leaves.len(),
             refreshed_ids
                 .len()
-                .saturating_sub(state.leaves.len() + state.missing_operators_leaves.len())
+                .saturating_sub(state.leaves.len() + state.missing_operators_leaves.len()),
+            preserved_count
         );
         Ok(())
     }
@@ -501,18 +693,30 @@ impl InMemoryTreeStore {
         // Remove reservation and record spent leaf IDs
         if let Some(entry) = state.leaves_reservations.remove(id) {
             // Mark all leaves from this reservation as spent to prevent re-adding during refresh
+            let now = SystemTime::now();
             for leaf in &entry.leaves {
-                state.spent_leaf_ids.insert(leaf.id.clone());
+                state.spent_leaf_ids.insert(leaf.id.clone(), now);
+                // Clean up leaf added timestamp
+                state.leaf_added_at.remove(&leaf.id);
+            }
+
+            // If this was a swap reservation with new leaves, record completion time.
+            // This is used to detect if a refresh started before a swap finished,
+            // which would cause stale data to be applied.
+            if entry.purpose == ReservationPurpose::Swap && new_leaves.is_some() {
+                state.last_swap_completed_at = Some(now);
             }
         } else {
             warn!("Tried to finalize a non existing reservation");
         }
 
-        // Add new leaves (e.g., change from swap)
+        // Add new leaves (e.g., change from swap) with fresh timestamp
         if let Some(resulting_leaves) = new_leaves {
-            state
-                .leaves
-                .extend(resulting_leaves.iter().map(|l| (l.id.clone(), l.clone())));
+            let now = SystemTime::now();
+            for leaf in resulting_leaves {
+                state.leaves.insert(leaf.id.clone(), leaf.clone());
+                state.leaf_added_at.insert(leaf.id.clone(), now);
+            }
         }
         trace!("Finalized leaves reservation: {}", id);
     }
@@ -537,10 +741,12 @@ impl InMemoryTreeStore {
         let purpose = old_entry.purpose;
         let permit = old_entry._permit;
 
-        // Add change leaves to the available pool
-        state
-            .leaves
-            .extend(change_leaves.iter().map(|l| (l.id.clone(), l.clone())));
+        // Add change leaves to the available pool with fresh timestamp
+        let now = SystemTime::now();
+        for leaf in change_leaves {
+            state.leaves.insert(leaf.id.clone(), leaf.clone());
+            state.leaf_added_at.insert(leaf.id.clone(), now);
+        }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
@@ -650,12 +856,14 @@ impl TreeStore for InMemoryTreeStore {
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(StoreCommand::SetLeaves {
                 leaves: leaves.to_vec(),
                 missing_operators_leaves: missing_operators_leaves.to_vec(),
+                refresh_started_at,
                 response_tx,
             })
             .await
@@ -740,7 +948,7 @@ impl TreeStore for InMemoryTreeStore {
             .map_err(|_| TreeServiceError::ProcessorShutdown)?
     }
 
-    fn subscribe_balance_changes(&self) -> watch::Receiver<u64> {
+    fn subscribe_balance_changes(&self) -> watch::Receiver<()> {
         self.balance_changed_rx.clone()
     }
 
@@ -777,6 +985,15 @@ mod tests {
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    /// Creates a test store with zero grace period for testing leaf replacement behavior.
+    fn create_test_store() -> InMemoryTreeStore {
+        InMemoryTreeStore::with_config(
+            DEFAULT_MAX_CONCURRENT_RESERVATIONS,
+            DEFAULT_RESERVATION_TIMEOUT,
+            Duration::ZERO,
+        )
+    }
 
     fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
         TreeNode {
@@ -882,15 +1099,25 @@ mod tests {
 
     #[async_test_all]
     async fn test_set_leaves() {
-        let state = InMemoryTreeStore::new();
+        // Use zero grace period so old leaves can be replaced immediately
+        let state = create_test_store();
         let initial_leaves = vec![create_test_tree_node("node1", 100)];
         state.add_leaves(&initial_leaves).await.unwrap();
+
+        // Small delay to ensure refresh_start is after the leaves were added
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
 
         let new_leaves = vec![
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300),
         ];
-        state.set_leaves(&new_leaves, &[]).await.unwrap();
+        // Use a refresh_start that's AFTER the initial leaves were added
+        // so they're considered "old" and can be replaced
+        state
+            .set_leaves(&new_leaves, &[], refresh_start)
+            .await
+            .unwrap();
 
         let stored_leaves = state.get_leaves().await.unwrap().available;
         assert_eq!(stored_leaves.len(), 2);
@@ -919,6 +1146,10 @@ mod tests {
         .await
         .unwrap();
 
+        // Small delay to ensure refresh_start is after leaves were added
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+
         // Update leaves with new data (including updated versions of reserved leaves)
         let non_existing_operator_leaf = create_test_tree_node("node7", 1000); // Updated value
         let mut updated_leaf1 = create_test_tree_node("node1", 150); // Updated value
@@ -929,7 +1160,7 @@ mod tests {
             create_test_tree_node("node4", 400), // New leaf, node3 removed
         ];
         state
-            .set_leaves(&new_leaves, &[non_existing_operator_leaf])
+            .set_leaves(&new_leaves, &[non_existing_operator_leaf], refresh_start)
             .await
             .unwrap();
 
@@ -997,10 +1228,17 @@ mod tests {
         .await
         .unwrap();
 
+        // Small delay to ensure refresh_start is after leaves were added
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+
         // Set new leaves that don't include the reserved ones
         // (simulating a refresh while swap is in progress)
         let new_leaves = vec![create_test_tree_node("node3", 300)];
-        state.set_leaves(&new_leaves, &[]).await.unwrap();
+        state
+            .set_leaves(&new_leaves, &[], refresh_start)
+            .await
+            .unwrap();
 
         // Reservation should be PRESERVED (not removed) - the swap might still complete
         let reserved = state.get_reservation(&reservation.id).await;
@@ -1442,12 +1680,11 @@ mod tests {
         let result =
             tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), async {
                 rx.changed().await.ok();
-                *rx.borrow()
             })
             .await;
 
+        // Just verify we received a notification (the value is () and doesn't matter)
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 100);
     }
 
     #[async_test_all]
@@ -1693,16 +1930,21 @@ mod tests {
                 .any(|l| l.id.to_string() == "node1")
         );
 
-        // Now simulate a refresh that returns stale data including the spent leaf
-        // (this is the race condition scenario - refresh started before finalize completed)
+        // Simulate a refresh that started BEFORE the finalize completed.
+        // Use a timestamp in the past to simulate this race condition.
+        // Since spent_at >= refresh_start, the spent marker should be kept.
+        let refresh_start = SystemTime::now() - Duration::from_secs(60);
         let stale_leaves = vec![
             create_test_tree_node("node1", 100), // This was spent!
             create_test_tree_node("node2", 200),
             create_test_tree_node("node3", 300), // New leaf
         ];
-        state.set_leaves(&stale_leaves, &[]).await.unwrap();
+        state
+            .set_leaves(&stale_leaves, &[], refresh_start)
+            .await
+            .unwrap();
 
-        // Verify node1 was NOT restored (it's in spent_leaf_ids)
+        // Verify node1 was NOT restored (it's in spent_leaf_ids, spent_at >= refresh_start)
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 2); // node2 and node3 only
         assert!(
@@ -1722,14 +1964,14 @@ mod tests {
                 .available
                 .iter()
                 .any(|l| l.id.to_string() == "node1"),
-            "Spent leaf node1 should not be restored by set_leaves"
+            "Spent leaf node1 should not be restored by set_leaves when refresh started before spend"
         );
     }
 
     #[async_test_all]
     async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
-        // Test that spent_leaf_ids are cleaned up when the operators no longer
-        // return those leaves (they've been fully processed on the operator side)
+        // Test that spent_leaf_ids are cleaned up when refresh_start > spent_at.
+        // This means the operators had time to process the spend.
         let state = InMemoryTreeStore::new();
         let leaves = vec![create_test_tree_node("node1", 100)];
         state.add_leaves(&leaves).await.unwrap();
@@ -1748,15 +1990,26 @@ mod tests {
             .await
             .unwrap();
 
-        // First refresh still includes node1 (stale) - should be filtered
+        // First refresh with refresh_start BEFORE spent_at (simulating race condition).
+        // The spent marker should be kept because spent_at >= refresh_start.
+        let refresh_start = SystemTime::now() - Duration::from_secs(60);
         let stale_leaves = vec![create_test_tree_node("node1", 100)];
-        state.set_leaves(&stale_leaves, &[]).await.unwrap();
+        state
+            .set_leaves(&stale_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+        // node1 should be filtered out because it's a recent spend
         assert!(state.get_leaves().await.unwrap().available.is_empty());
 
-        // Second refresh no longer includes node1 (operators caught up)
-        // The spent_leaf_ids entry should be cleaned up
+        // Second refresh with refresh_start AFTER spent_at (operators had time to process).
+        // The spent_leaf_ids entry should be cleaned up because spent_at < refresh_start.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start2 = SystemTime::now();
         let fresh_leaves = vec![create_test_tree_node("node2", 200)];
-        state.set_leaves(&fresh_leaves, &[]).await.unwrap();
+        state
+            .set_leaves(&fresh_leaves, &[], refresh_start2)
+            .await
+            .unwrap();
 
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 1);
@@ -1767,13 +2020,18 @@ mod tests {
                 .any(|l| l.id.to_string() == "node2")
         );
 
-        // Now if a new node1 appears (different transaction, same ID pattern is unlikely
-        // but tests the cleanup), it should be accepted since it's no longer in spent_leaf_ids
+        // Now if node1 appears again (e.g., HTLC refund scenario), it should be accepted
+        // since the spent marker was cleaned up (spent_at < refresh_start2).
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start3 = SystemTime::now();
         let new_node1_leaves = vec![
-            create_test_tree_node("node1", 150), // New node1, different value
+            create_test_tree_node("node1", 150), // Returned node1
             create_test_tree_node("node2", 200),
         ];
-        state.set_leaves(&new_node1_leaves, &[]).await.unwrap();
+        state
+            .set_leaves(&new_node1_leaves, &[], refresh_start3)
+            .await
+            .unwrap();
 
         let all_leaves = state.get_leaves().await.unwrap();
         assert_eq!(all_leaves.available.len(), 2);
@@ -1782,6 +2040,496 @@ mod tests {
                 .available
                 .iter()
                 .any(|l| l.id.to_string() == "node1" && l.value == 150)
+        );
+    }
+
+    // ==================== Race Condition Fix Tests ====================
+
+    #[async_test_all]
+    async fn test_add_leaves_not_deleted_by_set_leaves() {
+        // Test that leaves added AFTER refresh starts are NOT deleted by set_leaves.
+        // This is the key race condition fix.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaves
+        let initial_leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&initial_leaves).await.unwrap();
+
+        // Simulate: refresh starts at T1
+        let refresh_start = SystemTime::now();
+
+        // Small delay to ensure the new leaf is added AFTER refresh_start
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Simulate: while refresh is in progress, a new leaf arrives (e.g., from a payment)
+        let new_leaf = create_test_tree_node("node2", 200);
+        state.add_leaves(&[new_leaf]).await.unwrap();
+
+        // Simulate: refresh completes with stale data (doesn't include node2)
+        let stale_refresh_data = vec![create_test_tree_node("node1", 100)];
+        state
+            .set_leaves(&stale_refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: node2 is PRESERVED (not deleted) because it was added after refresh started
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 2);
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1")
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node2"),
+            "Leaf added after refresh started should be preserved"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_old_leaves_deleted_by_set_leaves() {
+        // Test that leaves added BEFORE refresh starts ARE deleted if not in refresh data.
+        // Use zero grace period so old leaves can be replaced immediately.
+        let state = create_test_store();
+
+        // Add initial leaves
+        let initial_leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        state.add_leaves(&initial_leaves).await.unwrap();
+
+        // Small delay to ensure refresh_start is after the leaves were added
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Simulate: refresh starts
+        let refresh_start = SystemTime::now();
+
+        // Simulate: refresh completes with data that doesn't include node2
+        let refresh_data = vec![create_test_tree_node("node1", 100)];
+        state
+            .set_leaves(&refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: node2 is DELETED because it was added before refresh started and not in refresh
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 1);
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1")
+        );
+        assert!(
+            !all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node2"),
+            "Leaf added before refresh started should be deleted if not in refresh data"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_change_leaves_from_swap_protected() {
+        // Test that change leaves from update_reservation are protected from concurrent refresh.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaf
+        let initial_leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&initial_leaves).await.unwrap();
+
+        // Reserve the leaf
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Simulate: refresh starts
+        let refresh_start = SystemTime::now();
+
+        // Small delay
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Simulate: swap completes and adds change leaves via update_reservation
+        let reserved_leaf = create_test_tree_node("swap_output", 500);
+        let change_leaf = create_test_tree_node("change", 500);
+        state
+            .update_reservation(&reservation.id, &[reserved_leaf], &[change_leaf])
+            .await
+            .unwrap();
+
+        // Simulate: refresh completes with stale data (doesn't include change leaf)
+        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
+        state
+            .set_leaves(&stale_refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: change leaf is PRESERVED
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "change"),
+            "Change leaf from swap should be preserved"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_finalize_with_new_leaves_protected() {
+        // Test that new leaves from finalize_reservation are protected from concurrent refresh.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaf
+        let initial_leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&initial_leaves).await.unwrap();
+
+        // Reserve the leaf
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Simulate: refresh starts
+        let refresh_start = SystemTime::now();
+
+        // Small delay
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Simulate: payment completes and adds change via finalize_reservation
+        let change_leaf = create_test_tree_node("change", 900);
+        state
+            .finalize_reservation(&reservation.id, Some(&[change_leaf]))
+            .await
+            .unwrap();
+
+        // Simulate: refresh completes with stale data
+        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
+        state
+            .set_leaves(&stale_refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: change leaf is PRESERVED, node1 is NOT restored (it's spent)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "change"),
+            "Change leaf from finalize should be preserved"
+        );
+        assert!(
+            !all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1"),
+            "Spent leaf should not be restored"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_add_leaves_clears_spent_status() {
+        // Test that add_leaves clears spent status and re-adds the leaf.
+        // This handles the case where a leaf returns to us after we sent it
+        // (e.g., we send to Bob, Bob sends back to us - same leaf ID).
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaf
+        let leaves = vec![create_test_tree_node("node1", 100)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve and finalize node1 (marks it as spent)
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        state
+            .finalize_reservation(&reservation.id, None)
+            .await
+            .unwrap();
+
+        // Verify node1 is not in the pool (we spent it)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(all_leaves.available.is_empty());
+
+        // Add the leaf back via add_leaves (simulating receiving it back in a transfer)
+        let returning_leaf = create_test_tree_node("node1", 100);
+        state.add_leaves(&[returning_leaf]).await.unwrap();
+
+        // Verify node1 IS now in the pool (spent status was cleared)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(
+            all_leaves.available.len(),
+            1,
+            "Leaf should be re-added when receiving it back via add_leaves"
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1"),
+            "node1 should be in available leaves"
+        );
+
+        // New leaf should also be added
+        let new_leaf = create_test_tree_node("node2", 200);
+        state.add_leaves(&[new_leaf]).await.unwrap();
+
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 2);
+    }
+
+    // ==================== Swap/Refresh Race Condition Fix Tests ====================
+
+    #[async_test_all]
+    async fn test_set_leaves_skipped_during_active_swap() {
+        // Test that set_leaves is skipped when there's an active swap reservation.
+        // This prevents stale refresh data from overwriting swap results.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaves
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve leaves for a swap (not payment)
+        let _reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            false,
+            ReservationPurpose::Swap, // This is a swap, not payment
+        )
+        .await
+        .unwrap();
+
+        // Simulate refresh starting while swap is in progress
+        let refresh_start = SystemTime::now();
+
+        // Small delay
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Try to set new leaves (should be skipped due to active swap)
+        let new_leaves = vec![create_test_tree_node("node3", 300)];
+        state
+            .set_leaves(&new_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: since there's an active swap, set_leaves should have been skipped
+        // The available pool should still be empty (leaves are reserved for swap)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves.available.is_empty(),
+            "set_leaves should be skipped during active swap"
+        );
+        assert_eq!(all_leaves.reserved_for_swap.len(), 2);
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_skipped_after_swap_completes_during_refresh() {
+        // Test the main race condition fix:
+        // 1. Refresh starts (t=0)
+        // 2. Swap completes during refresh (t=1)
+        // 3. set_leaves called with stale data (t=2)
+        // Expected: set_leaves should be skipped because swap completed after refresh started
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaves
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve leaves for a swap
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+            false,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        // Simulate refresh starting at T0
+        let refresh_start = SystemTime::now();
+
+        // Small delay to ensure swap completes AFTER refresh started
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Swap completes at T1, adding new leaves
+        let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
+        state
+            .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
+            .await
+            .unwrap();
+
+        // Verify swap result leaves are in the pool
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.available.len(), 1);
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "swap_result")
+        );
+
+        // Now at T2, set_leaves is called with stale data from the refresh
+        // This data was fetched at T0, before the swap completed
+        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)]; // Old leaf
+        state
+            .set_leaves(&stale_refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: set_leaves should have been SKIPPED because swap completed during refresh
+        // The swap result leaf should still be present
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "swap_result"),
+            "Swap result leaf should be preserved after skipped set_leaves"
+        );
+        // The stale node1 should NOT have been restored
+        assert!(
+            !all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node1"),
+            "Stale leaf should not be restored when set_leaves is skipped"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later() {
+        // Test that set_leaves proceeds normally when refresh starts AFTER swap completed.
+        // This is the normal case - swap finishes, then a new refresh starts.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaves
+        let leaves = vec![create_test_tree_node("node1", 1000)];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve leaves for a swap
+        let reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+            false,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        // Swap completes first
+        let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
+        state
+            .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
+            .await
+            .unwrap();
+
+        // Small delay to ensure refresh starts AFTER swap completed
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Now refresh starts (AFTER swap completed)
+        let refresh_start = SystemTime::now();
+
+        // Small delay for grace period
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // set_leaves called with fresh data that includes the swap result
+        let fresh_refresh_data = vec![
+            create_test_tree_node("swap_result", 500),
+            create_test_tree_node("new_deposit", 200),
+        ];
+        state
+            .set_leaves(&fresh_refresh_data, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: set_leaves should have proceeded normally
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "swap_result"),
+            "swap_result should be present"
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "new_deposit"),
+            "new_deposit should be added"
+        );
+    }
+
+    #[async_test_all]
+    async fn test_payment_reservation_does_not_block_set_leaves() {
+        // Test that payment reservations (not swap) do NOT block set_leaves.
+        // Only swap reservations should block because they modify leaf ownership.
+        let state = InMemoryTreeStore::new();
+
+        // Add initial leaves
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        state.add_leaves(&leaves).await.unwrap();
+
+        // Reserve leaves for PAYMENT (not swap)
+        let _reservation = reserve_leaves(
+            &state,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment, // This is payment, should not block
+        )
+        .await
+        .unwrap();
+
+        // Small delay to ensure refresh starts after leaves were added
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+
+        // set_leaves should proceed (payment reservation doesn't block)
+        let new_leaves = vec![
+            create_test_tree_node("node1", 150), // Updated value
+            create_test_tree_node("node3", 300), // New leaf
+        ];
+        state
+            .set_leaves(&new_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify: set_leaves should have proceeded
+        // node3 should be in the pool (set_leaves was not skipped)
+        let all_leaves = state.get_leaves().await.unwrap();
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node3"),
+            "New leaf should be added when payment reservation is active"
         );
     }
 }
