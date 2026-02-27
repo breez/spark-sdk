@@ -7,59 +7,21 @@ on:
       - 'crates/breez-sdk/cli/src/**'
       - 'crates/breez-sdk/cli/README.md'
   workflow_dispatch:
-    inputs:
-      languages-to-sync:
-        description: 'Array of languages to sync (remove what you do not want)'
-        required: true
-        type: string
-        default: '["python", "go", "dart"]'
-      base-sha:
-        description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
-        required: false
-        type: string
+
+# This workflow acts as a trigger for the per-language sync workflows.
+# They react to this workflow's completion via the workflow_run event,
+# which claude-code-action supports (unlike push).
+#
+# To sync a single language manually, dispatch its workflow directly
+# (e.g., "Sync Dart CLI from Rust CLI") instead of this umbrella.
 
 concurrency:
   group: sync-cli-langs-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
-  sync-python:
-    name: Sync Python CLI
-    if: contains(fromJSON(inputs.languages-to-sync || '["python", "go", "dart"]'), 'python')
-    uses: ./.github/workflows/sync-python-cli.yml
-    with:
-      base_sha: ${{ github.event.before || inputs.base-sha || '' }}
-    secrets: inherit
-
-  sync-go:
-    name: Sync Go CLI
-    if: contains(fromJSON(inputs.languages-to-sync || '["python", "go", "dart"]'), 'go')
-    uses: ./.github/workflows/sync-go-cli.yml
-    with:
-      base_sha: ${{ github.event.before || inputs.base-sha || '' }}
-    secrets: inherit
-
-  sync-dart:
-    name: Sync Dart CLI
-    if: contains(fromJSON(inputs.languages-to-sync || '["python", "go", "dart"]'), 'dart')
-    uses: ./.github/workflows/sync-dart-cli.yml
-    with:
-      base_sha: ${{ github.event.before || inputs.base-sha || '' }}
-    secrets: inherit
-
-  summary:
-    name: Sync Summary
-    needs: [sync-python, sync-go, sync-dart]
-    if: always()
+  trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 1
     steps:
-      - name: Report results
-        run: |
-          echo "## CLI Sync Results" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Language | Status |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Python | ${{ needs.sync-python.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Go | ${{ needs.sync-go.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Dart | ${{ needs.sync-dart.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+      - run: echo "Rust CLI changed — language syncs will start via workflow_run"
