@@ -149,6 +149,16 @@ Map<String, CommandEntry> buildCommandRegistry() {
 
 ArgParser _parser(String name) => ArgParser(usageLineLength: 80);
 
+/// Parse [args] with [parser], returning `null` if the user asked for help.
+ArgResults? _parseArgs(ArgParser parser, List<String> args, String usage) {
+  if (args.contains('help') || args.contains('--help') || args.contains('-h')) {
+    print('Usage: $usage');
+    print(parser.usage);
+    return null;
+  }
+  return parser.parse(args);
+}
+
 bool? _parseBool(String? value) {
   if (value == null) return null;
   return ['true', '1', 'yes'].contains(value.toLowerCase());
@@ -166,7 +176,8 @@ Future<void> _handleGetInfo(
   List<String> args,
 ) async {
   final parser = _parser('get-info')..addOption('ensure-synced', abbr: 'e');
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'get-info [options]');
+  if (results == null) return;
   final ensureSynced = _parseBool(results.option('ensure-synced'));
   final result = await sdk.getInfo(
     request: GetInfoRequest(ensureSynced: ensureSynced),
@@ -182,11 +193,11 @@ Future<void> _handleGetPayment(
   List<String> args,
 ) async {
   final parser = _parser('get-payment');
-  parser.parse(args);
-  if (args.isEmpty) {
+  if (args.isEmpty || args.contains('help') || args.contains('--help')) {
     print('Usage: get-payment <payment_id>');
     return;
   }
+  parser.parse(args);
   final paymentId = args.last;
   final result = await sdk.getPayment(
     request: GetPaymentRequest(paymentId: paymentId),
@@ -275,7 +286,8 @@ Future<void> _handleListPayments(
         ..addOption('limit', abbr: 'l', defaultsTo: '10')
         ..addOption('offset', abbr: 'o', defaultsTo: '0')
         ..addOption('sort-ascending');
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'list-payments [options]');
+  if (results == null) return;
 
   List<PaymentType>? typeFilter;
   final typeFilterValues = results.multiOption('type-filter');
@@ -370,7 +382,8 @@ Future<void> _handleReceive(
         ..addOption('expiry-secs', abbr: 'e')
         ..addOption('sender-public-key', abbr: 's')
         ..addFlag('hodl', defaultsTo: false);
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'receive -m <method> [options]');
+  if (results == null) return;
 
   final method = results.option('method')!.toLowerCase();
   final description = results.option('description');
@@ -457,7 +470,8 @@ Future<void> _handlePay(
         ..addOption('from-token')
         ..addOption('convert-max-slippage-bps', abbr: 's')
         ..addFlag('fees-included', defaultsTo: false);
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'pay -r <request> [options]');
+  if (results == null) return;
 
   final paymentRequest = results.option('payment-request')!;
   final amountStr = results.option('amount');
@@ -540,7 +554,12 @@ Future<void> _handleLnurlPay(
         ..addOption('from-token')
         ..addOption('convert-max-slippage-bps', abbr: 's')
         ..addFlag('fees-included', defaultsTo: false);
-  final results = parser.parse(args);
+  final results = _parseArgs(
+    parser,
+    args,
+    'lnurl-pay <lnurl-or-address> [options]',
+  );
+  if (results == null) return;
 
   // The LNURL is the first positional argument (remaining args)
   if (results.rest.isEmpty) {
@@ -629,7 +648,8 @@ Future<void> _handleLnurlWithdraw(
   List<String> args,
 ) async {
   final parser = _parser('lnurl-withdraw')..addOption('timeout', abbr: 't');
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'lnurl-withdraw <lnurl> [options]');
+  if (results == null) return;
 
   if (results.rest.isEmpty) {
     print('Usage: lnurl-withdraw <lnurl> [options]');
@@ -673,7 +693,7 @@ Future<void> _handleLnurlAuth(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: lnurl-auth <lnurl>');
     return;
   }
@@ -705,7 +725,7 @@ Future<void> _handleClaimHtlcPayment(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: claim-htlc-payment <preimage>');
     return;
   }
@@ -728,7 +748,12 @@ Future<void> _handleClaimDeposit(
         ..addOption('fee-sat')
         ..addOption('sat-per-vbyte')
         ..addOption('recommended-fee-leeway');
-  final results = parser.parse(args);
+  final results = _parseArgs(
+    parser,
+    args,
+    'claim-deposit <txid> <vout> [options]',
+  );
+  if (results == null) return;
 
   if (results.rest.length < 2) {
     print('Usage: claim-deposit <txid> <vout> [options]');
@@ -774,7 +799,7 @@ Future<void> _handleParse(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: parse <input>');
     return;
   }
@@ -794,7 +819,12 @@ Future<void> _handleRefundDeposit(
       _parser('refund-deposit')
         ..addOption('fee-sat')
         ..addOption('sat-per-vbyte');
-  final results = parser.parse(args);
+  final results = _parseArgs(
+    parser,
+    args,
+    'refund-deposit <txid> <vout> <address> [options]',
+  );
+  if (results == null) return;
 
   if (results.rest.length < 3) {
     print(
@@ -859,7 +889,8 @@ Future<void> _handleBuyBitcoin(
       _parser('buy-bitcoin')
         ..addOption('locked-amount-sat')
         ..addOption('redirect-url');
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'buy-bitcoin [options]');
+  if (results == null) return;
 
   final lockedStr = results.option('locked-amount-sat');
   final lockedAmount = lockedStr != null ? BigInt.parse(lockedStr) : null;
@@ -882,7 +913,7 @@ Future<void> _handleCheckLightningAddressAvailable(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: check-lightning-address-available <username>');
     return;
   }
@@ -911,7 +942,7 @@ Future<void> _handleRegisterLightningAddress(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: register-lightning-address <username> [description]');
     return;
   }
@@ -977,7 +1008,7 @@ Future<void> _handleGetTokensMetadata(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print(
       'Usage: get-tokens-metadata <token_identifier> [token_identifier...]',
     );
@@ -998,7 +1029,12 @@ Future<void> _handleFetchConversionLimits(
 ) async {
   final parser = _parser('fetch-conversion-limits')
     ..addFlag('from-bitcoin', abbr: 'f', defaultsTo: false);
-  final results = parser.parse(args);
+  final results = _parseArgs(
+    parser,
+    args,
+    'fetch-conversion-limits [-f] <token_identifier>',
+  );
+  if (results == null) return;
 
   if (results.rest.isEmpty) {
     print('Usage: fetch-conversion-limits [-f] <token_identifier>');
@@ -1045,7 +1081,8 @@ Future<void> _handleSetUserSettings(
   List<String> args,
 ) async {
   final parser = _parser('set-user-settings')..addOption('private', abbr: 'p');
-  final results = parser.parse(args);
+  final results = _parseArgs(parser, args, 'set-user-settings [options]');
+  if (results == null) return;
   final privateMode = _parseBool(results.option('private'));
 
   await sdk.updateUserSettings(

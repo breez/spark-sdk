@@ -65,7 +65,7 @@ Future<void> dispatchIssuerCommand(
 ) async {
   final registry = _getRegistry();
 
-  if (args.isEmpty || args[0] == 'help') {
+  if (args.isEmpty || args[0] == 'help' || args[0] == '--help') {
     print('\nIssuer subcommands:\n');
     for (final entry
         in registry.entries.toList()..sort((a, b) => a.key.compareTo(b.key))) {
@@ -116,6 +116,13 @@ Future<void> _handleCreateToken(
 ) async {
   final parser =
       ArgParser()..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
+  if (args.contains('help') || args.contains('--help')) {
+    print(
+      'Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]',
+    );
+    print(parser.usage);
+    return;
+  }
   final results = parser.parse(args);
 
   if (results.rest.length < 4) {
@@ -148,7 +155,7 @@ Future<void> _handleMintToken(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer mint-token <amount>');
     return;
   }
@@ -165,7 +172,7 @@ Future<void> _handleBurnToken(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer burn-token <amount>');
     return;
   }
@@ -182,7 +189,7 @@ Future<void> _handleFreezeToken(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer freeze-token <address>');
     return;
   }
@@ -199,7 +206,7 @@ Future<void> _handleUnfreezeToken(
   TokenIssuer tokenIssuer,
   List<String> args,
 ) async {
-  if (args.isEmpty) {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer unfreeze-token <address>');
     return;
   }
