@@ -53,4 +53,8 @@ Future<void> main(List<String> arguments) async {
     network: network,
     accountNumber: accountNumber,
   );
+
+  // Force exit — the native FFI library may keep background threads alive
+  // after sdk.disconnect(), preventing the Dart VM from exiting cleanly.
+  exit(0);
 }
