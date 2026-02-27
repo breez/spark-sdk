@@ -1,5 +1,4 @@
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
-import 'helper.dart';
 
 Config configureLightningAddress() {
   // ANCHOR: config-lightning-address
