@@ -86,8 +86,6 @@ content = """
 - Each group has its own file with `COMMAND_NAMES`, `build_registry()`, parser builders, handlers
 
 **Python-specific UniFFI quirks:**
-- The SDK fires events from Rust background threads. Use `uniffi_set_event_loop(asyncio.get_running_loop())` at startup to register the asyncio event loop.
-- All trait interface callbacks (e.g., `EventListener.on_event`) must be `async def` because UniFFI wraps them with `await`.
 - Python UniFFI enum variant names use SCREAMING_SNAKE_CASE (e.g., `InputType.LNURL_PAY`).
 - Python UniFFI enum variant fields use snake_case (e.g., `input_type.data`).
 """

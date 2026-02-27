@@ -4,10 +4,15 @@ name: Sync Go CLI from Rust CLI
 
 on:
   workflow_dispatch:
+    inputs:
+      base-sha:
+        description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
+        required: false
+        type: string
   workflow_call:
     inputs:
-      diff_summary:
-        description: 'Summary of Rust CLI changes (from umbrella workflow)'
+      base_sha:
+        description: 'Base commit SHA for diffing (from umbrella workflow or github.event.before)'
         required: false
         type: string
 
@@ -28,35 +33,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Determine diff summary
+      - name: Compute diff info
         id: diff-info
         run: |
-          if [ -n "${{ inputs.diff_summary }}" ]; then
-            # Called from umbrella workflow — use provided summary
+          # Determine diff base. Priority:
+          # 1. Explicit base_sha from umbrella workflow or workflow_dispatch input
+          # 2. Auto-detect: last commit that touched this language CLI (= last sync point)
+          DIFF_BASE="${{ inputs.base_sha || inputs.base-sha }}"
+          if [ -z "$DIFF_BASE" ] || [ "$DIFF_BASE" = "0000000000000000000000000000000000000000" ]; then
+            DIFF_BASE=$(git log -1 --format=%H -- 'crates/breez-sdk/bindings/examples/cli/langs/go/')
+            if [ -n "$DIFF_BASE" ]; then
+              echo "Auto-detected diff base from last sync commit: $DIFF_BASE"
+            fi
+          fi
+
+          if [ -n "$DIFF_BASE" ]; then
+            echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
             {
               echo "diff_summary<<EODIFF"
-              echo "${{ inputs.diff_summary }}"
+              git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual trigger — always run, generate diff from HEAD~1
-            echo "Manual trigger — running sync"
-            {
-              echo "diff_summary<<EODIFF"
-              git diff --stat HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md' || echo "Manual trigger (workflow_dispatch)"
-              echo "EODIFF"
-            } >> "$GITHUB_OUTPUT"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No diff summary provided and not a manual trigger"
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            # No language CLI commits yet — first sync
+            echo "diff_base=" >> "$GITHUB_OUTPUT"
+            {
+              echo "diff_summary<<EODIFF"
+              echo "First sync — no previous language CLI commits found. Do a full comparison."
+              echo "EODIFF"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync Go CLI
-        if: steps.diff-info.outputs.has_changes == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -69,15 +79,15 @@ jobs:
           prompt: |
             ## Task: Sync Go CLI with Rust CLI changes
 
-            A commit was just pushed to `main` that changed the Rust CLI source files.
-            Your job is to update the Go CLI to match.
+            Your job is to update the Go CLI to match the current Rust CLI.
 
             ### What changed
             ${{ steps.diff-info.outputs.diff_summary }}
 
-            ### Step 1: Analyze the diff
-            Run: `git diff HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
-            Then read the current Rust files for full context.
+            ### Step 1: Analyze the changes
+            If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
+            Otherwise (manual trigger without a base SHA), read the full Rust CLI source files and compare them against the current Go CLI to identify all differences.
+            Always read the current Rust files for full context.
 
             ### Step 2: File mapping
 
@@ -192,8 +202,4 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          if [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
-            echo "::notice::No changes to sync — skipping"
-          else
-            echo "::notice::Claude Code sync completed — check for new PR"
-          fi
+          echo "::notice::Claude Code sync completed — check for new PR"

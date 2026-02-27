@@ -13,57 +13,35 @@ on:
         required: true
         type: string
         default: '["python", "go"]'
+      base-sha:
+        description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
+        required: false
+        type: string
 
 concurrency:
   group: sync-cli-langs-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
-  setup:
-    name: Setup
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      diff_summary: ${{ steps.diff.outputs.diff_summary }}
-      python: ${{ contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'python') }}
-      go: ${{ contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'go') }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Compute diff summary
-        id: diff
-        run: |
-          {
-            echo "diff_summary<<EODIFF"
-            git diff --stat HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md' || echo "Manual trigger"
-            echo "EODIFF"
-          } >> "$GITHUB_OUTPUT"
-
   sync-python:
     name: Sync Python CLI
-    needs: setup
-    if: needs.setup.outputs.python == 'true'
+    if: contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'python')
     uses: ./.github/workflows/sync-python-cli.yml
     with:
-      diff_summary: ${{ needs.setup.outputs.diff_summary }}
+      base_sha: ${{ github.event.before || inputs.base-sha || '' }}
     secrets: inherit
 
   sync-go:
     name: Sync Go CLI
-    needs: setup
-    if: needs.setup.outputs.go == 'true'
+    if: contains(fromJSON(inputs.languages-to-sync || '["python", "go"]'), 'go')
     uses: ./.github/workflows/sync-go-cli.yml
     with:
-      diff_summary: ${{ needs.setup.outputs.diff_summary }}
+      base_sha: ${{ github.event.before || inputs.base-sha || '' }}
     secrets: inherit
 
   summary:
     name: Sync Summary
-    needs: [setup, sync-python, sync-go]
+    needs: [sync-python, sync-go]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

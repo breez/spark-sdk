@@ -1,14 +1,14 @@
 ## Task: Sync {{LANG_NAME}} CLI with Rust CLI changes
 
-A commit was just pushed to `main` that changed the Rust CLI source files.
-Your job is to update the {{LANG_NAME}} CLI to match.
+Your job is to update the {{LANG_NAME}} CLI to match the current Rust CLI.
 
 ### What changed
 ${{ steps.diff-info.outputs.diff_summary }}
 
-### Step 1: Analyze the diff
-Run: `git diff HEAD~1 HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
-Then read the current Rust files for full context.
+### Step 1: Analyze the changes
+If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
+Otherwise (manual trigger without a base SHA), read the full Rust CLI source files and compare them against the current {{LANG_NAME}} CLI to identify all differences.
+Always read the current Rust files for full context.
 
 ### Step 2: File mapping
 
