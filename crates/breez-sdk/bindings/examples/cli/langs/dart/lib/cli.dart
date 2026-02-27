@@ -10,14 +10,8 @@ import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
 
-Future<void> runCli({
-  required String dataDir,
-  required String network,
-  int? accountNumber,
-}) async {
-  await BreezSdkSparkLib.init(
-    externalLibrary: ExternalLibrary.open(_nativeLibPath()),
-  );
+Future<void> runCli({required String dataDir, required String network, int? accountNumber}) async {
+  await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
   final dir = Directory(dataDir);
   if (!dir.existsSync()) {
@@ -85,17 +79,8 @@ Future<void> _runRepl(
   stdout.writeln("Type 'help' for available commands or 'exit' to quit");
 
   final registry = buildCommandRegistry();
-  final allCommands = [
-    ...commandNames,
-    ...issuerCommandNames,
-    'exit',
-    'quit',
-    'help',
-  ];
-  final rl = Readline(
-    completions: allCommands,
-    historyFile: persistence.historyFile,
-  );
+  final allCommands = [...commandNames, ...issuerCommandNames, 'exit', 'quit', 'help'];
+  final rl = Readline(completions: allCommands, historyFile: persistence.historyFile);
 
   while (true) {
     try {
@@ -126,9 +111,7 @@ Future<void> _runRepl(
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
       } else {
-        stdout.writeln(
-          "Unknown command: $cmdName. Type 'help' for available commands.",
-        );
+        stdout.writeln("Unknown command: $cmdName. Type 'help' for available commands.");
       }
     } on StdinException {
       stdout.writeln('');

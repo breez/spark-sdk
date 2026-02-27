@@ -12,3 +12,6 @@ dependencies:
   crypto: ^3.0.0
   breez_sdk_spark_flutter:
     path: ../../../../../../../packages/flutter
+
+dev_dependencies:
+  lints: ^5.1.1

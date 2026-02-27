@@ -28,15 +28,11 @@ extension ConfigCopyWith on Config {
       syncIntervalSecs: syncIntervalSecs ?? this.syncIntervalSecs,
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
-      preferSparkOverLightning:
-          preferSparkOverLightning ?? this.preferSparkOverLightning,
+      preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
       externalInputParsers: externalInputParsers ?? this.externalInputParsers,
-      useDefaultExternalInputParsers:
-          useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
-      realTimeSyncServerUrl:
-          realTimeSyncServerUrl ?? this.realTimeSyncServerUrl,
-      privateEnabledDefault:
-          privateEnabledDefault ?? this.privateEnabledDefault,
+      useDefaultExternalInputParsers: useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
+      realTimeSyncServerUrl: realTimeSyncServerUrl ?? this.realTimeSyncServerUrl,
+      privateEnabledDefault: privateEnabledDefault ?? this.privateEnabledDefault,
       optimizationConfig: optimizationConfig ?? this.optimizationConfig,
       stableBalanceConfig: stableBalanceConfig ?? this.stableBalanceConfig,
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,

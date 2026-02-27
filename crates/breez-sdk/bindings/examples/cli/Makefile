@@ -17,8 +17,12 @@ sync-prompts-generate: ## Regenerate workflow files from templates
 check-python: ## Syntax-check Python CLI source files
 	python3 -m py_compile $(PYTHON_SRC)/*.py
 
-check-go: ## Syntax-check Go CLI source files
+check-go: ## Check Go CLI (format + build + vet)
 	cd $(GO_SRC) && gofmt -e *.go > /dev/null
+	cd $(GO_SRC) && go build ./...
+	cd $(GO_SRC) && go vet ./...
 
-check-dart: ## Syntax-check Dart CLI source files
-	cd $(DART_SRC) && dart format --set-exit-if-changed lib/ bin/
+check-dart: ## Check Dart CLI (format + analyze)
+	cd $(DART_SRC) && dart pub get
+	cd $(DART_SRC) && dart format -l 110 --set-exit-if-changed lib/ bin/
+	cd $(DART_SRC) && dart analyze --fatal-infos lib/ bin/

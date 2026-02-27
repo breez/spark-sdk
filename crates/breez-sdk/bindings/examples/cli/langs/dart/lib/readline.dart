@@ -150,24 +150,14 @@ class Readline {
                   } else if (_historyIndex > 0) {
                     _historyIndex--;
                   }
-                  _replaceBuffer(
-                    prompt,
-                    buf,
-                    cursor,
-                    _history[_historyIndex].codeUnits,
-                  );
+                  _replaceBuffer(prompt, buf, cursor, _history[_historyIndex].codeUnits);
                   cursor = buf.length;
                 }
               case 66: // Down arrow
                 if (_historyIndex >= 0) {
                   if (_historyIndex < _history.length - 1) {
                     _historyIndex++;
-                    _replaceBuffer(
-                      prompt,
-                      buf,
-                      cursor,
-                      _history[_historyIndex].codeUnits,
-                    );
+                    _replaceBuffer(prompt, buf, cursor, _history[_historyIndex].codeUnits);
                   } else {
                     _historyIndex = -1;
                     _replaceBuffer(prompt, buf, cursor, _savedLine.codeUnits);
@@ -234,8 +224,7 @@ class Readline {
     void Function(List<int> newBuf, int newCursor) update,
   ) {
     final text = String.fromCharCodes(buf);
-    final matches =
-        _completions.where((c) => c.startsWith(text)).toList()..sort();
+    final matches = _completions.where((c) => c.startsWith(text)).toList()..sort();
 
     if (matches.isEmpty) return;
 
@@ -291,10 +280,7 @@ class Readline {
     if (_historyFile == null) return;
     final file = File(_historyFile);
     // Keep last 500 entries.
-    final entries =
-        _history.length > 500
-            ? _history.sublist(_history.length - 500)
-            : _history;
+    final entries = _history.length > 500 ? _history.sublist(_history.length - 500) : _history;
     file.writeAsStringSync('${entries.join('\n')}\n');
   }
 
@@ -318,12 +304,7 @@ class Readline {
   }
 
   /// Replace buffer contents and redraw.
-  void _replaceBuffer(
-    String prompt,
-    List<int> buf,
-    int oldCursor,
-    List<int> newContent,
-  ) {
+  void _replaceBuffer(String prompt, List<int> buf, int oldCursor, List<int> newContent) {
     buf
       ..clear()
       ..addAll(newContent);

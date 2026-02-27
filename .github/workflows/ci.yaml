@@ -177,6 +177,43 @@ jobs:
       - name: Verify generated workflow files are up-to-date
         run: make sync-prompts-check
 
+  cli-examples:
+    name: CLI examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.38.9
+
+      - name: Set up just
+        uses: extractions/setup-just@v3
+
+      - name: Generate Flutter bindings
+        working-directory: packages/flutter
+        run: just codegen
+
+      - name: Check Dart CLI
+        working-directory: crates/breez-sdk/bindings/examples/cli
+        run: make check-dart
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.19'
+
+      - name: Check Go CLI
+        working-directory: crates/breez-sdk/bindings/examples/cli
+        run: make check-go
+
   docs-rust:
     name: Docs (rust)
     runs-on: ubuntu-latest

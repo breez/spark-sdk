@@ -14,8 +14,7 @@ const issuerCommandNames = [
   'issuer unfreeze-token',
 ];
 
-typedef IssuerHandler =
-    Future<void> Function(TokenIssuer tokenIssuer, List<String> args);
+typedef IssuerHandler = Future<void> Function(TokenIssuer tokenIssuer, List<String> args);
 
 class _IssuerEntry {
   final String description;
@@ -27,48 +26,23 @@ Map<String, _IssuerEntry>? _registry;
 
 Map<String, _IssuerEntry> _getRegistry() {
   return _registry ??= {
-    'token-balance': _IssuerEntry(
-      'Get issuer token balance',
-      _handleTokenBalance,
-    ),
-    'token-metadata': _IssuerEntry(
-      'Get issuer token metadata',
-      _handleTokenMetadata,
-    ),
-    'create-token': _IssuerEntry(
-      'Create a new issuer token',
-      _handleCreateToken,
-    ),
-    'mint-token': _IssuerEntry(
-      'Mint supply of the issuer token',
-      _handleMintToken,
-    ),
-    'burn-token': _IssuerEntry(
-      'Burn supply of the issuer token',
-      _handleBurnToken,
-    ),
-    'freeze-token': _IssuerEntry(
-      'Freeze tokens at an address',
-      _handleFreezeToken,
-    ),
-    'unfreeze-token': _IssuerEntry(
-      'Unfreeze tokens at an address',
-      _handleUnfreezeToken,
-    ),
+    'token-balance': _IssuerEntry('Get issuer token balance', _handleTokenBalance),
+    'token-metadata': _IssuerEntry('Get issuer token metadata', _handleTokenMetadata),
+    'create-token': _IssuerEntry('Create a new issuer token', _handleCreateToken),
+    'mint-token': _IssuerEntry('Mint supply of the issuer token', _handleMintToken),
+    'burn-token': _IssuerEntry('Burn supply of the issuer token', _handleBurnToken),
+    'freeze-token': _IssuerEntry('Freeze tokens at an address', _handleFreezeToken),
+    'unfreeze-token': _IssuerEntry('Unfreeze tokens at an address', _handleUnfreezeToken),
   };
 }
 
 /// Dispatch an issuer subcommand given the args after 'issuer'.
-Future<void> dispatchIssuerCommand(
-  List<String> args,
-  TokenIssuer tokenIssuer,
-) async {
+Future<void> dispatchIssuerCommand(List<String> args, TokenIssuer tokenIssuer) async {
   final registry = _getRegistry();
 
   if (args.isEmpty || args[0] == 'help' || args[0] == '--help') {
     print('\nIssuer subcommands:\n');
-    for (final entry
-        in registry.entries.toList()..sort((a, b) => a.key.compareTo(b.key))) {
+    for (final entry in registry.entries.toList()..sort((a, b) => a.key.compareTo(b.key))) {
       print('  issuer ${entry.key.padRight(30)} ${entry.value.description}');
     }
     print('');
@@ -79,9 +53,7 @@ Future<void> dispatchIssuerCommand(
   final subArgs = args.sublist(1);
 
   if (!registry.containsKey(subName)) {
-    print(
-      "Unknown issuer subcommand: $subName. Use 'issuer help' for available commands.",
-    );
+    print("Unknown issuer subcommand: $subName. Use 'issuer help' for available commands.");
     return;
   }
 
@@ -90,45 +62,31 @@ Future<void> dispatchIssuerCommand(
 
 // --- token-balance ---
 
-Future<void> _handleTokenBalance(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleTokenBalance(TokenIssuer tokenIssuer, List<String> args) async {
   final result = await tokenIssuer.getIssuerTokenBalance();
   printValue(result);
 }
 
 // --- token-metadata ---
 
-Future<void> _handleTokenMetadata(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleTokenMetadata(TokenIssuer tokenIssuer, List<String> args) async {
   final result = await tokenIssuer.getIssuerTokenMetadata();
   printValue(result);
 }
 
 // --- create-token ---
 
-Future<void> _handleCreateToken(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
-  final parser =
-      ArgParser()..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
+Future<void> _handleCreateToken(TokenIssuer tokenIssuer, List<String> args) async {
+  final parser = ArgParser()..addFlag('is-freezable', abbr: 'f', defaultsTo: false);
   if (args.contains('help') || args.contains('--help')) {
-    print(
-      'Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]',
-    );
+    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]');
     print(parser.usage);
     return;
   }
   final results = parser.parse(args);
 
   if (results.rest.length < 4) {
-    print(
-      'Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]',
-    );
+    print('Usage: issuer create-token <name> <ticker> <decimals> <max_supply> [-f]');
     return;
   }
   final name = results.rest[0];
@@ -151,68 +109,48 @@ Future<void> _handleCreateToken(
 
 // --- mint-token ---
 
-Future<void> _handleMintToken(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleMintToken(TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer mint-token <amount>');
     return;
   }
   final amount = BigInt.parse(args[0]);
-  final result = await tokenIssuer.mintIssuerToken(
-    request: MintIssuerTokenRequest(amount: amount),
-  );
+  final result = await tokenIssuer.mintIssuerToken(request: MintIssuerTokenRequest(amount: amount));
   printValue(result);
 }
 
 // --- burn-token ---
 
-Future<void> _handleBurnToken(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleBurnToken(TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer burn-token <amount>');
     return;
   }
   final amount = BigInt.parse(args[0]);
-  final result = await tokenIssuer.burnIssuerToken(
-    request: BurnIssuerTokenRequest(amount: amount),
-  );
+  final result = await tokenIssuer.burnIssuerToken(request: BurnIssuerTokenRequest(amount: amount));
   printValue(result);
 }
 
 // --- freeze-token ---
 
-Future<void> _handleFreezeToken(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleFreezeToken(TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer freeze-token <address>');
     return;
   }
   final address = args[0];
-  final result = await tokenIssuer.freezeIssuerToken(
-    request: FreezeIssuerTokenRequest(address: address),
-  );
+  final result = await tokenIssuer.freezeIssuerToken(request: FreezeIssuerTokenRequest(address: address));
   printValue(result);
 }
 
 // --- unfreeze-token ---
 
-Future<void> _handleUnfreezeToken(
-  TokenIssuer tokenIssuer,
-  List<String> args,
-) async {
+Future<void> _handleUnfreezeToken(TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
     print('Usage: issuer unfreeze-token <address>');
     return;
   }
   final address = args[0];
-  final result = await tokenIssuer.unfreezeIssuerToken(
-    request: UnfreezeIssuerTokenRequest(address: address),
-  );
+  final result = await tokenIssuer.unfreezeIssuerToken(request: UnfreezeIssuerTokenRequest(address: address));
   printValue(result);
 }
