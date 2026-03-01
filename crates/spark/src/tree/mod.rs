@@ -3,6 +3,9 @@ mod select_helper;
 mod service;
 mod store;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod tests;
+
 pub use error::TreeServiceError;
 pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,

@@ -45,3 +45,6 @@ pub use spark::{
 };
 pub use wallet::SparkWallet;
 pub use wallet_builder::WalletBuilder;
+
+#[cfg(feature = "test-utils")]
+pub use spark::tree::tests as tree_store_tests;

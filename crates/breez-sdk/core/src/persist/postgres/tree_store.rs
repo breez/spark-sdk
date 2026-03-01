@@ -1053,10 +1053,8 @@ pub async fn create_postgres_tree_store(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
-    use frost_secp256k1_tr::Identifier;
-    use spark_wallet::TreeNodeId;
-    use std::str::FromStr;
+    use spark_wallet::tree_store_tests as shared_tests;
+    use std::sync::Arc;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
 
@@ -1094,40 +1092,7 @@ mod tests {
     }
 
     fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
-        TreeNode {
-            id: TreeNodeId::from_str(id).unwrap(),
-            tree_id: "test_tree".to_string(),
-            value,
-            parent_node_id: None,
-            node_tx: Transaction {
-                version: Version::non_standard(3),
-                lock_time: LockTime::ZERO,
-                input: vec![],
-                output: vec![],
-            },
-            refund_tx: None,
-            direct_tx: None,
-            direct_refund_tx: None,
-            direct_from_cpfp_refund_tx: None,
-            vout: 0,
-            verifying_public_key: PublicKey::from_str(
-                "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-            )
-            .unwrap(),
-            owner_identity_public_key: PublicKey::from_str(
-                "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-            )
-            .unwrap(),
-            signing_keyshare: spark_wallet::SigningKeyshare {
-                public_key: PublicKey::from_str(
-                    "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-                )
-                .unwrap(),
-                owner_identifiers: vec![Identifier::try_from(1u16).unwrap()],
-                threshold: 2,
-            },
-            status: TreeNodeStatus::Available,
-        }
+        shared_tests::create_test_tree_node(id, value)
     }
 
     /// Helper function to reserve leaves in tests.
@@ -1138,1251 +1103,237 @@ mod tests {
         exact_only: bool,
         purpose: ReservationPurpose,
     ) -> Result<LeavesReservation, TreeServiceError> {
-        match store
-            .try_reserve_leaves(target_amounts, exact_only, purpose)
-            .await?
-        {
-            ReserveResult::Success(reservation) => Ok(reservation),
-            ReserveResult::InsufficientFunds => Err(TreeServiceError::InsufficientFunds),
-            ReserveResult::WaitForPending { .. } => Err(TreeServiceError::Generic(
-                "Unexpected WaitForPending".into(),
-            )),
-        }
+        shared_tests::reserve_leaves(store, target_amounts, exact_only, purpose).await
     }
 
-    // ==================== Basic Operations ====================
+    // ==================== Shared tests ====================
 
     #[tokio::test]
     async fn test_new() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        assert!(
-            fixture
-                .store
-                .get_leaves()
-                .await
-                .unwrap()
-                .available
-                .is_empty()
-        );
+        shared_tests::test_new(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_add_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let stored_leaves = fixture.store.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 2);
-        assert!(
-            stored_leaves
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 100)
-        );
-        assert!(
-            stored_leaves
-                .iter()
-                .any(|l| l.id.to_string() == "node2" && l.value == 200)
-        );
+        shared_tests::test_add_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_add_leaves_duplicate_ids() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaf1 = create_test_tree_node("node1", 100);
-        let leaf2 = create_test_tree_node("node1", 200); // Same ID, different value
-
-        fixture.store.add_leaves(&[leaf1]).await.unwrap();
-        fixture.store.add_leaves(&[leaf2]).await.unwrap();
-
-        let stored_leaves = fixture.store.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 1);
-        // With ON CONFLICT DO UPDATE, the second value (200) replaces the first
-        // This matches InMemoryTreeStore behavior (HashMap::insert replaces)
-        assert_eq!(stored_leaves[0].value, 200);
+        shared_tests::test_add_leaves_duplicate_ids(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_set_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let initial_leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&initial_leaves).await.unwrap();
-
-        // Use a refresh_start far enough in the future to exceed the grace period.
-        // This simulates an "old" refresh that should delete leaves added "now".
-        let refresh_start = SystemTime::now()
-            + std::time::Duration::from_millis((LEAF_PRESERVATION_GRACE_PERIOD_MS + 1000) as u64);
-
-        let new_leaves = vec![
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        // Use a refresh_start that's AFTER the initial leaves were added
-        // so they're considered "old" and can be replaced
-        fixture
-            .store
-            .set_leaves(&new_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-
-        let stored_leaves = fixture.store.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 2);
-        assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node2"));
-        assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node3"));
-        assert!(!stored_leaves.iter().any(|l| l.id.to_string() == "node1"));
+        shared_tests::test_set_leaves(&fixture.store).await;
     }
-
-    // ==================== Reservation Operations ====================
 
     #[tokio::test]
     async fn test_reserve_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check that reservation was created by verifying leaves are reserved
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.reserved_for_payment.len(), 1);
-        assert_eq!(all_leaves.reserved_for_payment[0].id, leaves[0].id);
-        // Check that leaf was removed from main pool
-        assert_eq!(all_leaves.available.len(), 1);
-        assert_eq!(all_leaves.available[0].id, leaves[1].id);
-
-        // Verify reservation ID is valid UUID
-        assert!(!reservation.id.is_empty());
+        shared_tests::test_reserve_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_cancel_reservation() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Cancel the reservation
-        fixture
-            .store
-            .cancel_reservation(&reservation.id)
-            .await
-            .unwrap();
-
-        // Check that leaf was returned to main pool
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(all_leaves.reserved_for_payment.is_empty());
-        assert_eq!(all_leaves.available.len(), 2);
-        assert!(all_leaves.available.iter().any(|l| l.id == leaves[0].id));
-        assert!(all_leaves.available.iter().any(|l| l.id == leaves[1].id));
+        shared_tests::test_cancel_reservation(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_cancel_reservation_nonexistent() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let fake_id = "fake-reservation-id".to_string();
-
-        // Should not panic or cause issues
-        fixture.store.cancel_reservation(&fake_id).await.unwrap();
-
-        let main_leaves = fixture.store.get_leaves().await.unwrap().available;
-        assert!(main_leaves.is_empty());
+        shared_tests::test_cancel_reservation_nonexistent(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_finalize_reservation() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Finalize the reservation
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
-
-        // Check that reservation was removed and leaf was NOT returned to main pool
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(all_leaves.reserved_for_payment.is_empty());
-        assert_eq!(all_leaves.available.len(), 1);
-        assert_eq!(all_leaves.available[0].id, leaves[1].id);
+        shared_tests::test_finalize_reservation(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_finalize_reservation_nonexistent() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let fake_id = "fake-reservation-id".to_string();
-
-        // Should not panic or cause issues - returns Ok like in-memory
-        fixture
-            .store
-            .finalize_reservation(&fake_id, None)
-            .await
-            .unwrap();
-
-        let main_leaves = fixture.store.get_leaves().await.unwrap().available;
-        assert!(main_leaves.is_empty());
+        shared_tests::test_finalize_reservation_nonexistent(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_multiple_reservations() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Create multiple reservations
-        let reservation1 = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        let reservation2 = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(200, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check both reservations exist
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.reserved_for_payment.len(), 2);
-        assert_eq!(all_leaves.available.len(), 1);
-        assert_eq!(all_leaves.available[0].id, leaves[2].id);
-
-        // Cancel one reservation
-        fixture
-            .store
-            .cancel_reservation(&reservation1.id)
-            .await
-            .unwrap();
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.reserved_for_payment.len(), 1);
-        assert_eq!(all_leaves.available.len(), 2);
-
-        // Finalize the other
-        fixture
-            .store
-            .finalize_reservation(&reservation2.id, None)
-            .await
-            .unwrap();
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(all_leaves.reserved_for_payment.is_empty());
-        assert_eq!(all_leaves.available.len(), 2);
+        shared_tests::test_multiple_reservations(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_reservation_ids_are_unique() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaf = create_test_tree_node("node1", 100);
-        fixture
-            .store
-            .add_leaves(std::slice::from_ref(&leaf))
-            .await
-            .unwrap();
-
-        let r1 = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        fixture.store.cancel_reservation(&r1.id).await.unwrap();
-        let r2 = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        assert_ne!(r1.id, r2.id);
+        shared_tests::test_reservation_ids_are_unique(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_non_reservable_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaf = create_test_tree_node("node1", 100);
-        fixture
-            .store
-            .add_leaves(std::slice::from_ref(&leaf))
-            .await
-            .unwrap();
-
-        reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        let result = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(result, TreeServiceError::InsufficientFunds));
+        shared_tests::test_non_reservable_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_reserve_leaves_empty() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let err = reserve_leaves(&fixture.store, None, false, ReservationPurpose::Payment)
-            .await
-            .unwrap_err();
-
-        // With no target amounts and no leaves, we get NonReservableLeaves
-        assert!(matches!(err, TreeServiceError::NonReservableLeaves));
+        shared_tests::test_reserve_leaves_empty(&fixture.store).await;
     }
-
-    // ==================== Balance and Reserved Types ====================
 
     #[tokio::test]
     async fn test_swap_reservation_included_in_balance() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve some leaves for swap
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            true,
-            ReservationPurpose::Swap,
-        )
-        .await
-        .unwrap();
-
-        // Check that swap-reserved leaves are included in balance
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.swap_reserved_balance(), 300);
-        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
-        // balance() should include swap-reserved leaves
-        assert_eq!(all_leaves.balance(), 300 + 300); // available + swap-reserved
+        shared_tests::test_swap_reservation_included_in_balance(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_payment_reservation_excluded_from_balance() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve some leaves for payment
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check that payment-reserved leaves are excluded from balance
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.payment_reserved_balance(), 300);
-        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
-        // balance() should NOT include payment-reserved leaves
-        assert_eq!(all_leaves.balance(), 300); // only available
+        shared_tests::test_payment_reservation_excluded_from_balance(&fixture.store).await;
     }
-
-    // ==================== Try Reserve with Result Handling ====================
 
     #[tokio::test]
     async fn test_try_reserve_success() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let result = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(result, ReserveResult::Success(_)));
-        if let ReserveResult::Success(reservation) = result {
-            assert_eq!(reservation.sum(), 100);
-        }
+        shared_tests::test_try_reserve_success(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_try_reserve_insufficient_funds() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        let result = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(500, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(result, ReserveResult::InsufficientFunds));
+        shared_tests::test_try_reserve_insufficient_funds(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_try_reserve_wait_for_pending() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - store will reserve 1000 and auto-track pending=900
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(r1, ReserveResult::Success(_)));
-
-        // Try to reserve 300 more - should get WaitForPending since pending=900 > 300
-        let r2 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        match r2 {
-            ReserveResult::WaitForPending {
-                needed,
-                available,
-                pending,
-            } => {
-                assert_eq!(needed, 300);
-                assert_eq!(available, 0);
-                assert_eq!(pending, 900);
-            }
-            _ => panic!("Expected WaitForPending, got {r2:?}"),
-        }
+        shared_tests::test_try_reserve_wait_for_pending(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_try_reserve_fail_immediately_when_insufficient() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        // Add 100 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve it for 50 sats - pending will be 50
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(50, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(r1, ReserveResult::Success(_)));
-
-        // Request 500 - more than available + pending (0 + 50 < 500)
-        let result = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(500, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(result, ReserveResult::InsufficientFunds));
+        shared_tests::test_try_reserve_fail_immediately_when_insufficient(&fixture.store).await;
     }
-
-    // ==================== Balance Change Notifications ====================
 
     #[tokio::test]
     async fn test_balance_change_notification() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let mut rx = fixture.store.subscribe_balance_changes();
-
-        // Mark initial value as seen so changed() waits for actual updates
-        rx.borrow_and_update();
-
-        // Add leaves
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Wait for notification with timeout (longer timeout for CI stability under load)
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            rx.changed().await.ok();
-        })
-        .await;
-
-        // Just verify we received a notification (the value is () and doesn't matter)
-        assert!(result.is_ok(), "Timed out waiting for balance notification");
+        shared_tests::test_balance_change_notification(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_pending_cleared_on_cancel() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - auto-tracks pending=900
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Cancel the reservation - pending should be cleared
-        fixture
-            .store
-            .cancel_reservation(&reservation_id)
-            .await
-            .unwrap();
-
-        // Try to reserve 300 - should succeed since 1000 sat leaf is back
-        let r2 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        // Now 1000 sat leaf is back, so we should succeed
-        assert!(matches!(r2, ReserveResult::Success(_)));
+        shared_tests::test_pending_cleared_on_cancel(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_pending_cleared_on_finalize() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - auto-tracks pending=900
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Finalize with new leaves (the change from swap)
-        let change_leaf = create_test_tree_node("node2", 900);
-        fixture
-            .store
-            .finalize_reservation(&reservation_id, Some(&[change_leaf]))
-            .await
-            .unwrap();
-
-        // Try to reserve 300 - should succeed since change is now available
-        let r2 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(r2, ReserveResult::Success(_)));
+        shared_tests::test_pending_cleared_on_finalize(&fixture.store).await;
     }
-
-    // ==================== Swap Updates ====================
 
     #[tokio::test]
     async fn test_notification_after_swap_with_exact_amount() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let mut rx = fixture.store.subscribe_balance_changes();
-
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Consume the initial notification
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        // Reserve it with target 100 - will reserve all 1000, pending=900
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Consume the reservation notification
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        // Simulate a swap that returns exactly the target amount (100 sats)
-        let swap_result_leaf = create_test_tree_node("node2", 100);
-        fixture
-            .store
-            .update_reservation(&reservation_id, &[swap_result_leaf], &[])
-            .await
-            .unwrap();
-
-        // Verify that we still get a notification
-        let notification_result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        assert!(
-            notification_result.is_ok(),
-            "Expected notification after swap update with exact amount"
-        );
+        shared_tests::test_notification_after_swap_with_exact_amount(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_notification_on_pending_balance_change() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let mut rx = fixture.store.subscribe_balance_changes();
-
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Consume initial notification
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        // Reserve with target 100 - pending=900
-        let r1 = fixture
-            .store
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        // Consume reservation notification
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Cancel the reservation - this clears pending from 900 to 0
-        fixture
-            .store
-            .cancel_reservation(&reservation_id)
-            .await
-            .unwrap();
-
-        // Should get notification because pending balance changed
-        let notification_result =
-            tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed()).await;
-
-        assert!(
-            notification_result.is_ok(),
-            "Expected notification when pending balance changes"
-        );
+        shared_tests::test_notification_on_pending_balance_change(&fixture.store).await;
     }
-
-    // ==================== Set Leaves with Reservations ====================
 
     #[tokio::test]
     async fn test_set_leaves_with_reservations() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve all leaves
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(600, None)),
-            false,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Small delay to ensure refresh_start is after leaves were added
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let refresh_start = SystemTime::now();
-
-        // Update leaves with new data (including updated versions of reserved leaves)
-        let non_existing_operator_leaf = create_test_tree_node("node7", 1000);
-        let mut updated_leaf1 = create_test_tree_node("node1", 150);
-        updated_leaf1.status = TreeNodeStatus::TransferLocked;
-        let new_leaves = vec![
-            updated_leaf1,
-            create_test_tree_node("node2", 250),
-            create_test_tree_node("node4", 400),
-        ];
-        fixture
-            .store
-            .set_leaves(&new_leaves, &[non_existing_operator_leaf], refresh_start)
-            .await
-            .unwrap();
-
-        // Check main pool
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        // Reserved leaves should be preserved and updated where data exists
-        assert_eq!(all_leaves.payment_reserved_balance(), 700); // 150 + 250 + 300 (node3 keeps original)
-        assert_eq!(all_leaves.available_balance(), 400);
-        assert_eq!(all_leaves.missing_operators_balance(), 1000);
-        assert_eq!(all_leaves.balance(), 400 + 1000);
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node4")
-        );
+        shared_tests::test_set_leaves_with_reservations(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_set_leaves_preserves_reservations_for_in_flight_swaps() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves (simulating start of a swap)
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            false,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Small delay to ensure refresh_start is after leaves were added
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let refresh_start = SystemTime::now();
-
-        // Set new leaves that don't include the reserved ones
-        let new_leaves = vec![create_test_tree_node("node3", 300)];
-        fixture
-            .store
-            .set_leaves(&new_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Reservation should be PRESERVED (not removed)
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        // The reserved leaves keep their original values since they're not updated
-        assert_eq!(all_leaves.reserved_for_payment.len(), 2);
-        assert!(
-            all_leaves
-                .reserved_for_payment
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 100)
-        );
-        assert!(
-            all_leaves
-                .reserved_for_payment
-                .iter()
-                .any(|l| l.id.to_string() == "node2" && l.value == 200)
-        );
+        shared_tests::test_set_leaves_preserves_reservations_for_in_flight_swaps(&fixture.store)
+            .await;
     }
-
-    // ==================== Spent Leaves Cleanup ====================
 
     #[tokio::test]
     async fn test_spent_leaves_not_restored_by_set_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve node1 for payment
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Finalize the reservation (node1 is now spent)
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
-
-        // Verify node1 is not in the pool
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1")
-        );
-
-        // Simulate a refresh that started BEFORE the finalize completed.
-        // Use a timestamp in the past to simulate this race condition.
-        // Since spent_at >= refresh_start, the spent marker should be kept.
-        let refresh_start = SystemTime::now() - std::time::Duration::from_secs(60);
-        let stale_leaves = vec![
-            create_test_tree_node("node1", 100), // This was spent!
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300), // New leaf
-        ];
-        fixture
-            .store
-            .set_leaves(&stale_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify node1 was NOT restored (it's in spent markers, spent_at >= refresh_start)
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 2); // node2 and node3 only
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node3")
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1"),
-            "Spent leaf node1 should not be restored when refresh started before spend"
-        );
+        shared_tests::test_spent_leaves_not_restored_by_set_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
-        // Tests that spent markers are cleaned up based on timestamp:
-        // - Kept when spent_at >= refresh_start (recent spend)
-        // - Ignored (not used for filtering) when spent_at < refresh_start
-        // - Actually deleted after SPENT_MARKER_CLEANUP_THRESHOLD_MS
         let fixture = PostgresTreeStoreTestFixture::new().await;
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve and finalize node1
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
-
-        // First refresh with refresh_start BEFORE spent_at (simulating race condition).
-        // The spent marker should filter out node1 because spent_at >= refresh_start.
-        let refresh_start = SystemTime::now() - std::time::Duration::from_secs(60);
-        let stale_leaves = vec![create_test_tree_node("node1", 100)];
-        fixture
-            .store
-            .set_leaves(&stale_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-        assert!(
-            fixture
-                .store
-                .get_leaves()
-                .await
-                .unwrap()
-                .available
-                .is_empty(),
-            "node1 should be filtered by spent marker (recent spend)"
-        );
-
-        // Spent marker should still exist (not deleted yet, within threshold)
-        let client = fixture.store.pool.get().await.unwrap();
-        let spent_count: i64 = client
-            .query_one("SELECT COUNT(*) FROM tree_spent_leaves", &[])
-            .await
-            .unwrap()
-            .get(0);
-        assert_eq!(spent_count, 1, "spent marker should still exist");
-
-        // Second refresh with refresh_start AFTER spent_at (operators had time to process).
-        // The spent marker is ignored (not used for filtering) because spent_at < refresh_start.
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let refresh_start2 = SystemTime::now();
-        let fresh_leaves = vec![create_test_tree_node("node2", 200)];
-        fixture
-            .store
-            .set_leaves(&fresh_leaves, &[], refresh_start2)
-            .await
-            .unwrap();
-
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
-
-        // Spent marker still exists (within threshold, not deleted yet)
-        // but it's ignored for filtering because spent_at < refresh_start2
-        let spent_count: i64 = client
-            .query_one("SELECT COUNT(*) FROM tree_spent_leaves", &[])
-            .await
-            .unwrap()
-            .get(0);
-        assert_eq!(
-            spent_count, 1,
-            "spent marker still exists but is ignored for filtering"
-        );
-
-        // If node1 appears again (e.g., received back via transfer), it should be accepted
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let refresh_start3 = SystemTime::now();
-        let new_node1_leaves = vec![
-            create_test_tree_node("node1", 150),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture
-            .store
-            .set_leaves(&new_node1_leaves, &[], refresh_start3)
-            .await
-            .unwrap();
-
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(
-            all_leaves.available.len(),
-            2,
-            "node1 should be accepted after spent marker cleanup"
-        );
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 150)
-        );
+        shared_tests::test_spent_ids_cleaned_up_when_no_longer_in_refresh(&fixture.store).await;
     }
-
-    // ==================== Race Condition Fix Tests ====================
 
     #[tokio::test]
     async fn test_add_leaves_not_deleted_by_set_leaves() {
-        // Test that leaves added AFTER refresh starts are NOT deleted by set_leaves.
-        // This is the key race condition fix.
         let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let initial_leaves = vec![create_test_tree_node("node1", 100)];
-        fixture.store.add_leaves(&initial_leaves).await.unwrap();
-
-        // Simulate: refresh starts at T1
-        let refresh_start = SystemTime::now();
-
-        // Small delay to ensure the new leaf is added AFTER refresh_start
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Simulate: while refresh is in progress, a new leaf arrives (e.g., from a payment)
-        let new_leaf = create_test_tree_node("node2", 200);
-        fixture.store.add_leaves(&[new_leaf]).await.unwrap();
-
-        // Simulate: refresh completes with stale data (doesn't include node2)
-        let stale_refresh_data = vec![create_test_tree_node("node1", 100)];
-        fixture
-            .store
-            .set_leaves(&stale_refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: node2 is PRESERVED (not deleted) because it was added after refresh started
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 2);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1")
-        );
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2"),
-            "Leaf added after refresh started should be preserved"
-        );
+        shared_tests::test_add_leaves_not_deleted_by_set_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_old_leaves_deleted_by_set_leaves() {
-        // Test that leaves added BEFORE refresh starts ARE deleted if not in refresh data.
         let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let initial_leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&initial_leaves).await.unwrap();
-
-        // Use a refresh_start far enough in the future to exceed the grace period.
-        // This simulates an "old" refresh that should delete leaves added "now".
-        let refresh_start = SystemTime::now()
-            + std::time::Duration::from_millis((LEAF_PRESERVATION_GRACE_PERIOD_MS + 1000) as u64);
-
-        // Simulate: refresh completes with data that doesn't include node2
-        let refresh_data = vec![create_test_tree_node("node1", 100)];
-        fixture
-            .store
-            .set_leaves(&refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: node2 is DELETED because it was added before refresh started and not in refresh
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1")
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2"),
-            "Leaf added before refresh started should be deleted if not in refresh data"
-        );
+        shared_tests::test_old_leaves_deleted_by_set_leaves(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_change_leaves_from_swap_protected() {
-        // Test that change leaves from update_reservation are protected from concurrent refresh.
         let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaf
-        let initial_leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&initial_leaves).await.unwrap();
-
-        // Reserve the leaf
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
-            false,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Simulate: refresh starts
-        let refresh_start = SystemTime::now();
-
-        // Small delay
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Simulate: swap completes and adds change leaves via update_reservation
-        let reserved_leaf = create_test_tree_node("swap_output", 500);
-        let change_leaf = create_test_tree_node("change", 500);
-        fixture
-            .store
-            .update_reservation(&reservation.id, &[reserved_leaf], &[change_leaf])
-            .await
-            .unwrap();
-
-        // Simulate: refresh completes with stale data (doesn't include change leaf)
-        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
-        fixture
-            .store
-            .set_leaves(&stale_refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: change leaf is PRESERVED
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "change"),
-            "Change leaf from swap should be preserved"
-        );
+        shared_tests::test_change_leaves_from_swap_protected(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_finalize_with_new_leaves_protected() {
-        // Test that new leaves from finalize_reservation are protected from concurrent refresh.
         let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaf
-        let initial_leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&initial_leaves).await.unwrap();
-
-        // Reserve the leaf
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
-            false,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Simulate: refresh starts
-        let refresh_start = SystemTime::now();
-
-        // Small delay
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Simulate: payment completes and adds change via finalize_reservation
-        let change_leaf = create_test_tree_node("change", 900);
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, Some(&[change_leaf]))
-            .await
-            .unwrap();
-
-        // Simulate: refresh completes with stale data
-        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)];
-        fixture
-            .store
-            .set_leaves(&stale_refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: change leaf is PRESERVED, node1 is NOT restored (it's spent)
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "change"),
-            "Change leaf from finalize should be preserved"
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1"),
-            "Spent leaf should not be restored"
-        );
+        shared_tests::test_finalize_with_new_leaves_protected(&fixture.store).await;
     }
+
+    #[tokio::test]
+    async fn test_add_leaves_clears_spent_status() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_skipped_during_active_swap() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_skipped_during_active_swap(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_skipped_after_swap_completes_during_refresh() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_skipped_after_swap_completes_during_refresh(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_proceeds_after_swap_when_refresh_starts_later(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_reservation_does_not_block_set_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_payment_reservation_does_not_block_set_leaves(&fixture.store).await;
+    }
+
+    // ==================== Postgres-Specific Tests ====================
 
     // ==================== Stale Reservation Cleanup ====================
 
@@ -2780,247 +1731,6 @@ mod tests {
         assert!(
             timeout_result.0 > 0,
             "Expected at least one successful reservation"
-        );
-    }
-
-    // ==================== Swap/Refresh Race Condition Fix Tests ====================
-
-    #[tokio::test]
-    async fn test_set_leaves_skipped_during_active_swap() {
-        // Test that set_leaves is skipped when there's an active swap reservation.
-        // This prevents stale refresh data from overwriting swap results.
-        let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves for a swap (not payment)
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            false,
-            ReservationPurpose::Swap, // This is a swap, not payment
-        )
-        .await
-        .unwrap();
-
-        // Simulate refresh starting while swap is in progress
-        let refresh_start = SystemTime::now();
-
-        // Small delay
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Try to set new leaves (should be skipped due to active swap)
-        let new_leaves = vec![create_test_tree_node("node3", 300)];
-        fixture
-            .store
-            .set_leaves(&new_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: since there's an active swap, set_leaves should have been skipped
-        // The available pool should still be empty (leaves are reserved for swap)
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves.available.is_empty(),
-            "set_leaves should be skipped during active swap"
-        );
-        assert_eq!(all_leaves.reserved_for_swap.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_set_leaves_skipped_after_swap_completes_during_refresh() {
-        // Test the main race condition fix:
-        // 1. Refresh starts (t=0)
-        // 2. Swap completes during refresh (t=1)
-        // 3. set_leaves called with stale data (t=2)
-        // Expected: set_leaves should be skipped because swap completed after refresh started
-        let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves for a swap
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
-            false,
-            ReservationPurpose::Swap,
-        )
-        .await
-        .unwrap();
-
-        // Simulate refresh starting at T0
-        let refresh_start = SystemTime::now();
-
-        // Small delay to ensure swap completes AFTER refresh started
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Swap completes at T1, adding new leaves
-        let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
-            .await
-            .unwrap();
-
-        // Verify swap result leaves are in the pool
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "swap_result")
-        );
-
-        // Now at T2, set_leaves is called with stale data from the refresh
-        // This data was fetched at T0, before the swap completed
-        let stale_refresh_data = vec![create_test_tree_node("node1", 1000)]; // Old leaf
-        fixture
-            .store
-            .set_leaves(&stale_refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: set_leaves should have been SKIPPED because swap completed during refresh
-        // The swap result leaf should still be present
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "swap_result"),
-            "Swap result leaf should be preserved after skipped set_leaves"
-        );
-        // The stale node1 should NOT have been restored
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1"),
-            "Stale leaf should not be restored when set_leaves is skipped"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later() {
-        // Test that set_leaves proceeds normally when refresh starts AFTER swap completed.
-        // This is the normal case - swap finishes, then a new refresh starts.
-        let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves for a swap
-        let reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(1000, None)),
-            false,
-            ReservationPurpose::Swap,
-        )
-        .await
-        .unwrap();
-
-        // Swap completes first
-        let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
-        fixture
-            .store
-            .finalize_reservation(&reservation.id, Some(&new_leaves_from_swap))
-            .await
-            .unwrap();
-
-        // Small delay to ensure refresh starts AFTER swap completed
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Now refresh starts (AFTER swap completed)
-        let refresh_start = SystemTime::now();
-
-        // Small delay for grace period
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // set_leaves called with fresh data that includes the swap result
-        let fresh_refresh_data = vec![
-            create_test_tree_node("swap_result", 500),
-            create_test_tree_node("new_deposit", 200),
-        ];
-        fixture
-            .store
-            .set_leaves(&fresh_refresh_data, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: set_leaves should have proceeded normally
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "swap_result"),
-            "swap_result should be present"
-        );
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "new_deposit"),
-            "new_deposit should be added"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_payment_reservation_does_not_block_set_leaves() {
-        // Test that payment reservations (not swap) do NOT block set_leaves.
-        // Only swap reservations should block because they modify leaf ownership.
-        let fixture = PostgresTreeStoreTestFixture::new().await;
-
-        // Add initial leaves
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        fixture.store.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves for PAYMENT (not swap)
-        let _reservation = reserve_leaves(
-            &fixture.store,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment, // This is payment, should not block
-        )
-        .await
-        .unwrap();
-
-        // Small delay to ensure refresh starts after leaves were added
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let refresh_start = SystemTime::now();
-
-        // set_leaves should proceed (payment reservation doesn't block)
-        let new_leaves = vec![
-            create_test_tree_node("node1", 150), // Updated value
-            create_test_tree_node("node3", 300), // New leaf
-        ];
-        fixture
-            .store
-            .set_leaves(&new_leaves, &[], refresh_start)
-            .await
-            .unwrap();
-
-        // Verify: set_leaves should have proceeded
-        // node3 should be in the pool (set_leaves was not skipped)
-        let all_leaves = fixture.store.get_leaves().await.unwrap();
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node3"),
-            "New leaf should be added when payment reservation is active"
         );
     }
 }
