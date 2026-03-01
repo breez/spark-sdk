@@ -53,10 +53,11 @@
     "release": "release-it --only-version",
     "typecheck": "tsc",
     "ubrn:android": "ubrn build android --release --config ubrn.config.yaml --and-generate",
-    "ubrn:build": "yarn ubrn:ios && yarn ubrn:android",
+    "ubrn:build": "yarn ubrn:ios && yarn ubrn:ios-static && yarn ubrn:android && ./scripts/patch-podspec.sh",
     "ubrn:checkout": "ubrn checkout --config ubrn.config.yaml",
     "ubrn:clean": "rm -rfv cpp/ android/CMakeLists.txt android/src/main/java android/*.cpp ios/ src/Native* src/index.*ts* src/generated/",
-    "ubrn:ios": "ubrn build ios --release --config ubrn.config.yaml --and-generate"
+    "ubrn:ios": "ubrn build ios --release --config ubrn.config.yaml --and-generate",
+    "ubrn:ios-static": "ubrn build ios --release --config ubrn.config.static.yaml --no-cargo"
   },
   "keywords": [
     "react-native",

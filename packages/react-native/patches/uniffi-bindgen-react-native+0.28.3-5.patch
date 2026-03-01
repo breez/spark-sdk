@@ -1,5 +1,5 @@
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/android.rs b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/android.rs
-index 4578e88..1dbf263 100644
+index 4578e88..1774166 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/android.rs
 +++ b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/android.rs
 @@ -52,6 +52,9 @@ pub(crate) struct AndroidConfig {
@@ -60,7 +60,7 @@ index 4578e88..1dbf263 100644
              )?;
              if self.native_bindings {
                  self.generate_native_bindings(&config, &target_files)?;
-@@ -217,16 +231,19 @@ impl AndroidArgs {
+@@ -217,17 +231,20 @@ impl AndroidArgs {
          targets: &[Target],
          cargo_extras: &ExtraArgs,
          api_level: usize,
@@ -76,11 +76,13 @@ index 4578e88..1dbf263 100644
              let target =
                  self.cargo_build(target, &manifest_path, cargo_extras, api_level, &rust_dir)?;
 -            let library = metadata.library_path(Some(target.triple()), profile);
+-            metadata.library_path_exists(&library)?;
 +            let library =
 +                metadata.library_path(Some(target.triple()), profile, Some(use_shared_library));
-             metadata.library_path_exists(&library)?;
++            metadata.library_path_exists(&library, Some(use_shared_library))?;
              target_files.insert(target, library);
          }
+         Ok(target_files)
 @@ -266,12 +283,14 @@ impl AndroidArgs {
          &self,
          metadata: &CrateMetadata,
@@ -116,7 +118,7 @@ index 4578e88..1dbf263 100644
              fs::copy(library, &dst_lib)?;
          }
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/mod.rs b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/mod.rs
-index 5b63f2d..ae9d244 100644
+index 5b63f2d..c551ec6 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/mod.rs
 +++ b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/mod.rs
 @@ -471,6 +471,7 @@ mod tests {
@@ -127,6 +129,15 @@ index 5b63f2d..ae9d244 100644
              };
              let ios = IOsConfig {
                  directory: "ios".to_string(),
+@@ -479,6 +480,8 @@ mod tests {
+                 targets: Default::default(),
+                 cargo_extras: ExtraArgs::default(),
+                 codegen_output_dir: "ios/generated".to_string(),
++                use_dynamic_library: false,
++                bundle_identifier: None,
+             };
+             let bindings = BindingsConfig {
+                 cpp: "cpp/bindings".to_string(),
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/templates/CMakeLists.txt b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/templates/CMakeLists.txt
 index 3a8d733..f4b2079 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/codegen/templates/CMakeLists.txt
@@ -224,42 +235,257 @@ index 3d1f9d4..831116d 100644
    s.dependency    "uniffi-bindgen-react-native", "{{ self.config.project.ubrn_version() }}"
  
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/ios.rs b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/ios.rs
-index 42d21cf..72113f6 100644
+index 42d21cf..8e53889 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/ios.rs
 +++ b/node_modules/uniffi-bindgen-react-native/crates/ubrn_cli/src/ios.rs
-@@ -209,7 +209,8 @@ impl IOsArgs {
+@@ -44,6 +44,20 @@ pub(crate) struct IOsConfig {
+ 
+     #[serde(default = "IOsConfig::default_codegen_output_dir")]
+     pub(crate) codegen_output_dir: String,
++
++    /// Use a dynamic library (dylib) instead of a static library (staticlib).
++    ///
++    /// When true, the crate is compiled as a `cdylib` and packaged as a
++    /// `.framework` bundle inside the xcframework.
++    #[serde(default)]
++    pub(crate) use_dynamic_library: bool,
++
++    /// Optional bundle identifier for the iOS framework.
++    ///
++    /// Used as `CFBundleIdentifier` in the framework's `Info.plist` when
++    /// building with dynamic libraries. Defaults to `com.rust.<framework_name>`.
++    #[serde(default)]
++    pub(crate) bundle_identifier: Option<String>,
+ }
+ 
+ impl IOsConfig {
+@@ -154,6 +168,7 @@ impl IOsArgs {
+         let config = self.project_config()?;
+         let crate_ = &config.crate_;
+         let ios = &config.ios;
++        let use_dynamic = ios.use_dynamic_library;
+         let target_list = &ios.targets;
+ 
+         let targets = target_list
+@@ -172,18 +187,19 @@ impl IOsArgs {
+             .collect::<Vec<_>>();
+ 
+         let target_files = if self.common_args.no_cargo {
+-            let files = self.find_existing(&crate_.metadata()?, &targets);
++            let files = self.find_existing(&crate_.metadata()?, &targets, use_dynamic);
+             if !files.is_empty() {
+                 files
+             } else {
+-                self.cargo_build_all(crate_, &targets, &ios.cargo_extras)?
++                self.cargo_build_all(crate_, &targets, &ios.cargo_extras, use_dynamic)?
+             }
+         } else {
+-            self.cargo_build_all(crate_, &targets, &ios.cargo_extras)?
++            self.cargo_build_all(crate_, &targets, &ios.cargo_extras, use_dynamic)?
+         };
+ 
+         Ok(if !self.no_xcodebuild {
+-            let mut target_files = self.lipo_when_necessary(crate_, target_files)?;
++            let mut target_files =
++                self.lipo_when_necessary(crate_, target_files, use_dynamic)?;
+             target_files.sort();
+             if self.native_bindings {
+                 self.generate_native_bindings(&config, &target_files)?;
+@@ -200,6 +216,7 @@ impl IOsArgs {
+         crate_: &CrateConfig,
+         targets: &[Target],
+         cargo_extras: &ExtraArgs,
++        use_dynamic: bool,
+     ) -> Result<HashMap<Target, Utf8PathBuf>> {
+         let mut target_files = HashMap::new();
+         let metadata = crate_.metadata()?;
+@@ -208,9 +225,12 @@ impl IOsArgs {
+         for target in targets {
              self.cargo_build(&manifest_path, target, cargo_extras, &rust_dir)?;
  
-             // Now we need to get the path to the lib.a file, to feed to xcodebuild.
+-            // Now we need to get the path to the lib.a file, to feed to xcodebuild.
 -            let library = metadata.library_path(Some(&target.triple), self.common_args.profile());
-+            let library =
-+                metadata.library_path(Some(&target.triple), self.common_args.profile(), None);
-             metadata.library_path_exists(&library)?;
+-            metadata.library_path_exists(&library)?;
++            let library = metadata.library_path(
++                Some(&target.triple),
++                self.common_args.profile(),
++                Some(use_dynamic),
++            );
++            metadata.library_path_exists(&library, Some(use_dynamic))?;
              target_files.insert(target.clone(), library);
          }
-@@ -257,7 +258,7 @@ impl IOsArgs {
+         Ok(target_files)
+@@ -242,6 +262,7 @@ impl IOsArgs {
+         &self,
+         crate_: &CrateConfig,
+         target_files: HashMap<Target, Utf8PathBuf>,
++        use_dynamic: bool,
+     ) -> Result<Vec<Utf8PathBuf>> {
+         let mut by_platform = HashMap::new();
+         for (target, file) in target_files {
+@@ -257,7 +278,7 @@ impl IOsArgs {
              } else {
                  let dir = metadata.target_dir().join("lipo").join(p.lib_folder_name());
                  mk_dir(&dir)?;
 -                let output = dir.join(metadata.library_file(Some("ios")));
-+                let output = dir.join(metadata.library_file(Some("ios"), None));
++                let output = dir.join(metadata.library_file(Some("ios"), Some(use_dynamic)));
                  let mut cmd = Command::new("lipo");
                  cmd.arg("-create");
                  for f in files {
-@@ -369,7 +370,7 @@ impl IOsArgs {
+@@ -316,16 +337,13 @@ impl IOsArgs {
+             mv_files("h", &native_bindings_dir, &header_dir)?;
+             self.merge_modulemaps(&native_bindings_dir, &header_dir.join("module.modulemap"))?;
+         }
+-        let mut library_args = Vec::new();
+-        for library in target_files {
+-            // :eyes: single dash arg.
+-            library_args.push("-library".to_string());
+-            library_args.push(library.to_string());
+-            if self.native_bindings {
+-                library_args.push("-headers".to_string());
+-                library_args.push(header_dir.to_string());
+-            }
+-        }
++
++        let library_args = if ios.use_dynamic_library {
++            self.framework_bundle_args(config, target_files)?
++        } else {
++            self.static_library_args(target_files, &header_dir)
++        };
++
+         let framework_path = ios.framework_path(project_root);
+         if framework_path.exists() {
+             rm_dir(&framework_path)?;
+@@ -343,6 +361,108 @@ impl IOsArgs {
+         Ok(())
+     }
+ 
++    fn static_library_args(
++        &self,
++        target_files: &[Utf8PathBuf],
++        header_dir: &Utf8Path,
++    ) -> Vec<String> {
++        let mut args = Vec::new();
++        for library in target_files {
++            // :eyes: single dash arg.
++            args.push("-library".to_string());
++            args.push(library.to_string());
++            if self.native_bindings {
++                args.push("-headers".to_string());
++                args.push(header_dir.to_string());
++            }
++        }
++        args
++    }
++
++    /// Wraps each dylib in a `.framework` bundle suitable for
++    /// `xcodebuild -create-xcframework -framework`.
++    fn framework_bundle_args(
++        &self,
++        config: &ProjectConfig,
++        target_files: &[Utf8PathBuf],
++    ) -> Result<Vec<String>> {
++        let ios = &config.ios;
++        let metadata = config.crate_.metadata()?;
++        let framework_name = Utf8Path::new(&ios.framework_name)
++            .file_name()
++            .unwrap_or(&ios.framework_name);
++        let bundle_identifier = ios
++            .bundle_identifier
++            .clone()
++            .unwrap_or_else(|| format!("com.rust.{framework_name}"));
++        let staging_dir = metadata.target_dir().join("framework-staging");
++
++        let mut args = Vec::new();
++        for (i, dylib_path) in target_files.iter().enumerate() {
++            let bundle_dir = staging_dir.join(format!("{i}"));
++            let dot_framework = bundle_dir.join(format!("{framework_name}.framework"));
++            if dot_framework.exists() {
++                rm_dir(&dot_framework)?;
++            }
++            mk_dir(&dot_framework)?;
++
++            // Copy the dylib as the framework binary (no extension).
++            let framework_binary = dot_framework.join(framework_name);
++            std::fs::copy(dylib_path.as_std_path(), framework_binary.as_std_path())?;
++
++            // Fix the install name so the dynamic linker finds the library at
++            // @rpath/<Name>.framework/<Name> instead of @rpath/lib<crate>.dylib.
++            let install_name = format!("@rpath/{framework_name}.framework/{framework_name}");
++            let status = Command::new("install_name_tool")
++                .args(["-id", &install_name, framework_binary.as_str()])
++                .status()?;
++            if !status.success() {
++                anyhow::bail!("install_name_tool -id failed for {}", framework_binary);
++            }
++
++            // Create a minimal Info.plist.
++            let info_plist = dot_framework.join("Info.plist");
++            let plist_contents = format!(
++                r#"<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>CFBundleName</key>
++    <string>{framework_name}</string>
++    <key>CFBundleIdentifier</key>
++    <string>{bundle_identifier}</string>
++    <key>CFBundleVersion</key>
++    <string>1</string>
++    <key>CFBundlePackageType</key>
++    <string>FMWK</string>
++    <key>CFBundleExecutable</key>
++    <string>{framework_name}</string>
++</dict>
++</plist>"#
++            );
++            std::fs::write(info_plist.as_std_path(), plist_contents)?;
++
++            if self.native_bindings {
++                let native_bindings_dir =
++                    ios.native_bindings_dir(config.project_root());
++                let header_dest = dot_framework.join("Headers");
++                mk_dir(&header_dest)?;
++                // Copy headers into the framework bundle.
++                for entry in native_bindings_dir.join("headers").read_dir_utf8()? {
++                    let entry = entry?;
++                    if entry.file_type()?.is_file() {
++                        let dest = header_dest.join(entry.file_name());
++                        std::fs::copy(entry.path(), dest.as_std_path())?;
++                    }
++                }
++            }
++
++            args.push("-framework".to_string());
++            args.push(dot_framework.to_string());
++        }
++        Ok(args)
++    }
++
+     fn merge_modulemaps(&self, dir: &Utf8Path, out_file: &Utf8Path) -> Result<()> {
+         let mut contents = String::new();
+         for entry in dir.read_dir_utf8()? {
+@@ -364,12 +484,14 @@ impl IOsArgs {
+         &self,
+         metadata: &CrateMetadata,
+         targets: &[Target],
++        use_dynamic: bool,
+     ) -> HashMap<Target, Utf8PathBuf> {
+         let profile = self.common_args.profile();
          targets
              .iter()
              .filter_map(|target| {
 -                let library = metadata.library_path(Some(&target.triple), profile);
-+                let library = metadata.library_path(Some(&target.triple), profile, None);
++                let library =
++                    metadata.library_path(Some(&target.triple), profile, Some(use_dynamic));
                  if library.exists() {
                      Some((target.clone(), library))
                  } else {
 diff --git a/node_modules/uniffi-bindgen-react-native/crates/ubrn_common/src/rust_crate.rs b/node_modules/uniffi-bindgen-react-native/crates/ubrn_common/src/rust_crate.rs
-index 6427034..b6e02e1 100644
+index 6427034..8e5fa49 100644
 --- a/node_modules/uniffi-bindgen-react-native/crates/ubrn_common/src/rust_crate.rs
 +++ b/node_modules/uniffi-bindgen-react-native/crates/ubrn_common/src/rust_crate.rs
-@@ -25,8 +25,13 @@ impl CrateMetadata {
+@@ -25,23 +25,41 @@ impl CrateMetadata {
          profile.unwrap_or(if release { "release" } else { "debug" })
      }
  
@@ -275,7 +501,28 @@ index 6427034..b6e02e1 100644
          match target {
              Some(t) => self.target_dir.join(t).join(profile).join(library_name),
              None => self.target_dir.join(profile).join(library_name),
-@@ -40,8 +45,8 @@ impl CrateMetadata {
+         }
+     }
+ 
+-    pub fn library_path_exists(&self, path: &Utf8Path) -> Result<()> {
++    pub fn library_path_exists(
++        &self,
++        path: &Utf8Path,
++        use_shared_library: Option<bool>,
++    ) -> Result<()> {
+         if !path.exists() {
+-            anyhow::bail!("Library doesn't exist. This may be because `staticlib` is not in the `crate-type` list in the [lib] entry of Cargo.toml: {}", self.manifest_path());
++            let crate_type = if use_shared_library.unwrap_or(false) {
++                "cdylib"
++            } else {
++                "staticlib"
++            };
++            anyhow::bail!(
++                "Library doesn't exist. This may be because `{crate_type}` is not in the \
++                `crate-type` list in the [lib] entry of Cargo.toml: {}",
++                self.manifest_path()
++            );
+         }
          Ok(())
      }
  
@@ -286,7 +533,7 @@ index 6427034..b6e02e1 100644
          format!("lib{}.{ext}", &self.library_name)
      }
  
-@@ -113,22 +118,25 @@ impl CrateMetadata {
+@@ -113,22 +131,27 @@ impl CrateMetadata {
      }
  }
  
@@ -305,6 +552,8 @@ index 6427034..b6e02e1 100644
          "dll"
      } else if target.contains("darwin") {
          "dylib"
++    } else if target.contains("ios") && use_shared_library.unwrap_or(false) {
++        "dylib"
      } else if target.contains("ios") {
          "a"
 +    } else if target.contains("android")

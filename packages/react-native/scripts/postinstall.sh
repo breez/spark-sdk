@@ -5,7 +5,7 @@ set -e
 # Skip if running in Expo managed workflow (prebuild will handle it)
 
 # Skip if artifacts already exist (they may have been downloaded by the Expo plugin)
-if [ -d "android/src/main/jniLibs" ] && [ -d "build/RnBreezSdkSpark.xcframework" ]; then
+if [ -d "android/src/main/jniLibs" ] && [ -d "build/dynamic/RnBreezSdkSpark.xcframework" ] && [ -d "build/static/RnBreezSdkSpark.xcframework" ]; then
   exit 0
 fi
 

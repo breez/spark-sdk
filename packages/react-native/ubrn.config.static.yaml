@@ -4,19 +4,13 @@ rust:
 bindings:
   cpp: cpp/generated
   ts: src/generated
-android:
-  useSharedLibrary: true
-  # Disable postgres feature to reduce binary size (not needed for mobile)
-  cargoExtras:
-    - --no-default-features
 ios:
-  useDynamicLibrary: true
-  bundleIdentifier: technology.breez.breez_sdk_spark
+  useDynamicLibrary: false
   targets:
     - aarch64-apple-ios
     - aarch64-apple-ios-sim
     - x86_64-apple-ios
-  frameworkName: build/dynamic/RnBreezSdkSpark
+  frameworkName: build/static/RnBreezSdkSpark
   # Disable postgres feature to reduce binary size (not needed for mobile)
   cargoExtras:
     - --no-default-features

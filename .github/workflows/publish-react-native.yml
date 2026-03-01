@@ -86,6 +86,8 @@ jobs:
           HASH=$(git rev-parse HEAD)
           sed -i.bak -e 's/directory: .*/repo: https:\/\/github.com\/breez\/spark-sdk\n  rev: '"$HASH"'/' ubrn.config.yaml
           rm ubrn.config.yaml.bak
+          sed -i.bak -e 's/directory: .*/repo: https:\/\/github.com\/breez\/spark-sdk\n  rev: '"$HASH"'/' ubrn.config.static.yaml
+          rm ubrn.config.static.yaml.bak
 
       - name: Compress Android binaries
         working-directory: packages/react-native
@@ -110,7 +112,7 @@ jobs:
           name: bindings-react-native
           path: |
             packages/react-native/app.plugin.js
-            packages/react-native/ubrn.config.yaml
+            packages/react-native/ubrn.config.*
             packages/react-native/android/generated
             packages/react-native/android/CMakeLists.txt
             packages/react-native/cpp

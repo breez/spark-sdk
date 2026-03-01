@@ -84,7 +84,7 @@ android/generated
 
 # Uniffi Codegen
 android/src/main/jniLibs
-build/RnBreezSdkSpark.xcframework
+build/*
 cpp/generated
 rust_modules/
 src/generated

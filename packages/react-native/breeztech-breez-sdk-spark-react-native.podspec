@@ -16,7 +16,37 @@ Pod::Spec.new do |s|
   s.source       = { :git => "https://github.com/breez/spark-sdk.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/*.{h,m,mm,swift}", "ios/generated/**/*.{h}", "cpp/**/*.{hpp,cpp,c,h}", "cpp/generated/**/*.{hpp,cpp,c,h}"
-  s.vendored_frameworks = "build/RnBreezSdkSpark.xcframework"
+  # Select static or dynamic xcframework based on the consumer's linkage setting.
+  # 1. Check USE_FRAMEWORKS env var (standard RN/CocoaPods convention)
+  # 2. Try to detect from the Podfile's target definitions
+  # 3. Default to static (works without use_frameworks!)
+  use_dynamic = ENV['USE_FRAMEWORKS'] == 'dynamic'
+  unless use_dynamic
+    begin
+      podfile = Pod::Config.instance.podfile
+      if podfile
+        podfile.target_definition_list.each do |td|
+          if td.build_type == Pod::BuildType.dynamic_framework
+            use_dynamic = true
+            break
+          end
+        end
+      end
+    rescue
+      # Detection failed, fall back to static
+    end
+  end
+
+  if use_dynamic
+    s.vendored_frameworks = "build/dynamic/RnBreezSdkSpark.xcframework"
+    # CocoaPods doesn't auto-link vendored xcframeworks for dynamic framework
+    # pods. Explicitly add the framework to the linker flags.
+    s.pod_target_xcconfig = {
+        "OTHER_LDFLAGS" => "-framework \"RnBreezSdkSpark\""
+    }
+  else
+    s.vendored_frameworks = "build/static/RnBreezSdkSpark.xcframework"
+  end
   s.dependency    "uniffi-bindgen-react-native", "0.28.3-5"
 
   # Use install_modules_dependencies helper to install the dependencies if React Native version >=0.71.0.
