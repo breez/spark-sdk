@@ -140,7 +140,6 @@ pub struct TreeNode {
     pub status: TreeNodeStatus,
 }
 
-
 impl TreeNode {
     fn node_sequence(&self) -> Sequence {
         self.node_tx.input[0].sequence
