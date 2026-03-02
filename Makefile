@@ -64,6 +64,9 @@ itest:
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
+breez-itest-pg-tree-store:
+	USE_POSTGRES_TREE_STORE=true cargo xtask test --package breez-sdk-itest -- --test-threads=8
+
 claude-check:
 	make fmt-check clippy-check cargo-test
 

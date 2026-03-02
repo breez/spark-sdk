@@ -1,13 +1,69 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 use bitcoin::hashes::{Hash as _, sha256};
 use breez_sdk_spark::*;
 use rand::RngCore;
-use tokio::sync::mpsc;
+use testcontainers::{ContainerAsync, runners::AsyncRunner};
+use testcontainers_modules::postgres::Postgres;
+use tokio::sync::{OnceCell, mpsc};
 use tracing::{Instrument, debug, info};
 
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
 use tempdir::TempDir;
+
+/// Shared PostgreSQL container for tree store testing.
+/// Started once on first access and kept alive for the process lifetime.
+struct SharedPgContainer {
+    _container: ContainerAsync<Postgres>,
+    base_conn_str: String,
+}
+
+static PG_TREE_STORE_CONTAINER: OnceCell<SharedPgContainer> = OnceCell::const_new();
+static TREE_STORE_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the base connection string for the shared postgres container,
+/// starting the container on first call. Returns None if USE_POSTGRES_TREE_STORE is not set.
+async fn get_postgres_tree_store_base_url() -> Option<&'static str> {
+    if std::env::var("USE_POSTGRES_TREE_STORE").is_err() {
+        return None;
+    }
+    let shared = PG_TREE_STORE_CONTAINER
+        .get_or_init(|| async {
+            info!("Starting shared PostgreSQL container for tree store testing...");
+            let container = Postgres::default()
+                .start()
+                .await
+                .expect("Failed to start PostgreSQL container for tree store");
+            let port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("Failed to get PostgreSQL container port");
+            info!("Shared PostgreSQL tree store container started on port {port}");
+            SharedPgContainer {
+                _container: container,
+                base_conn_str: format!(
+                    "host=127.0.0.1 port={port} user=postgres password=postgres"
+                ),
+            }
+        })
+        .await;
+    Some(&shared.base_conn_str)
+}
+
+/// If USE_POSTGRES_TREE_STORE is set, creates a unique database and attaches
+/// a PostgreSQL tree store to the builder. Otherwise returns builder unchanged.
+async fn apply_postgres_tree_store(builder: SdkBuilder) -> Result<SdkBuilder> {
+    let Some(base_url) = get_postgres_tree_store_base_url().await else {
+        return Ok(builder);
+    };
+    let counter = TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let conn_str = format!("{base_url} dbname=ts_{counter}");
+    ensure_postgres_database_exists(&conn_str).await?;
+    let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
+    Ok(builder.with_postgres_tree_store(pg_config))
+}
 
 /// Event listener that forwards events to a channel
 struct ChannelEventListener {
@@ -45,6 +101,7 @@ pub async fn build_sdk_with_dir(
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
     let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+    let builder = apply_postgres_tree_store(builder).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -109,6 +166,7 @@ pub async fn build_sdk_with_custom_config(
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
     let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+    let builder = apply_postgres_tree_store(builder).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -346,7 +404,8 @@ pub async fn build_sdk_with_tree_store_config(
 
     let mut builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
 
-    // Add postgres tree store if connection string provided
+    // Add postgres tree store if connection string provided, otherwise fall through
+    // to the env-var-based shared container
     if let Some(conn_str) = postgres_tree_store_connection {
         // Ensure the database exists (create if necessary)
         ensure_postgres_database_exists(&conn_str).await?;
@@ -356,6 +415,8 @@ pub async fn build_sdk_with_tree_store_config(
         pg_config.max_pool_size = 30;
 
         builder = builder.with_postgres_tree_store(pg_config);
+    } else {
+        builder = apply_postgres_tree_store(builder).await?;
     }
 
     let sdk = builder.build().await?;
@@ -413,6 +474,7 @@ pub async fn build_sdk_from_mnemonic(
         passphrase,
     };
     let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+    let builder = apply_postgres_tree_store(builder).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -445,7 +507,7 @@ pub async fn build_sdk_from_mnemonic(
 /// * `temp_dir` - Optional TempDir to keep alive
 ///
 /// # Returns
-/// An SdkInstance with SDK initialized via connect_with_signer
+/// An SdkInstance with SDK initialized via SdkBuilder::new_with_signer
 pub async fn build_sdk_with_external_signer(
     storage_dir: String,
     mnemonic: String,
@@ -470,13 +532,10 @@ pub async fn build_sdk_with_external_signer(
         }),
     )?;
 
-    // Use connect_with_signer instead of connect
-    let sdk = connect_with_signer(ConnectWithSignerRequest {
-        config,
-        signer,
-        storage_dir,
-    })
-    .await?;
+    // Use SdkBuilder directly so we can apply postgres tree store
+    let builder = SdkBuilder::new_with_signer(config, signer).with_default_storage(storage_dir);
+    let builder = apply_postgres_tree_store(builder).await?;
+    let sdk = builder.build().await?;
 
     // Set up event listener
     let (tx, rx) = mpsc::channel(100);
