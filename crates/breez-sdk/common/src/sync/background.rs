@@ -21,6 +21,7 @@ pub trait NewRecordHandler: Send + Sync {
         incoming_count: Option<u32>,
         outgoing_count: Option<u32>,
     ) -> anyhow::Result<()>;
+    async fn on_sync_failed(&self);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +158,7 @@ impl SyncProcessor {
         let mut stream = match self.client.listen_changes().await {
             Ok(stream) => stream,
             Err(e) => {
-                error!("Failed to establish update subscription: {e}");
+                error!("Failed to establish real-time sync update subscription: {e}");
                 return;
             }
         };
@@ -212,6 +213,21 @@ impl SyncProcessor {
         mut shutdown_receiver: watch::Receiver<()>,
         mut pull_trigger: watch::Receiver<()>,
     ) {
+        // Initial remote pull to fetch the latest state from the sync server.
+        // This ensures we do an initial pull, regardless of whether the subscription
+        // delivers a notification.
+        match self.pull_sync_once().await {
+            Ok(count) => {
+                if let Err(e) = self.new_record_handler.on_sync_completed(count, None).await {
+                    error!("Failed to notify of initial real-time sync completion: {e:?}");
+                }
+            }
+            Err(e) => {
+                error!("Failed initial remote pull: {e}");
+                self.new_record_handler.on_sync_failed().await;
+            }
+        }
+
         let mut push_trigger = self.push_sync_trigger.resubscribe();
         let (backoff_trigger_tx, mut backoff_trigger_rx) = mpsc::channel::<Duration>(10);
 
@@ -230,6 +246,7 @@ impl SyncProcessor {
                         Ok(count) => (count, None),
                         Err(e) => {
                             error!("Failed to sync once: {}", e);
+                            self.new_record_handler.on_sync_failed().await;
                             (None, None)
                         }
                     }
@@ -279,6 +296,7 @@ impl SyncProcessor {
             Ok(count) => count,
             Err(e) => {
                 error!("Failed to pull sync once in backoff mode: {}", e);
+                self.new_record_handler.on_sync_failed().await;
                 self.schedule_backoff(
                     backoff_handle,
                     backoff_trigger_tx,
@@ -292,6 +310,7 @@ impl SyncProcessor {
             Ok(count) => count,
             Err(e) => {
                 error!("Failed to push sync once in backoff mode: {}", e);
+                self.new_record_handler.on_sync_failed().await;
                 self.schedule_backoff(
                     backoff_handle,
                     backoff_trigger_tx,
@@ -320,6 +339,7 @@ impl SyncProcessor {
                         Ok(count) => count,
                         Err(e) => {
                             error!("Failed to sync once: {}", e);
+                            self.new_record_handler.on_sync_failed().await;
                             self.schedule_backoff(
                                 backoff_handle,
                                 backoff_trigger_tx,
@@ -336,6 +356,7 @@ impl SyncProcessor {
                     Ok(count) => count,
                     Err(e) => {
                         error!("Failed to sync once: {}", e);
+                        self.new_record_handler.on_sync_failed().await;
                         self.schedule_backoff(
                             backoff_handle,
                             backoff_trigger_tx,
@@ -1206,10 +1227,15 @@ mod tests {
             .returning(|_| Err(anyhow!("pull failed")));
         mock_client.expect_set_record().times(0);
 
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_sync_failed()
+            .times(1)
+            .returning(|| ());
         let sync_processor = SyncProcessor::new(
             create_signing_client(mock_client, MockSyncSigner::new()),
             broadcast::channel(10).1,
-            Arc::new(MockNewRecordHandler::new()),
+            Arc::new(mock_handler),
             Arc::new(mock_storage),
         );
 
@@ -1249,10 +1275,15 @@ mod tests {
             .returning(|_| Err(anyhow!("pull failed")));
         mock_client.expect_set_record().times(0);
 
+        let mut mock_handler = MockNewRecordHandler::new();
+        mock_handler
+            .expect_on_sync_failed()
+            .times(1)
+            .returning(|| ());
         let sync_processor = SyncProcessor::new(
             create_signing_client(mock_client, MockSyncSigner::new()),
             broadcast::channel(10).1,
-            Arc::new(MockNewRecordHandler::new()),
+            Arc::new(mock_handler),
             Arc::new(mock_storage),
         );
 
@@ -1518,6 +1549,19 @@ mod tests {
         // Setup
         let mut mock_storage = MockSyncStorage::new();
 
+        // For initial pull_sync_once
+        mock_storage
+            .expect_get_last_revision()
+            .times(1)
+            .returning(|| Ok(5));
+
+        // For initial pull + push_sync_batch (checks for pending incoming)
+        mock_storage
+            .expect_get_incoming_records()
+            .times(2)
+            .with(eq(u32::MAX))
+            .returning(|_| Ok(Vec::new()));
+
         // For push_sync_once
         mock_storage
             .expect_get_pending_outgoing_changes()
@@ -1543,20 +1587,21 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
 
-        mock_storage
-            .expect_get_incoming_records()
-            .times(1)
-            .with(eq(u32::MAX))
-            .returning(|_| Ok(Vec::new()));
-
         let (tx, rx) = broadcast::channel::<RecordId>(10);
         let mut mock_handler = MockNewRecordHandler::new();
+        // Initial pull + push sync
         mock_handler
             .expect_on_sync_completed()
-            .times(1)
+            .times(2)
             .returning(|_, _| Ok(()));
         let mock_handler = Arc::new(mock_handler);
         let mut syncer_client = MockSyncerClient::new();
+        // Initial pull
+        syncer_client.expect_list_changes().times(1).returning(|_| {
+            Ok(crate::sync::proto::ListChangesReply {
+                changes: Vec::new(),
+            })
+        });
         syncer_client.expect_set_record().times(1).returning(|_| {
             Ok(SetRecordReply {
                 ..Default::default()
@@ -1601,29 +1646,32 @@ mod tests {
         // Setup
         let mut mock_storage = MockSyncStorage::new();
 
-        // For pull_sync_once
+        // For initial pull_sync_once + triggered pull_sync_once
         mock_storage
             .expect_get_last_revision()
-            .times(1)
+            .times(2)
             .returning(|| Ok(5));
 
         let mut mock_client = MockSyncerClient::new();
-        mock_client.expect_list_changes().times(1).returning(|_| {
+        // Initial pull + triggered pull
+        mock_client.expect_list_changes().times(2).returning(|_| {
             Ok(crate::sync::proto::ListChangesReply {
                 changes: Vec::new(),
             })
         });
 
+        // Initial pull + triggered pull
         mock_storage
             .expect_get_incoming_records()
-            .times(1)
+            .times(2)
             .returning(|_| Ok(Vec::new()));
 
         let (_tx, rx) = broadcast::channel::<RecordId>(10);
         let mut mock_handler = MockNewRecordHandler::new();
+        // Initial pull + triggered pull
         mock_handler
             .expect_on_sync_completed()
-            .times(1)
+            .times(2)
             .returning(|_, _| Ok(()));
         let mock_handler = Arc::new(mock_handler);
         let client = create_signing_client(mock_client, MockSyncSigner::new());
