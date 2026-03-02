@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "breez-sdk-spark-cli"
+version = "0.1.0"
+description = "CLI client for Breez SDK with Spark"
+requires-python = ">=3.9"
+dependencies = [
+    "breez-sdk-spark",
+    "asyncclick>=8.1.8",
+    "prompt-toolkit>=3.0.40",
+    "mnemonic>=0.21",
+]
+
+[project.scripts]
+breez-cli = "breez_cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

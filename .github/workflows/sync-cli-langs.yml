@@ -1,0 +1,27 @@
+name: Sync CLI Languages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/breez-sdk/cli/src/**'
+      - 'crates/breez-sdk/cli/README.md'
+  workflow_dispatch:
+
+# This workflow acts as a trigger for the per-language sync workflows.
+# They react to this workflow's completion via the workflow_run event,
+# which claude-code-action supports (unlike push).
+#
+# To sync a single language manually, dispatch its workflow directly
+# (e.g., "Sync Dart CLI from Rust CLI") instead of this umbrella.
+
+concurrency:
+  group: sync-cli-langs-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "Rust CLI changed — language syncs will start via workflow_run"
