@@ -3209,6 +3209,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nip65-publisher"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "bitcoin",
+ "clap",
+ "dotenvy",
+ "nostr",
+ "nostr-sdk",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

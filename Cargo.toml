@@ -25,6 +25,7 @@ members = [
   "crates/spark-wallet",
   "crates/xtask",
   "crates/internal",
+  "crates/nip65-publisher",
 ]
 
 [workspace.package]
