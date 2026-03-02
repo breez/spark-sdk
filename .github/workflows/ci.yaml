@@ -207,6 +207,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Check Swift CLI
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-swift

@@ -28,6 +28,6 @@ check-dart: ## Check Dart CLI (format + analyze)
 	cd $(DART_SRC) && dart format -l 110 --set-exit-if-changed lib/ bin/
 	cd $(DART_SRC) && dart analyze --fatal-infos lib/ bin/
 
-check-swift: ## Check Swift CLI (resolve + build)
-	cd $(SWIFT_SRC) && swift package resolve
-	cd $(SWIFT_SRC) && swift build
+check-swift: ## Check Swift CLI (build with local bindings)
+	cd $(SWIFT_SRC) && $(MAKE) setup
+	cd $(SWIFT_SRC) && $(MAKE) build
