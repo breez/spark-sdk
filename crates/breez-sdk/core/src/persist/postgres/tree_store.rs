@@ -61,12 +61,12 @@ impl TreeStore for PostgresTreeStore {
             return Ok(());
         }
 
-        tracing::info!(
+        tracing::trace!(
             "PostgresTreeStore::add_leaves: adding {} leaves",
             leaves.len()
         );
         for leaf in leaves {
-            tracing::info!(
+            tracing::trace!(
                 "PostgresTreeStore::add_leaves: leaf {} owner={:?} value={} status={:?}",
                 leaf.id,
                 leaf.owner_identity_public_key,
@@ -93,7 +93,7 @@ impl TreeStore for PostgresTreeStore {
         Self::batch_upsert_leaves(&tx, leaves, false, None).await?;
 
         tx.commit().await.map_err(map_err)?;
-        tracing::info!(
+        tracing::trace!(
             "PostgresTreeStore::add_leaves: committed {} leaves",
             leaves.len()
         );
@@ -191,7 +191,6 @@ impl TreeStore for PostgresTreeStore {
                 "Skipping set_leaves: active_swap={}, swap_completed_during_refresh={}",
                 has_active_swap, swap_completed_during_refresh
             );
-            tx.rollback().await.ok();
             return Ok(());
         }
 
@@ -258,7 +257,6 @@ impl TreeStore for PostgresTreeStore {
 
         if reservation.is_none() {
             // Already cancelled or finalized
-            tx.rollback().await.ok();
             return Ok(());
         }
 
@@ -295,7 +293,6 @@ impl TreeStore for PostgresTreeStore {
 
         let Some(reservation_row) = reservation else {
             // Already finalized or cancelled - match in-memory behavior by returning Ok
-            tx.rollback().await.ok();
             return Ok(());
         };
 
@@ -385,12 +382,12 @@ impl TreeStore for PostgresTreeStore {
             .map(|r| Self::deserialize_node(r.get("data")))
             .collect::<Result<Vec<_>, _>>()?;
 
-        tracing::info!(
+        tracing::trace!(
             "PostgresTreeStore::try_reserve_leaves: found {} available leaves",
             available_leaves.len()
         );
         for leaf in &available_leaves {
-            tracing::info!(
+            tracing::trace!(
                 "PostgresTreeStore::try_reserve_leaves: available leaf {} owner={:?} value={}",
                 leaf.id,
                 leaf.owner_identity_public_key,
@@ -415,7 +412,6 @@ impl TreeStore for PostgresTreeStore {
 
                 // Reject empty reservations (matches in-memory behavior)
                 if selected_leaves.is_empty() {
-                    tx.rollback().await.ok();
                     return Err(TreeServiceError::NonReservableLeaves);
                 }
 
@@ -458,9 +454,7 @@ impl TreeStore for PostgresTreeStore {
                     )));
                 }
 
-                // No suitable leaves found, rollback and return appropriate result
-                tx.rollback().await.ok();
-
+                // No suitable leaves found
                 if available + pending >= target_amount {
                     Ok(ReserveResult::WaitForPending {
                         needed: target_amount,
@@ -472,8 +466,6 @@ impl TreeStore for PostgresTreeStore {
                 }
             }
             Err(_) => {
-                tx.rollback().await.ok();
-
                 if available + pending >= target_amount {
                     Ok(ReserveResult::WaitForPending {
                         needed: target_amount,
@@ -513,7 +505,6 @@ impl TreeStore for PostgresTreeStore {
             .map_err(map_err)?;
 
         if reservation.is_none() {
-            tx.rollback().await.ok();
             return Err(TreeServiceError::Generic(format!(
                 "Reservation {reservation_id} not found"
             )));
