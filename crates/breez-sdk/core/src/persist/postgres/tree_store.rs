@@ -175,30 +175,21 @@ impl TreeStore for PostgresTreeStore {
         // Acquire advisory lock to prevent deadlocks with concurrent operations
         Self::acquire_write_lock(&tx).await?;
 
-        // Check if any swap reservation is currently active
-        let has_active_swap: bool = {
+        // Check if any swap reservation is currently active, or if a swap completed
+        // after this refresh started (making the refresh data potentially inconsistent).
+        let (has_active_swap, swap_completed_during_refresh): (bool, bool) = {
             let row = tx
                 .query_one(
-                    "SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap')",
-                    &[],
-                )
-                .await
-                .map_err(map_err)?;
-            row.get(0)
-        };
-
-        // Check if a swap completed after this refresh started.
-        // If so, the refresh data may be inconsistent (operators have new leaves,
-        // but we're about to apply stale data from before the swap completed).
-        let swap_completed_during_refresh: bool = {
-            let row = tx
-                .query_one(
-                    "SELECT COALESCE(last_completed_at >= $1, FALSE) FROM tree_swap_status WHERE id = 1",
+                    r"
+                    SELECT
+                        EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap'),
+                        COALESCE((SELECT last_completed_at >= $1 FROM tree_swap_status WHERE id = 1), FALSE)
+                    ",
                     &[&refresh_timestamp],
                 )
                 .await
                 .map_err(map_err)?;
-            row.get(0)
+            (row.get(0), row.get(1))
         };
 
         if has_active_swap || swap_completed_during_refresh {
@@ -232,17 +223,6 @@ impl TreeStore for PostgresTreeStore {
             rows.iter().map(|r| r.get(0)).collect()
         };
 
-        let reserved_ids: HashSet<String> = {
-            let rows = tx
-                .query(
-                    "SELECT id FROM tree_leaves WHERE reservation_id IS NOT NULL",
-                    &[],
-                )
-                .await
-                .map_err(map_err)?;
-            rows.iter().map(|r| r.get(0)).collect()
-        };
-
         // Delete non-reserved leaves that were added BEFORE refresh started (minus grace period).
         // Leaves added within the grace period before refresh_started_at are preserved
         // to handle race conditions where a refresh starts right after a leaf is added
@@ -265,32 +245,11 @@ impl TreeStore for PostgresTreeStore {
         // which interferes with the timestamp-based leaf deletion.
         Self::cleanup_stale_reservations(&tx).await?;
 
-        // Separate leaves into reserved (for update) and non-reserved (for upsert)
-        let (reserved_leaves, non_reserved_leaves): (Vec<&TreeNode>, Vec<&TreeNode>) = leaves
-            .iter()
-            .filter(|l| !spent_ids.contains(&l.id.to_string()))
-            .partition(|l| reserved_ids.contains(&l.id.to_string()));
-
-        let (reserved_missing, non_reserved_missing): (Vec<&TreeNode>, Vec<&TreeNode>) =
-            missing_operators_leaves
-                .iter()
-                .filter(|l| !spent_ids.contains(&l.id.to_string()))
-                .partition(|l| reserved_ids.contains(&l.id.to_string()));
-
-        // Batch update reserved leaves
-        let reserved_leaves_owned: Vec<TreeNode> = reserved_leaves.into_iter().cloned().collect();
-        Self::batch_update_reserved_leaves(&tx, &reserved_leaves_owned, false).await?;
-
-        let reserved_missing_owned: Vec<TreeNode> = reserved_missing.into_iter().cloned().collect();
-        Self::batch_update_reserved_leaves(&tx, &reserved_missing_owned, true).await?;
-
-        // Batch upsert non-reserved leaves (with fresh added_at timestamp)
-        let non_reserved_owned: Vec<TreeNode> = non_reserved_leaves.into_iter().cloned().collect();
-        Self::batch_upsert_leaves(&tx, &non_reserved_owned, false, None).await?;
-
-        let non_reserved_missing_owned: Vec<TreeNode> =
-            non_reserved_missing.into_iter().cloned().collect();
-        Self::batch_upsert_leaves(&tx, &non_reserved_missing_owned, true, None).await?;
+        // Upsert all leaves. batch_upsert_leaves handles spent filtering via skip_ids,
+        // and its ON CONFLICT clause preserves reservation_id (not in the UPDATE SET list).
+        // Reserved leaves are also immune to timestamp-based deletion (WHERE reservation_id IS NULL).
+        Self::batch_upsert_leaves(&tx, leaves, false, Some(&spent_ids)).await?;
+        Self::batch_upsert_leaves(&tx, missing_operators_leaves, true, Some(&spent_ids)).await?;
 
         tx.commit().await.map_err(map_err)?;
         self.notify_balance_change();
@@ -860,43 +819,6 @@ impl PostgresTreeStore {
                 result
             );
         }
-
-        Ok(())
-    }
-
-    /// Batch updates reserved leaves (leaves that already exist and are reserved).
-    async fn batch_update_reserved_leaves(
-        tx: &tokio_postgres::Transaction<'_>,
-        leaves: &[TreeNode],
-        is_missing_from_operators: bool,
-    ) -> Result<(), TreeServiceError> {
-        if leaves.is_empty() {
-            return Ok(());
-        }
-
-        let mut ids: Vec<String> = Vec::with_capacity(leaves.len());
-        let mut statuses: Vec<&str> = Vec::with_capacity(leaves.len());
-        let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(leaves.len());
-
-        for leaf in leaves {
-            ids.push(leaf.id.to_string());
-            statuses.push(Self::status_to_string(leaf.status));
-            data_values.push(Self::serialize_node(leaf)?);
-        }
-
-        tx.execute(
-            r"
-            UPDATE tree_leaves
-            SET status = u.status,
-                is_missing_from_operators = $4,
-                data = u.data
-            FROM (SELECT * FROM UNNEST($1::text[], $2::text[], $3::jsonb[])) AS u(id, status, data)
-            WHERE tree_leaves.id = u.id
-            ",
-            &[&ids, &statuses, &data_values, &is_missing_from_operators],
-        )
-        .await
-        .map_err(map_err)?;
 
         Ok(())
     }

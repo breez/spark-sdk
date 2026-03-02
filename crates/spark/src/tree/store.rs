@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -116,26 +116,6 @@ enum StoreCommand {
         change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
-}
-
-/// Collects leaves that were added recently enough to be preserved during refresh.
-///
-/// A leaf is preserved if `added_at + grace_period >= refresh_started_at`.
-fn collect_preserved_leaves(
-    source: &HashMap<TreeNodeId, TreeNode>,
-    leaf_added_at: &HashMap<TreeNodeId, SystemTime>,
-    grace_period: Duration,
-    refresh_started_at: SystemTime,
-) -> HashMap<TreeNodeId, TreeNode> {
-    source
-        .iter()
-        .filter(|(id, _)| {
-            leaf_added_at
-                .get(*id)
-                .is_some_and(|added_at| *added_at + grace_period >= refresh_started_at)
-        })
-        .map(|(id, leaf)| (id.clone(), leaf.clone()))
-        .collect()
 }
 
 /// Queue-based in-memory tree store.
@@ -404,129 +384,76 @@ impl InMemoryTreeStore {
         refresh_started_at: SystemTime,
         grace_period: Duration,
     ) -> Result<(), TreeServiceError> {
-        // Check if any swap reservation is currently active
+        // Skip if swap is active or completed during this refresh
         let has_active_swap = state
             .leaves_reservations
             .values()
             .any(|entry| entry.purpose == ReservationPurpose::Swap);
-
-        // Check if a swap completed after this refresh started.
-        // If so, the refresh data may be inconsistent (operators have new leaves,
-        // but we're about to apply stale data from before the swap completed).
         let swap_completed_during_refresh = state
             .last_swap_completed_at
             .is_some_and(|completed_at| completed_at >= refresh_started_at);
-
         if has_active_swap || swap_completed_during_refresh {
             trace!(
-                "Skipping set_leaves: active_swap={}, swap_completed_during_refresh={}",
-                has_active_swap, swap_completed_during_refresh
+                "Skipping set_leaves: active_swap={has_active_swap}, \
+                 swap_completed_during_refresh={swap_completed_during_refresh}"
             );
             return Ok(());
         }
 
-        // Collect IDs from the new refresh for later use
-        let refreshed_ids: HashSet<TreeNodeId> = leaves
-            .iter()
-            .chain(missing_operators_leaves.iter())
-            .map(|l| l.id.clone())
-            .collect();
-
-        // Remove spent entries for leaves that were spent BEFORE refresh started.
-        // If spent_at < refresh_started_at, operators had time to process the spend.
-        // Note: A spent leaf won't appear in `leaves` (coordinator processed the spend),
-        // it may only appear in `missing_operators_leaves` if returned (e.g., HTLC refund).
+        // Remove spent entries that operators have had time to process
         state
             .spent_leaf_ids
-            .retain(|_id, spent_at| *spent_at >= refresh_started_at);
+            .retain(|_, spent_at| *spent_at >= refresh_started_at);
 
-        // Collect leaves to preserve (added recently relative to refresh start).
-        // These are leaves that were added by `add_leaves` or `finalize_reservation` or
-        // `update_reservation` while the refresh was in progress or shortly before.
-        // We use a grace period to handle race conditions where a refresh starts right
-        // after a leaf is added but before operators have synced the new leaf data.
-        let preserved_leaves = collect_preserved_leaves(
-            &state.leaves,
-            &state.leaf_added_at,
-            grace_period,
-            refresh_started_at,
-        );
+        // Save old pools before replacing (moved, not cloned)
+        let old_leaves = std::mem::take(&mut state.leaves);
+        let old_missing = std::mem::take(&mut state.missing_operators_leaves);
 
-        let preserved_missing = collect_preserved_leaves(
-            &state.missing_operators_leaves,
-            &state.leaf_added_at,
-            grace_period,
-            refresh_started_at,
-        );
-
-        // Build new leaves map from refresh data, excluding spent
+        // Build new pools from refresh data, excluding spent leaves
         let now = SystemTime::now();
-
-        state.leaves = leaves
-            .iter()
-            .filter(|l| !state.spent_leaf_ids.contains_key(&l.id))
-            .map(|l| (l.id.clone(), l.clone()))
-            .collect();
-
-        // Update timestamps for refreshed leaves (they're now "confirmed")
         for leaf in leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
                 state.leaf_added_at.insert(leaf.id.clone(), now);
+                state.leaves.insert(leaf.id.clone(), leaf.clone());
             }
         }
-
-        state.missing_operators_leaves = missing_operators_leaves
-            .iter()
-            .filter(|l| !state.spent_leaf_ids.contains_key(&l.id))
-            .map(|l| (l.id.clone(), l.clone()))
-            .collect();
-
-        // Update timestamps for missing operator leaves
         for leaf in missing_operators_leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
                 state.leaf_added_at.insert(leaf.id.clone(), now);
+                state
+                    .missing_operators_leaves
+                    .insert(leaf.id.clone(), leaf.clone());
             }
         }
 
-        // Re-add preserved leaves (keep their original timestamps)
-        // These are leaves added after refresh started, so they should not be overwritten
-        let preserved_count = preserved_leaves.len() + preserved_missing.len();
-        trace!(
-            "set_leaves: Preserving {} leaves ({} regular, {} missing), refresh has {} leaves",
-            preserved_count,
-            preserved_leaves.len(),
-            preserved_missing.len(),
-            leaves.len()
-        );
-        for (id, leaf) in preserved_leaves {
-            // Skip if already in missing_operators_leaves to avoid double counting.
-            // This can happen when a leaf is returned (via add_leaves) and a refresh
-            // starts shortly after with coordinator/operator status mismatch.
-            if state.missing_operators_leaves.contains_key(&id) {
-                trace!(
-                    "Skipping preserved leaf {} with value {} (already in missing_operators_leaves)",
-                    id, leaf.value
-                );
-                continue;
+        // Re-add recently-added leaves from old state that aren't in refresh data.
+        // Uses grace_period to handle race conditions between add and refresh.
+        let mut preserved_count = 0u32;
+        for (id, leaf) in old_leaves {
+            let is_recent = state
+                .leaf_added_at
+                .get(&id)
+                .is_some_and(|added_at| *added_at + grace_period >= refresh_started_at);
+            if is_recent
+                && !state.leaves.contains_key(&id)
+                && !state.missing_operators_leaves.contains_key(&id)
+            {
+                state.leaves.insert(id, leaf);
+                preserved_count += 1;
             }
-            trace!("Re-adding preserved leaf {} with value {}", id, leaf.value);
-            state.leaves.entry(id).or_insert(leaf);
         }
-
-        for (id, leaf) in preserved_missing {
-            // Skip if already in leaves to avoid double counting
-            if state.leaves.contains_key(&id) {
-                trace!(
-                    "Skipping preserved missing leaf {} with value {} (already in leaves)",
-                    id, leaf.value
-                );
-                continue;
+        for (id, leaf) in old_missing {
+            let is_recent = state
+                .leaf_added_at
+                .get(&id)
+                .is_some_and(|added_at| *added_at + grace_period >= refresh_started_at);
+            if is_recent
+                && !state.leaves.contains_key(&id)
+                && !state.missing_operators_leaves.contains_key(&id)
+            {
+                state.missing_operators_leaves.insert(id, leaf);
+                preserved_count += 1;
             }
-            trace!(
-                "Re-adding preserved missing leaf {} with value {}",
-                id, leaf.value
-            );
-            state.missing_operators_leaves.entry(id).or_insert(leaf);
         }
 
         // Clean up timestamps for leaves no longer in store
@@ -534,37 +461,24 @@ impl InMemoryTreeStore {
             state.leaves.contains_key(id) || state.missing_operators_leaves.contains_key(id)
         });
 
-        for (key, entry) in state.leaves_reservations.iter_mut() {
-            // Try to update reserved leaves with fresh data from the pool.
-            // If a leaf is no longer in the pool (e.g., being swapped), keep the original.
-            // IMPORTANT: Never remove reservations here - they might be in the middle of a swap
-            // where leaves have been transferred but the swap hasn't completed yet.
-            // Reservations should only be removed by explicit cancel/finalize.
-
-            // Update leaves that exist in the refreshed pool
-            for l in entry.leaves.iter_mut() {
+        // Update reserved leaves with fresh data, removing them from the unreserved pool
+        for entry in state.leaves_reservations.values_mut() {
+            for l in &mut entry.leaves {
                 if let Some(leaf) = state.leaves.remove(&l.id) {
                     *l = leaf;
                 } else if let Some(leaf) = state.missing_operators_leaves.remove(&l.id) {
                     *l = leaf;
                 }
-                // If leaf is not in either pool, keep the original (it might be in-flight)
             }
-
-            trace!(
-                "Updated reservation {}: refreshed {} leaves",
-                key,
-                entry.leaves.len()
-            );
         }
+
         trace!(
-            "Updated {:?} leaves in the local state (filtered {} spent, preserved {} new)",
+            "set_leaves: {} leaves, {} missing, {} preserved from previous state",
             state.leaves.len(),
-            refreshed_ids
-                .len()
-                .saturating_sub(state.leaves.len() + state.missing_operators_leaves.len()),
+            state.missing_operators_leaves.len(),
             preserved_count
         );
+
         Ok(())
     }
 
