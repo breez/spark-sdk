@@ -15,6 +15,7 @@ cargo install mdbook
 cargo install --path ./snippets-processor
 cargo install mdbook-variables
 cargo install mdbook-pagetoc
+cargo install mdbook-llms-txt-tools
 mdbook build
 mdbook serve --open
 

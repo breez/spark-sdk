@@ -306,12 +306,12 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
 
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
     let status = Command::new("./gradlew")
-        .arg("build")
+        .arg("compileKotlinJvm")
         .current_dir(&kotlin_snippets_dir)
         .status()?;
     if !status.success() {
         anyhow::bail!(
-            "Failed to run './gradlew build' in {:?}",
+            "Failed to run './gradlew compileKotlinJvm' in {:?}",
             kotlin_snippets_dir
         );
     }

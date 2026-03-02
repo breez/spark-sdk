@@ -1,0 +1,17 @@
+name: breez_cli
+description: CLI client for Breez SDK with Spark (Dart/Flutter port)
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+
+dependencies:
+  args: ^2.5.0
+  bip39: ^1.0.6
+  crypto: ^3.0.0
+  breez_sdk_spark_flutter:
+    path: ../../../../../../../packages/flutter
+
+dev_dependencies:
+  lints: ^5.1.1

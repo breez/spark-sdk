@@ -1,0 +1,8 @@
+include: package:lints/recommended.yaml
+
+formatter:
+  page_width: 110
+
+linter:
+  rules:
+    depend_on_referenced_packages: false

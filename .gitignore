@@ -16,6 +16,13 @@ js_reference/
 # Example CLI files
 *.spark*/
 crates/breez-sdk/cli/.data*
+crates/breez-sdk/bindings/examples/cli/langs/**/.data/
+crates/breez-sdk/bindings/examples/cli/langs/**/breez-cli
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
 
 # Deployment files
 fly.toml

@@ -1,5 +1,10 @@
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import '../breez_sdk_spark.dart';
 
+/// Extension to add copyWith to the FRB-generated Config class.
+///
+/// FRB does not generate copyWith for regular (non-sealed) classes.
+/// This extension provides it so consumers can modify individual fields
+/// without reconstructing the entire Config object.
 extension ConfigCopyWith on Config {
   Config copyWith({
     String? apiKey,
@@ -10,6 +15,7 @@ extension ConfigCopyWith on Config {
     bool? preferSparkOverLightning,
     List<ExternalInputParser>? externalInputParsers,
     bool? useDefaultExternalInputParsers,
+    String? realTimeSyncServerUrl,
     bool? privateEnabledDefault,
     OptimizationConfig? optimizationConfig,
     StableBalanceConfig? stableBalanceConfig,
@@ -22,18 +28,15 @@ extension ConfigCopyWith on Config {
       syncIntervalSecs: syncIntervalSecs ?? this.syncIntervalSecs,
       maxDepositClaimFee: maxDepositClaimFee ?? this.maxDepositClaimFee,
       lnurlDomain: lnurlDomain ?? this.lnurlDomain,
-      preferSparkOverLightning:
-          preferSparkOverLightning ?? this.preferSparkOverLightning,
+      preferSparkOverLightning: preferSparkOverLightning ?? this.preferSparkOverLightning,
       externalInputParsers: externalInputParsers ?? this.externalInputParsers,
-      useDefaultExternalInputParsers:
-          useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
-      privateEnabledDefault:
-          privateEnabledDefault ?? this.privateEnabledDefault,
+      useDefaultExternalInputParsers: useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
+      realTimeSyncServerUrl: realTimeSyncServerUrl ?? this.realTimeSyncServerUrl,
+      privateEnabledDefault: privateEnabledDefault ?? this.privateEnabledDefault,
       optimizationConfig: optimizationConfig ?? this.optimizationConfig,
       stableBalanceConfig: stableBalanceConfig ?? this.stableBalanceConfig,
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
-      supportLnurlVerify:
-          supportLnurlVerify ?? this.supportLnurlVerify,
+      supportLnurlVerify: supportLnurlVerify ?? this.supportLnurlVerify,
     );
   }
 }
