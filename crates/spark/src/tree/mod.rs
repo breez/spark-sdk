@@ -121,89 +121,25 @@ pub struct TreeNode {
     pub tree_id: String,
     pub value: u64,
     pub parent_node_id: Option<TreeNodeId>,
-    #[serde(with = "tx_serde")]
     pub node_tx: Transaction,
     // TODO: improve model to only allow empty refunds txs on expected cases
-    #[serde(with = "opt_tx_serde")]
     pub refund_tx: Option<Transaction>,
     /// The direct transaction of the node, this transaction is for the watchtower to broadcast.
-    #[serde(with = "opt_tx_serde")]
     pub direct_tx: Option<Transaction>,
     /// The refund transaction of the node, this transaction is to pay to the user.
-    #[serde(with = "opt_tx_serde")]
     pub direct_refund_tx: Option<Transaction>,
     /// The refund transaction of the node, this transaction is to pay to the user.
-    #[serde(with = "opt_tx_serde")]
     pub direct_from_cpfp_refund_tx: Option<Transaction>,
     /// This vout is the vout to spend the previous transaction, which is in the
     /// parent node.
     pub vout: u32,
-    #[serde(with = "pubkey_serde")]
     pub verifying_public_key: PublicKey,
-    #[serde(with = "pubkey_serde")]
     pub owner_identity_public_key: PublicKey,
     /// The signing keyshare information of the node on the SE side.
     pub signing_keyshare: SigningKeyshare,
     pub status: TreeNodeStatus,
 }
 
-/// Serde module for `Transaction` (hex-encoded consensus bytes).
-mod tx_serde {
-    use bitcoin::Transaction;
-    use bitcoin::consensus::{deserialize as btc_deserialize, serialize as btc_serialize};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(tx: &Transaction, s: S) -> Result<S::Ok, S::Error> {
-        hex::encode(btc_serialize(tx)).serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Transaction, D::Error> {
-        let hex_str = String::deserialize(d)?;
-        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
-        btc_deserialize(&bytes).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Serde module for `Option<Transaction>`.
-mod opt_tx_serde {
-    use bitcoin::Transaction;
-    use bitcoin::consensus::{deserialize as btc_deserialize, serialize as btc_serialize};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(tx: &Option<Transaction>, s: S) -> Result<S::Ok, S::Error> {
-        tx.as_ref()
-            .map(|t| hex::encode(btc_serialize(t)))
-            .serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Transaction>, D::Error> {
-        let opt: Option<String> = Option::deserialize(d)?;
-        match opt {
-            Some(hex_str) => {
-                let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
-                let tx = btc_deserialize(&bytes).map_err(serde::de::Error::custom)?;
-                Ok(Some(tx))
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-/// Serde module for `PublicKey` (hex-encoded compressed).
-mod pubkey_serde {
-    use bitcoin::secp256k1::PublicKey;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S: Serializer>(pk: &PublicKey, s: S) -> Result<S::Ok, S::Error> {
-        hex::encode(pk.serialize()).serialize(s)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PublicKey, D::Error> {
-        let hex_str = String::deserialize(d)?;
-        let bytes = hex::decode(&hex_str).map_err(serde::de::Error::custom)?;
-        PublicKey::from_slice(&bytes).map_err(serde::de::Error::custom)
-    }
-}
 
 impl TreeNode {
     fn node_sequence(&self) -> Sequence {
