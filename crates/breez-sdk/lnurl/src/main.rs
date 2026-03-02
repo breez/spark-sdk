@@ -85,8 +85,9 @@ struct Args {
     /// Whether to include the spark address in the invoices generated.
     /// If included this can reduce fees for wallets that support it at the
     /// cost of privacy.
+    #[cfg(feature = "dev")]
     #[arg(long, default_value = "false")]
-    pub include_spark_address: bool,
+    pub dev_dont_use_lnurl_include_spark_address: bool,
 
     /// List of domains that are allowed to use the lnurl server. Comma separated.
     /// These are in addition to any domains stored in the database. The configured
@@ -298,7 +299,16 @@ where
         scheme: args.scheme,
         min_sendable: args.min_sendable,
         max_sendable: args.max_sendable,
-        include_spark_address: args.include_spark_address,
+        include_spark_address: {
+            #[cfg(feature = "dev")]
+            {
+                args.dev_dont_use_lnurl_include_spark_address
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                false
+            }
+        },
         domains,
         nostr_keys,
         ca_cert,

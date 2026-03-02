@@ -35,6 +35,9 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 x509-parser = { version = "0.18.0", features = ["verify"] }
 
+[features]
+dev = []
+
 [lints]
 clippy.suspicious = { level = "warn", priority = -1 }
 clippy.complexity = { level = "warn", priority = -1 }

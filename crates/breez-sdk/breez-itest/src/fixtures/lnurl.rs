@@ -35,6 +35,7 @@ impl Default for LnurlImageConfig {
                 dockerfile_path: "crates/breez-sdk/lnurl/Dockerfile".to_string(),
                 image_name: "breez-lnurl-built".to_string(),
                 image_tag: "latest".to_string(),
+                build_args: vec![("CARGO_FEATURES".to_string(), "dev".to_string())],
             },
             network: "regtest".to_string(),
             auto_migrate: true,
@@ -127,7 +128,7 @@ impl LnurlFixture {
             .with_env_var("BREEZ_LNURL_MIN_SENDABLE", "1000")
             .with_env_var("BREEZ_LNURL_MAX_SENDABLE", "1000000000")
             .with_env_var(
-                "BREEZ_LNURL_INCLUDE_SPARK_ADDRESS",
+                "BREEZ_LNURL_DEV_DONT_USE_LNURL_INCLUDE_SPARK_ADDRESS",
                 config.include_spark_address.to_string(),
             )
             // Allow the container to reach services on the host via host.docker.internal

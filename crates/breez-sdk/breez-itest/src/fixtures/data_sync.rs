@@ -20,6 +20,7 @@ impl Default for DataSyncImageConfig {
             dockerfile_path: "Dockerfile".to_string(),
             image_name: "breez-data-sync-built".to_string(),
             image_tag: "latest".to_string(),
+            build_args: Vec::new(),
         }
     }
 }

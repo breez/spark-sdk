@@ -11,7 +11,12 @@ RUN apt-get update -qq && \
 RUN mkdir -p /app/crates/breez-sdk/lnurl/
 COPY . /app
 WORKDIR /app/crates/breez-sdk/lnurl
-RUN cargo build --release --bin lnurl
+ARG CARGO_FEATURES=""
+RUN if [ -z "$CARGO_FEATURES" ]; then \
+        cargo build --release --bin lnurl; \
+    else \
+        cargo build --release --bin lnurl --features "$CARGO_FEATURES"; \
+    fi
 
 
 FROM debian:bookworm-slim AS final

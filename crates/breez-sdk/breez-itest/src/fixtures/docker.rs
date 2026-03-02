@@ -15,6 +15,8 @@ pub struct DockerImageConfig {
     pub image_name: String,
     /// Tag for the built image
     pub image_tag: String,
+    /// Build arguments to pass to `docker build --build-arg`
+    pub build_args: Vec<(String, String)>,
 }
 
 /// Build a Docker image from the specified context path
@@ -76,8 +78,11 @@ pub async fn build_docker_image(config: &DockerImageConfig) -> Result<()> {
         &dockerfile_path,
         "-t",
         &format!("{}:{}", config.image_name, config.image_tag),
-        &absolute_context_path.to_string_lossy(),
     ]);
+    for (key, value) in &config.build_args {
+        cmd.args(["--build-arg", &format!("{key}={value}")]);
+    }
+    cmd.arg(&*absolute_context_path.to_string_lossy());
 
     let output = cmd.output().map_err(|e| {
         anyhow::anyhow!(
