@@ -13,7 +13,7 @@ use web_time::SystemTime;
 
 use crate::tree::{
     Leaves, LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNode,
-    TreeNodeId, TreeServiceError, TreeStore,
+    TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
 };
 
 /// Creates a test `TreeNode` with the given ID and value.
@@ -74,8 +74,8 @@ pub async fn reserve_leaves(
     }
 }
 
-/// Returns a future `SystemTime` that exceeds any grace period, ensuring
-/// that leaves added "now" are treated as old relative to this refresh start.
+/// Returns a future `SystemTime`, ensuring that leaves added "now" are
+/// treated as old relative to this refresh start.
 fn future_refresh_start() -> SystemTime {
     SystemTime::now() + Duration::from_secs(10)
 }
@@ -1250,4 +1250,407 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
         available.iter().any(|l| l.id.to_string() == "node3"),
         "New leaf should be added when payment reservation is active"
     );
+}
+
+pub async fn test_update_reservation_basic(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 1000)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve node1 for payment
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+        false,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    // Update the reservation: swap completed, new reserved + change leaves
+    let swap_output = create_test_tree_node("swap_output", 500);
+    let change = create_test_tree_node("change", 500);
+    let updated = store
+        .update_reservation(&reservation.id, &[swap_output], &[change])
+        .await
+        .unwrap();
+
+    // Same reservation ID
+    assert_eq!(updated.id, reservation.id);
+
+    let all = get_all(store).await;
+    // Reserved leaves should be updated
+    assert_eq!(all.reserved_for_payment.len(), 1);
+    assert!(
+        all.reserved_for_payment
+            .iter()
+            .any(|l| l.id.to_string() == "swap_output")
+    );
+    // Change leaf should be available
+    assert!(
+        all.available
+            .iter()
+            .any(|l| l.id.to_string() == "change")
+    );
+    assert_eq!(all.available_balance(), 500);
+}
+
+pub async fn test_update_reservation_nonexistent(store: &dyn TreeStore) {
+    let leaf = create_test_tree_node("node1", 100);
+    let fake_id = "nonexistent".to_string();
+    let result = store
+        .update_reservation(&fake_id, std::slice::from_ref(&leaf), &[])
+        .await;
+    assert!(result.is_err());
+}
+
+pub async fn test_update_reservation_clears_pending(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 1000)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve 100 from a 1000-sat leaf (pending=900)
+    let r1 = store
+        .try_reserve_leaves(
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+    let reservation_id = match r1 {
+        ReserveResult::Success(r) => r.id,
+        _ => panic!("Expected Success"),
+    };
+
+    // Second reserve should get WaitForPending (pending=900 exists)
+    let r2 = store
+        .try_reserve_leaves(
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(r2, ReserveResult::WaitForPending { .. }),
+        "Expected WaitForPending, got {r2:?}"
+    );
+
+    // Update reservation: reserved=[100], change=[900]
+    let reserved_leaf = create_test_tree_node("reserved", 100);
+    let change_leaf = create_test_tree_node("change", 900);
+    store
+        .update_reservation(&reservation_id, &[reserved_leaf], &[change_leaf])
+        .await
+        .unwrap();
+
+    // Now pending is cleared and change(900) is available.
+    // Reserve 300 should succeed.
+    let r3 = store
+        .try_reserve_leaves(
+            Some(&TargetAmounts::new_amount_and_fee(300, None)),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(r3, ReserveResult::Success(_)),
+        "Expected Success after pending cleared, got {r3:?}"
+    );
+}
+
+pub async fn test_update_reservation_preserves_purpose(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 1000)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve for Swap purpose
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(1000, None)),
+        false,
+        ReservationPurpose::Swap,
+    )
+    .await
+    .unwrap();
+
+    // Update reservation
+    let swap_output = create_test_tree_node("swap_output", 600);
+    let change = create_test_tree_node("change", 400);
+    store
+        .update_reservation(&reservation.id, &[swap_output], &[change])
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    // Should be in reserved_for_swap, not reserved_for_payment
+    assert!(
+        all.reserved_for_payment.is_empty(),
+        "Updated swap reservation should not appear in reserved_for_payment"
+    );
+    assert_eq!(all.reserved_for_swap.len(), 1);
+    assert!(
+        all.reserved_for_swap
+            .iter()
+            .any(|l| l.id.to_string() == "swap_output")
+    );
+    // balance() includes swap-reserved + available
+    assert_eq!(all.swap_reserved_balance(), 600);
+    assert_eq!(all.available_balance(), 400);
+    assert_eq!(all.balance(), 600 + 400);
+}
+
+pub async fn test_get_leaves_not_available(store: &dyn TreeStore) {
+    let mut locked_leaf = create_test_tree_node("locked", 100);
+    locked_leaf.status = TreeNodeStatus::TransferLocked;
+    let available_leaf = create_test_tree_node("avail", 200);
+
+    store
+        .add_leaves(&[locked_leaf, available_leaf])
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert_eq!(all.not_available.len(), 1);
+    assert!(
+        all.not_available
+            .iter()
+            .any(|l| l.id.to_string() == "locked")
+    );
+    assert_eq!(all.available.len(), 1);
+    assert!(
+        all.available
+            .iter()
+            .any(|l| l.id.to_string() == "avail")
+    );
+    // available_balance excludes locked leaf
+    assert_eq!(all.available_balance(), 200);
+}
+
+pub async fn test_get_leaves_missing_operators_filters_spent(store: &dyn TreeStore) {
+    // Add node1 and reserve+finalize it (mark as spent)
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
+
+    // Call set_leaves with refresh_start BEFORE the spend, so spent marker is preserved
+    let refresh_start = SystemTime::now() - Duration::from_secs(60);
+    let missing = vec![
+        create_test_tree_node("node1", 100), // was spent
+        create_test_tree_node("node3", 300), // new
+    ];
+    store
+        .set_leaves(&[], &missing, refresh_start)
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    // node1 should be filtered out (spent), only node3 remains
+    assert_eq!(all.available_missing_from_operators.len(), 1);
+    assert!(
+        all.available_missing_from_operators
+            .iter()
+            .any(|l| l.id.to_string() == "node3")
+    );
+    assert!(
+        !all.available_missing_from_operators
+            .iter()
+            .any(|l| l.id.to_string() == "node1"),
+        "Spent leaf node1 should be filtered from missing_operators"
+    );
+}
+
+pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore) {
+    let refresh_start1 = future_refresh_start();
+    let missing1 = vec![create_test_tree_node("missing1", 100)];
+    store
+        .set_leaves(&[], &missing1, refresh_start1)
+        .await
+        .unwrap();
+
+    // Verify missing1 is present
+    let all = get_all(store).await;
+    assert_eq!(all.available_missing_from_operators.len(), 1);
+    assert!(
+        all.available_missing_from_operators
+            .iter()
+            .any(|l| l.id.to_string() == "missing1")
+    );
+
+    // Second set_leaves replaces with missing2
+    let refresh_start2 = future_refresh_start();
+    let missing2 = vec![create_test_tree_node("missing2", 200)];
+    store
+        .set_leaves(&[], &missing2, refresh_start2)
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert_eq!(all.available_missing_from_operators.len(), 1);
+    assert!(
+        all.available_missing_from_operators
+            .iter()
+            .any(|l| l.id.to_string() == "missing2")
+    );
+    assert!(
+        !all.available_missing_from_operators
+            .iter()
+            .any(|l| l.id.to_string() == "missing1"),
+        "missing1 should be replaced, not accumulated"
+    );
+}
+
+pub async fn test_reserve_with_none_target_reserves_all(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve with None target -> should reserve all leaves
+    let reservation = reserve_leaves(store, None, false, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+
+    assert_eq!(reservation.leaves.len(), 3);
+    let all = get_all(store).await;
+    assert!(all.available.is_empty(), "All leaves should be reserved");
+    assert_eq!(all.reserved_for_payment.len(), 3);
+}
+
+pub async fn test_reserve_skips_non_available_leaves(store: &dyn TreeStore) {
+    let node1 = create_test_tree_node("node1", 100);
+    let mut node2 = create_test_tree_node("node2", 200);
+    node2.status = TreeNodeStatus::TransferLocked;
+    let node3 = create_test_tree_node("node3", 300);
+
+    store.add_leaves(&[node1, node2, node3]).await.unwrap();
+
+    // Reserve 400 exact -> should pick node1(100) + node3(300)
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(400, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reservation.sum(), 400);
+    let all = get_all(store).await;
+    // node2 should remain in not_available
+    assert_eq!(all.not_available.len(), 1);
+    assert!(
+        all.not_available
+            .iter()
+            .any(|l| l.id.to_string() == "node2")
+    );
+    // Available pool should be empty (node1 and node3 were reserved)
+    assert!(all.available.is_empty());
+}
+
+pub async fn test_add_leaves_empty_slice(store: &dyn TreeStore) {
+    // Adding empty slice should succeed with no state change
+    store.add_leaves(&[]).await.unwrap();
+    assert_available_count(store, 0).await;
+
+    // Add a real leaf, then add empty slice again
+    let leaf = create_test_tree_node("node1", 100);
+    store.add_leaves(&[leaf]).await.unwrap();
+    assert_available_count(store, 1).await;
+
+    store.add_leaves(&[]).await.unwrap();
+    assert_available_count(store, 1).await;
+}
+
+pub async fn test_full_payment_cycle(store: &dyn TreeStore) {
+    // Add node1(1000)
+    let leaves = vec![create_test_tree_node("node1", 1000)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve 400 (non-exact, gets 1000)
+    let reservation1 = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(400, None)),
+        false,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reservation1.sum(), 1000);
+
+    // Finalize with change=[change(600)]
+    let change_leaf = create_test_tree_node("change", 600);
+    store
+        .finalize_reservation(&reservation1.id, Some(&[change_leaf]))
+        .await
+        .unwrap();
+
+    // change(600) should now be available
+    let all = get_all(store).await;
+    assert_eq!(all.available.len(), 1);
+    assert_eq!(all.available_balance(), 600);
+
+    // Reserve 600 (exact) from change
+    let reservation2 = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(600, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reservation2.sum(), 600);
+
+    // Finalize with no new leaves
+    store
+        .finalize_reservation(&reservation2.id, None)
+        .await
+        .unwrap();
+
+    // Store should be empty
+    let all = get_all(store).await;
+    assert!(all.available.is_empty());
+    assert!(all.reserved_for_payment.is_empty());
+    assert!(all.reserved_for_swap.is_empty());
+    assert_eq!(all.balance(), 0);
+}
+
+pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
+    let refresh_start1 = future_refresh_start();
+    let initial = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+    ];
+    store
+        .set_leaves(&initial, &[], refresh_start1)
+        .await
+        .unwrap();
+    assert_available_count(store, 2).await;
+
+    // Second set_leaves with only node3
+    let refresh_start2 = future_refresh_start();
+    let replacement = vec![create_test_tree_node("node3", 300)];
+    store
+        .set_leaves(&replacement, &[], refresh_start2)
+        .await
+        .unwrap();
+
+    let available = get_available(store).await;
+    assert_eq!(available.len(), 1);
+    assert!(available.iter().any(|l| l.id.to_string() == "node3"));
+    assert!(!available.iter().any(|l| l.id.to_string() == "node1"));
+    assert!(!available.iter().any(|l| l.id.to_string() == "node2"));
 }

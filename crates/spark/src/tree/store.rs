@@ -21,12 +21,6 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Grace period for preserving recently added leaves during refresh.
-/// Leaves added within this period before `refresh_started_at` are preserved
-/// to handle race conditions where a refresh starts right after a leaf is added
-/// but before operators have synced the new leaf data.
-pub const LEAF_PRESERVATION_GRACE_PERIOD: Duration = Duration::from_secs(5);
-
 /// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
 /// The permit is automatically released when this entry is dropped.
 struct ReservationEntry {
@@ -50,8 +44,7 @@ struct LeavesState {
     /// in refresh data AND was spent before the refresh started.
     spent_leaf_ids: HashMap<TreeNodeId, SystemTime>,
     /// Timestamps for when each leaf was added/returned to the pool.
-    /// Used to determine which leaves can be deleted during refresh.
-    /// Leaves added AFTER a refresh started will be preserved even if
+    /// Leaves added at or after `refresh_started_at` are preserved even if
     /// not in the refresh data.
     leaf_added_at: HashMap<TreeNodeId, SystemTime>,
     /// Timestamp of when the most recent swap finalization completed.
@@ -151,13 +144,11 @@ pub struct InMemoryTreeStore {
 impl InMemoryTreeStore {
     /// Creates a new `InMemoryTreeStore` with default configuration.
     ///
-    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`], [`DEFAULT_RESERVATION_TIMEOUT`],
-    /// and [`LEAF_PRESERVATION_GRACE_PERIOD`].
+    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`] and [`DEFAULT_RESERVATION_TIMEOUT`].
     pub fn new() -> Self {
         Self::with_config(
             DEFAULT_MAX_CONCURRENT_RESERVATIONS,
             DEFAULT_RESERVATION_TIMEOUT,
-            LEAF_PRESERVATION_GRACE_PERIOD,
         )
     }
 
@@ -169,13 +160,9 @@ impl InMemoryTreeStore {
     ///   Additional reservation attempts will wait up to `reservation_timeout`.
     /// * `reservation_timeout` - How long to wait for a reservation permit before
     ///   returning [`TreeServiceError::ResourceBusy`].
-    /// * `leaf_preservation_grace_period` - Grace period for preserving recently added
-    ///   leaves during refresh. Leaves added within this period before `refresh_started_at`
-    ///   are preserved to handle race conditions with operator sync.
     pub fn with_config(
         max_concurrent_reservations: usize,
         reservation_timeout: Duration,
-        leaf_preservation_grace_period: Duration,
     ) -> Self {
         // Bounded channel provides backpressure under extreme load
         let (command_tx, command_rx) = mpsc::channel(1024);
@@ -183,11 +170,7 @@ impl InMemoryTreeStore {
         let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
 
         // Spawn the processor task - it will exit when command_tx is dropped
-        tokio::spawn(Self::run_processor(
-            command_rx,
-            balance_changed_tx,
-            leaf_preservation_grace_period,
-        ));
+        tokio::spawn(Self::run_processor(command_rx, balance_changed_tx));
 
         Self {
             command_tx,
@@ -202,7 +185,6 @@ impl InMemoryTreeStore {
     async fn run_processor(
         mut command_rx: mpsc::Receiver<StoreCommand>,
         balance_changed_tx: watch::Sender<()>,
-        leaf_preservation_grace_period: Duration,
     ) {
         let mut state = LeavesState::default();
 
@@ -235,7 +217,6 @@ impl InMemoryTreeStore {
                         &leaves,
                         &missing_operators_leaves,
                         refresh_started_at,
-                        leaf_preservation_grace_period,
                     );
                     let _ = response_tx.send(result);
                 }
@@ -382,7 +363,6 @@ impl InMemoryTreeStore {
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
         refresh_started_at: SystemTime,
-        grace_period: Duration,
     ) -> Result<(), TreeServiceError> {
         // Skip if swap is active or completed during this refresh
         let has_active_swap = state
@@ -426,15 +406,15 @@ impl InMemoryTreeStore {
             }
         }
 
-        // Re-add recently-added leaves from old state that aren't in refresh data.
-        // Uses grace_period to handle race conditions between add and refresh.
+        // Re-add leaves from old state that were added after the refresh started
+        // and aren't in the refresh data (they weren't available when refresh collected data).
         let mut preserved_count = 0u32;
         for (id, leaf) in old_leaves {
-            let is_recent = state
+            let added_after_refresh = state
                 .leaf_added_at
                 .get(&id)
-                .is_some_and(|added_at| *added_at + grace_period >= refresh_started_at);
-            if is_recent
+                .is_some_and(|added_at| *added_at >= refresh_started_at);
+            if added_after_refresh
                 && !state.leaves.contains_key(&id)
                 && !state.missing_operators_leaves.contains_key(&id)
             {
@@ -443,11 +423,11 @@ impl InMemoryTreeStore {
             }
         }
         for (id, leaf) in old_missing {
-            let is_recent = state
+            let added_after_refresh = state
                 .leaf_added_at
                 .get(&id)
-                .is_some_and(|added_at| *added_at + grace_period >= refresh_started_at);
-            if is_recent
+                .is_some_and(|added_at| *added_at >= refresh_started_at);
+            if added_after_refresh
                 && !state.leaves.contains_key(&id)
                 && !state.missing_operators_leaves.contains_key(&id)
             {
@@ -1013,8 +993,8 @@ mod tests {
 
     #[async_test_all]
     async fn test_old_leaves_deleted_by_set_leaves() {
-        // This test uses zero grace period (create_test_store), but the shared
-        // test uses future_refresh_start() which works for any grace period.
+        // The shared test uses future_refresh_start() to ensure leaves added
+        // "now" are treated as old relative to the refresh start.
         shared_tests::test_old_leaves_deleted_by_set_leaves(&InMemoryTreeStore::new()).await;
     }
 
@@ -1058,5 +1038,67 @@ mod tests {
     async fn test_payment_reservation_does_not_block_set_leaves() {
         shared_tests::test_payment_reservation_does_not_block_set_leaves(&InMemoryTreeStore::new())
             .await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_basic() {
+        shared_tests::test_update_reservation_basic(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_nonexistent() {
+        shared_tests::test_update_reservation_nonexistent(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_clears_pending() {
+        shared_tests::test_update_reservation_clears_pending(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_preserves_purpose() {
+        shared_tests::test_update_reservation_preserves_purpose(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_leaves_not_available() {
+        shared_tests::test_get_leaves_not_available(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_leaves_missing_operators_filters_spent() {
+        shared_tests::test_get_leaves_missing_operators_filters_spent(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_missing_operators_replaced_on_set_leaves() {
+        shared_tests::test_missing_operators_replaced_on_set_leaves(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_with_none_target_reserves_all() {
+        shared_tests::test_reserve_with_none_target_reserves_all(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_skips_non_available_leaves() {
+        shared_tests::test_reserve_skips_non_available_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_add_leaves_empty_slice() {
+        shared_tests::test_add_leaves_empty_slice(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_full_payment_cycle() {
+        shared_tests::test_full_payment_cycle(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_replaces_fully() {
+        shared_tests::test_set_leaves_replaces_fully(&InMemoryTreeStore::new()).await;
     }
 }

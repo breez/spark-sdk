@@ -36,12 +36,6 @@ const TREE_STORE_WRITE_LOCK_KEY: i64 = 0x7472_6565_5354_4f52; // "treeTOR" as he
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
 const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
-/// Grace period in milliseconds for preserving recently added leaves during refresh.
-/// Leaves added within this period before `refresh_started_at` are preserved
-/// to handle race conditions where a refresh starts right after a leaf is added
-/// but before operators have synced the new leaf data.
-const LEAF_PRESERVATION_GRACE_PERIOD_MS: i64 = 5_000;
-
 /// Threshold in milliseconds for cleaning up spent leaf markers.
 /// Spent markers are kept in the database for this duration to support multiple
 /// SDK instances sharing the same postgres database. During `set_leaves`, spent
@@ -223,18 +217,11 @@ impl TreeStore for PostgresTreeStore {
             rows.iter().map(|r| r.get(0)).collect()
         };
 
-        // Delete non-reserved leaves that were added BEFORE refresh started (minus grace period).
-        // Leaves added within the grace period before refresh_started_at are preserved
-        // to handle race conditions where a refresh starts right after a leaf is added
-        // but before operators have synced the new leaf data.
+        // Delete non-reserved leaves that were added BEFORE refresh started.
         // The advisory lock acquired at the start of this transaction prevents deadlocks.
-        let grace_period = chrono::Duration::milliseconds(LEAF_PRESERVATION_GRACE_PERIOD_MS);
-        let cutoff_timestamp = refresh_timestamp
-            .checked_sub_signed(grace_period)
-            .unwrap_or(refresh_timestamp);
         tx.execute(
             "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < $1",
-            &[&cutoff_timestamp],
+            &[&refresh_timestamp],
         )
         .await
         .map_err(map_err)?;
@@ -1253,6 +1240,78 @@ mod tests {
     async fn test_payment_reservation_does_not_block_set_leaves() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_payment_reservation_does_not_block_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_basic() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_basic(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_nonexistent() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_clears_pending() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_clears_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_preserves_purpose() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_preserves_purpose(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_not_available() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_not_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_missing_operators_filters_spent() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_missing_operators_filters_spent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_missing_operators_replaced_on_set_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_missing_operators_replaced_on_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_with_none_target_reserves_all() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_with_none_target_reserves_all(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_skips_non_available_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_skips_non_available_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_add_leaves_empty_slice() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_empty_slice(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_full_payment_cycle() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_full_payment_cycle(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_replaces_fully() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_replaces_fully(&fixture.store).await;
     }
 
     // ==================== Postgres-Specific Tests ====================
