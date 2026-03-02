@@ -1286,11 +1286,7 @@ pub async fn test_update_reservation_basic(store: &dyn TreeStore) {
             .any(|l| l.id.to_string() == "swap_output")
     );
     // Change leaf should be available
-    assert!(
-        all.available
-            .iter()
-            .any(|l| l.id.to_string() == "change")
-    );
+    assert!(all.available.iter().any(|l| l.id.to_string() == "change"));
     assert_eq!(all.available_balance(), 500);
 }
 
@@ -1417,11 +1413,7 @@ pub async fn test_get_leaves_not_available(store: &dyn TreeStore) {
             .any(|l| l.id.to_string() == "locked")
     );
     assert_eq!(all.available.len(), 1);
-    assert!(
-        all.available
-            .iter()
-            .any(|l| l.id.to_string() == "avail")
-    );
+    assert!(all.available.iter().any(|l| l.id.to_string() == "avail"));
     // available_balance excludes locked leaf
     assert_eq!(all.available_balance(), 200);
 }

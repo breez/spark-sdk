@@ -160,10 +160,7 @@ impl InMemoryTreeStore {
     ///   Additional reservation attempts will wait up to `reservation_timeout`.
     /// * `reservation_timeout` - How long to wait for a reservation permit before
     ///   returning [`TreeServiceError::ResourceBusy`].
-    pub fn with_config(
-        max_concurrent_reservations: usize,
-        reservation_timeout: Duration,
-    ) -> Self {
+    pub fn with_config(max_concurrent_reservations: usize, reservation_timeout: Duration) -> Self {
         // Bounded channel provides backpressure under extreme load
         let (command_tx, command_rx) = mpsc::channel(1024);
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
