@@ -130,7 +130,10 @@ impl TreeStore for PostgresTreeStore {
             let purpose: Option<String> = row.get("purpose");
 
             if let Some(purpose_str) = purpose {
-                match Self::purpose_from_string(&purpose_str)? {
+                match purpose_str
+                    .parse::<ReservationPurpose>()
+                    .map_err(TreeServiceError::Generic)?
+                {
                     ReservationPurpose::Payment => reserved_for_payment.push(node),
                     ReservationPurpose::Swap => reserved_for_swap.push(node),
                 }
@@ -691,13 +694,13 @@ impl PostgresTreeStore {
         }
 
         let mut ids: Vec<String> = Vec::with_capacity(filtered.len());
-        let mut statuses: Vec<&str> = Vec::with_capacity(filtered.len());
+        let mut statuses: Vec<String> = Vec::with_capacity(filtered.len());
         let mut missing_flags: Vec<bool> = Vec::with_capacity(filtered.len());
         let mut data_values: Vec<serde_json::Value> = Vec::with_capacity(filtered.len());
 
         for leaf in filtered {
             ids.push(leaf.id.to_string());
-            statuses.push(Self::status_to_string(leaf.status));
+            statuses.push(leaf.status.to_string());
             missing_flags.push(is_missing_from_operators);
             data_values.push(Self::serialize_node(leaf)?);
         }
@@ -801,44 +804,6 @@ impl PostgresTreeStore {
         Ok(())
     }
 
-    /// Converts `TreeNodeStatus` to string for storage.
-    fn status_to_string(status: TreeNodeStatus) -> &'static str {
-        match status {
-            TreeNodeStatus::Creating => "Creating",
-            TreeNodeStatus::Available => "Available",
-            TreeNodeStatus::FrozenByIssuer => "FrozenByIssuer",
-            TreeNodeStatus::TransferLocked => "TransferLocked",
-            TreeNodeStatus::SplitLocked => "SplitLocked",
-            TreeNodeStatus::Splitted => "Splitted",
-            TreeNodeStatus::Aggregated => "Aggregated",
-            TreeNodeStatus::OnChain => "OnChain",
-            TreeNodeStatus::Exited => "Exited",
-            TreeNodeStatus::AggregateLock => "AggregateLock",
-            TreeNodeStatus::Investigation => "Investigation",
-            TreeNodeStatus::Lost => "Lost",
-            TreeNodeStatus::Reimbursed => "Reimbursed",
-        }
-    }
-
-    /// Converts `ReservationPurpose` to string.
-    fn purpose_to_string(purpose: ReservationPurpose) -> &'static str {
-        match purpose {
-            ReservationPurpose::Payment => "Payment",
-            ReservationPurpose::Swap => "Swap",
-        }
-    }
-
-    /// Parses `ReservationPurpose` from string.
-    fn purpose_from_string(s: &str) -> Result<ReservationPurpose, TreeServiceError> {
-        match s {
-            "Payment" => Ok(ReservationPurpose::Payment),
-            "Swap" => Ok(ReservationPurpose::Swap),
-            _ => Err(TreeServiceError::Generic(format!(
-                "Unknown reservation purpose: {s}"
-            ))),
-        }
-    }
-
     /// Acquires an exclusive advisory lock for write operations.
     /// This serializes all tree store writes to prevent deadlocks.
     /// The lock is automatically released when the transaction commits or rolls back.
@@ -921,7 +886,7 @@ impl PostgresTreeStore {
 
         tx.execute(
             "INSERT INTO tree_reservations (id, purpose, pending_change_amount) VALUES ($1, $2, $3)",
-            &[&reservation_id, &Self::purpose_to_string(purpose), &pending_i64],
+            &[&reservation_id, &purpose.to_string(), &pending_i64],
         )
         .await
         .map_err(map_err)?;

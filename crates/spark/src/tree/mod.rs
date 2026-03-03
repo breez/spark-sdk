@@ -92,6 +92,26 @@ pub enum TreeNodeStatus {
     Reimbursed,
 }
 
+impl std::fmt::Display for TreeNodeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TreeNodeStatus::Creating => write!(f, "Creating"),
+            TreeNodeStatus::Available => write!(f, "Available"),
+            TreeNodeStatus::FrozenByIssuer => write!(f, "FrozenByIssuer"),
+            TreeNodeStatus::TransferLocked => write!(f, "TransferLocked"),
+            TreeNodeStatus::SplitLocked => write!(f, "SplitLocked"),
+            TreeNodeStatus::Splitted => write!(f, "Splitted"),
+            TreeNodeStatus::Aggregated => write!(f, "Aggregated"),
+            TreeNodeStatus::OnChain => write!(f, "OnChain"),
+            TreeNodeStatus::Exited => write!(f, "Exited"),
+            TreeNodeStatus::AggregateLock => write!(f, "AggregateLock"),
+            TreeNodeStatus::Investigation => write!(f, "Investigation"),
+            TreeNodeStatus::Lost => write!(f, "Lost"),
+            TreeNodeStatus::Reimbursed => write!(f, "Reimbursed"),
+        }
+    }
+}
+
 impl std::str::FromStr for TreeNodeStatus {
     type Err = String;
 
@@ -260,6 +280,27 @@ pub enum ReservationPurpose {
     /// Leaves will be swapped. Included in balance since we will receive
     /// the same amount back. Not removed by set_leaves to ensure consistent balance calculation.
     Swap,
+}
+
+impl std::fmt::Display for ReservationPurpose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReservationPurpose::Payment => write!(f, "Payment"),
+            ReservationPurpose::Swap => write!(f, "Swap"),
+        }
+    }
+}
+
+impl std::str::FromStr for ReservationPurpose {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Payment" => Ok(ReservationPurpose::Payment),
+            "Swap" => Ok(ReservationPurpose::Swap),
+            _ => Err(format!("Unknown ReservationPurpose: {s}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
