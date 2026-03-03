@@ -334,15 +334,14 @@ impl BreezSdk {
                     .await?
                     .into();
 
-                // Use fast fee as worst case
-                let fast_fee_sats = fee_quote.speed_fast.total_fee_sat();
-
-                // For FeesIncluded, also validate the output after fees
+                // For FeesIncluded, validate the output after fees using the best case
+                // (slow/lowest fee). Only reject if even the cheapest option results in dust.
                 if fee_policy == FeePolicy::FeesIncluded {
-                    let output_amount_sats = amount_u64.saturating_sub(fast_fee_sats);
+                    let min_fee_sats = fee_quote.speed_slow.total_fee_sat();
+                    let output_amount_sats = amount_u64.saturating_sub(min_fee_sats);
                     if output_amount_sats < dust_limit_sats {
                         return Err(SdkError::InvalidInput(format!(
-                            "Amount is below the minimum of {dust_limit_sats} sats required for this address after fees of {fast_fee_sats} sats"
+                            "Amount is below the minimum of {dust_limit_sats} sats required for this address after lowest fees of {min_fee_sats} sats"
                         )));
                     }
                 }
@@ -351,7 +350,9 @@ impl BreezSdk {
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
                     None
                 } else {
-                    let total_amount = amount.saturating_add(u128::from(fast_fee_sats));
+                    // For conversion estimate, use fast fee as worst case
+                    let total_amount =
+                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat()));
                     let conversion_options = self
                         .get_conversion_options_for_payment(
                             request.conversion_options.as_ref(),
