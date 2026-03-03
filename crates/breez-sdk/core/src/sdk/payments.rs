@@ -27,7 +27,7 @@ use crate::{
     },
     utils::{
         payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
-        send_payment_validation::validate_prepare_send_payment_request,
+        send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
 };
@@ -314,6 +314,17 @@ impl BreezSdk {
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
+                // Validate the amount meets the dust limit before making any network calls.
+                // For FeesIncluded the output will be smaller after fees, but if the total
+                // amount is already below dust there's no point fetching a fee quote.
+                let dust_limit_sats = get_dust_limit_sats(&withdrawal_address.address)?;
+                let amount_u64: u64 = amount.try_into()?;
+                if amount_u64 < dust_limit_sats {
+                    return Err(SdkError::InvalidInput(format!(
+                        "Amount is below the minimum of {dust_limit_sats} sats required for this address"
+                    )));
+                }
+
                 let fee_quote: SendOnchainFeeQuote = self
                     .spark_wallet
                     .fetch_coop_exit_fee_quote(
@@ -322,6 +333,18 @@ impl BreezSdk {
                     )
                     .await?
                     .into();
+
+                // For FeesIncluded, validate the output after fees using the best case
+                // (slow/lowest fee). Only reject if even the cheapest option results in dust.
+                if fee_policy == FeePolicy::FeesIncluded {
+                    let min_fee_sats = fee_quote.speed_slow.total_fee_sat();
+                    let output_amount_sats = amount_u64.saturating_sub(min_fee_sats);
+                    if output_amount_sats < dust_limit_sats {
+                        return Err(SdkError::InvalidInput(format!(
+                            "Amount is below the minimum of {dust_limit_sats} sats required for this address after lowest fees of {min_fee_sats} sats"
+                        )));
+                    }
+                }
 
                 // FeesIncluded doesn't support conversion (validated earlier)
                 let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
@@ -1104,6 +1127,14 @@ impl BreezSdk {
         } else {
             request.prepare_response.amount.try_into()?
         };
+
+        // Validate the output amount meets the dust limit for this address type
+        let dust_limit_sats = get_dust_limit_sats(&address.address)?;
+        if amount_sats < dust_limit_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount is below the minimum of {dust_limit_sats} sats required for this address"
+            )));
+        }
 
         let transfer_id = request
             .idempotency_key

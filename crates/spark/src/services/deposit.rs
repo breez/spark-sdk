@@ -327,10 +327,13 @@ impl DepositService {
         let credit_amount_sats = tx_out.value.to_sat().saturating_sub(fee_sats);
         refund_tx.output[0].value = Amount::from_sat(credit_amount_sats);
 
-        if credit_amount_sats == 0 {
-            return Err(ServiceError::Generic(
-                "credit amount must be more than 0 sats".to_string(),
-            ));
+        // Validate the output amount meets the dust limit for this address type
+        let dust_limit = refund_address.script_pubkey().minimal_non_dust();
+        if Amount::from_sat(credit_amount_sats) < dust_limit {
+            return Err(ServiceError::InvalidInput(format!(
+                "Refund amount ({credit_amount_sats} sats) is below the minimum of {} sats required for this address",
+                dust_limit.to_sat()
+            )));
         }
         trace!(
             "Refunding static deposit txid: {txid}, output_index: {output_index}, credit_amount_sats: {credit_amount_sats}, fee_sats: {fee_sats}"

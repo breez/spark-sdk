@@ -75,9 +75,9 @@ pub enum ServiceError {
     #[error("insufficient funds")]
     InsufficientFunds,
 
-    // Cooperative exit related errors
-    #[error("Fee exceeds withdrawal amount")]
-    InvalidFees,
+    // Input validation errors
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 
     // Timelock manager related errors
     #[error("Partial check timelock error")]
