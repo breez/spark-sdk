@@ -14,6 +14,10 @@ on:
         required: false
         type: boolean
         default: false
+      approve-run:
+        description: 'Run ID of a previous dry-run to approve (applies cached diff and creates PR)'
+        required: false
+        type: string
   workflow_run:
     workflows: ["Sync CLI Languages"]
     types: [completed]
@@ -33,14 +37,52 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      actions: read
 
     steps:
+      - name: Validate inputs
+        if: inputs.dry-run == 'true' && inputs.approve-run != ''
+        run: |
+          echo "::error::Cannot use dry-run and approve-run together."
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ── Approve flow ────────────────────────────────────────────────
+      - name: Download dry-run patch
+        if: inputs.approve-run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-swift-patch
+          run-id: ${{ inputs.approve-run }}
+          github-token: ${{ github.token }}
+
+      - name: Apply patch and create PR
+        if: inputs.approve-run != ''
+        run: |
+          if [ ! -s sync-swift.patch ]; then
+            echo "::notice::Patch is empty — no changes to apply."
+            exit 0
+          fi
+          if ! git apply sync-swift.patch; then
+            echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
+            exit 1
+          fi
+          make -C crates/breez-sdk/bindings/examples/cli check-swift
+          git checkout -b claude/sync-swift-cli-$(echo "${{ github.sha }}" | cut -c1-7)
+          git add crates/breez-sdk/bindings/examples/cli/langs/swift/
+          git commit -m "chore: sync Swift CLI with Rust CLI changes (${{ github.sha }})"
+          git push -u origin HEAD
+          gh pr create --title "chore: sync Swift CLI with Rust CLI changes" \
+            --body "Automated sync of Swift CLI from Rust CLI changes in ${{ github.sha }}. Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}" \
+            --base main
+
+      # ── Normal / dry-run flow ───────────────────────────────────────
       - name: Compute diff info
+        if: inputs.approve-run == ''
         id: diff-info
         run: |
           # Determine diff base. Priority:
@@ -80,7 +122,7 @@ jobs:
           fi
 
       - name: Sync Swift CLI
-        if: steps.diff-info.outputs.has_changes == 'true'
+        if: inputs.approve-run == '' && steps.diff-info.outputs.has_changes == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -229,22 +271,38 @@ jobs:
             ### Step 7: No-op check
             If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No Swift CLI changes needed."
 
+      - name: Create dry-run patch
+        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        run: git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/' > sync-swift.patch
+
+      - name: Upload dry-run patch
+        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-swift-patch
+          path: sync-swift.patch
+          retention-days: 7
+
+      # ── Summary ─────────────────────────────────────────────────────
       - name: Summary
         if: always()
         run: |
-          if [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
+          if [ "${{ inputs.approve-run }}" != "" ]; then
+            echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
+          elif [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
             echo "::notice::No Rust CLI changes to sync — Swift CLI is up to date."
           elif [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "### Dry run — Swift CLI sync" >> "$GITHUB_STEP_SUMMARY"
-            if git diff --quiet HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/'; then
-              echo "No Swift CLI changes were needed." >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice::Dry run completed — no changes needed."
-            else
+            if [ -s sync-swift.patch ]; then
               echo '```diff' >> "$GITHUB_STEP_SUMMARY"
-              git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/' >> "$GITHUB_STEP_SUMMARY"
+              cat sync-swift.patch >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice::Dry run completed — no PR created. See job summary for diff."
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "To approve, re-run this workflow with \`approve-run\` set to \`${{ github.run_id }}\`." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "No Swift CLI changes were needed." >> "$GITHUB_STEP_SUMMARY"
             fi
+            echo "::notice::Dry run completed — no PR created. See job summary for diff."
           else
             echo "::notice::Claude Code sync completed — check for new PR"
           fi
