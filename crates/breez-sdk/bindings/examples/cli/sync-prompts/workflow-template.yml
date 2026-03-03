@@ -9,6 +9,11 @@ on:
         description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
         required: false
         type: string
+      dry-run:
+        description: 'Run the sync without creating a PR (test mode)'
+        required: false
+        type: boolean
+        default: false
   workflow_run:
     workflows: ["Sync CLI Languages"]
     types: [completed]

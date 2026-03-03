@@ -9,6 +9,11 @@ on:
         description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
         required: false
         type: string
+      dry-run:
+        description: 'Run the sync without creating a PR (test mode)'
+        required: false
+        type: boolean
+        default: false
   workflow_run:
     workflows: ["Sync CLI Languages"]
     types: [completed]
@@ -206,7 +211,8 @@ jobs:
             ### Step 6: Verify and create PR
             After making changes:
             1. Read back each modified file to verify correctness
-            2. Create a branch and PR:
+            2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Instead, output a summary of all changes you made (files modified, what changed in each) and end with: "Dry run complete — no PR created."
+            3. **Otherwise**, create a branch and PR:
             ```bash
             git checkout -b claude/sync-dart-cli-$(echo "${{ github.sha }}" | cut -c1-7)
             git add crates/breez-sdk/bindings/examples/cli/langs/dart/
