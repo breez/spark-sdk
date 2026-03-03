@@ -215,16 +215,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              ,      MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) AS updated_at
              ,      i.preimage
              FROM (
-                 SELECT payment_hash FROM invoices WHERE user_pubkey = $1
+                 SELECT payment_hash FROM invoices WHERE user_pubkey = $1 AND updated_at > $4
                  UNION
-                 SELECT payment_hash FROM zaps WHERE user_pubkey = $1
+                 SELECT payment_hash FROM zaps WHERE user_pubkey = $1 AND updated_at > $4
                  UNION
-                 SELECT payment_hash FROM sender_comments WHERE user_pubkey = $1
+                 SELECT payment_hash FROM sender_comments WHERE user_pubkey = $1 AND updated_at > $4
              ) ph
              LEFT JOIN invoices i ON ph.payment_hash = i.payment_hash
              LEFT JOIN zaps z ON ph.payment_hash = z.payment_hash
              LEFT JOIN sender_comments sc ON ph.payment_hash = sc.payment_hash
-             WHERE MAX(COALESCE(z.updated_at, 0), COALESCE(sc.updated_at, 0), COALESCE(i.updated_at, 0)) > $4
              ORDER BY updated_at ASC
              LIMIT $3 OFFSET $2",
         )
