@@ -14,7 +14,8 @@ use crate::{
     persist::{ObjectCacheRepository, UpdateDepositPayload},
     sync::SparkSyncService,
     utils::{
-        deposit_chain_syncer::DepositChainSyncer, run_with_shutdown, utxo_fetcher::DetailedUtxo,
+        deposit_chain_syncer::DepositChainSyncer, payments::get_payment_and_emit_event,
+        run_with_shutdown, utxo_fetcher::DetailedUtxo,
     },
 };
 
@@ -135,9 +136,8 @@ impl BreezSdk {
                     // couldn't process it. Now that the payment is completed, re-trigger.
                     let _ = self.lnurl_preimage_trigger.send(());
 
-                    self.event_emitter
-                        .emit(&SdkEvent::PaymentSucceeded { payment })
-                        .await;
+                    // Fetch the payment to include already stored metadata
+                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
                 }
                 self.sync_coordinator
                     .trigger_sync_no_wait(super::SyncType::WalletState, true)
@@ -154,9 +154,8 @@ impl BreezSdk {
                     // Ensure potential lnurl metadata is synced before emitting the event
                     self.sync_single_lnurl_metadata(&mut payment).await;
 
-                    self.event_emitter
-                        .emit(&SdkEvent::PaymentPending { payment })
-                        .await;
+                    // Fetch the payment to include already stored metadata
+                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
                 }
                 self.sync_coordinator
                     .trigger_sync_no_wait(super::SyncType::WalletState, true)
