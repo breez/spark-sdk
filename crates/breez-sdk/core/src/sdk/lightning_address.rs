@@ -1,12 +1,8 @@
-use breez_sdk_common::sync::{RecordChangeRequest, RecordId};
 use lnurl_models::sanitize_username;
-use tracing::error;
 
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
-    error::SdkError,
-    persist::ObjectCacheRepository,
-    realtime_sync::{LIGHTNING_ADDRESS_DATA_ID, RecordType},
+    error::SdkError, persist::ObjectCacheRepository,
 };
 
 use super::BreezSdk;
@@ -66,7 +62,6 @@ impl BreezSdk {
 
         client.unregister_lightning_address(&params).await?;
         cache.delete_lightning_address().await?;
-        self.push_lightning_address_sync().await;
         Ok(())
     }
 }
@@ -130,27 +125,7 @@ impl BreezSdk {
             username,
         };
         cache.save_lightning_address(&address_info).await?;
-        self.push_lightning_address_sync().await;
         Ok(address_info)
-    }
-
-    async fn push_lightning_address_sync(&self) {
-        let Some(sync_service) = &self.sync_service else {
-            return;
-        };
-        if let Err(e) = sync_service
-            .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(
-                    RecordType::LightningAddress.to_string(),
-                    LIGHTNING_ADDRESS_DATA_ID,
-                ),
-                schema_version: RecordType::LightningAddress.schema_version(),
-                updated_fields: std::collections::HashMap::new(),
-            })
-            .await
-        {
-            error!("Failed to push lightning address sync signal: {e:?}");
-        }
     }
 }
 

@@ -499,7 +499,7 @@ impl SdkBuilder {
         let event_emitter = Arc::new(EventEmitter::new(
             self.config.real_time_sync_server_url.is_some(),
         ));
-        let (storage, sync_signing_client, sync_service) =
+        let (storage, sync_signing_client) =
             if let Some(server_url) = &self.config.real_time_sync_server_url {
                 let result = init_and_start_real_time_sync(RealTimeSyncParams {
                     server_url: server_url.clone(),
@@ -511,13 +511,9 @@ impl SdkBuilder {
                     lnurl_server_client: lnurl_server_client.clone(),
                 })
                 .await?;
-                (
-                    result.storage,
-                    Some(result.signing_client),
-                    Some(result.sync_service),
-                )
+                (result.storage, Some(result.signing_client))
             } else {
-                (storage, None, None)
+                (storage, None)
             };
 
         // Create the MoonPay provider for buying Bitcoin
@@ -538,7 +534,6 @@ impl SdkBuilder {
             event_emitter,
             sync_signing_client,
             buy_bitcoin_provider,
-            sync_service,
         })?;
         debug!("Initialized and started breez sdk.");
 

@@ -18,7 +18,7 @@ use crate::{
     PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
-    persist::{ObjectCacheRepository, StorageListPaymentsRequest},
+    persist::{LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 
-pub(crate) enum RecordType {
+enum RecordType {
     PaymentMetadata,
     Contact,
     LightningAddress,
@@ -34,7 +34,7 @@ pub(crate) enum RecordType {
 
 impl RecordType {
     #[allow(clippy::match_same_arms)] // Arms will diverge as types evolve independently.
-    pub(crate) const fn schema_version(&self) -> SchemaVersion {
+    const fn schema_version(&self) -> SchemaVersion {
         match self {
             Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
             Self::Contact => SchemaVersion::new(1, 0, 0),
@@ -67,7 +67,7 @@ impl FromStr for RecordType {
     }
 }
 
-pub(crate) const LIGHTNING_ADDRESS_DATA_ID: &str = "current";
+const LIGHTNING_ADDRESS_DATA_ID: &str = "current";
 const DELETED_AT_FIELD: &str = "deleted_at";
 
 /// Internal sync model for contacts
@@ -355,6 +355,23 @@ impl SyncedStorage {
         Ok(())
     }
 
+    async fn push_lightning_address_sync(&self) {
+        if let Err(e) = self
+            .sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(
+                    RecordType::LightningAddress.to_string(),
+                    LIGHTNING_ADDRESS_DATA_ID,
+                ),
+                schema_version: RecordType::LightningAddress.schema_version(),
+                updated_fields: HashMap::new(),
+            })
+            .await
+        {
+            error!("Failed to push lightning address sync signal: {e:?}");
+        }
+    }
+
     async fn handle_lightning_address_change(&self) -> RecordOutcome {
         let Some(client) = &self.lnurl_server_client else {
             return RecordOutcome::Completed;
@@ -406,12 +423,18 @@ impl SyncedStorage {
 #[macros::async_trait]
 impl Storage for SyncedStorage {
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
+        if key == LIGHTNING_ADDRESS_KEY {
+            self.push_lightning_address_sync().await;
+        }
         self.inner.delete_cached_item(key).await
     }
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         self.inner.get_cached_item(key).await
     }
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
+        if key == LIGHTNING_ADDRESS_KEY {
+            self.push_lightning_address_sync().await;
+        }
         self.inner.set_cached_item(key, value).await
     }
     async fn list_payments(

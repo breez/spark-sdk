@@ -22,7 +22,6 @@ pub struct RealTimeSyncParams {
 pub struct RealTimeSyncResult {
     pub storage: Arc<dyn Storage>,
     pub signing_client: SigningClient,
-    pub sync_service: Arc<SyncService>,
 }
 
 pub async fn init_and_start_real_time_sync(
@@ -66,6 +65,5 @@ pub async fn init_and_start_real_time_sync(
     Ok(RealTimeSyncResult {
         storage,
         signing_client,
-        sync_service,
     })
 }
