@@ -1,12 +1,10 @@
 use breez_sdk_common::sync::{RecordChangeRequest, RecordId};
 use lnurl_models::sanitize_username;
-use tokio_with_wasm::alias as tokio;
 use tracing::error;
 
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
     error::SdkError,
-    events::SdkEvent,
     persist::ObjectCacheRepository,
     realtime_sync::{LIGHTNING_ADDRESS_DATA_ID, RecordType},
 };
@@ -153,51 +151,6 @@ impl BreezSdk {
         {
             error!("Failed to push lightning address sync signal: {e:?}");
         }
-    }
-
-    pub(super) fn spawn_lightning_address_sync_listener(&self) {
-        let sdk = self.clone();
-        let mut shutdown = sdk.shutdown_sender.subscribe();
-        let mut trigger = sdk.lightning_address_trigger.subscribe();
-
-        tokio::spawn(async move {
-            loop {
-                let triggered = tokio::select! {
-                    _ = shutdown.changed() => return,
-                    result = trigger.recv() => {
-                        match result {
-                            // Lagged means we missed messages; still need to recover.
-                            Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                        }
-                    }
-                };
-
-                if triggered {
-                    let cache = ObjectCacheRepository::new(sdk.storage.clone());
-                    let old = cache
-                        .fetch_lightning_address()
-                        .await
-                        .ok()
-                        .flatten()
-                        .flatten();
-                    match sdk.recover_lightning_address().await {
-                        Ok(new) => {
-                            if old != new {
-                                sdk.event_emitter
-                                    .emit(&SdkEvent::LightningAddressChanged {
-                                        lightning_address: new,
-                                    })
-                                    .await;
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to recover lightning address after sync trigger: {e:?}");
-                        }
-                    }
-                }
-            }
-        });
     }
 }
 

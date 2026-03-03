@@ -499,7 +499,6 @@ impl SdkBuilder {
         let event_emitter = Arc::new(EventEmitter::new(
             self.config.real_time_sync_server_url.is_some(),
         ));
-        let (la_trigger_tx, _) = tokio::sync::broadcast::channel::<()>(16);
         let (storage, sync_signing_client, sync_service) =
             if let Some(server_url) = &self.config.real_time_sync_server_url {
                 let result = init_and_start_real_time_sync(RealTimeSyncParams {
@@ -509,7 +508,7 @@ impl SdkBuilder {
                     storage: Arc::clone(&storage),
                     shutdown_receiver: shutdown_sender.subscribe(),
                     event_emitter: Arc::clone(&event_emitter),
-                    lightning_address_trigger: la_trigger_tx.clone(),
+                    lnurl_server_client: lnurl_server_client.clone(),
                 })
                 .await?;
                 (
@@ -540,7 +539,6 @@ impl SdkBuilder {
             sync_signing_client,
             buy_bitcoin_provider,
             sync_service,
-            lightning_address_trigger: la_trigger_tx,
         })?;
         debug!("Initialized and started breez sdk.");
 

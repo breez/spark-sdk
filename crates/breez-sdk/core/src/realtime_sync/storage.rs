@@ -16,8 +16,9 @@ use tracing::{Instrument, debug, error, warn};
 use crate::{
     Contact, DepositInfo, EventEmitter, ListContactsRequest, Payment, PaymentDetails,
     PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
-    events::InternalSyncedEvent,
-    persist::StorageListPaymentsRequest,
+    events::{InternalSyncedEvent, SdkEvent},
+    lnurl::LnurlServerClient,
+    persist::{ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 use serde::{Deserialize, Serialize};
@@ -86,7 +87,7 @@ pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
     event_emitter: Arc<EventEmitter>,
-    lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
+    lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
 #[macros::async_trait]
@@ -136,13 +137,13 @@ impl SyncedStorage {
         inner: Arc<dyn Storage>,
         sync_service: Arc<SyncService>,
         event_emitter: Arc<EventEmitter>,
-        lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
+        lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     ) -> Self {
         SyncedStorage {
             inner,
             sync_service,
             event_emitter,
-            lightning_address_trigger,
+            lnurl_server_client,
         }
     }
 
@@ -268,8 +269,7 @@ impl SyncedStorage {
                     .await
             }
             RecordType::LightningAddress => {
-                let _ = self.lightning_address_trigger.send(());
-                Ok(())
+                return Ok(self.handle_lightning_address_change().await);
             }
         }?;
         Ok(RecordOutcome::Completed)
@@ -353,6 +353,53 @@ impl SyncedStorage {
         self.inner.insert_contact(contact).await?;
 
         Ok(())
+    }
+
+    async fn handle_lightning_address_change(&self) -> RecordOutcome {
+        let Some(client) = &self.lnurl_server_client else {
+            return RecordOutcome::Completed;
+        };
+
+        let cache = ObjectCacheRepository::new(Arc::clone(&self.inner));
+        let old = cache
+            .fetch_lightning_address()
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+
+        let resp = match client.recover_lightning_address().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("Failed to recover lightning address after sync trigger, deferring: {e:?}");
+                return RecordOutcome::Deferred;
+            }
+        };
+
+        let new = if let Some(resp) = resp {
+            let address_info = resp.into();
+            if let Err(e) = cache.save_lightning_address(&address_info).await {
+                error!("Failed to save recovered lightning address: {e:?}");
+                return RecordOutcome::Deferred;
+            }
+            Some(address_info)
+        } else {
+            if let Err(e) = cache.delete_lightning_address().await {
+                error!("Failed to delete lightning address from cache: {e:?}");
+                return RecordOutcome::Deferred;
+            }
+            None
+        };
+
+        if old != new {
+            self.event_emitter
+                .emit(&SdkEvent::LightningAddressChanged {
+                    lightning_address: new,
+                })
+                .await;
+        }
+
+        RecordOutcome::Completed
     }
 }
 
@@ -578,8 +625,7 @@ mod tests {
         );
         let sync_service = Arc::new(SyncService::new(sync_storage));
         let event_emitter = Arc::new(EventEmitter::new(true));
-        let (la_trigger, _) = tokio::sync::broadcast::channel(16);
-        SyncedStorage::new(storage, sync_service, event_emitter, la_trigger)
+        SyncedStorage::new(storage, sync_service, event_emitter, None)
     }
 
     fn make_incoming_change(

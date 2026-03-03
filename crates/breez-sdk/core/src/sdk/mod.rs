@@ -99,7 +99,6 @@ pub struct BreezSdk {
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
     pub(crate) sync_service: Option<Arc<SyncService>>,
-    pub(crate) lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -116,7 +115,6 @@ pub(crate) struct BreezSdkParams {
     pub sync_signing_client: Option<SigningClient>,
     pub buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
     pub sync_service: Option<Arc<SyncService>>,
-    pub lightning_address_trigger: tokio::sync::broadcast::Sender<()>,
 }
 
 pub async fn parse_input(
