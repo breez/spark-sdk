@@ -56,14 +56,22 @@ jobs:
 
           if [ -n "$DIFF_BASE" ]; then
             echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
+            DIFF_STAT=$(git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md')
             {
               echo "diff_summary<<EODIFF"
-              git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'
+              echo "$DIFF_STAT"
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
+            if [ -z "$DIFF_STAT" ]; then
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              echo "No Rust CLI changes since last sync — nothing to do."
+            else
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            fi
           else
             # No language CLI commits yet — first sync
             echo "diff_base=" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             {
               echo "diff_summary<<EODIFF"
               echo "First sync — no previous language CLI commits found. Do a full comparison."
@@ -72,6 +80,7 @@ jobs:
           fi
 
       - name: Sync Swift CLI
+        if: steps.diff-info.outputs.has_changes == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -205,7 +214,7 @@ jobs:
             ### Step 6: Verify and create PR
             After making changes:
             1. Read back each modified file to verify correctness
-            2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Instead, output a summary of all changes you made (files modified, what changed in each) and end with: "Dry run complete — no PR created."
+            2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
             3. **Otherwise**, create a branch and PR:
             ```bash
             git checkout -b claude/sync-swift-cli-$(echo "${{ github.sha }}" | cut -c1-7)
@@ -223,4 +232,19 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "::notice::Claude Code sync completed — check for new PR"
+          if [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
+            echo "::notice::No Rust CLI changes to sync — Swift CLI is up to date."
+          elif [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "### Dry run — Swift CLI sync" >> "$GITHUB_STEP_SUMMARY"
+            if git diff --quiet HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/'; then
+              echo "No Swift CLI changes were needed." >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::Dry run completed — no changes needed."
+            else
+              echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+              git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/' >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice::Dry run completed — no PR created. See job summary for diff."
+            fi
+          else
+            echo "::notice::Claude Code sync completed — check for new PR"
+          fi
