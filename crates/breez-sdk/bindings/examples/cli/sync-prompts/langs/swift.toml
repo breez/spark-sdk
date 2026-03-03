@@ -1,0 +1,112 @@
+# Swift CLI sync prompt configuration
+#
+# This file defines Swift-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "Swift"
+lang_id   = "swift"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/swift/"
+
+# Workflow-level settings
+workflow_name = "Sync Swift CLI from Rust CLI"
+concurrency_group = "sync-swift-cli"
+job_name = "sync-swift-cli"
+step_name = "Sync Swift CLI"
+
+# File layout
+serialization_file = "Serialization.swift"
+issuer_file = "Issuer.swift"
+subgroup_path_pattern = "<Name>.swift"
+cli_binary = "swift run breez-cli"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'print "Not yet supported" and return'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "build and run commands (`make run` instead of `cargo run --`)"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "Swift build instructions, SPM setup, or Swift-specific notes"
+
+# Build check command (syntax validation without SDK installed)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-swift"
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
+Bash(gh pr create:*),Bash(gh pr list:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-swift:*)"""
+
+[file_mapping]
+content = """
+| Rust source | Swift target |
+|-------------|--------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/swift/Sources/BreezCLI/main.swift` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/swift/Sources/BreezCLI/Commands.swift` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/swift/Sources/BreezCLI/Issuer.swift` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/swift/Sources/BreezCLI/Persistence.swift` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/swift/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → Swift kebab-case command names in registry
+- New commands need: `handleXxx` function, `buildCommandRegistry()` entry, `commandNames` entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `FlagParser` with `.get("x", "long-name")`
+- `Option<T>` → optional type (`String?`, `UInt64?`, `BInt?`)
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `FlagParser` with `.has("name")`
+- Positional args → `fp.positional[0]`, `fp.positional[1]`, etc.
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `try await sdk.method(req: MethodRequest(field1: val, field2: val))`
+- Return types: `let result = try await sdk.method(req:)` with `throws`
+- Free functions: `get_spark_status()` → `getSparkStatus()`
+
+**Enums:**
+- `EnumType::Variant { field }` → `.variant(field: value)`
+- `EnumType::Variant` (unit) → `.variant`
+- Pattern match → `switch val { case let .variant(field): ... }`
+- `InputType` variants use `v1:` label: `case let .lnurlPay(v1): ...`
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `readlinePrompt(prompt)` or `readlineWithDefault(prompt, defaultValue:)`
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)`
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `throw` or `print("Error: msg"); return`
+
+**Types:**
+- `u128` → `BInt` (from BigNumber package, re-exported by BreezSdkSpark)
+- `Option<u128>` → `BInt?`
+- `Vec<T>` → `[T]`
+- `String` → `String`
+
+**Swift-specific UniFFI quirks:**
+- Swift UniFFI structs have memberwise initializers with optional fields defaulting to nil
+- Enum associated values use camelCase labels matching Rust field names
+- `InputType` enum cases use `v1:` label for their associated value
+- `ReceivePaymentMethod`, `SendPaymentMethod`, etc. are enums with associated values
+- SDK method parameter labels: `req:` for request objects, `input:` for parse, `reqData:` for lnurlAuth, `listener:` for addEventListener
+
+**Subcommand groups (like Issuer):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- Swift: main REPL checks `cmdName == "group"` and calls `dispatchGroupCommand(args, tokenIssuer:)`
+- Each group has its own file with dispatch function and handler functions
+
+**Serialization:**
+- UniFFI types are NOT Codable; use Mirror-based reflection in Serialization.swift
+- `serialize()` and `printValue()` are global functions available from any file
+
+**BIP39:**
+- Full BIP39 English wordlist + mnemonic generation in BIP39.swift
+- Uses CommonCrypto for SHA-256 and SecRandomCopyBytes for entropy
+"""

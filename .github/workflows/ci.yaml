@@ -201,6 +201,21 @@ jobs:
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-go
 
+  cli-swift:
+    name: CLI static analysis (swift)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Swift CLI
+        working-directory: crates/breez-sdk/bindings/examples/cli
+        run: make check-swift
+
   docs:
     name: Docs
     uses: ./.github/workflows/docs-ci.yml
