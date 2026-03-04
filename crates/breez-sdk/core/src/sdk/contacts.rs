@@ -80,6 +80,9 @@ impl BreezSdk {
     ///
     /// Success or an error
     pub async fn delete_contact(&self, id: String) -> Result<(), SdkError> {
+        // Validate contact exists
+        self.storage.get_contact(id.clone()).await?;
+
         self.storage.delete_contact(id).await?;
         Ok(())
     }
