@@ -32,7 +32,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -328,6 +328,8 @@ jobs:
               echo '```' >> "$GITHUB_STEP_SUMMARY"
               echo "" >> "$GITHUB_STEP_SUMMARY"
               echo "To approve, re-run this workflow with \`approve-run\` set to \`${{ github.run_id }}\`." >> "$GITHUB_STEP_SUMMARY"
+            elif [ -f sync-findings.md ]; then
+              echo "::warning::Changes were made but the run was cancelled before the patch could be captured." >> "$GITHUB_STEP_SUMMARY"
             else
               echo "No Python CLI changes were needed." >> "$GITHUB_STEP_SUMMARY"
             fi
