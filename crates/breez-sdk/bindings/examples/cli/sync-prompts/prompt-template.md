@@ -58,7 +58,8 @@ If any check fails, fix the errors before proceeding.
 ### Step 6: Verify and create PR
 After making changes:
 1. Read back each modified file to verify correctness
-2. Create a branch and PR:
+2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
+3. **Otherwise**, create a branch and PR:
 ```bash
 git checkout -b claude/sync-{{LANG_ID}}-cli-$(echo "${{ github.sha }}" | cut -c1-7)
 git add {{TARGET_DIR}}

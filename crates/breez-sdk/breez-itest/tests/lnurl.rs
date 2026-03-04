@@ -13,15 +13,22 @@ use tracing::{Instrument, debug, info};
 use warp::Filter;
 
 // ---------------------
-// Fixtures
+// Setup helpers
 // ---------------------
 
-/// Fixture: Lnurl service for LNURL testing
-#[fixture]
-async fn lnurl_fixture() -> LnurlFixture {
-    LnurlFixture::new()
-        .await
-        .expect("Failed to start Lnurl service")
+/// Start an LNURL server fixture.
+/// When `use_postgres` is true the server runs against a PostgreSQL
+/// testcontainer; otherwise it uses in-memory SQLite.
+async fn setup_lnurl(use_postgres: bool) -> LnurlFixture {
+    if use_postgres {
+        LnurlFixture::new_with_postgres()
+            .await
+            .expect("Failed to start Lnurl service with PostgreSQL")
+    } else {
+        LnurlFixture::new()
+            .await
+            .expect("Failed to start Lnurl service")
+    }
 }
 
 /// Fixture: Alice SDK for LNURL testing (sender)
@@ -54,11 +61,12 @@ async fn alice_sdk() -> Result<SdkInstance> {
     .await
 }
 
-/// Fixture: Bob SDK with Lnurl configured (receiver)
-#[fixture]
-async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
+/// Set up Bob SDK with an LNURL server (receiver).
+/// When `use_postgres` is true the LNURL server runs against a PostgreSQL
+/// testcontainer; otherwise it uses in-memory SQLite.
+async fn setup_bob(use_postgres: bool) -> Result<SdkInstance> {
     async {
-        let lnurl = Arc::new(lnurl_fixture.await);
+        let lnurl = Arc::new(setup_lnurl(use_postgres).await);
         let lnurl_domain = lnurl.http_url().to_string();
 
         let temp_dir = TempDir::new("breez-sdk-bob-lnurl")?;
@@ -95,11 +103,13 @@ async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
 
 /// Test registering a Lightning address
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_01_register_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_01_register_lightning_address(#[case] use_postgres: bool) -> Result<()> {
     info!("=== Starting test_01_register_lightning_address ===");
 
-    let bob = bob_sdk.await?;
+    let bob = setup_bob(use_postgres).await?;
     let username = "bobtest";
 
     // Register a Lightning address for Bob
@@ -129,13 +139,13 @@ async fn test_01_register_lightning_address(#[future] bob_sdk: Result<SdkInstanc
 
 /// Test checking Lightning address availability
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_02_check_lightning_address_available(
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_02_check_lightning_address_available(#[case] use_postgres: bool) -> Result<()> {
     info!("=== Starting test_02_check_lightning_address_available ===");
 
-    let bob = bob_sdk.await?;
+    let bob = setup_bob(use_postgres).await?;
 
     // Test available username
     let available_response = bob
@@ -173,11 +183,13 @@ async fn test_02_check_lightning_address_available(
 
 /// Test getting Lightning address
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_03_get_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_03_get_lightning_address(#[case] use_postgres: bool) -> Result<()> {
     info!("=== Starting test_03_get_lightning_address ===");
 
-    let bob = bob_sdk.await?;
+    let bob = setup_bob(use_postgres).await?;
     let username = "bobgettest";
     let description = "Bob's get test Lightning address";
 
@@ -219,11 +231,13 @@ async fn test_03_get_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -
 
 /// Test deleting a Lightning address
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_04_delete_lightning_address(#[future] bob_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_04_delete_lightning_address(#[case] use_postgres: bool) -> Result<()> {
     info!("=== Starting test_04_delete_lightning_address ===");
 
-    let bob = bob_sdk.await?;
+    let bob = setup_bob(use_postgres).await?;
     let username = "bobdeletetest";
 
     // Register an address first
@@ -270,15 +284,18 @@ async fn test_04_delete_lightning_address(#[future] bob_sdk: Result<SdkInstance>
 
 /// Test LNURL payments between Alice and Bob
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_05_lnurl_payment_flow(
     #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+
+    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_05_lnurl_payment_flow ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut bob = setup_bob(use_postgres).await?;
 
     let username = "bobpayment";
     let description = "Bob's payment test Lightning address";
@@ -437,15 +454,17 @@ async fn start_nostr_relay() -> Result<u16> {
 /// Alice sends a zap to Bob's lightning address
 /// Verify Bob creates and publishes a zap receipt
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_06_client_side_zap_receipt(
-    #[future] lnurl_fixture: LnurlFixture,
     #[future] alice_sdk: Result<SdkInstance>,
+    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_06_client_side_zap_receipt ===");
 
     // Setup Bob with private mode enabled
-    let lnurl = Arc::new(lnurl_fixture.await);
+    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
     let lnurl_domain = lnurl.http_url().to_string();
 
     let mut bob = async {
@@ -774,15 +793,18 @@ fn percent_encode(input: &str) -> Cow<'_, str> {
 
 /// Test LNURL full balance payment - sends entire balance via LNURL
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_07_lnurl_send_all_payment(
     #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+
+    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_07_lnurl_send_all_payment ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut bob = setup_bob(use_postgres).await?;
 
     let username = "bobfullbalance";
     let description = "Bob's full balance test Lightning address";
@@ -911,15 +933,18 @@ async fn test_07_lnurl_send_all_payment(
 /// - fee(balance) > fee(balance - fee(balance))
 /// - The SDK must overpay the fee to fully spend the balance
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_08_lnurl_send_all_with_fee_overpayment(
     #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+
+    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_08_lnurl_send_all_with_fee_overpayment ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut bob = setup_bob(use_postgres).await?;
 
     let username = "boboverpay";
     let description = "Bob's overpayment test Lightning address";
@@ -1227,11 +1252,13 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
 
 /// Test that the invoice expiry query parameter is passed through to the generated invoice
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
-async fn test_09_invoice_expiry_parameter(#[future] bob_sdk: Result<SdkInstance>) -> Result<()> {
+async fn test_09_invoice_expiry_parameter(#[case] use_postgres: bool) -> Result<()> {
     info!("=== Starting test_09_invoice_expiry_parameter ===");
 
-    let bob = bob_sdk.await?;
+    let bob = setup_bob(use_postgres).await?;
     let username = "bobexpiry";
 
     // Register a Lightning address for Bob
@@ -1331,15 +1358,18 @@ async fn test_09_invoice_expiry_parameter(#[future] bob_sdk: Result<SdkInstance>
 /// 2. Before payment completed: verify returns settled=false
 /// 3. After payment completed: verify returns settled=true with preimage
 #[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
 #[test_log::test(tokio::test)]
 async fn test_10_lud21_verify(
     #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
+
+    #[case] use_postgres: bool,
 ) -> Result<()> {
     info!("=== Starting test_10_lud21_verify ===");
 
     let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
+    let mut bob = setup_bob(use_postgres).await?;
 
     let username = "bobverify";
     let description = "Bob's LUD-21 verify test Lightning address";

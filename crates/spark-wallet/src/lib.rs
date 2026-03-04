@@ -19,9 +19,9 @@ pub use spark::{
         BURN_PUBLIC_KEY, CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LeafOptimizationOptions,
         LightningSendPayment, LightningSendStatus, OptimizationEvent, OptimizationProgress,
-        Preimage, PreimageRequestStatus, ReceiverTokenOutput, TokenInputs, TokenTransaction,
-        TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
-        TransferStatus, TransferTokenOutput, TransferType, Utxo,
+        Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError, TokenInputs,
+        TokenTransaction, TokenTransactionStatus, TransferId, TransferObserver,
+        TransferObserverError, TransferStatus, TransferTokenOutput, TransferType, Utxo,
     },
     session_manager::*,
     signer::{

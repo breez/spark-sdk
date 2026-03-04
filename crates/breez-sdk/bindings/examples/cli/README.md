@@ -15,8 +15,9 @@ When a change is made to the Rust CLI and merged to `main`, the [sync-cli-langs]
 | [Python](langs/python/) | `langs/python/` | Active |
 | [Go](langs/go/) | `langs/go/` | Active |
 | [Dart](langs/dart/) | `langs/dart/` | Active |
+| [Swift](langs/swift/) | `langs/swift/` | Active |
 
-More languages (Swift, Kotlin, WASM, React Native, C#) will be added over time.
+More languages (Kotlin, WASM, React Native, C#) will be added over time.
 
 ## Sync Prompts
 

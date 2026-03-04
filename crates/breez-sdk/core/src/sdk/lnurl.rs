@@ -222,6 +222,7 @@ impl BreezSdk {
             )
             .await?;
 
+        // Emit the payment with metadata already included
         self.event_emitter
             .emit(&SdkEvent::from_payment(payment.clone()))
             .await;

@@ -166,6 +166,9 @@ impl From<SparkWalletError> for SdkError {
     fn from(e: SparkWalletError) -> Self {
         match e {
             SparkWalletError::InsufficientFunds => SdkError::InsufficientFunds,
+            SparkWalletError::ServiceError(spark_wallet::ServiceError::InvalidInput(msg)) => {
+                SdkError::InvalidInput(msg)
+            }
             _ => SdkError::SparkError(e.to_string()),
         }
     }
