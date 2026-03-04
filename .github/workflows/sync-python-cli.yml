@@ -144,17 +144,31 @@ jobs:
             If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
             The diff is a hint for what changed recently, but it may not reveal all differences.
 
-            **Always read the current Rust CLI source files and compare them against the Python CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and compare them carefully — do not skim or summarize. For each file pair, explicitly list every difference you find before deciding whether changes are needed. Categories to check:
-            - **SDK API calls**: function names, request types, builder patterns, method signatures
-            - **CLI flags/options**: names, types, defaults, short aliases
-            - **Command handlers**: logic, control flow, error handling
-            - **Imports**: removed or renamed SDK symbols
+            **Always read the current Rust CLI source files and compare them against the Python CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and perform this comparison for each pair:
 
-            **Critical: do NOT dismiss differences as "expected language variations."** Only pure syntax differences are expected (e.g., `.await` vs `await`, `snake_case` vs `camelCase`). If the Rust and Python CLIs call different SDK functions, use different initialization patterns, pass different arguments, or have different control flow — that is a real divergence that must be reported and fixed. When in doubt, treat it as a real difference.
+            #### 1a. Extract SDK calls
+            For each file pair, list every SDK/builder method call in both versions:
+            - Rust: every call on `sdk`, `sdk_builder`, `config`, or any SDK type
+            - Python: every corresponding call on `sdk`, `builder`, `config`, or any SDK type
 
-            Only after listing all differences should you decide which ones to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but 'print a "not yet supported" message in the handler' and leave a comment explaining why.
+            #### 1b. Compare call-by-call
+            For each SDK call in the Rust file, find the corresponding call in the Python file. Flag any of these as a **divergence**:
+            - Different function name (e.g., `with_postgres_storage()` vs `create_postgres_storage()`)
+            - Different arguments or parameters
+            - Extra steps in one version that don't exist in the other (e.g., two-step init vs one-step)
+            - Missing calls — an SDK call in Rust with no equivalent in Python
 
-            Also check the Python SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the Python CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
+            #### 1c. Compare CLI flags and commands
+            - List every CLI flag/option in both versions and flag any missing or mismatched ones
+            - List every command/subcommand and flag any missing ones
+
+            #### 1d. Verify against snippets
+            For every divergence found, check the Python SDK snippets at `docs/breez-sdk/snippets/` to determine the correct API. The snippets are always up-to-date — if the Rust CLI uses a function, assume it exists in the Python SDK unless the snippets prove otherwise.
+
+            **Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_storage()` and the Python CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
+
+            Only after completing 1a–1d should you decide which divergences to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but 'print a "not yet supported" message in the handler' and leave a comment explaining why.
+
 
             ### Step 2: File mapping
 
