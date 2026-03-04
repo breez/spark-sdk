@@ -73,7 +73,6 @@ jobs:
             echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
             exit 1
           fi
-          make -C crates/breez-sdk/bindings/examples/cli check-swift
           BRANCH="claude/sync-swift-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -81,8 +80,13 @@ jobs:
           git add crates/breez-sdk/bindings/examples/cli/langs/swift/
           git commit -m "chore: sync Swift CLI with Rust CLI changes (${{ github.sha }})"
           git push --force-with-lease -u origin HEAD
+          BODY="Automated sync of Swift CLI from Rust CLI changes in ${{ github.sha }}."
+          BODY+=$'\n'"Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}"
+          if [ -f sync-findings.md ]; then
+            BODY+=$'\n\n'"$(cat sync-findings.md)"
+          fi
           gh pr create --title "chore: sync Swift CLI with Rust CLI changes" \
-            --body "Automated sync of Swift CLI from Rust CLI changes in ${{ github.sha }}. Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}" \
+            --body "$BODY" \
             --base main
 
       - name: Cleanup branch on approve failure
@@ -306,14 +310,18 @@ jobs:
 
       - name: Create dry-run patch
         if: inputs.approve-run == '' && inputs.dry-run
-        run: git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/' > sync-swift.patch
+        run: |
+          git add -N 'crates/breez-sdk/bindings/examples/cli/langs/swift/'
+          git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/swift/' > sync-swift.patch
 
-      - name: Upload dry-run patch
+      - name: Upload dry-run artifacts
         if: inputs.approve-run == '' && inputs.dry-run
         uses: actions/upload-artifact@v4
         with:
           name: sync-swift-patch
-          path: sync-swift.patch
+          path: |
+            sync-swift.patch
+            sync-findings.md
           retention-days: 7
 
       - name: Upload Claude log
