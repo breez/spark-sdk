@@ -1749,7 +1749,9 @@ async fn claim_pending_transfers(
     for (transfer, result) in claim_results {
         let is_already_claimed = matches!(
             &result,
-            Err(SparkWalletError::ServiceError(ServiceError::TransferAlreadyClaimed))
+            Err(SparkWalletError::ServiceError(
+                ServiceError::TransferAlreadyClaimed
+            ))
         );
         if result.is_ok() || is_already_claimed {
             let mut completed = transfer;
