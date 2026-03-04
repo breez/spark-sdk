@@ -5,12 +5,20 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'commands.dart';
+import 'contacts.dart';
 import 'issuer.dart';
 import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
 
-Future<void> runCli({required String dataDir, required String network, int? accountNumber}) async {
+Future<void> runCli({
+  required String dataDir,
+  required String network,
+  int? accountNumber,
+  String? postgresConnectionString,
+  String? stableBalanceTokenIdentifier,
+  int? stableBalanceThreshold,
+}) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
   final dir = Directory(dataDir);
@@ -28,8 +36,24 @@ Future<void> runCli({required String dataDir, required String network, int? acco
     config = config.copyWith(apiKey: apiKey);
   }
 
+  if (stableBalanceTokenIdentifier != null) {
+    config = config.copyWith(
+      stableBalanceConfig: StableBalanceConfig(
+        tokenIdentifier: stableBalanceTokenIdentifier,
+        thresholdSats: stableBalanceThreshold != null ? BigInt.from(stableBalanceThreshold) : null,
+        maxSlippageBps: null,
+        reservedSats: null,
+      ),
+    );
+  }
+
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
   var builder = SdkBuilder(config: config, seed: seed);
+  if (postgresConnectionString != null) {
+    // PostgreSQL storage is not yet available in the Flutter/Dart bindings.
+    // The withPostgresStorage method is not exposed via flutter_rust_bridge.
+    print('Warning: --postgres-connection-string is not yet supported in the Dart CLI');
+  }
   builder = builder.withDefaultStorage(storageDir: dataDir);
 
   if (accountNumber != null) {
@@ -79,7 +103,7 @@ Future<void> _runRepl(
   stdout.writeln("Type 'help' for available commands or 'exit' to quit");
 
   final registry = buildCommandRegistry();
-  final allCommands = [...commandNames, ...issuerCommandNames, 'exit', 'quit', 'help'];
+  final allCommands = [...commandNames, ...issuerCommandNames, ...contactsCommandNames, 'exit', 'quit', 'help'];
   final rl = Readline(completions: allCommands, historyFile: persistence.historyFile);
 
   while (true) {
@@ -107,6 +131,8 @@ Future<void> _runRepl(
 
       if (cmdName == 'issuer') {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer);
+      } else if (cmdName == 'contacts') {
+        await dispatchContactsCommand(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -140,6 +166,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   }
   stdout.writeln(
     '  ${'issuer <subcommand>'.padRight(40)} Token issuer commands (use \'issuer help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'contacts <subcommand>'.padRight(40)} Contacts commands (use \'contacts help\' for details)',
   );
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');
