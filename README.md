@@ -2,14 +2,14 @@
 
 ## **Overview**
 
-The Breez SDK provides developers with an end-to-end solution for integrating instant, self-custodial bitcoin into their apps and services.
+The Breez SDK provides developers with an end-to-end solution for integrating instant, non-custodial bitcoin into their apps and services.
 It eliminates the need for third parties, simplifies the complexities of Bitcoin and Lightning, and enables seamless onboarding for billions of users to the future of value transfer.
 
 **The Breez SDK is free for developers.**
 
 ## **What is the Breez SDK - Spark?**
 
-It’s a nodeless integration that offers a self-custodial, end-to-end solution for integrating bitcoin, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
+It’s a nodeless integration that offers a non-custodial, end-to-end solution for integrating bitcoin, utilizing the Bitcoin-native Layer 2 Lightning & Spark, with on-chain interoperability. Using the Breez SDK, you’ll be able to:
 
 - **Send payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address, Spark address
 - **Receive payments** via various protocols such as: Lightning address, LNURL-Pay, Bolt11, BTC address
@@ -71,7 +71,7 @@ When receiving a payment, the same process works in reverse: the network updates
 Unlike blockchains, rollups, or smart contracts, Spark doesn’t create a new ledger or require trust in external consensus.
 On Bitcoin’s main chain, Spark transactions appear as a series of multi-sig wallets. Off-chain, Spark keeps a lightweight record of balances and history.
 
-Funds are self-custodial: you can exit Spark at any time and reclaim your bitcoin directly on the Bitcoin main chain.
+Funds are non-custodial: you can exit Spark at any time and reclaim your bitcoin directly on the Bitcoin main chain.
 
 
 ## **Build & Test**
