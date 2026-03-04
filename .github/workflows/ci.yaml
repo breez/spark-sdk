@@ -172,15 +172,6 @@ jobs:
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-dart
 
-  cli-sync-check:
-    name: CLI sync check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Verify generated workflow files are up-to-date
-        run: make sync-prompts-check
-
   cli-python:
     name: CLI static analysis (python)
     runs-on: ubuntu-latest
