@@ -71,6 +71,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
+**Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Each command supports `--help` for detailed usage, e.g. `receive --help`.
