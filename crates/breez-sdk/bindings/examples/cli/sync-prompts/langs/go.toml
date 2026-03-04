@@ -9,12 +9,6 @@ lang_name = "Go"
 lang_id   = "go"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/go/"
 
-# Workflow-level settings
-workflow_name = "Sync Go CLI from Rust CLI"
-concurrency_group = "sync-go-cli"
-job_name = "sync-go-cli"
-step_name = "Sync Go CLI"
-
 # File layout
 serialization_file = "serialization.go"
 issuer_file = "issuer.go"

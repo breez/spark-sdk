@@ -9,12 +9,6 @@ lang_name = "Python"
 lang_id   = "python"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/python/"
 
-# Workflow-level settings
-workflow_name = "Sync Python CLI from Rust CLI"
-concurrency_group = "sync-python-cli"
-job_name = "sync-python-cli"
-step_name = "Sync Python CLI"
-
 # File layout
 serialization_file = "serialization.py"
 issuer_file = "issuer.py"

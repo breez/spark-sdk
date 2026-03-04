@@ -9,12 +9,6 @@ lang_name = "Swift"
 lang_id   = "swift"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/swift/"
 
-# Workflow-level settings
-workflow_name = "Sync Swift CLI from Rust CLI"
-concurrency_group = "sync-swift-cli"
-job_name = "sync-swift-cli"
-step_name = "Sync Swift CLI"
-
 # File layout
 serialization_file = "Serialization.swift"
 issuer_file = "Issuer.swift"

@@ -9,12 +9,6 @@ lang_name = "Dart"
 lang_id   = "dart"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/dart/"
 
-# Workflow-level settings
-workflow_name = "Sync Dart CLI from Rust CLI"
-concurrency_group = "sync-dart-cli"
-job_name = "sync-dart-cli"
-step_name = "Sync Dart CLI"
-
 # File layout
 serialization_file = "serialization.dart"
 issuer_file = "issuer.dart"

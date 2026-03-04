@@ -88,7 +88,7 @@ If no differences were found, write only: `No differences found — CLIs are in 
 
 ### Step 5: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`
-Do NOT modify any other files.
+Do NOT modify any other files. The only exception is `sync-findings.md`, which must be written to the repository root (not inside `{{TARGET_DIR}}`).
 
 ### Step 6: Verify changes
 Read back each modified file to verify correctness.
