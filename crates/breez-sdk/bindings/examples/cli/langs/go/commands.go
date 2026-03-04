@@ -1,12 +1,16 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"math/big"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	breez_sdk_spark "github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 	"github.com/chzyer/readline"
@@ -96,6 +100,7 @@ func PrintHelp(registry map[string]Command) {
 		fmt.Printf("  %-40s %s\n", name, cmd.Description)
 	}
 	fmt.Printf("\n  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
+	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
 	fmt.Printf("  %-40s %s\n", "exit / quit", "Exit the CLI")
 	fmt.Printf("  %-40s %s\n", "help", "Show this help message")
 	fmt.Println()
@@ -107,8 +112,21 @@ func PrintHelp(registry map[string]Command) {
 
 // --- get-info ---
 
-func handleGetInfo(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, _ []string) error {
-	result, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{})
+func handleGetInfo(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("get-info", flag.ContinueOnError)
+	ensureSynced := fs.String("s", "", "Force sync (true/false)")
+	fs.StringVar(ensureSynced, "ensure-synced", "", "Force sync (true/false)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	req := breez_sdk_spark.GetInfoRequest{}
+	if *ensureSynced != "" {
+		val := *ensureSynced == "true"
+		req.EnsureSynced = &val
+	}
+
+	result, err := sdk.GetInfo(req)
 	if err = liftError(err); err != nil {
 		return err
 	}
@@ -151,6 +169,21 @@ func handleListPayments(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	fs.UintVar(limit, "limit", 10, "Number of payments to show")
 	offset := fs.Uint("o", 0, "Number of payments to skip")
 	fs.UintVar(offset, "offset", 0, "Number of payments to skip")
+	var typeFilter stringSliceFlag
+	fs.Var(&typeFilter, "t", "Filter by payment type (send, receive)")
+	fs.Var(&typeFilter, "type-filter", "Filter by payment type")
+	var statusFilter stringSliceFlag
+	fs.Var(&statusFilter, "s", "Filter by payment status (pending, completed, failed)")
+	fs.Var(&statusFilter, "status-filter", "Filter by payment status")
+	assetFilterStr := fs.String("a", "", "Filter by asset (bitcoin, token:<id>)")
+	fs.StringVar(assetFilterStr, "asset-filter", "", "Filter by asset")
+	var sparkHtlcStatusFilter stringSliceFlag
+	fs.Var(&sparkHtlcStatusFilter, "spark-htlc-status-filter", "Filter by Spark HTLC status")
+	txHash := fs.String("tx-hash", "", "Filter by token transaction hash")
+	txType := fs.String("tx-type", "", "Filter by token transaction type")
+	fromTimestamp := fs.Uint64("from-timestamp", 0, "Only include payments created after this timestamp")
+	toTimestamp := fs.Uint64("to-timestamp", 0, "Only include payments created before this timestamp")
+	sortAscending := fs.String("sort-ascending", "", "Sort payments in ascending order (true/false)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -158,10 +191,64 @@ func handleListPayments(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	limitU32 := uint32(*limit)
 	offsetU32 := uint32(*offset)
 
-	result, err := sdk.ListPayments(breez_sdk_spark.ListPaymentsRequest{
+	req := breez_sdk_spark.ListPaymentsRequest{
 		Limit:  &limitU32,
 		Offset: &offsetU32,
-	})
+	}
+
+	if len(typeFilter) > 0 {
+		types := parsePaymentTypes(typeFilter)
+		req.TypeFilter = &types
+	}
+
+	if len(statusFilter) > 0 {
+		statuses := parsePaymentStatuses(statusFilter)
+		req.StatusFilter = &statuses
+	}
+
+	if *assetFilterStr != "" {
+		af := parseAssetFilter(*assetFilterStr)
+		if af != nil {
+			req.AssetFilter = &af
+		}
+	}
+
+	var paymentDetailsFilter []breez_sdk_spark.PaymentDetailsFilter
+	if len(sparkHtlcStatusFilter) > 0 {
+		htlcStatuses := parseSparkHtlcStatuses(sparkHtlcStatusFilter)
+		paymentDetailsFilter = append(paymentDetailsFilter, breez_sdk_spark.PaymentDetailsFilterSpark{
+			HtlcStatus: &htlcStatuses,
+		})
+	}
+	if *txHash != "" {
+		paymentDetailsFilter = append(paymentDetailsFilter, breez_sdk_spark.PaymentDetailsFilterToken{
+			TxHash: txHash,
+		})
+	}
+	if *txType != "" {
+		tt := parseTokenTransactionType(*txType)
+		if tt != nil {
+			paymentDetailsFilter = append(paymentDetailsFilter, breez_sdk_spark.PaymentDetailsFilterToken{
+				TxType: tt,
+			})
+		}
+	}
+	if len(paymentDetailsFilter) > 0 {
+		req.PaymentDetailsFilter = &paymentDetailsFilter
+	}
+
+	if *fromTimestamp > 0 {
+		req.FromTimestamp = fromTimestamp
+	}
+	if *toTimestamp > 0 {
+		req.ToTimestamp = toTimestamp
+	}
+	if *sortAscending != "" {
+		val := *sortAscending == "true"
+		req.SortAscending = &val
+	}
+
+	result, err := sdk.ListPayments(req)
 	if err = liftError(err); err != nil {
 		return err
 	}
@@ -173,19 +260,26 @@ func handleListPayments(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 
 func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("receive", flag.ContinueOnError)
-	method := fs.String("m", "", "Payment method: sparkaddress, bitcoin, bolt11")
+	method := fs.String("m", "", "Payment method: sparkaddress, sparkinvoice, bitcoin, bolt11")
 	fs.StringVar(method, "method", "", "Payment method")
-	description := fs.String("d", "", "Optional description (bolt11 only)")
+	description := fs.String("d", "", "Optional description")
 	fs.StringVar(description, "description", "", "Optional description")
-	amountStr := fs.String("a", "", "Amount (bolt11 only)")
+	amountStr := fs.String("a", "", "Amount in sats or token base units")
 	fs.StringVar(amountStr, "amount", "", "Amount")
+	tokenId := fs.String("t", "", "Optional token identifier (sparkinvoice only)")
+	fs.StringVar(tokenId, "token-identifier", "", "Optional token identifier")
+	expirySecs := fs.Uint("e", 0, "Optional expiry time in seconds from now")
+	fs.UintVar(expirySecs, "expiry-secs", 0, "Optional expiry time in seconds")
+	senderPublicKey := fs.String("s", "", "Optional sender public key (sparkinvoice only)")
+	fs.StringVar(senderPublicKey, "sender-public-key", "", "Optional sender public key")
+	hodl := fs.Bool("hodl", false, "Create a HODL invoice (bolt11 only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *method == "" {
 		fmt.Println("Usage: receive -m <method> [options]")
-		fmt.Println("Methods: sparkaddress, bitcoin, bolt11")
+		fmt.Println("Methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
 		return nil
 	}
 
@@ -194,6 +288,31 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 	switch strings.ToLower(*method) {
 	case "sparkaddress":
 		paymentMethod = breez_sdk_spark.ReceivePaymentMethodSparkAddress{}
+
+	case "sparkinvoice":
+		pm := breez_sdk_spark.ReceivePaymentMethodSparkInvoice{}
+		if *amountStr != "" {
+			amount, ok := new(big.Int).SetString(*amountStr, 10)
+			if !ok {
+				return fmt.Errorf("invalid amount: %s", *amountStr)
+			}
+			pm.Amount = &amount
+		}
+		if *tokenId != "" {
+			pm.TokenIdentifier = tokenId
+		}
+		if *expirySecs > 0 {
+			now := uint64(time.Now().Unix())
+			expiryTime := now + uint64(*expirySecs)
+			pm.ExpiryTime = &expiryTime
+		}
+		if *description != "" {
+			pm.Description = description
+		}
+		if *senderPublicKey != "" {
+			pm.SenderPublicKey = senderPublicKey
+		}
+		paymentMethod = pm
 
 	case "bitcoin":
 		paymentMethod = breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{}
@@ -209,11 +328,30 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 			}
 			pm.AmountSats = &amountVal
 		}
+		if *expirySecs > 0 {
+			e := uint32(*expirySecs)
+			pm.ExpirySecs = &e
+		}
+		if *hodl {
+			preimageBytes := make([]byte, 32)
+			if _, err := cryptorand.Read(preimageBytes); err != nil {
+				return fmt.Errorf("failed to generate preimage: %w", err)
+			}
+			preimage := hex.EncodeToString(preimageBytes)
+			hashBytes := sha256.Sum256(preimageBytes)
+			paymentHash := hex.EncodeToString(hashBytes[:])
+
+			fmt.Printf("HODL invoice preimage: %s\n", preimage)
+			fmt.Printf("Payment hash: %s\n", paymentHash)
+			fmt.Println("Save the preimage! Use `claim-htlc-payment` with it to settle.")
+
+			pm.PaymentHash = &paymentHash
+		}
 		paymentMethod = pm
 
 	default:
 		fmt.Printf("Invalid payment method: %s\n", *method)
-		fmt.Println("Available methods: sparkaddress, bitcoin, bolt11")
+		fmt.Println("Available methods: sparkaddress, sparkinvoice, bitcoin, bolt11")
 		return nil
 	}
 
@@ -222,6 +360,10 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 	})
 	if err = liftError(err); err != nil {
 		return err
+	}
+
+	if result.Fee != nil && result.Fee.Sign() > 0 {
+		fmt.Printf("Prepared payment requires fee of %s sats/token base units\n", result.Fee.String())
 	}
 
 	printValue(result)
@@ -238,12 +380,19 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	fs.StringVar(amountStr, "amount", "", "Optional amount")
 	tokenId := fs.String("t", "", "Optional token identifier")
 	fs.StringVar(tokenId, "token-identifier", "", "Optional token identifier")
+	idempotencyKey := fs.String("i", "", "Optional idempotency key")
+	fs.StringVar(idempotencyKey, "idempotency-key", "", "Optional idempotency key")
+	fromBitcoin := fs.Bool("from-bitcoin", false, "Convert from Bitcoin to token to fulfill payment")
+	fromToken := fs.String("from-token", "", "Convert from token to Bitcoin to fulfill payment")
+	maxSlippage := fs.String("s", "", "Max slippage in basis points for conversion")
+	fs.StringVar(maxSlippage, "convert-max-slippage-bps", "", "Max slippage in basis points")
+	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from amount instead of adding on top")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *paymentRequest == "" {
-		fmt.Println("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>]")
+		fmt.Println("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [--from-bitcoin | --from-token <id>] [-s <slippage_bps>] [--fees-included] [-i <idempotency_key>]")
 		return nil
 	}
 
@@ -263,9 +412,57 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 		req.TokenIdentifier = tokenId
 	}
 
+	// Conversion options
+	if *fromBitcoin || *fromToken != "" {
+		var maxSlippageBps *uint32
+		if *maxSlippage != "" {
+			val, err := strconv.ParseUint(*maxSlippage, 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid max slippage: %s", *maxSlippage)
+			}
+			val32 := uint32(val)
+			maxSlippageBps = &val32
+		}
+
+		var convType breez_sdk_spark.ConversionType
+		if *fromBitcoin {
+			convType = breez_sdk_spark.ConversionTypeFromBitcoin{}
+		} else {
+			convType = breez_sdk_spark.ConversionTypeToBitcoin{FromTokenIdentifier: *fromToken}
+		}
+		convOpts := breez_sdk_spark.ConversionOptions{
+			ConversionType: convType,
+			MaxSlippageBps: maxSlippageBps,
+		}
+		req.ConversionOptions = &convOpts
+	}
+
+	// Fee policy
+	if *feesIncluded {
+		fp := breez_sdk_spark.FeePolicyFeesIncluded
+		req.FeePolicy = &fp
+	}
+
 	prepareResponse, err := sdk.PrepareSendPayment(req)
 	if err = liftError(err); err != nil {
 		return fmt.Errorf("failed to prepare payment: %w", err)
+	}
+
+	// Show conversion estimate and confirm
+	if prepareResponse.ConversionEstimate != nil {
+		est := prepareResponse.ConversionEstimate
+		units := "token base units"
+		if _, ok := est.Options.ConversionType.(breez_sdk_spark.ConversionTypeFromBitcoin); ok {
+			units = "sats"
+		}
+		fmt.Printf("Estimated conversion of %v %s with a %v %s fee\n", est.Amount, units, est.Fee, units)
+		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+		if err != nil {
+			return err
+		}
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			return fmt.Errorf("payment cancelled")
+		}
 	}
 
 	// Payment options
@@ -277,6 +474,9 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	sendReq := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,
 		Options:         paymentOptions,
+	}
+	if *idempotencyKey != "" {
+		sendReq.IdempotencyKey = idempotencyKey
 	}
 
 	result, err := sdk.SendPayment(sendReq)
@@ -295,6 +495,12 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	fs.StringVar(comment, "comment", "", "Comment")
 	validateStr := fs.String("v", "", "Validate success action URL (true/false)")
 	fs.StringVar(validateStr, "validate", "", "Validate success URL")
+	idempotencyKey := fs.String("i", "", "Optional idempotency key")
+	fs.StringVar(idempotencyKey, "idempotency-key", "", "Optional idempotency key")
+	fromToken := fs.String("from-token", "", "Convert from token to Bitcoin to fulfill payment")
+	maxSlippage := fs.String("s", "", "Max slippage in basis points for conversion")
+	fs.StringVar(maxSlippage, "convert-max-slippage-bps", "", "Max slippage in basis points")
+	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from amount instead of adding on top")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -321,9 +527,10 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 		return fmt.Errorf("input is not an LNURL-pay or lightning address")
 	}
 
-	printValue(payRequest)
-
-	amountLine, err := readlinePrompt(rl, "Amount to pay (sats): ")
+	minSendable := (payRequest.MinSendable + 999) / 1000
+	maxSendable := payRequest.MaxSendable / 1000
+	prompt := fmt.Sprintf("Amount to pay (min %d sat, max %d sat): ", minSendable, maxSendable)
+	amountLine, err := readlinePrompt(rl, prompt)
 	if err != nil {
 		return err
 	}
@@ -344,16 +551,66 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 		prepareReq.ValidateSuccessActionUrl = &val
 	}
 
+	// Conversion options
+	if *fromToken != "" {
+		var maxSlippageBps *uint32
+		if *maxSlippage != "" {
+			val, err := strconv.ParseUint(*maxSlippage, 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid max slippage: %s", *maxSlippage)
+			}
+			val32 := uint32(val)
+			maxSlippageBps = &val32
+		}
+		convOpts := breez_sdk_spark.ConversionOptions{
+			ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{FromTokenIdentifier: *fromToken},
+			MaxSlippageBps: maxSlippageBps,
+		}
+		prepareReq.ConversionOptions = &convOpts
+	}
+
+	// Fee policy
+	if *feesIncluded {
+		fp := breez_sdk_spark.FeePolicyFeesIncluded
+		prepareReq.FeePolicy = &fp
+	}
+
 	prepareResponse, err := sdk.PrepareLnurlPay(prepareReq)
 	if err = liftError(err); err != nil {
 		return err
 	}
 
+	// Show conversion estimate and confirm
+	if prepareResponse.ConversionEstimate != nil {
+		est := prepareResponse.ConversionEstimate
+		fmt.Printf("Estimated conversion of %v token base units with a %v token base units fee\n", est.Amount, est.Fee)
+		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+		if err != nil {
+			return err
+		}
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			return fmt.Errorf("payment cancelled")
+		}
+	}
+
 	printValue(prepareResponse)
 
-	result, err := sdk.LnurlPay(breez_sdk_spark.LnurlPayRequest{
+	line, err := readlineWithDefault(rl, "Do you want to continue? (y/n): ", "y")
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		return nil
+	}
+
+	lnurlPayReq := breez_sdk_spark.LnurlPayRequest{
 		PrepareResponse: prepareResponse,
-	})
+	}
+	if *idempotencyKey != "" {
+		lnurlPayReq.IdempotencyKey = idempotencyKey
+	}
+
+	result, err := sdk.LnurlPay(lnurlPayReq)
 	if err = liftError(err); err != nil {
 		return err
 	}
@@ -464,13 +721,14 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	fs := flag.NewFlagSet("claim-deposit", flag.ContinueOnError)
 	feeSat := fs.Uint64("fee-sat", 0, "Max fee in sats (fixed)")
 	satPerVbyte := fs.Uint64("sat-per-vbyte", 0, "Max fee per vbyte (rate)")
+	recommendedFeeLeeway := fs.Uint64("recommended-fee-leeway", 0, "Use fastest recommended fee plus this leeway (sat/vbyte)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	positional := fs.Args()
 	if len(positional) < 2 {
-		fmt.Println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N]")
+		fmt.Println("Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]")
 		return nil
 	}
 
@@ -481,9 +739,13 @@ func handleClaimDeposit(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, arg
 	}
 
 	var maxFee breez_sdk_spark.MaxFee
-	if *feeSat > 0 && *satPerVbyte > 0 {
-		fmt.Println("Cannot specify both --fee-sat and --sat-per-vbyte")
-		return nil
+	if *recommendedFeeLeeway > 0 {
+		if *feeSat > 0 || *satPerVbyte > 0 {
+			return fmt.Errorf("cannot specify fee-sat or sat-per-vbyte when using recommended fee")
+		}
+		maxFee = breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: *recommendedFeeLeeway}
+	} else if *feeSat > 0 && *satPerVbyte > 0 {
+		return fmt.Errorf("cannot specify both --fee-sat and --sat-per-vbyte")
 	} else if *feeSat > 0 {
 		maxFee = breez_sdk_spark.MaxFeeFixed{Amount: *feeSat}
 	} else if *satPerVbyte > 0 {
@@ -854,6 +1116,7 @@ func readPaymentOptions(paymentMethod breez_sdk_spark.SendPaymentMethod, rl *rea
 		return &opts, nil
 
 	case breez_sdk_spark.SendPaymentMethodBolt11Invoice:
+		completionTimeout := uint32(0)
 		if pm.SparkTransferFeeSats != nil {
 			fmt.Println("Choose payment option:")
 			fmt.Printf("1. Spark transfer fee: %d sats\n", *pm.SparkTransferFeeSats)
@@ -864,19 +1127,67 @@ func readPaymentOptions(paymentMethod breez_sdk_spark.SendPaymentMethod, rl *rea
 			}
 			if strings.TrimSpace(line) == "1" {
 				var opts breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBolt11Invoice{
-					PreferSpark: true,
+					PreferSpark:           true,
+					CompletionTimeoutSecs: &completionTimeout,
 				}
 				return &opts, nil
 			}
 		}
 		var opts breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsBolt11Invoice{
-			PreferSpark: false,
+			PreferSpark:           false,
+			CompletionTimeoutSecs: &completionTimeout,
 		}
 		return &opts, nil
 
 	case breez_sdk_spark.SendPaymentMethodSparkAddress:
-		// No options for Spark address payments
-		return nil, nil
+		// HTLC options are only valid for Bitcoin payments, not token payments
+		if pm.TokenIdentifier != nil {
+			return nil, nil
+		}
+
+		line, err := readlineWithDefault(rl, "Do you want to create an HTLC transfer? (y/n): ", "n")
+		if err != nil {
+			return nil, err
+		}
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			return nil, nil
+		}
+
+		paymentHashLine, err := readlinePrompt(rl, "Please enter the HTLC payment hash (hex string) or leave empty to generate a new preimage and associated hash: ")
+		if err != nil {
+			return nil, err
+		}
+		paymentHash := strings.TrimSpace(paymentHashLine)
+		if paymentHash == "" {
+			preimageBytes := make([]byte, 32)
+			if _, err := cryptorand.Read(preimageBytes); err != nil {
+				return nil, fmt.Errorf("failed to generate preimage: %w", err)
+			}
+			preimage := hex.EncodeToString(preimageBytes)
+			hashBytes := sha256.Sum256(preimageBytes)
+			paymentHash = hex.EncodeToString(hashBytes[:])
+
+			fmt.Printf("Generated preimage: %s\n", preimage)
+			fmt.Printf("Associated payment hash: %s\n", paymentHash)
+		}
+
+		expiryLine, err := readlinePrompt(rl, "Please enter the HTLC expiry duration in seconds: ")
+		if err != nil {
+			return nil, err
+		}
+		expiryDurationSecs, err := strconv.ParseUint(strings.TrimSpace(expiryLine), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid expiry duration: %w", err)
+		}
+
+		htlcOptions := breez_sdk_spark.SparkHtlcOptions{
+			PaymentHash:        paymentHash,
+			ExpiryDurationSecs: expiryDurationSecs,
+		}
+		var opts breez_sdk_spark.SendPaymentOptions = breez_sdk_spark.SendPaymentOptionsSparkAddress{
+			HtlcOptions: &htlcOptions,
+		}
+		return &opts, nil
 	}
 
 	return nil, nil
@@ -910,4 +1221,94 @@ func stringOrDefault(s *string, def string) string {
 		return *s
 	}
 	return def
+}
+
+// stringSliceFlag implements flag.Value for a comma-separated list of strings.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	for _, v := range strings.Split(value, ",") {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			*s = append(*s, v)
+		}
+	}
+	return nil
+}
+
+func parsePaymentTypes(values []string) []breez_sdk_spark.PaymentType {
+	var result []breez_sdk_spark.PaymentType
+	for _, v := range values {
+		switch strings.ToLower(v) {
+		case "send":
+			result = append(result, breez_sdk_spark.PaymentTypeSend)
+		case "receive":
+			result = append(result, breez_sdk_spark.PaymentTypeReceive)
+		}
+	}
+	return result
+}
+
+func parsePaymentStatuses(values []string) []breez_sdk_spark.PaymentStatus {
+	var result []breez_sdk_spark.PaymentStatus
+	for _, v := range values {
+		switch strings.ToLower(v) {
+		case "pending":
+			result = append(result, breez_sdk_spark.PaymentStatusPending)
+		case "completed":
+			result = append(result, breez_sdk_spark.PaymentStatusCompleted)
+		case "failed":
+			result = append(result, breez_sdk_spark.PaymentStatusFailed)
+		}
+	}
+	return result
+}
+
+func parseAssetFilter(value string) breez_sdk_spark.AssetFilter {
+	lower := strings.ToLower(value)
+	if lower == "bitcoin" {
+		return breez_sdk_spark.AssetFilterBitcoin{}
+	}
+	if strings.HasPrefix(lower, "token:") {
+		tokenId := value[6:]
+		return breez_sdk_spark.AssetFilterToken{TokenIdentifier: &tokenId}
+	}
+	if lower == "token" {
+		return breez_sdk_spark.AssetFilterToken{}
+	}
+	return nil
+}
+
+func parseSparkHtlcStatuses(values []string) []breez_sdk_spark.SparkHtlcStatus {
+	var result []breez_sdk_spark.SparkHtlcStatus
+	for _, v := range values {
+		switch strings.ToLower(v) {
+		case "waitingforpreimage":
+			result = append(result, breez_sdk_spark.SparkHtlcStatusWaitingForPreimage)
+		case "preimageshared":
+			result = append(result, breez_sdk_spark.SparkHtlcStatusPreimageShared)
+		case "returned":
+			result = append(result, breez_sdk_spark.SparkHtlcStatusReturned)
+		}
+	}
+	return result
+}
+
+func parseTokenTransactionType(value string) *breez_sdk_spark.TokenTransactionType {
+	switch strings.ToLower(value) {
+	case "mint":
+		t := breez_sdk_spark.TokenTransactionType(breez_sdk_spark.TokenTransactionTypeMint)
+		return &t
+	case "burn":
+		t := breez_sdk_spark.TokenTransactionType(breez_sdk_spark.TokenTransactionTypeBurn)
+		return &t
+	case "transfer":
+		t := breez_sdk_spark.TokenTransactionType(breez_sdk_spark.TokenTransactionTypeTransfer)
+		return &t
+	}
+	return nil
 }
