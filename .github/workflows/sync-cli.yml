@@ -38,20 +38,41 @@ on:
         type: string
 
 jobs:
+  # ── Build a filtered matrix from the `languages` input ──────────
+  filter:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - name: Build matrix
+        id: set
+        env:
+          REQUESTED: ${{ inputs.languages }}
+        run: |
+          ALL='[
+            {"lang":"dart","runner":"ubuntu-latest","timeout":30},
+            {"lang":"go","runner":"ubuntu-latest","timeout":30},
+            {"lang":"python","runner":"ubuntu-latest","timeout":30},
+            {"lang":"swift","runner":"macos-latest","timeout":45}
+          ]'
+          if [ -z "$REQUESTED" ] || [ "$REQUESTED" = "all" ]; then
+            echo "matrix={\"include\":$(echo "$ALL" | jq -c '.')}" >> "$GITHUB_OUTPUT"
+          else
+            FILTERED=$(echo "$ALL" | jq -c --arg langs "$REQUESTED" \
+              '[.[] | select(.lang as $l | ($langs | split(",") | map(gsub("\\s+";"")) | index($l)))]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No valid languages in: $REQUESTED (available: dart, go, python, swift)"
+              exit 1
+            fi
+            echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
+          fi
+
   sync:
-    # Skip languages not in the requested set (push triggers run all).
-    if: >-
-      !inputs.languages || inputs.languages == 'all' ||
-      contains(inputs.languages, matrix.lang)
+    needs: filter
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { lang: dart,   runner: ubuntu-latest, timeout: 30 }
-          - { lang: go,     runner: ubuntu-latest, timeout: 30 }
-          - { lang: python, runner: ubuntu-latest, timeout: 30 }
-          - { lang: swift,  runner: macos-latest,  timeout: 45 }
+      matrix: ${{ fromJSON(needs.filter.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
