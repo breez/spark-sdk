@@ -71,37 +71,37 @@ features and configuration options, but with {{LANG_NAME}}-specific syntax and u
   {{DOC_PRESERVE_ITEMS}}.
 
 ### Step 4: Write findings summary
-After comparing all file pairs, write a short summary to `sync-findings.md` with:
-- **Differences found**: list each divergence (1 line each)
-- **Changes applied**: which differences you fixed
-- **Skipped**: which differences you could not fix and why (missing bindings, platform limitation, etc.)
-- If no differences were found, write "No differences found — CLIs are in sync."
+After comparing all file pairs, write `sync-findings.md` using this exact format:
+
+```markdown
+## Divergences
+- [one-line description of each divergence found]
+
+## Applied
+- [one-line description of each fix applied, referencing the file changed]
+
+## Skipped
+- [one-line description of what was skipped and why (missing bindings, platform limitation, etc.)]
+```
+
+If no differences were found, write only: `No differences found — CLIs are in sync.`
 
 ### Step 5: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`
-Do NOT modify any other files.
+Do NOT modify any other files. The only exception is `sync-findings.md`, which must be written to the repository root (not inside `{{TARGET_DIR}}`).
 
-### Step 6: Build check
-After making changes, verify the code is syntactically valid:
+### Step 6: Verify changes
+Read back each modified file to verify correctness.
+
+### Step 7: Build check (final gate)
+**This must be the very last step.** Do NOT make any code edits after this step passes.
+Run the build check to verify the code is syntactically valid and properly formatted:
 ```bash
 {{BUILD_CHECK}}
 ```
-If any check fails, fix the errors before proceeding.
-
-### Step 7: Verify and create PR
-After making changes:
-1. Read back each modified file to verify correctness
-2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
-3. **Otherwise**, create a branch and PR:
-```bash
-git checkout -b claude/sync-{{LANG_ID}}-cli-$(echo "${{ github.sha }}" | cut -c1-7)
-git add {{TARGET_DIR}}
-git commit -m "chore: sync {{LANG_NAME}} CLI with Rust CLI changes (${{ github.sha }})"
-git push -u origin HEAD
-gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
-  --body "Automated sync of {{LANG_NAME}} CLI from Rust CLI changes in ${{ github.sha }}" \
-  --base main
-```
+If any check fails, fix the errors and re-run until it passes. {{FORMAT_INSTRUCTIONS}}
 
 ### Step 8: No-op check
-If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."
+If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT modify any files. Output: "No {{LANG_NAME}} CLI changes needed."
+
+**Important:** Do NOT create git branches, commits, or pull requests. The CI workflow handles all git operations after you finish. Just leave your changes in the working tree.

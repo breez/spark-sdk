@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-Sync-prompt generator — produces GitHub Actions workflow YAML for CLI sync workflows.
+Sync-prompt generator for CLI sync workflows.
 
-Reads a shared prompt template and per-language config (TOML) to generate
-the final workflow YAML files under .github/workflows/.
+Reads a shared prompt template and per-language config (TOML) to produce
+rendered prompts.  The sync workflow (.github/workflows/sync-cli.yml) calls
+generate_prompt() at runtime to assemble the prompt for each language.
 
 Usage:
-    python generate.py                    # Generate all languages
-    python generate.py go                 # Generate only Go
-    python generate.py python go          # Generate Python and Go
-    python generate.py --check            # Verify generated files are up-to-date
-    python generate.py --dry-run go       # Print Go workflow to stdout
+    python generate.py --prompt-only dart   # Print rendered prompt for Dart
+    python generate.py --prompt-only go     # Print rendered prompt for Go
+    python generate.py --list               # List available languages
 """
 
 from __future__ import annotations
 
 import argparse
-import difflib
 import sys
-import textwrap
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -77,6 +74,9 @@ def parse_toml(text: str) -> dict[str, dict[str, str]]:
             # Regular quoted string
             elif value.startswith('"') and value.endswith('"'):
                 result[current_section][key] = value[1:-1]
+            # Single-quoted string
+            elif value.startswith("'") and value.endswith("'"):
+                result[current_section][key] = value[1:-1]
             # Unquoted value
             else:
                 result[current_section][key] = value
@@ -94,10 +94,7 @@ def parse_toml(text: str) -> dict[str, dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[5]  # Navigate up from sync-prompts/ to repo root
-WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 PROMPT_TEMPLATE = SCRIPT_DIR / "prompt-template.md"
-WORKFLOW_TEMPLATE = SCRIPT_DIR / "workflow-template.yml"
 LANGS_DIR = SCRIPT_DIR / "langs"
 
 
@@ -125,11 +122,6 @@ def load_lang_config(lang_id: str) -> dict[str, str]:
                 else:
                     flat[f"{section_name}_{key}"] = value
 
-    # Post-process: indent allowed_tools continuation lines for YAML >- scalar
-    if "allowed_tools" in flat:
-        lines = [l.strip() for l in flat["allowed_tools"].strip().splitlines()]
-        flat["allowed_tools"] = ("\n" + " " * 12).join(lines)
-
     return flat
 
 
@@ -154,56 +146,36 @@ def generate_prompt(lang_id: str) -> str:
     return render_template(template, config)
 
 
-def generate_workflow(lang_id: str) -> str:
-    """Generate the complete workflow YAML for a language."""
-    config = load_lang_config(lang_id)
-
-    # Render the prompt first
-    prompt_text = generate_prompt(lang_id)
-    # Indent prompt by 12 spaces for YAML embedding (inside `prompt: |`)
-    indented_prompt = textwrap.indent(prompt_text.strip(), "            ")
-
-    # Add rendered prompt to config for workflow template substitution
-    config["prompt"] = indented_prompt
-
-    # Render the workflow template
-    workflow_template = WORKFLOW_TEMPLATE.read_text()
-    return render_template(workflow_template, config)
-
-
 def available_languages() -> list[str]:
     """List available language configs."""
     return sorted(p.stem for p in LANGS_DIR.glob("*.toml"))
 
 
-def workflow_path(lang_id: str) -> Path:
-    """Return the expected workflow file path for a language."""
-    config = load_lang_config(lang_id)
-    concurrency_group = config.get("concurrency_group", f"sync-{lang_id}-cli")
-    # Derive filename from concurrency group
-    return WORKFLOWS_DIR / f"{concurrency_group}.yml"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate CLI sync workflow YAML from templates"
+        description="Generate CLI sync prompts from templates"
     )
     parser.add_argument(
         "languages",
         nargs="*",
-        help="Languages to generate (default: all)",
+        help="Languages to process (default: all)",
     )
     parser.add_argument(
-        "--check",
+        "--prompt-only",
         action="store_true",
-        help="Verify generated files are up-to-date (exit 1 if not)",
+        help="Print rendered prompt(s) to stdout",
     )
     parser.add_argument(
-        "--dry-run",
+        "--list",
         action="store_true",
-        help="Print generated workflows to stdout instead of writing files",
+        help="List available languages and exit",
     )
     args = parser.parse_args()
+
+    if args.list:
+        for lang in available_languages():
+            print(lang)
+        return
 
     languages = args.languages or available_languages()
 
@@ -215,49 +187,18 @@ def main() -> None:
                 f"Error: unknown language '{lang}'. Available: {', '.join(sorted(available))}"
             )
 
-    all_ok = True
-
-    for lang in languages:
-        generated = generate_workflow(lang)
-        output_path = workflow_path(lang)
-
-        if args.dry_run:
-            print(f"# === {output_path.name} ===")
-            print(generated)
-            print()
-            continue
-
-        if args.check:
-            if not output_path.exists():
-                print(f"MISSING: {output_path}")
-                all_ok = False
-                continue
-
-            existing = output_path.read_text()
-            if existing != generated:
-                diff = difflib.unified_diff(
-                    existing.splitlines(keepends=True),
-                    generated.splitlines(keepends=True),
-                    fromfile=f"{output_path.name} (current)",
-                    tofile=f"{output_path.name} (generated)",
-                )
-                print(f"OUT OF DATE: {output_path}")
-                sys.stdout.writelines(diff)
-                all_ok = False
-            else:
-                print(f"OK: {output_path}")
-            continue
-
-        # Write mode
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(generated)
-        print(f"Generated: {output_path}")
-
-    if args.check and not all_ok:
-        print(
-            "\nWorkflow files are out of date. Run `python generate.py` to regenerate."
-        )
-        sys.exit(1)
+    if args.prompt_only:
+        for lang in languages:
+            prompt = generate_prompt(lang)
+            if len(languages) > 1:
+                print(f"# === {lang} ===")
+            print(prompt)
+            if len(languages) > 1:
+                print()
+    else:
+        parser.print_help()
+        print(f"\nAvailable languages: {', '.join(available_languages())}")
+        print("\nUse --prompt-only to generate prompts.")
 
 
 if __name__ == "__main__":

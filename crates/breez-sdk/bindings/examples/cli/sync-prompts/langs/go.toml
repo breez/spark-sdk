@@ -9,12 +9,6 @@ lang_name = "Go"
 lang_id   = "go"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/go/"
 
-# Workflow-level settings
-workflow_name = "Sync Go CLI from Rust CLI"
-concurrency_group = "sync-go-cli"
-job_name = "sync-go-cli"
-step_name = "Sync Go CLI"
-
 # File layout
 serialization_file = "serialization.go"
 issuer_file = "issuer.go"
@@ -36,10 +30,12 @@ doc_preserve_items = "go build instructions, or Go-specific notes"
 # Build check command (syntax validation without SDK installed)
 build_check = "make -C crates/breez-sdk/bindings/examples/cli check-go"
 
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
-Bash(git diff:*),Bash(git checkout -b claude/sync-:*),Bash(git add crates/breez-sdk/bindings/examples/cli/langs/go/:*),Bash(git commit -m:*),Bash(git push -u origin HEAD:*),
-Bash(gh pr create --title:*),
+Bash(git diff:*),
 Bash(make -C crates/breez-sdk/bindings/examples/cli check-go:*)"""
 
 [file_mapping]

@@ -168,18 +168,19 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
 
-      - name: Check Dart CLI
+      - name: CLI static analysis (dart)
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-dart
 
-  cli-sync-check:
-    name: CLI sync check
+  cli-python:
+    name: CLI static analysis (python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify generated workflow files are up-to-date
-        run: make sync-prompts-check
+      - name: Check Python CLI
+        working-directory: crates/breez-sdk/bindings/examples/cli
+        run: make check-python
 
   cli-go:
     name: CLI static analysis (go)

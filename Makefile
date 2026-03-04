@@ -66,14 +66,6 @@ breez-itest:
 
 breez-itest-pg-tree-store:
 	USE_POSTGRES_TREE_STORE=true cargo xtask test --package breez-sdk-itest -- --test-threads=8
-CLI_DIR := crates/breez-sdk/bindings/examples/cli
-
-sync-prompts-check:
-	$(MAKE) -C $(CLI_DIR) sync-prompts-check
-
-sync-prompts-generate:
-	$(MAKE) -C $(CLI_DIR) sync-prompts-generate
-
 claude-check:
 	make fmt-check clippy-check cargo-test
 

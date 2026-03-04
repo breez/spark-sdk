@@ -9,12 +9,6 @@ lang_name = "Swift"
 lang_id   = "swift"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/swift/"
 
-# Workflow-level settings
-workflow_name = "Sync Swift CLI from Rust CLI"
-concurrency_group = "sync-swift-cli"
-job_name = "sync-swift-cli"
-step_name = "Sync Swift CLI"
-
 # File layout
 serialization_file = "Serialization.swift"
 issuer_file = "Issuer.swift"
@@ -36,10 +30,12 @@ doc_preserve_items = "Swift build instructions, SPM setup, or Swift-specific not
 # Build check command (syntax validation without SDK installed)
 build_check = "make -C crates/breez-sdk/bindings/examples/cli check-swift"
 
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
-Bash(git diff:*),Bash(git checkout -b claude/sync-:*),Bash(git add crates/breez-sdk/bindings/examples/cli/langs/swift/:*),Bash(git commit -m:*),Bash(git push -u origin HEAD:*),
-Bash(gh pr create --title:*),
+Bash(git diff:*),
 Bash(make -C crates/breez-sdk/bindings/examples/cli check-swift:*)"""
 
 [file_mapping]

@@ -9,12 +9,6 @@ lang_name = "Dart"
 lang_id   = "dart"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/dart/"
 
-# Workflow-level settings
-workflow_name = "Sync Dart CLI from Rust CLI"
-concurrency_group = "sync-dart-cli"
-job_name = "sync-dart-cli"
-step_name = "Sync Dart CLI"
-
 # File layout
 serialization_file = "serialization.dart"
 issuer_file = "issuer.dart"
@@ -36,10 +30,12 @@ doc_preserve_items = "Flutter pub get instructions, or Dart/FRB-specific notes"
 # Build check command (syntax validation without SDK installed)
 build_check = "make -C crates/breez-sdk/bindings/examples/cli check-dart"
 
+# Format instructions appended to the build check step
+format_instructions = "The Dart project uses 110-character line length. Run `dart format -l 110 lib/ bin/` before the build check to ensure formatting passes."
+
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
-Bash(git diff:*),Bash(git checkout -b claude/sync-:*),Bash(git add crates/breez-sdk/bindings/examples/cli/langs/dart/:*),Bash(git commit -m:*),Bash(git push -u origin HEAD:*),
-Bash(gh pr create --title:*),
+Bash(git diff:*),
 Bash(make -C crates/breez-sdk/bindings/examples/cli check-dart:*)"""
 
 [file_mapping]
