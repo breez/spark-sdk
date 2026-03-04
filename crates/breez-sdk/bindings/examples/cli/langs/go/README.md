@@ -53,6 +53,10 @@ make clean            Remove binary
 |--------|---------|-------------|
 | `-d`, `--data-dir` | `./.data` | Path to the data directory |
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
+| `--account-number` | - | Account number for the Spark signer |
+| `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
+| `--stable-balance-token-identifier` | - | Stable balance token identifier |
+| `--stable-balance-threshold` | - | Stable balance threshold in sats |
 
 ## Environment Variables
 
@@ -64,7 +68,7 @@ make clean            Remove binary
 
 Once inside the REPL, type `help` to see all commands. The CLI supports:
 
-**Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`
+**Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
 **Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
@@ -72,15 +76,11 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
-**Fiat**: `list-fiat-currencies`, `list-fiat-rates`
+**Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list` *(not yet available in published Go SDK)*
 
-**Settings**: `get-user-settings`, `set-user-settings`, `recommended-fees`, `get-spark-status`
-
-**Token issuer**: `issuer create-token`, `issuer mint-token`, `issuer burn-token`, `issuer token-balance`, `issuer token-metadata`, `issuer freeze-token`, `issuer unfreeze-token`
-
-**Input parsing**: `parse`
+**Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Each command supports `--help` for detailed usage.
 
