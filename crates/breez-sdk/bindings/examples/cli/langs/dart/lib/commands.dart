@@ -417,8 +417,7 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   if (prepareResponse.conversionEstimate != null) {
     final est = prepareResponse.conversionEstimate!;
-    final units =
-        prepareResponse.paymentMethod is SendPaymentMethod_BitcoinAddress ? 'sats' : 'token base units';
+    final units = est.options.conversionType is ConversionType_FromBitcoin ? 'sats' : 'token base units';
     print('Estimated conversion of ${est.amount} $units with a ${est.fee} $units fee');
     final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
