@@ -173,6 +173,9 @@ jobs:
             echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
             exit 1
           fi
+          # Explicitly set credentials for push (checkout token may have been cleared)
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
           BRANCH="claude/sync-${LANG}-cli"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -334,6 +337,10 @@ jobs:
           TARGET_DIR: ${{ steps.config.outputs.target_dir }}
           REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
         run: |
+          # Re-set credentials — claude-code-action may have reset the ones
+          # configured by actions/checkout during its own git operations.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
           BRANCH="claude/sync-${LANG}-cli"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
