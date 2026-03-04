@@ -135,6 +135,7 @@ func printHelp(_ registry: [String: CommandEntry]) {
         print("  \(name.padding(toLength: 40, withPad: " ", startingAt: 0))\(cmd.description)")
     }
     print("\n  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
+    print("  \("contacts <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Contacts commands (use 'contacts help' for details)")
     print("  \("exit / quit".padding(toLength: 40, withPad: " ", startingAt: 0))Exit the CLI")
     print("  \("help".padding(toLength: 40, withPad: " ", startingAt: 0))Show this help message")
     print()
@@ -257,11 +258,86 @@ func handleListPayments(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     let limit = fp.get("l", "limit").flatMap { UInt32($0) } ?? 10
     let offset = fp.get("o", "offset").flatMap { UInt32($0) } ?? 0
+
+    let typeFilter: [PaymentType]? = fp.get("t", "type-filter").map { raw in
+        raw.split(separator: ",").compactMap { parsePaymentType(String($0)) }
+    }
+    let statusFilter: [PaymentStatus]? = fp.get("s", "status-filter").map { raw in
+        raw.split(separator: ",").compactMap { parsePaymentStatus(String($0)) }
+    }
+    let assetFilter: AssetFilter? = fp.get("a", "asset-filter").flatMap { parseAssetFilter($0) }
+    let fromTimestamp = fp.get("from-timestamp").flatMap { UInt64($0) }
+    let toTimestamp = fp.get("to-timestamp").flatMap { UInt64($0) }
+    let sortAscending: Bool? = fp.get("sort-ascending").map { $0 == "true" }
+
+    var paymentDetailsFilter: [PaymentDetailsFilter] = []
+    if let htlcStatusRaw = fp.get("spark-htlc-status-filter") {
+        let statuses = htlcStatusRaw.split(separator: ",").compactMap { parseSparkHtlcStatus(String($0)) }
+        paymentDetailsFilter.append(.spark(htlcStatus: statuses, conversionRefundNeeded: nil))
+    }
+    if let txHash = fp.get("tx-hash") {
+        paymentDetailsFilter.append(.token(conversionRefundNeeded: nil, txHash: txHash, txType: nil))
+    }
+    if let txTypeRaw = fp.get("tx-type"), let txType = parseTokenTransactionType(txTypeRaw) {
+        paymentDetailsFilter.append(.token(conversionRefundNeeded: nil, txHash: nil, txType: txType))
+    }
+
     let result = try await sdk.listPayments(request: ListPaymentsRequest(
+        typeFilter: typeFilter,
+        statusFilter: statusFilter,
+        assetFilter: assetFilter,
+        paymentDetailsFilter: paymentDetailsFilter.isEmpty ? nil : paymentDetailsFilter,
+        fromTimestamp: fromTimestamp,
+        toTimestamp: toTimestamp,
         offset: offset,
-        limit: limit
+        limit: limit,
+        sortAscending: sortAscending
     ))
     printValue(result)
+}
+
+// MARK: - Filter parsing helpers
+
+private func parsePaymentType(_ raw: String) -> PaymentType? {
+    switch raw.lowercased() {
+    case "send": return .send
+    case "receive": return .receive
+    default: return nil
+    }
+}
+
+private func parsePaymentStatus(_ raw: String) -> PaymentStatus? {
+    switch raw.lowercased() {
+    case "pending": return .pending
+    case "completed": return .completed
+    case "failed": return .failed
+    default: return nil
+    }
+}
+
+private func parseAssetFilter(_ raw: String) -> AssetFilter? {
+    if raw.lowercased() == "bitcoin" {
+        return .bitcoin
+    }
+    return .token(tokenIdentifier: raw)
+}
+
+private func parseSparkHtlcStatus(_ raw: String) -> SparkHtlcStatus? {
+    switch raw.lowercased().replacingOccurrences(of: "_", with: "") {
+    case "waitingforpreimage": return .waitingForPreimage
+    case "preimageshared": return .preimageShared
+    case "returned": return .returned
+    default: return nil
+    }
+}
+
+private func parseTokenTransactionType(_ raw: String) -> TokenTransactionType? {
+    switch raw.lowercased() {
+    case "transfer": return .transfer
+    case "mint": return .mint
+    case "burn": return .burn
+    default: return nil
+    }
 }
 
 // --- receive ---
@@ -559,7 +635,7 @@ func handleClaimHtlcPayment(_ sdk: BreezSdk, _ args: [String]) async throws {
     let result = try await sdk.claimHtlcPayment(request: ClaimHtlcPaymentRequest(
         preimage: args[0]
     ))
-    printValue(result)
+    printValue(result.payment)
 }
 
 // --- claim-deposit ---
@@ -663,7 +739,7 @@ func handleListUnclaimedDeposits(_ sdk: BreezSdk, _ args: [String]) async throws
 
 func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
-    let lockedAmount = fp.get("amount").flatMap { UInt64($0) }
+    let lockedAmount = fp.get("locked-amount-sat").flatMap { UInt64($0) }
     let redirectUrl = fp.get("redirect-url")
 
     let result = try await sdk.buyBitcoin(request: BuyBitcoinRequest(
