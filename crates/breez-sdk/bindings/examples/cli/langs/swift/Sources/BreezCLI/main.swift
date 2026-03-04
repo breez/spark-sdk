@@ -7,6 +7,10 @@ import CEditLine
 struct CliOptions {
     var dataDir: String = "./.data"
     var network: String = "regtest"
+    var accountNumber: UInt32?
+    var postgresConnectionString: String?
+    var stableBalanceTokenIdentifier: String?
+    var stableBalanceThreshold: UInt64?
 }
 
 func parseCliFlags() -> CliOptions {
@@ -21,6 +25,18 @@ func parseCliFlags() -> CliOptions {
         case "--network":
             i += 1
             if i < args.count { opts.network = args[i] }
+        case "--account-number":
+            i += 1
+            if i < args.count { opts.accountNumber = UInt32(args[i]) }
+        case "--postgres-connection-string":
+            i += 1
+            if i < args.count { opts.postgresConnectionString = args[i] }
+        case "--stable-balance-token-identifier":
+            i += 1
+            if i < args.count { opts.stableBalanceTokenIdentifier = args[i] }
+        case "--stable-balance-threshold":
+            i += 1
+            if i < args.count { opts.stableBalanceThreshold = UInt64(args[i]) }
         default:
             break
         }
@@ -167,11 +183,30 @@ var config = defaultConfig(network: network)
 if let apiKey = ProcessInfo.processInfo.environment["BREEZ_API_KEY"], !apiKey.isEmpty {
     config.apiKey = apiKey
 }
+if let tokenIdentifier = opts.stableBalanceTokenIdentifier {
+    config.stableBalanceConfig = StableBalanceConfig(
+        tokenIdentifier: tokenIdentifier,
+        thresholdSats: opts.stableBalanceThreshold,
+        maxSlippageBps: nil,
+        reservedSats: nil
+    )
+}
 
 // Build SDK
 let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 let builder = SdkBuilder(config: config, seed: seed)
-await builder.withDefaultStorage(storageDir: resolvedDir)
+if let connectionString = opts.postgresConnectionString {
+    await builder.withPostgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
+} else {
+    await builder.withDefaultStorage(storageDir: resolvedDir)
+}
+if let accountNumber = opts.accountNumber {
+    await builder.withKeySet(config: KeySetConfig(
+        keySetType: .default,
+        useAddressIndex: false,
+        accountNumber: accountNumber
+    ))
+}
 
 let sdk = try await builder.build()
 
@@ -185,7 +220,7 @@ let tokenIssuer = sdk.getTokenIssuer()
 let registry = buildCommandRegistry()
 
 // Set up tab completion
-allCompletionCommands = commandNames + issuerCommandNames + ["help", "exit", "quit"]
+allCompletionCommands = commandNames + issuerCommandNames + contactsCommandNames + ["help", "exit", "quit"]
 rl_attempted_completion_function = attemptedCompletion
 
 // Load history
@@ -229,6 +264,8 @@ replLoop: while true {
 
     if cmdName == "issuer" {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer: tokenIssuer)
+    } else if cmdName == "contacts" {
+        await dispatchContactsCommand(cmdArgs, sdk: sdk)
     } else if let cmd = registry[cmdName] {
         do {
             try await cmd.run(sdk, cmdArgs)
