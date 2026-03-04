@@ -106,6 +106,22 @@ jobs:
               f.write(f"allowed_tools={tools_line}\n")
           PYEOF
 
+      # ── Resolve PR reviewer ──────────────────────────────────────────
+      - name: Resolve reviewer
+        id: reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REVIEWER=$(gh api "repos/${{ github.repository }}/commits?path=crates/breez-sdk/cli/src/&per_page=1" \
+            --jq '.[0].author.login // empty') || true
+          if [ -n "$REVIEWER" ] && [[ ! "$REVIEWER" =~ \[bot\]$ ]]; then
+            echo "reviewer=$REVIEWER" >> "$GITHUB_OUTPUT"
+            echo "::notice::Will request review from $REVIEWER (last Rust CLI committer)"
+          else
+            echo "reviewer=" >> "$GITHUB_OUTPUT"
+            echo "::notice::No reviewer to assign (last committer is a bot or unknown)"
+          fi
+
       # ── Approve flow ────────────────────────────────────────────────
       - name: Download dry-run patch
         if: inputs.approve-run != ''
@@ -123,6 +139,7 @@ jobs:
           LANG: ${{ matrix.lang }}
           LANG_NAME: ${{ steps.config.outputs.lang_name }}
           TARGET_DIR: ${{ steps.config.outputs.target_dir }}
+          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
         run: |
           if [ ! -s "sync-${LANG}.patch" ]; then
             echo "::notice::Patch is empty — no changes to apply."
@@ -149,6 +166,11 @@ jobs:
             BODY+=$'\n\n'"</details>"
           fi
 
+          REVIEWER_FLAG=""
+          if [ -n "$REVIEWER" ]; then
+            REVIEWER_FLAG="--reviewer $REVIEWER"
+          fi
+
           # Reuse existing open PR or create a new one
           EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING_PR" ]; then
@@ -161,6 +183,7 @@ jobs:
             gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
               --body "$BODY" \
               --label "CLI" \
+              $REVIEWER_FLAG \
               --base main
             echo "action=created" >> "$GITHUB_OUTPUT"
           fi
@@ -276,6 +299,7 @@ jobs:
           LANG: ${{ matrix.lang }}
           LANG_NAME: ${{ steps.config.outputs.lang_name }}
           TARGET_DIR: ${{ steps.config.outputs.target_dir }}
+          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
         run: |
           BRANCH="claude/sync-${LANG}-cli"
           git config user.name "github-actions[bot]"
@@ -294,6 +318,11 @@ jobs:
             BODY+=$'\n\n'"</details>"
           fi
 
+          REVIEWER_FLAG=""
+          if [ -n "$REVIEWER" ]; then
+            REVIEWER_FLAG="--reviewer $REVIEWER"
+          fi
+
           # Reuse existing open PR or create a new one
           EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING_PR" ]; then
@@ -306,6 +335,7 @@ jobs:
             gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
               --body "$BODY" \
               --label "CLI" \
+              $REVIEWER_FLAG \
               --base main
             echo "action=created" >> "$GITHUB_OUTPUT"
           fi
