@@ -117,6 +117,7 @@ jobs:
 
       - name: Apply patch and create PR
         if: inputs.approve-run != ''
+        id: approve-pr
         env:
           GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
           LANG: ${{ matrix.lang }}
@@ -131,27 +132,38 @@ jobs:
             echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
             exit 1
           fi
-          BRANCH="claude/sync-${LANG}-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
+          BRANCH="claude/sync-${LANG}-cli"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add "$TARGET_DIR"
           git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
-          git push --force-with-lease -u origin HEAD
+
           BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes in ${{ github.sha }}."
           BODY+=$'\n'"Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}"
           if [ -f sync-findings.md ]; then
             BODY+=$'\n\n'"$(cat sync-findings.md)"
           fi
-          gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
-            --body "$BODY" \
-            --base main
+
+          # Reuse existing open PR or create a new one
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING_PR" ]; then
+            git push --force-with-lease -u origin HEAD
+            gh pr edit "$EXISTING_PR" --body "$BODY"
+            echo "::notice::Updated existing PR #${EXISTING_PR}"
+            echo "action=updated" >> "$GITHUB_OUTPUT"
+          else
+            git push -u origin HEAD
+            gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
+              --body "$BODY" \
+              --base main
+            echo "action=created" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cleanup branch on approve failure
-        if: failure() && inputs.approve-run != ''
+        if: failure() && inputs.approve-run != '' && steps.approve-pr.outputs.action == 'created'
         run: |
-          BRANCH="claude/sync-${{ matrix.lang }}-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
-          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git push origin --delete "claude/sync-${{ matrix.lang }}-cli" 2>/dev/null || true
 
       # ── Normal / dry-run flow ───────────────────────────────────────
       - name: Compute diff info
@@ -253,32 +265,44 @@ jobs:
 
       - name: Create branch and PR
         if: inputs.approve-run == '' && !inputs.dry-run && steps.changes.outputs.changed == 'true'
+        id: sync-pr
         env:
           GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
           LANG: ${{ matrix.lang }}
           LANG_NAME: ${{ steps.config.outputs.lang_name }}
           TARGET_DIR: ${{ steps.config.outputs.target_dir }}
         run: |
-          BRANCH="claude/sync-${LANG}-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
+          BRANCH="claude/sync-${LANG}-cli"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git checkout -B "$BRANCH"
           git add "$TARGET_DIR"
           git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
-          git push -u origin HEAD
+
           BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes in ${{ github.sha }}."
           if [ -f sync-findings.md ]; then
             BODY+=$'\n\n'"$(cat sync-findings.md)"
           fi
-          gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
-            --body "$BODY" \
-            --base main
+
+          # Reuse existing open PR or create a new one
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING_PR" ]; then
+            git push --force-with-lease -u origin HEAD
+            gh pr edit "$EXISTING_PR" --body "$BODY"
+            echo "::notice::Updated existing PR #${EXISTING_PR}"
+            echo "action=updated" >> "$GITHUB_OUTPUT"
+          else
+            git push -u origin HEAD
+            gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
+              --body "$BODY" \
+              --base main
+            echo "action=created" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cleanup branch on PR failure
-        if: failure() && inputs.approve-run == '' && !inputs.dry-run && steps.changes.outputs.changed == 'true'
+        if: failure() && inputs.approve-run == '' && !inputs.dry-run && steps.sync-pr.outputs.action == 'created'
         run: |
-          BRANCH="claude/sync-${{ matrix.lang }}-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
-          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git push origin --delete "claude/sync-${{ matrix.lang }}-cli" 2>/dev/null || true
 
       # ── Dry-run artifacts ───────────────────────────────────────────
       - name: Create dry-run patch
