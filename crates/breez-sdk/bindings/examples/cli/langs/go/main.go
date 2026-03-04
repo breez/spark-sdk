@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	breez_sdk_spark "github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -76,6 +77,10 @@ func main() {
 	dataDir := flag.String("d", "./.data", "Path to the data directory")
 	flag.StringVar(dataDir, "data-dir", "./.data", "Path to the data directory")
 	network := flag.String("network", "regtest", "Network to use (regtest or mainnet)")
+	accountNumber := flag.String("account-number", "", "Account number for the Spark signer")
+	postgresConnectionString := flag.String("postgres-connection-string", "", "PostgreSQL connection string (uses SQLite by default)")
+	stableBalanceTokenIdentifier := flag.String("stable-balance-token-identifier", "", "Stable balance token identifier")
+	stableBalanceThreshold := flag.Uint64("stable-balance-threshold", 0, "Stable balance threshold in sats")
 	flag.Parse()
 
 	resolvedDir := expandPath(*dataDir)
@@ -111,10 +116,38 @@ func main() {
 		config.ApiKey = &apiKey
 	}
 
+	// Stable balance config
+	if *stableBalanceTokenIdentifier != "" {
+		sbc := breez_sdk_spark.StableBalanceConfig{
+			TokenIdentifier: *stableBalanceTokenIdentifier,
+		}
+		if *stableBalanceThreshold > 0 {
+			sbc.ThresholdSats = stableBalanceThreshold
+		}
+		config.StableBalanceConfig = &sbc
+	}
+
 	// Build SDK
 	seed := breez_sdk_spark.SeedMnemonic{Mnemonic: mnemonic}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithDefaultStorage(resolvedDir)
+	if *postgresConnectionString != "" {
+		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
+		builder.WithPostgresStorage(pgConfig)
+	} else {
+		builder.WithDefaultStorage(resolvedDir)
+	}
+	if *accountNumber != "" {
+		acctNum, err := strconv.ParseUint(*accountNumber, 10, 32)
+		if err != nil {
+			log.Fatalf("Invalid account number: %v", err)
+		}
+		acctNum32 := uint32(acctNum)
+		builder.WithKeySet(breez_sdk_spark.KeySetConfig{
+			KeySetType:      breez_sdk_spark.KeySetTypeDefault,
+			UseAddressIndex: false,
+			AccountNumber:   &acctNum32,
+		})
+	}
 
 	sdk, err := builder.Build()
 	if err = liftError(err); err != nil {
@@ -145,6 +178,7 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 	allCommands := make([]string, 0)
 	allCommands = append(allCommands, CommandNames...)
 	allCommands = append(allCommands, IssuerCommandNames...)
+	allCommands = append(allCommands, ContactCommandNames...)
 	allCommands = append(allCommands, "exit", "quit", "help")
 
 	// Build prefix completer items
@@ -212,6 +246,8 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 
 		if cmdName == "issuer" {
 			DispatchIssuerCommand(cmdArgs, tokenIssuer, rl)
+		} else if cmdName == "contacts" {
+			DispatchContactCommand(cmdArgs, sdk, rl)
 		} else if cmd, ok := registry[cmdName]; ok {
 			if err := cmd.Run(sdk, rl, cmdArgs); err != nil {
 				fmt.Printf("Error: %v\n", err)
