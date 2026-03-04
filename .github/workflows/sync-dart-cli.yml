@@ -62,6 +62,8 @@ jobs:
 
       - name: Apply patch and create PR
         if: inputs.approve-run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ ! -s sync-dart.patch ]; then
             echo "::notice::Patch is empty — no changes to apply."
@@ -72,12 +74,13 @@ jobs:
             exit 1
           fi
           make -C crates/breez-sdk/bindings/examples/cli check-dart
+          BRANCH="claude/sync-dart-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b claude/sync-dart-cli-$(echo "${{ github.sha }}" | cut -c1-7)
+          git checkout -b "$BRANCH"
           git add crates/breez-sdk/bindings/examples/cli/langs/dart/
           git commit -m "chore: sync Dart CLI with Rust CLI changes (${{ github.sha }})"
-          git push -u origin HEAD
+          git push --force-with-lease -u origin HEAD
           gh pr create --title "chore: sync Dart CLI with Rust CLI changes" \
             --body "Automated sync of Dart CLI from Rust CLI changes in ${{ github.sha }}. Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}" \
             --base main
