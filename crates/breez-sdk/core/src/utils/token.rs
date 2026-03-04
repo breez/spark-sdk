@@ -62,6 +62,11 @@ pub async fn token_transaction_to_payments(
     transaction: &spark_wallet::TokenTransaction,
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
+    // Transactions with no outputs (e.g. Create) produce no payments
+    if transaction.outputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Get token metadata for the first output (assuming all outputs have the same token)
     let token_identifier = transaction
         .outputs
