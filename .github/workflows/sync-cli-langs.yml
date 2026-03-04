@@ -1,4 +1,7 @@
-name: Sync CLI Languages
+# TEMPORARY: renamed to suppress workflow_run triggers on per-language workflows.
+# Dispatches each sync workflow with dry-run=true for testing.
+# Revert to original after validating the dry-run → approve flow.
+name: "Sync CLI Languages (dry-run test)"
 
 on:
   push:
@@ -8,13 +11,6 @@ on:
       - 'crates/breez-sdk/cli/README.md'
   workflow_dispatch:
 
-# This workflow acts as a trigger for the per-language sync workflows.
-# They react to this workflow's completion via the workflow_run event,
-# which claude-code-action supports (unlike push).
-#
-# To sync a single language manually, dispatch its workflow directly
-# (e.g., "Sync Dart CLI from Rust CLI") instead of this umbrella.
-
 concurrency:
   group: sync-cli-langs-${{ github.sha }}
   cancel-in-progress: true
@@ -22,6 +18,14 @@ concurrency:
 jobs:
   trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 2
+    permissions:
+      actions: write
     steps:
-      - run: echo "Rust CLI changed — language syncs will start via workflow_run"
+      - run: |
+          for lang in dart go python swift; do
+            gh workflow run "sync-${lang}-cli.yml" -f dry-run=true
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
