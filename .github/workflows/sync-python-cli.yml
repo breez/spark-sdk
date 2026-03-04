@@ -85,6 +85,12 @@ jobs:
             --body "Automated sync of Python CLI from Rust CLI changes in ${{ github.sha }}. Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}" \
             --base main
 
+      - name: Cleanup branch on approve failure
+        if: failure() && inputs.approve-run != ''
+        run: |
+          BRANCH="claude/sync-python-cli-$(echo "${{ github.sha }}" | cut -c1-7)"
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+
       # ── Normal / dry-run flow ───────────────────────────────────────
       - name: Compute diff info
         if: inputs.approve-run == ''
