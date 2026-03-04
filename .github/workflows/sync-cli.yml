@@ -76,7 +76,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ inputs.approve-run != '' && 1 || 0 }}
 
       # ── Load per-language config from TOML ──────────────────────────
       - name: Load language config
@@ -139,10 +139,14 @@ jobs:
           git add "$TARGET_DIR"
           git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
 
-          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes in ${{ github.sha }}."
-          BODY+=$'\n'"Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}"
+          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes."
+          BODY+=$'\n\n'"**Source commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
+          BODY+=$'\n'"**Approved from:** [dry-run #${{ inputs.approve-run }}](https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }})"
           if [ -f sync-findings.md ]; then
+            BODY+=$'\n\n'"<details>"
+            BODY+=$'\n'"<summary>Sync findings</summary>"
             BODY+=$'\n\n'"$(cat sync-findings.md)"
+            BODY+=$'\n\n'"</details>"
           fi
 
           # Reuse existing open PR or create a new one
@@ -156,6 +160,7 @@ jobs:
             git push -u origin HEAD
             gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
               --body "$BODY" \
+              --label "CLI" \
               --base main
             echo "action=created" >> "$GITHUB_OUTPUT"
           fi
@@ -279,9 +284,14 @@ jobs:
           git add "$TARGET_DIR"
           git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
 
-          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes in ${{ github.sha }}."
+          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes."
+          BODY+=$'\n\n'"**Source commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
+          BODY+=$'\n'"**Claude log:** [View artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           if [ -f sync-findings.md ]; then
+            BODY+=$'\n\n'"<details>"
+            BODY+=$'\n'"<summary>Sync findings</summary>"
             BODY+=$'\n\n'"$(cat sync-findings.md)"
+            BODY+=$'\n\n'"</details>"
           fi
 
           # Reuse existing open PR or create a new one
@@ -295,6 +305,7 @@ jobs:
             git push -u origin HEAD
             gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
               --body "$BODY" \
+              --label "CLI" \
               --base main
             echo "action=created" >> "$GITHUB_OUTPUT"
           fi
@@ -330,7 +341,7 @@ jobs:
         with:
           name: sync-${{ matrix.lang }}-claude-log
           path: ${{ runner.temp }}/claude-execution-output.json
-          retention-days: 7
+          retention-days: 30
           if-no-files-found: ignore
 
       # ── Summary ─────────────────────────────────────────────────────

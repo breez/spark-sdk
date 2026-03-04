@@ -71,11 +71,20 @@ features and configuration options, but with {{LANG_NAME}}-specific syntax and u
   {{DOC_PRESERVE_ITEMS}}.
 
 ### Step 4: Write findings summary
-After comparing all file pairs, write a short summary to `sync-findings.md` with:
-- **Differences found**: list each divergence (1 line each)
-- **Changes applied**: which differences you fixed
-- **Skipped**: which differences you could not fix and why (missing bindings, platform limitation, etc.)
-- If no differences were found, write "No differences found — CLIs are in sync."
+After comparing all file pairs, write `sync-findings.md` using this exact format:
+
+```markdown
+## Divergences
+- [one-line description of each divergence found]
+
+## Applied
+- [one-line description of each fix applied, referencing the file changed]
+
+## Skipped
+- [one-line description of what was skipped and why (missing bindings, platform limitation, etc.)]
+```
+
+If no differences were found, write only: `No differences found — CLIs are in sync.`
 
 ### Step 5: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`
