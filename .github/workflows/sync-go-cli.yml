@@ -261,6 +261,15 @@ jobs:
           path: sync-go.patch
           retention-days: 7
 
+      - name: Upload Claude log
+        if: always() && inputs.approve-run == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-go-claude-log
+          path: /home/runner/work/_temp/claude-execution-output.json
+          retention-days: 7
+          if-no-files-found: ignore
+
       # ── Summary ─────────────────────────────────────────────────────
       - name: Summary
         if: always()
