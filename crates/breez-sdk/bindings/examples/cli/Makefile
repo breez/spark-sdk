@@ -11,7 +11,8 @@ help: ## Show available targets
 check-python: ## Syntax-check Python CLI source files
 	python3 -m py_compile $(PYTHON_SRC)/*.py
 
-check-go: ## Check Go CLI (format + build + vet)
+check-go: ## Check Go CLI (build with local bindings)
+	cd $(GO_SRC) && $(MAKE) setup
 	cd $(GO_SRC) && gofmt -e *.go > /dev/null
 	cd $(GO_SRC) && go build ./...
 	cd $(GO_SRC) && go vet ./...

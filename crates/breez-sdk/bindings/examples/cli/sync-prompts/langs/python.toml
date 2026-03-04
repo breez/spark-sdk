@@ -76,6 +76,9 @@ content = """
 **Errors:**
 - `return Err(anyhow!("msg"))` → `print("msg"); return`
 
+**SDK version:**
+The Python CLI uses locally built bindings (installed via `make setup`). All SDK methods from the Rust CLI are available in the Python SDK. All commands should be fully implemented — do not use stub handlers. Reference the Python snippets in `docs/breez-sdk/snippets/python/src/` for exact API patterns.
+
 **Subcommand groups (like Issuer, Contacts):**
 - Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
 - Python: main REPL checks `cmd_name == "group"` and calls `dispatch_group_command(args, ...)`

@@ -255,11 +255,17 @@ jobs:
           channel: stable
           flutter-version: 3.38.9
 
-      - name: Set up Swift build environment
-        if: matrix.lang == 'swift' && inputs.approve-run == ''
+      - name: Set up build environment
+        if: (matrix.lang == 'swift' || matrix.lang == 'go') && inputs.approve-run == ''
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
+
+      - name: Set up Go
+        if: matrix.lang == 'go' && inputs.approve-run == ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.19'
 
       # ── Generate prompt and run Claude ───────────────────────────────
       - name: Generate sync prompt

@@ -27,7 +27,7 @@ doc_build_instructions = "build and run commands (`make run` instead of `cargo r
 # Documentation: what language-specific content to preserve
 doc_preserve_items = "go build instructions, or Go-specific notes"
 
-# Build check command (syntax validation without SDK installed)
+# Build check command (builds local bindings from Rust source, then checks)
 build_check = "make -C crates/breez-sdk/bindings/examples/cli check-go"
 
 # Format instructions appended to the build check step (empty = no extra instructions)
@@ -79,7 +79,7 @@ content = """
 - `return Err(anyhow!("msg"))` → `return fmt.Errorf("msg")`
 
 **SDK version:**
-The Go CLI uses the published Go SDK. You can check available SDK methods by reading the Go source in the module cache (e.g. `go/pkg/mod/github.com/breez/breez-sdk-spark-go@*/breez_sdk_spark/breez_sdk_spark.go`). All commands should be fully implemented — do not use stub handlers.
+The Go CLI uses locally built bindings via a `replace` directive in `go.mod`. The `make check-go` build step generates bindings from the current Rust source, so all SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers.
 
 **Subcommand groups (like Issuer, Contacts):**
 - Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`

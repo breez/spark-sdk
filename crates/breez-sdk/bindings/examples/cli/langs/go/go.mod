@@ -13,5 +13,6 @@ require (
 	golang.org/x/sys v0.0.0-20220310020820-b874c991c1a5 // indirect
 )
 
-// Uncomment to use locally generated bindings (run `make setup-local` first):
-// replace github.com/breez/breez-sdk-spark-go => ../../../../ffi/golang
+// Uses local bindings by default (run `make setup` first).
+// To use the published SDK instead, comment out the replace directive below.
+replace github.com/breez/breez-sdk-spark-go => ../../../../ffi/golang
