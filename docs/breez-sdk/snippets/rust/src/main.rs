@@ -1,6 +1,7 @@
 mod buying_bitcoin;
 mod config;
 mod external_signer;
+mod contacts;
 mod fiat_currencies;
 mod getting_started;
 mod htlcs;

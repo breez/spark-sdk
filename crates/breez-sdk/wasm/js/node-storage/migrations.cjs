@@ -382,6 +382,16 @@ class MigrationManager {
         name: "Add index on payment_hash for JOIN with lnurl_receive_metadata",
         sql: `CREATE INDEX IF NOT EXISTS idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash)`
       },
+      {
+        name: "Create contacts table",
+        sql: `CREATE TABLE contacts (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          payment_identifier TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )`
+      },
     ];
   }
 }

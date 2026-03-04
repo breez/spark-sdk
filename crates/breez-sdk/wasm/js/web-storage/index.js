@@ -410,6 +410,16 @@ class MigrationManager {
         },
       },
       {
+        name: "Create contacts store",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("contacts")) {
+            const contactsStore = db.createObjectStore("contacts", { keyPath: "id" });
+            contactsStore.createIndex("name_identifier", ["name", "paymentIdentifier"], { unique: false });
+            contactsStore.createIndex("name", "name", { unique: false });
+          }
+        }
+      },
+      {
         name: "Clear cached lightning address for LnurlInfo schema change",
         upgrade: (db, transaction) => {
           if (db.objectStoreNames.contains("settings")) {
@@ -441,7 +451,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 13; // Current schema version
+    this.dbVersion = 14; // Current schema version
   }
 
   /**
@@ -461,8 +471,7 @@ class IndexedDBStorage {
 
       request.onerror = () => {
         const error = new StorageError(
-          `Failed to open IndexedDB: ${
-            request.error?.message || "Unknown error"
+          `Failed to open IndexedDB: ${request.error?.message || "Unknown error"
           }`,
           request.error
         );
@@ -537,8 +546,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get cached item '${key}': ${
-              request.error?.message || "Unknown error"
+            `Failed to get cached item '${key}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -562,8 +570,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to set cached item '${key}': ${
-              request.error?.message || "Unknown error"
+            `Failed to set cached item '${key}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -587,8 +594,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to delete cached item '${key}': ${
-              request.error?.message || "Unknown error"
+            `Failed to delete cached item '${key}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -758,8 +764,7 @@ class IndexedDBStorage {
       cursorRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list payments (request: ${JSON.stringify(request)}: ${
-              cursorRequest.error?.message || "Unknown error"
+            `Failed to list payments (request: ${JSON.stringify(request)}: ${cursorRequest.error?.message || "Unknown error"
             }`,
             cursorRequest.error
           )
@@ -789,8 +794,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to insert payment '${payment.id}': ${
-              request.error?.message || "Unknown error"
+            `Failed to insert payment '${payment.id}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -853,8 +857,7 @@ class IndexedDBStorage {
       paymentRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get payment by id '${id}': ${
-              paymentRequest.error?.message || "Unknown error"
+            `Failed to get payment by id '${id}': ${paymentRequest.error?.message || "Unknown error"
             }`,
             paymentRequest.error
           )
@@ -918,8 +921,7 @@ class IndexedDBStorage {
       paymentRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get payment by invoice '${invoice}': ${
-              paymentRequest.error?.message || "Unknown error"
+            `Failed to get payment by invoice '${invoice}': ${paymentRequest.error?.message || "Unknown error"
             }`,
             paymentRequest.error
           )
@@ -1084,8 +1086,7 @@ class IndexedDBStorage {
       cursorRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get payments by parent ids: ${
-              cursorRequest.error?.message || "Unknown error"
+            `Failed to get payments by parent ids: ${cursorRequest.error?.message || "Unknown error"
             }`,
             cursorRequest.error
           )
@@ -1129,8 +1130,7 @@ class IndexedDBStorage {
         putRequest.onerror = () => {
           reject(
             new StorageError(
-              `Failed to set payment metadata for '${paymentId}': ${
-                putRequest.error?.message || "Unknown error"
+              `Failed to set payment metadata for '${paymentId}': ${putRequest.error?.message || "Unknown error"
               }`,
               putRequest.error
             )
@@ -1140,8 +1140,7 @@ class IndexedDBStorage {
       getRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get existing payment metadata for '${paymentId}': ${
-              getRequest.error?.message || "Unknown error"
+            `Failed to get existing payment metadata for '${paymentId}': ${getRequest.error?.message || "Unknown error"
             }`,
             getRequest.error
           )
@@ -1178,8 +1177,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to add deposit '${txid}:${vout}': ${
-              request.error?.message || "Unknown error"
+            `Failed to add deposit '${txid}:${vout}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -1205,8 +1203,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to delete deposit '${txid}:${vout}': ${
-              request.error?.message || "Unknown error"
+            `Failed to delete deposit '${txid}:${vout}': ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -1240,8 +1237,7 @@ class IndexedDBStorage {
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list deposits: ${
-              request.error?.message || "Unknown error"
+            `Failed to list deposits: ${request.error?.message || "Unknown error"
             }`,
             request.error
           )
@@ -1293,8 +1289,7 @@ class IndexedDBStorage {
         putRequest.onerror = () => {
           reject(
             new StorageError(
-              `Failed to update deposit '${txid}:${vout}': ${
-                putRequest.error?.message || "Unknown error"
+              `Failed to update deposit '${txid}:${vout}': ${putRequest.error?.message || "Unknown error"
               }`,
               putRequest.error
             )
@@ -1305,8 +1300,7 @@ class IndexedDBStorage {
       getRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get deposit '${txid}:${vout}' for update: ${
-              getRequest.error?.message || "Unknown error"
+            `Failed to get deposit '${txid}:${vout}' for update: ${getRequest.error?.message || "Unknown error"
             }`,
             getRequest.error
           )
@@ -1354,8 +1348,7 @@ class IndexedDBStorage {
         request.onerror = () => {
           reject(
             new StorageError(
-              `Failed to add lnurl metadata for payment hash '${
-                item.paymentHash
+              `Failed to add lnurl metadata for payment hash '${item.paymentHash
               }': ${request.error?.message || "Unknown error"}`,
               request.error
             )
@@ -1835,6 +1828,144 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to update record from incoming: ${event.target.error.message}`
+          )
+        );
+      };
+    });
+  }
+
+  // ===== Contact Operations =====
+
+  async listContacts(request) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    const actualOffset = request.offset !== null && request.offset !== undefined ? request.offset : 0;
+    const actualLimit = request.limit !== null && request.limit !== undefined ? request.limit : 4294967295;
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readonly");
+      const store = transaction.objectStore("contacts");
+      const nameIndex = store.index("name");
+
+      const contacts = [];
+      let count = 0;
+      let skipped = 0;
+
+      const cursorRequest = nameIndex.openCursor();
+
+      cursorRequest.onsuccess = (event) => {
+        const cursor = event.target.result;
+
+        if (!cursor || count >= actualLimit) {
+          resolve(contacts);
+          return;
+        }
+
+        if (skipped < actualOffset) {
+          skipped++;
+          cursor.continue();
+          return;
+        }
+
+        contacts.push(cursor.value);
+        count++;
+        cursor.continue();
+      };
+
+      cursorRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to list contacts: ${cursorRequest.error?.message || "Unknown error"}`,
+            cursorRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  async getContact(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readonly");
+      const store = transaction.objectStore("contacts");
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        resolve(request.result || null);
+      };
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async insertContact(contact) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readwrite");
+      const store = transaction.objectStore("contacts");
+
+      // Preserve created_at from existing record on update
+      const getRequest = store.get(contact.id);
+      getRequest.onsuccess = () => {
+        const existingById = getRequest.result;
+        const toStore = existingById
+          ? { ...contact, createdAt: existingById.createdAt }
+          : contact;
+
+        const putRequest = store.put(toStore);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => {
+          reject(
+            new StorageError(
+              `Inserting contact failed: ${putRequest.error?.name || "Unknown error"} - ${putRequest.error?.message || ""}`,
+              putRequest.error
+            )
+          );
+        };
+      };
+      getRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to check existing contact: ${getRequest.error?.message || "Unknown error"}`,
+            getRequest.error
+          )
+        );
+      };
+    });
+  }
+
+  async deleteContact(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("contacts", "readwrite");
+      const store = transaction.objectStore("contacts");
+      const request = store.delete(id);
+
+      request.onsuccess = () => resolve();
+
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to delete contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
           )
         );
       };

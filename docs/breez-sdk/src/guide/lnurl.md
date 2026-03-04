@@ -3,6 +3,7 @@
 The Breez SDK - Spark supports the following <a target="_blank" href="https://github.com/lnurl/luds">LNURL</a> functionality:
 
 - **[Sending payments using LNURL-Pay/Lightning address]** (including BIP353 addresses)
+- **[Managing contacts]** — Save frequently used Lightning addresses for quick access
 - **[Receiving payments using LNURL-Pay/Lightning address]**
 - **[Receiving payments using LNURL-Withdraw]**
 - **[Using LNURL-Auth]**
@@ -13,3 +14,4 @@ The Breez SDK - Spark supports the following <a target="_blank" href="https://gi
 [Receiving payments using LNURL-Withdraw]: lnurl_withdraw.md
 [Using LNURL-Auth]: lnurl_auth.md
 [LNURL-Verify]: receive_lnurl_pay.md#payment-verification-lud-21
+[Managing contacts]: contacts.md

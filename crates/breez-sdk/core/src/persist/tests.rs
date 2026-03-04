@@ -3233,3 +3233,129 @@ pub async fn test_pending_lnurl_preimages(storage: Box<dyn Storage>) {
         pending_after.len()
     );
 }
+
+#[allow(clippy::too_many_lines)]
+pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
+    use crate::{Contact, ListContactsRequest, StorageError};
+
+    // Test insert
+    let c1 = Contact {
+        id: "c1".to_string(),
+        name: "Alice".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c1.clone()).await.unwrap();
+
+    // Test get_contact
+    let fetched = storage.get_contact("c1".to_string()).await.unwrap();
+    assert_eq!(fetched.id, "c1");
+    assert_eq!(fetched.name, "Alice");
+    assert_eq!(fetched.payment_identifier, "alice@example.com");
+    assert_eq!(fetched.created_at, 1000);
+    assert_eq!(fetched.updated_at, 1000);
+
+    // Test get_contact not found
+    assert!(matches!(
+        storage.get_contact("nonexistent".to_string()).await,
+        Err(StorageError::NotFound)
+    ));
+
+    // Test list
+    let contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].name, "Alice");
+
+    // Test upsert - preserves created_at from existing row
+    let to_update = Contact {
+        id: "c1".to_string(),
+        name: "Alice B".to_string(),
+        payment_identifier: "alice@example.com".to_string(),
+        created_at: 0, // Should be ignored by ON CONFLICT
+        updated_at: 2000,
+    };
+    storage.insert_contact(to_update).await.unwrap();
+    let updated = storage.get_contact("c1".to_string()).await.unwrap();
+    assert_eq!(updated.name, "Alice B");
+    assert_eq!(updated.created_at, 1000); // Verify created_at preserved
+
+    // Test delete
+    storage.delete_contact("c1".to_string()).await.unwrap();
+    let contacts = storage
+        .list_contacts(ListContactsRequest::default())
+        .await
+        .unwrap();
+    assert!(contacts.is_empty());
+
+    // Test duplicate (name, payment_identifier) with different id — allowed at storage layer
+    let c2 = Contact {
+        id: "c2".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c2).await.unwrap();
+    let c3 = Contact {
+        id: "c3".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c3).await.unwrap();
+
+    // Test upsert to duplicate (name, payment_identifier) — allowed at storage layer
+    let c4 = Contact {
+        id: "c4".to_string(),
+        name: "Carol".to_string(),
+        payment_identifier: "carol@example.com".to_string(),
+        created_at: 1000,
+        updated_at: 1000,
+    };
+    storage.insert_contact(c4).await.unwrap();
+    let c4_dup = Contact {
+        id: "c4".to_string(),
+        name: "Bob".to_string(),
+        payment_identifier: "bob@example.com".to_string(),
+        created_at: 0,
+        updated_at: 2000,
+    };
+    storage.insert_contact(c4_dup).await.unwrap();
+
+    // Test pagination
+    storage.delete_contact("c2".to_string()).await.unwrap();
+    storage.delete_contact("c3".to_string()).await.unwrap();
+    storage.delete_contact("c4".to_string()).await.unwrap();
+    for i in 0..5 {
+        let c = Contact {
+            id: format!("p{i}"),
+            name: format!("User{i}"),
+            payment_identifier: format!("u{i}@example.com"),
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        storage.insert_contact(c).await.unwrap();
+    }
+    let page1 = storage
+        .list_contacts(ListContactsRequest {
+            offset: Some(0),
+            limit: Some(2),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page1.len(), 2);
+    let page2 = storage
+        .list_contacts(ListContactsRequest {
+            offset: Some(2),
+            limit: Some(2),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page2.len(), 2);
+    assert_ne!(page1[0].id, page2[0].id);
+}

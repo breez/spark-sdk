@@ -25,6 +25,11 @@ fn storage_to_sync_error(value: StorageError) -> breez_sdk_common::sync::storage
         StorageError::Serialization(msg) => {
             breez_sdk_common::sync::storage::SyncStorageError::Serialization(msg)
         }
+        StorageError::NotFound => {
+            breez_sdk_common::sync::storage::SyncStorageError::Implementation(
+                "Not found".to_string(),
+            )
+        }
     }
 }
 
