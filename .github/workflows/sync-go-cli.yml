@@ -150,6 +150,8 @@ jobs:
             - **Command handlers**: logic, control flow, error handling
             - **Imports**: removed or renamed SDK symbols
 
+            **Critical: do NOT dismiss differences as "expected language variations."** Only pure syntax differences are expected (e.g., `.await` vs `await`, `snake_case` vs `camelCase`). If the Rust and Go CLIs call different SDK functions, use different initialization patterns, pass different arguments, or have different control flow — that is a real divergence that must be reported and fixed. When in doubt, treat it as a real difference.
+
             Only after listing all differences should you decide which ones to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but 'use `handleNotYetSupported` as the handler' and leave a comment explaining why.
 
             Also check the Go SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the Go CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
