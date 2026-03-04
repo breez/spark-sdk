@@ -4,10 +4,9 @@ use macros::async_test_all;
 use serde_json::json;
 
 use crate::input::error::Bip21Error;
-use crate::input::parser::{InputParser, parse_local};
+use crate::input::parser::InputParser;
 use crate::input::{
-    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType,
-    LocalInputType, ParseError,
+    Bip21Details, Bip21Extra, BitcoinAddressDetails, ExternalInputParser, InputType, ParseError,
 };
 use crate::test_utils::mock_dns_resolver::MockDnsResolver;
 use crate::test_utils::mock_rest_client::{MockResponse, MockRestClient};
@@ -940,105 +939,4 @@ async fn test_external_parsing_error() {
     let result = input_parser.parse(input).await;
 
     assert!(matches!(result, Err(ParseError::InvalidInput)));
-}
-
-// --- parse_local tests ---
-
-#[test]
-fn test_parse_local_empty_input() {
-    assert!(parse_local("").is_err());
-    assert!(parse_local("   ").is_err());
-}
-
-#[test]
-fn test_parse_local_garbage_input() {
-    assert!(parse_local("not_a_valid_anything").is_err());
-    assert!(parse_local("hello world").is_err());
-}
-
-#[test]
-fn test_parse_local_lightning_address() {
-    let result = parse_local("user@domain.com").unwrap();
-    assert!(matches!(
-        result,
-        LocalInputType::LightningAddress { address } if address == "user@domain.com"
-    ));
-}
-
-#[test]
-fn test_parse_local_lightning_address_bitcoin_prefix() {
-    let result = parse_local("₿user@domain.com").unwrap();
-    assert!(matches!(
-        result,
-        LocalInputType::LightningAddress { address } if address == "user@domain.com"
-    ));
-}
-
-#[test]
-fn test_parse_local_bolt11_invoice() {
-    let bolt11 = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
-    let result = parse_local(bolt11).unwrap();
-    assert!(matches!(result, LocalInputType::Bolt11Invoice(_)));
-}
-
-#[test]
-fn test_parse_local_bolt11_with_lightning_prefix() {
-    let bolt11 = "lightning:lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
-    let result = parse_local(bolt11).unwrap();
-    assert!(matches!(result, LocalInputType::Bolt11Invoice(_)));
-}
-
-#[test]
-fn test_parse_local_bolt12_offer() {
-    let offer = "lno1zcss9mk8y3wkklfvevcrszlmu23kfrxh49px20665dqwmn4p72pksese";
-    let result = parse_local(offer).unwrap();
-    assert!(matches!(result, LocalInputType::Bolt12Offer(_)));
-}
-
-#[test]
-fn test_parse_local_lnurl_bech32() {
-    let lnurl = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf";
-    let result = parse_local(lnurl).unwrap();
-    assert!(matches!(result, LocalInputType::Lnurl { .. }));
-}
-
-#[test]
-fn test_parse_local_lnurlp_scheme() {
-    let result = parse_local("lnurlp://domain.com/lnurl-pay?session=test").unwrap();
-    assert!(matches!(result, LocalInputType::Lnurl { .. }));
-}
-
-#[test]
-fn test_parse_local_lnurlw_scheme() {
-    let result = parse_local("lnurlw://domain.com/lnurl-withdraw?session=test").unwrap();
-    assert!(matches!(result, LocalInputType::Lnurl { .. }));
-}
-
-#[test]
-fn test_parse_local_keyauth_scheme() {
-    let result = parse_local("keyauth://domain.com/auth?k1=abc123").unwrap();
-    assert!(matches!(result, LocalInputType::Lnurl { .. }));
-}
-
-#[test]
-fn test_parse_local_spark_address() {
-    let spark_addr = "sparkrt1pgssyuuuhnrrdjswal5c3s3rafw9w3y5dd4cjy3duxlf7hjzkp0rqx6dc0nltx";
-    let result = parse_local(spark_addr).unwrap();
-    assert!(matches!(result, LocalInputType::SparkAddress(_)));
-}
-
-#[test]
-fn test_parse_local_bitcoin_address() {
-    let result = parse_local("1andreas3batLhQa2FawWjeyjCqyBzypd").unwrap();
-    assert!(matches!(result, LocalInputType::BitcoinAddress(_)));
-
-    let result = parse_local("bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj").unwrap();
-    assert!(matches!(result, LocalInputType::BitcoinAddress(_)));
-}
-
-#[test]
-fn test_parse_local_plain_url_not_lnurl() {
-    // Plain https URLs should NOT be recognized as LNURL
-    assert!(parse_local("https://example.com").is_err());
-    assert!(parse_local("http://example.com").is_err());
 }

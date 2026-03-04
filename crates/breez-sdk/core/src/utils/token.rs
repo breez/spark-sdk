@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use breez_sdk_common::input::{PaymentRequestSource, SparkAddressParsed, parse_spark_address};
+use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use spark_wallet::{BURN_PUBLIC_KEY, PublicKey, SparkWallet};
 use tracing::{debug, warn};
 use web_time::UNIX_EPOCH;
@@ -102,7 +102,7 @@ pub async fn token_transaction_to_payments(
 
     let mut invoices = Vec::new();
     for invoice_str in &transaction.fulfilled_invoices {
-        if let Some(SparkAddressParsed::Invoice(invoice)) =
+        if let Some(InputType::SparkInvoice(invoice)) =
             parse_spark_address(invoice_str, &PaymentRequestSource::default())
         {
             invoices.push(invoice);

@@ -21,8 +21,8 @@ use platform_utils::{DefaultHttpClient, HttpClient};
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
     Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
-    Bolt12OfferDetails, InputType, LightningAddressDetails, LocalInputType,
-    SilentPaymentAddressDetails, error::Bip21Error,
+    Bolt12OfferDetails, InputType, LightningAddressDetails, SilentPaymentAddressDetails,
+    error::Bip21Error,
 };
 
 const BIP_21_PREFIX: &str = "bitcoin:";
@@ -30,7 +30,6 @@ const BIP_353_USER_BITCOIN_PAYMENT_PREFIX: &str = "user._bitcoin-payment";
 const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
-const LNURL_SUPPORTED_SCHEMES: [&str; 3] = ["lnurlp", "lnurlw", "keyauth"];
 
 mod percent_encode;
 
@@ -49,123 +48,6 @@ pub fn validate_lightning_address_format(input: &str) -> bool {
         return false;
     }
     url::Url::parse(&format!("https://{domain}")).is_ok()
-}
-
-/// Parses an input string locally (synchronously, no network calls).
-/// Returns a [`LocalInputType`] if the input can be recognized as a known payment format.
-pub fn parse_local(input: &str) -> Result<super::LocalInputType, ParseError> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Err(ParseError::EmptyInput);
-    }
-
-    // BIP-21 (bitcoin: URI)
-    if has_bip_21_prefix(input) {
-        let source = PaymentRequestSource {
-            bip_21_uri: Some(input.to_string()),
-            bip_353_address: None,
-        };
-        if let Some(bip_21) = parse_bip_21(input, &source)? {
-            return Ok(LocalInputType::Bip21(bip_21));
-        }
-    }
-
-    // Lightning address check (contains '@')
-    if input.contains('@') {
-        let cleaned = input.strip_prefix('₿').unwrap_or(input);
-        if validate_lightning_address_format(cleaned) {
-            let (user, domain) = cleaned.split_once('@').unwrap();
-            let address = format!("{}@{}", user.to_lowercase(), domain.to_lowercase());
-            return Ok(super::LocalInputType::LightningAddress { address });
-        }
-    }
-
-    // Strip lightning: prefix
-    let stripped = if has_lightning_prefix(input) {
-        &input[LIGHTNING_PREFIX_LEN..]
-    } else {
-        input
-    };
-
-    let source = PaymentRequestSource::default();
-
-    // Bolt11
-    if let Some(details) = parse_bolt11(stripped, &source) {
-        return Ok(LocalInputType::Bolt11Invoice(details));
-    }
-
-    // Bolt12 offer
-    if let Some(details) = parse_bolt12_offer(stripped, &source) {
-        return Ok(LocalInputType::Bolt12Offer(details));
-    }
-
-    // Bolt12 invoice request
-    if let Some(details) = parse_bolt12_invoice_request(stripped, &source) {
-        return Ok(LocalInputType::Bolt12InvoiceRequest(details));
-    }
-
-    // LNURL (bech32 or scheme-prefixed, sync decode only)
-    if let Some(url) = try_decode_lnurl(stripped) {
-        return Ok(LocalInputType::Lnurl { url });
-    }
-
-    // Spark address / invoice
-    if let Some(parsed) = parse_spark_address(input, &source) {
-        return Ok(match parsed {
-            super::SparkAddressParsed::Address(details) => LocalInputType::SparkAddress(details),
-            super::SparkAddressParsed::Invoice(details) => LocalInputType::SparkInvoice(details),
-        });
-    }
-
-    // Bitcoin: check silent payment address first (bech32 "sp" HRP)
-    if let Ok((hrp, _)) = bech32::decode(input)
-        && hrp.to_lowercase().as_str() == "sp"
-    {
-        return match parse_silent_payment_address(input, &source) {
-            Some(details) => Ok(LocalInputType::SilentPaymentAddress(details)),
-            None => Err(ParseError::InvalidInput),
-        };
-    }
-
-    // Bitcoin address
-    if let Some(details) = parse_bitcoin_address(input, &source) {
-        return Ok(LocalInputType::BitcoinAddress(details));
-    }
-
-    Err(ParseError::InvalidInput)
-}
-
-/// Decodes an LNURL synchronously without making network calls.
-/// Handles bech32-encoded LNURLs and scheme-prefixed URLs (lnurlp://, lnurlw://, keyauth://).
-/// Returns the decoded URL string on success, or None if not recognized as an LNURL.
-fn try_decode_lnurl(input: &str) -> Option<String> {
-    // Path 1: bech32 decode
-    if let Ok((hrp, data)) = bech32::decode(input)
-        && hrp.to_lowercase() == LNURL_HRP
-    {
-        let decoded = String::from_utf8(data).ok()?;
-        // Validate it's a proper URL
-        url::Url::parse(&decoded).ok()?;
-        return Some(decoded);
-    }
-
-    // Path 2: scheme-prefixed (lnurlp://, lnurlw://, keyauth://)
-    let mut candidate = input.to_string();
-    for pref in LNURL_SUPPORTED_SCHEMES {
-        let scheme_simple = format!("{pref}:");
-        let scheme_authority = format!("{pref}://");
-        if has_prefix(&candidate, &scheme_simple) && !has_prefix(&candidate, &scheme_authority) {
-            candidate = replace_prefix(&candidate, &scheme_simple, &scheme_authority);
-        }
-    }
-
-    let parsed = url::Url::parse(&candidate).ok()?;
-    if LNURL_SUPPORTED_SCHEMES.contains(&parsed.scheme()) {
-        parsed.host()?; // ensure it has a host
-        return Some(candidate);
-    }
-
-    None
 }
 
 pub async fn parse(
@@ -226,35 +108,40 @@ where
     }
 
     pub async fn parse_core(&self, input: &str) -> Result<Option<InputType>, ParseError> {
-        match parse_local(input) {
-            Ok(LocalInputType::Bip21(d)) => Ok(Some(InputType::Bip21(d))),
-            Ok(LocalInputType::LightningAddress { .. }) => {
-                if let Some(la) = self.parse_lightning_address(input).await {
-                    return Ok(Some(InputType::LightningAddress(la)));
-                }
-                Ok(self.parse_bip_353(input).await?.map(InputType::Bip21))
+        if input.contains('@') {
+            if let Some(lightning_address) = self.parse_lightning_address(input).await {
+                return Ok(Some(InputType::LightningAddress(lightning_address)));
             }
-            Ok(LocalInputType::Lnurl { url }) => Ok(self
-                .resolve_lnurl_decoded(&url, &PaymentRequestSource::default())
-                .await?),
-            Ok(LocalInputType::BitcoinAddress(d)) => Ok(Some(InputType::BitcoinAddress(d))),
-            Ok(LocalInputType::Bolt11Invoice(d)) => Ok(Some(InputType::Bolt11Invoice(d))),
-            Ok(LocalInputType::Bolt12InvoiceRequest(d)) => {
-                Ok(Some(InputType::Bolt12InvoiceRequest(d)))
+
+            if let Some(bip_21) = self.parse_bip_353(input).await? {
+                return Ok(Some(InputType::Bip21(bip_21)));
             }
-            Ok(LocalInputType::Bolt12Offer(d)) => Ok(Some(InputType::Bolt12Offer(d))),
-            Ok(LocalInputType::SparkAddress(d)) => Ok(Some(InputType::SparkAddress(d))),
-            Ok(LocalInputType::SparkInvoice(d)) => Ok(Some(InputType::SparkInvoice(d))),
-            Ok(LocalInputType::SilentPaymentAddress(d)) => {
-                Ok(Some(InputType::SilentPaymentAddress(d)))
-            }
-            // Input not recognized locally — try async LNURL as fallback
-            // (handles raw https:// URLs that aren't bech32-encoded or scheme-prefixed)
-            Err(ParseError::InvalidInput) => Ok(self
-                .try_resolve_lnurl(input, &PaymentRequestSource::default())
-                .await?),
-            Err(e) => Err(e),
         }
+
+        if has_bip_21_prefix(input) {
+            let source = PaymentRequestSource {
+                bip_21_uri: Some(input.to_string()),
+                bip_353_address: None,
+            };
+            if let Some(bip_21) = parse_bip_21(input, &source)? {
+                return Ok(Some(InputType::Bip21(bip_21)));
+            }
+        }
+
+        let source = PaymentRequestSource::default();
+        if let Some(input_type) = self.parse_lightning(input, &source).await? {
+            return Ok(Some(input_type));
+        }
+
+        if let Some(input_type) = parse_spark_address(input, &source) {
+            return Ok(Some(input_type));
+        }
+
+        if let Some(input_type) = parse_bitcoin(input, &source) {
+            return Ok(Some(input_type));
+        }
+
+        Ok(None)
     }
 
     async fn parse_bip_353(&self, input: &str) -> Result<Option<Bip21Details>, Bip21Error> {
@@ -298,6 +185,34 @@ where
                 bip_353_address: Some(input.to_string()),
             },
         )
+    }
+
+    async fn parse_lightning(
+        &self,
+        input: &str,
+        source: &PaymentRequestSource,
+    ) -> Result<Option<InputType>, ParseError> {
+        let input = if has_lightning_prefix(input) {
+            &input[LIGHTNING_PREFIX_LEN..]
+        } else {
+            input
+        };
+
+        if let Some(payment_method) = parse_lightning_payment_method(input, source) {
+            return Ok(Some(payment_method));
+        }
+
+        if let Some(bolt12_invoice_request) = parse_bolt12_invoice_request(input, source) {
+            return Ok(Some(InputType::Bolt12InvoiceRequest(
+                bolt12_invoice_request,
+            )));
+        }
+
+        if let Some(lnurl) = self.parse_lnurl(input, source).await? {
+            return Ok(Some(lnurl));
+        }
+
+        Ok(None)
     }
 
     async fn parse_lightning_address(&self, input: &str) -> Option<LightningAddressDetails> {
@@ -348,57 +263,80 @@ where
         }
     }
 
-    async fn try_resolve_lnurl(
+    async fn parse_lnurl(
         &self,
         input: &str,
         source: &PaymentRequestSource,
     ) -> Result<Option<InputType>, LnurlError> {
-        let decoded = try_decode_lnurl(input).unwrap_or_else(|| input.to_string());
-        self.resolve_lnurl_decoded(&decoded, source).await
-    }
+        let mut input = match bech32::decode(input) {
+            Ok((hrp, data)) => {
+                let hrp = hrp.to_lowercase();
+                if hrp != LNURL_HRP {
+                    return Ok(None);
+                }
 
-    async fn resolve_lnurl_decoded(
-        &self,
-        decoded: &str,
-        source: &PaymentRequestSource,
-    ) -> Result<Option<InputType>, LnurlError> {
-        let Ok(parsed_url) = url::Url::parse(decoded) else {
+                match String::from_utf8(data) {
+                    Ok(decoded) => decoded,
+                    Err(_) => return Ok(None),
+                }
+            }
+            Err(_) => input.to_string(),
+        };
+
+        let supported_prefixes: [&str; 3] = ["lnurlp", "lnurlw", "keyauth"];
+
+        // Treat prefix: and prefix:// the same, to cover both vendor implementations
+        // https://github.com/lnbits/lnbits/pull/762#issue-1309702380
+        for pref in supported_prefixes {
+            let scheme_simple = format!("{pref}:");
+            let scheme_authority = format!("{pref}://");
+            if has_prefix(&input, &scheme_simple) && !has_prefix(&input, &scheme_authority) {
+                input = replace_prefix(&input, &scheme_simple, &scheme_authority);
+            }
+        }
+
+        let Ok(parsed_url) = url::Url::parse(&input) else {
             return Ok(None);
         };
 
         let host = match parsed_url.host() {
             Some(domain) => domain.to_string(),
-            None => return Ok(None),
+            None => return Ok(None), // TODO: log or return error.
         };
 
-        // Validate scheme and rewrite lnurl-specific schemes to http/https
-        let url = match parsed_url.scheme() {
+        let mut url = parsed_url.clone();
+        match parsed_url.scheme() {
             "http" => {
+                // Allow http for .onion domains and local domains (for testing)
                 if !has_extension(&host, "onion") && !is_local_domain(&host) {
                     return Err(LnurlError::HttpSchemeWithoutOnionDomain);
                 }
-                parsed_url
             }
             "https" => {
                 if has_extension(&host, "onion") {
                     return Err(LnurlError::HttpsSchemeWithOnionDomain);
                 }
-                parsed_url
             }
-            scheme if LNURL_SUPPORTED_SCHEMES.contains(&scheme) => {
-                let target_scheme = if has_extension(&host, "onion") {
-                    "http"
+            scheme if supported_prefixes.contains(&scheme) => {
+                if has_extension(&host, "onion") {
+                    url =
+                        url::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(|_| {
+                            LnurlError::General(
+                                "failed to rewrite lnurl scheme to http".to_string(),
+                            )
+                        })?;
                 } else {
-                    "https"
-                };
-                url::Url::parse(&replace_prefix(decoded, scheme, target_scheme)).map_err(|_| {
-                    LnurlError::General(format!(
-                        "failed to rewrite lnurl scheme to {target_scheme}"
-                    ))
-                })?
+                    url = url::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
+                        |_| {
+                            LnurlError::General(
+                                "failed to rewrite lnurl scheme to https".to_string(),
+                            )
+                        },
+                    )?;
+                }
             }
-            &_ => return Err(LnurlError::UnknownScheme),
-        };
+            &_ => return Err(LnurlError::UnknownScheme), // TODO: log or return error.
+        }
 
         Ok(Some(self.resolve_lnurl(&url, source).await?))
     }
@@ -692,7 +630,7 @@ fn parse_bip21_key(
         "spark" => {
             let spark_address = parse_spark_address(value, source);
             match spark_address {
-                Some(spark_address) => bip_21.payment_methods.push(spark_address.into()),
+                Some(spark_address) => bip_21.payment_methods.push(spark_address),
                 None => return Err(Bip21Error::invalid_parameter("spark")),
             }
         }
@@ -710,62 +648,84 @@ fn parse_bip21_key(
     Ok(())
 }
 
-pub fn parse_spark_address(
-    input: &str,
-    source: &PaymentRequestSource,
-) -> Option<super::SparkAddressParsed> {
-    let spark_address = input.parse::<SparkAddress>().ok()?;
-    let identity_public_key = spark_address.identity_public_key.to_string();
-    let network = spark_address.network.into();
+pub fn parse_spark_address(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
+    if let Ok(spark_address) = input.parse::<SparkAddress>() {
+        let identity_public_key = spark_address.identity_public_key.to_string();
+        let network = spark_address.network.into();
 
-    if spark_address.is_invoice() {
-        let invoice_fields = spark_address.spark_invoice_fields?;
+        if spark_address.is_invoice() {
+            let invoice_fields = spark_address.spark_invoice_fields?;
 
-        let payment_type = invoice_fields.payment_type?;
+            let payment_type = invoice_fields.payment_type?;
 
-        let amount = match &payment_type {
-            SparkAddressPaymentType::TokensPayment(tp) => tp.amount,
-            SparkAddressPaymentType::SatsPayment(sp) => sp.amount.map(Into::into),
-        };
+            let amount = match &payment_type {
+                SparkAddressPaymentType::TokensPayment(tp) => tp.amount,
+                SparkAddressPaymentType::SatsPayment(sp) => sp.amount.map(Into::into),
+            };
 
-        let token_identifier = match &payment_type {
-            SparkAddressPaymentType::TokensPayment(tp) => {
-                let Some(token_identifier) = &tp.token_identifier else {
-                    warn!("Tried parsing Spark token invoice without token identifier: {input}");
-                    return None;
-                };
-                Some(token_identifier.clone())
-            }
-            SparkAddressPaymentType::SatsPayment(_) => None,
-        };
+            let token_identifier = match &payment_type {
+                SparkAddressPaymentType::TokensPayment(tp) => {
+                    let Some(token_identifier) = &tp.token_identifier else {
+                        warn!(
+                            "Tried parsing Spark token invoice without token identifier: {input}"
+                        );
+                        return None;
+                    };
+                    Some(token_identifier.clone())
+                }
+                SparkAddressPaymentType::SatsPayment(_) => None,
+            };
 
-        let Ok(expiry_time_duration) = invoice_fields
-            .expiry_time
-            .map(|e| e.duration_since(UNIX_EPOCH))
-            .transpose()
-        else {
-            return None;
-        };
-        let expiry_time = expiry_time_duration.map(|e| e.as_secs());
+            let Ok(expiry_time_duration) = invoice_fields
+                .expiry_time
+                .map(|e| e.duration_since(UNIX_EPOCH))
+                .transpose()
+            else {
+                return None;
+            };
+            let expiry_time = expiry_time_duration.map(|e| e.as_secs());
 
-        return Some(super::SparkAddressParsed::Invoice(SparkInvoiceDetails {
-            invoice: input.to_string(),
+            return Some(InputType::SparkInvoice(SparkInvoiceDetails {
+                invoice: input.to_string(),
+                identity_public_key,
+                network,
+                amount,
+                token_identifier,
+                expiry_time,
+                description: invoice_fields.memo,
+                sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),
+            }));
+        }
+
+        return Some(InputType::SparkAddress(SparkAddressDetails {
+            address: input.to_string(),
             identity_public_key,
             network,
-            amount,
-            token_identifier,
-            expiry_time,
-            description: invoice_fields.memo,
-            sender_public_key: invoice_fields.sender_public_key.map(|e| e.to_string()),
+            source: source.clone(),
         }));
     }
+    None
+}
 
-    Some(super::SparkAddressParsed::Address(SparkAddressDetails {
-        address: input.to_string(),
-        identity_public_key,
-        network,
-        source: source.clone(),
-    }))
+fn parse_bitcoin(input: &str, source: &PaymentRequestSource) -> Option<InputType> {
+    if let Ok((hrp, _)) = bech32::decode(input)
+        && hrp.to_lowercase().as_str() == "sp"
+    {
+        match parse_silent_payment_address(input, source) {
+            Some(silent_payment) => {
+                return Some(InputType::SilentPaymentAddress(silent_payment));
+            }
+            None => {
+                return None;
+            }
+        }
+    }
+
+    if let Some(address) = parse_bitcoin_address(input, source) {
+        return Some(InputType::BitcoinAddress(address));
+    }
+
+    None
 }
 
 fn parse_bitcoin_address(
