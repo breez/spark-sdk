@@ -248,9 +248,12 @@ jobs:
           fi
 
       # ── Language-specific setup ─────────────────────────────────────
-      - name: Set up Dart
+      - name: Set up Flutter
         if: matrix.lang == 'dart' && inputs.approve-run == ''
-        uses: dart-lang/setup-dart@v1
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.38.9
 
       - name: Set up Swift build environment
         if: matrix.lang == 'swift' && inputs.approve-run == ''
