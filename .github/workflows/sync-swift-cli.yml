@@ -279,7 +279,11 @@ jobs:
         if: always()
         run: |
           if [ "${{ inputs.approve-run }}" != "" ]; then
-            echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
+            if [ -s sync-swift.patch ]; then
+              echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
+            else
+              echo "::notice::Patch from dry-run ${{ inputs.approve-run }} was empty — no changes needed."
+            fi
           elif [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "### Dry run — Swift CLI sync" >> "$GITHUB_STEP_SUMMARY"
             if [ -s sync-swift.patch ]; then
