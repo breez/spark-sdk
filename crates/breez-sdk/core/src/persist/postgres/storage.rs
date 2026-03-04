@@ -4,7 +4,6 @@
 //! suitable for server-side or multi-instance deployments.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use deadpool_postgres::Pool;
 use macros::async_trait;
@@ -30,35 +29,6 @@ use super::base::{
 
 /// Name of the schema migrations table for `PostgresStorage`.
 const MIGRATIONS_TABLE: &str = "schema_migrations";
-
-/// Creates a `PostgreSQL` storage instance for use with the SDK builder.
-///
-/// Returns a `Storage` trait object backed by the `PostgreSQL` connection pool.
-///
-/// # Arguments
-///
-/// * `config` - Configuration for the `PostgreSQL` connection pool
-///
-/// # Example
-///
-/// ```ignore
-/// use breez_sdk_core::{create_postgres_storage, default_postgres_storage_config};
-///
-/// let storage = create_postgres_storage(default_postgres_storage_config(
-///     "host=localhost user=postgres dbname=spark".to_string()
-/// )).await?;
-///
-/// let sdk = SdkBuilder::new(config, seed)
-///     .with_storage(storage)
-///     .build()
-///     .await?;
-/// ```
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn create_postgres_storage(
-    config: PostgresStorageConfig,
-) -> Result<Arc<dyn Storage>, StorageError> {
-    Ok(Arc::new(PostgresStorage::new(config).await?))
-}
 
 /// PostgreSQL-based storage implementation using connection pooling
 pub struct PostgresStorage {

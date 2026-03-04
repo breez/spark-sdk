@@ -728,6 +728,10 @@ impl TransferService {
                 .await
             {
                 Ok(res) => res,
+                Err(ServiceError::TransferAlreadyClaimed) => {
+                    // Transfer was already claimed by another instance - don't retry.
+                    return Err(ServiceError::TransferAlreadyClaimed);
+                }
                 Err(e) => {
                     error!("Failed to claim transfer with leaves: {}", e);
                     retry_count += 1;
@@ -793,18 +797,10 @@ impl TransferService {
             .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
             .await;
 
-        let node_signatures = match node_signatures_result {
-            Ok(sigs) => sigs,
-            Err(ServiceError::TransferAlreadyClaimed) => {
-                // Transfer was already claimed by another instance.
-                // The leaves are already in the shared store.
-                return Ok(vec![]);
-            }
-            Err(e) => {
-                debug!("Failed to claim transfer sign refunds: {}", e);
-                return Err(e);
-            }
-        };
+        let node_signatures = node_signatures_result.map_err(|e| {
+            debug!("Failed to claim transfer sign refunds: {}", e);
+            e
+        })?;
         debug!("Claim transfer sign refunds successful.");
 
         // Finalize the node signatures with the coordinator

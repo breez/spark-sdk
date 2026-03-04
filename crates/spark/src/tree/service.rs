@@ -152,9 +152,10 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
-        // Capture the start time before any network calls.
+        // Capture the start time before any network calls from the store's clock.
+        // This uses the DB server time for database-backed stores to avoid clock skew.
         // Leaves added after this time will be preserved even if not in the refresh data.
-        let refresh_started_at = web_time::SystemTime::now();
+        let refresh_started_at = self.state.now().await?;
 
         // Prepare queries for coordinator and all operators and run them in parallel
         let coordinator_client = self.operator_pool.get_coordinator().client.clone();

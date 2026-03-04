@@ -482,6 +482,16 @@ impl TreeStore for PostgresTreeStore {
         }
     }
 
+    async fn now(&self) -> Result<SystemTime, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let row = client
+            .query_one("SELECT NOW()", &[])
+            .await
+            .map_err(map_err)?;
+        let now: chrono::DateTime<chrono::Utc> = row.get(0);
+        Ok(now.into())
+    }
+
     fn subscribe_balance_changes(&self) -> watch::Receiver<()> {
         self.balance_changed_rx.clone()
     }

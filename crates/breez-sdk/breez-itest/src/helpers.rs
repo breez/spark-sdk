@@ -191,18 +191,16 @@ pub async fn build_sdk_with_custom_config(
     })
 }
 
-/// Modifies a PostgreSQL connection string to use a different database name.
+/// Extracts the database name from a PostgreSQL connection string.
 ///
-/// Replaces or appends `dbname=<new_db_name>` to the connection string.
-/// This is useful when multiple SDK instances need separate databases.
+/// Looks for the `dbname=<value>` parameter in a whitespace-separated
+/// connection string and returns the value if found.
 ///
 /// # Arguments
-/// * `conn_str` - Original PostgreSQL connection string
-/// * `suffix` - Suffix to append to the database name
+/// * `conn_str` - PostgreSQL connection string (key=value pairs)
 ///
 /// # Returns
-/// Modified connection string with the new database name
-/// Extracts the database name from a PostgreSQL connection string.
+/// The database name if a `dbname` parameter is present
 fn extract_dbname(conn_str: &str) -> Option<String> {
     for part in conn_str.split_whitespace() {
         if let Some((key, value)) = part.split_once('=')

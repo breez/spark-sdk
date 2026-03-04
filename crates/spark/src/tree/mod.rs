@@ -638,6 +638,13 @@ pub trait TreeStore: Send + Sync {
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError>;
 
+    /// Returns the current time from the store's clock.
+    ///
+    /// For in-memory stores this returns `SystemTime::now()`. For database-backed
+    /// stores this queries the database server time, avoiding clock skew between
+    /// the application and database servers.
+    async fn now(&self) -> Result<web_time::SystemTime, TreeServiceError>;
+
     /// Subscribe to balance change notifications.
     ///
     /// Returns a `watch::Receiver` that notifies when the balance changes.

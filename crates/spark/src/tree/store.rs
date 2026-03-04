@@ -6,7 +6,7 @@ use web_time::SystemTime;
 
 use tokio_with_wasm::alias as tokio;
 use tokio_with_wasm::alias::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
@@ -21,10 +21,17 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A leaf bundled with the timestamp it was added/returned to the pool.
+#[derive(Clone)]
+struct StoredLeaf {
+    node: TreeNode,
+    added_at: SystemTime,
+}
+
 /// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
 /// The permit is automatically released when this entry is dropped.
 struct ReservationEntry {
-    leaves: Vec<TreeNode>,
+    leaves: Vec<StoredLeaf>,
     purpose: ReservationPurpose,
     /// Semaphore permit held for the duration of this reservation.
     /// Dropped automatically when the reservation is cancelled or finalized.
@@ -36,17 +43,13 @@ struct ReservationEntry {
 
 #[derive(Default)]
 struct LeavesState {
-    leaves: HashMap<TreeNodeId, TreeNode>,
-    missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
+    leaves: HashMap<TreeNodeId, StoredLeaf>,
+    missing_operators_leaves: HashMap<TreeNodeId, StoredLeaf>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
     /// Leaf IDs that have been finalized (spent) with their spent timestamp.
     /// Prevents re-adding during refresh. Cleaned up when leaf is no longer
     /// in refresh data AND was spent before the refresh started.
     spent_leaf_ids: HashMap<TreeNodeId, SystemTime>,
-    /// Timestamps for when each leaf was added/returned to the pool.
-    /// Leaves added at or after `refresh_started_at` are preserved even if
-    /// not in the refresh data.
-    leaf_added_at: HashMap<TreeNodeId, SystemTime>,
     /// Timestamp of when the most recent swap finalization completed.
     /// Used to detect if a refresh started before a swap finished,
     /// which would cause stale data to be applied.
@@ -58,8 +61,8 @@ impl LeavesState {
     fn available_balance(&self) -> u64 {
         self.leaves
             .values()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .map(|leaf| leaf.value)
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.value)
             .sum()
     }
 
@@ -310,8 +313,13 @@ impl InMemoryTreeStore {
                 "Adding leaf {} with value {} at {:?}",
                 leaf.id, leaf.value, now
             );
-            state.leaves.insert(leaf.id.clone(), leaf.clone());
-            state.leaf_added_at.insert(leaf.id.clone(), now);
+            state.leaves.insert(
+                leaf.id.clone(),
+                StoredLeaf {
+                    node: leaf.clone(),
+                    added_at: now,
+                },
+            );
         }
         Ok(())
     }
@@ -321,12 +329,13 @@ impl InMemoryTreeStore {
         let mut reserved_for_payment = Vec::new();
         let mut reserved_for_swap = Vec::new();
         for entry in state.leaves_reservations.values() {
+            let nodes = entry.leaves.iter().map(|stored| stored.node.clone());
             match entry.purpose {
                 ReservationPurpose::Payment => {
-                    reserved_for_payment.extend(entry.leaves.iter().cloned());
+                    reserved_for_payment.extend(nodes);
                 }
                 ReservationPurpose::Swap => {
-                    reserved_for_swap.extend(entry.leaves.iter().cloned());
+                    reserved_for_swap.extend(nodes);
                 }
             }
         }
@@ -335,20 +344,20 @@ impl InMemoryTreeStore {
             available: state
                 .leaves
                 .values()
-                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             not_available: state
                 .leaves
                 .values()
-                .filter(|leaf| leaf.status != TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status != TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             available_missing_from_operators: state
                 .missing_operators_leaves
                 .values()
-                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             reserved_for_payment,
             reserved_for_swap,
@@ -370,7 +379,7 @@ impl InMemoryTreeStore {
             .last_swap_completed_at
             .is_some_and(|completed_at| completed_at >= refresh_started_at);
         if has_active_swap || swap_completed_during_refresh {
-            trace!(
+            debug!(
                 "Skipping set_leaves: active_swap={has_active_swap}, \
                  swap_completed_during_refresh={swap_completed_during_refresh}"
             );
@@ -390,61 +399,56 @@ impl InMemoryTreeStore {
         let now = SystemTime::now();
         for leaf in leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
-                state.leaf_added_at.insert(leaf.id.clone(), now);
-                state.leaves.insert(leaf.id.clone(), leaf.clone());
+                state.leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
             }
         }
         for leaf in missing_operators_leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
-                state.leaf_added_at.insert(leaf.id.clone(), now);
-                state
-                    .missing_operators_leaves
-                    .insert(leaf.id.clone(), leaf.clone());
+                state.missing_operators_leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
             }
         }
 
         // Re-add leaves from old state that were added after the refresh started
         // and aren't in the refresh data (they weren't available when refresh collected data).
         let mut preserved_count = 0u32;
-        for (id, leaf) in old_leaves {
-            let added_after_refresh = state
-                .leaf_added_at
-                .get(&id)
-                .is_some_and(|added_at| *added_at >= refresh_started_at);
-            if added_after_refresh
+        for (id, stored) in old_leaves {
+            if stored.added_at >= refresh_started_at
                 && !state.leaves.contains_key(&id)
                 && !state.missing_operators_leaves.contains_key(&id)
             {
-                state.leaves.insert(id, leaf);
+                state.leaves.insert(id, stored);
                 preserved_count += 1;
             }
         }
-        for (id, leaf) in old_missing {
-            let added_after_refresh = state
-                .leaf_added_at
-                .get(&id)
-                .is_some_and(|added_at| *added_at >= refresh_started_at);
-            if added_after_refresh
+        for (id, stored) in old_missing {
+            if stored.added_at >= refresh_started_at
                 && !state.leaves.contains_key(&id)
                 && !state.missing_operators_leaves.contains_key(&id)
             {
-                state.missing_operators_leaves.insert(id, leaf);
+                state.missing_operators_leaves.insert(id, stored);
                 preserved_count += 1;
             }
         }
-
-        // Clean up timestamps for leaves no longer in store
-        state.leaf_added_at.retain(|id, _| {
-            state.leaves.contains_key(id) || state.missing_operators_leaves.contains_key(id)
-        });
 
         // Update reserved leaves with fresh data, removing them from the unreserved pool
         for entry in state.leaves_reservations.values_mut() {
-            for l in &mut entry.leaves {
-                if let Some(leaf) = state.leaves.remove(&l.id) {
-                    *l = leaf;
-                } else if let Some(leaf) = state.missing_operators_leaves.remove(&l.id) {
-                    *l = leaf;
+            for stored in &mut entry.leaves {
+                if let Some(fresh) = state.leaves.remove(&stored.node.id) {
+                    *stored = fresh;
+                } else if let Some(fresh) = state.missing_operators_leaves.remove(&stored.node.id) {
+                    *stored = fresh;
                 }
             }
         }
@@ -478,8 +482,8 @@ impl InMemoryTreeStore {
         let leaves: Vec<TreeNode> = state
             .leaves
             .values()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .cloned()
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.clone())
             .collect();
 
         let selected = select_helper::select_leaves_by_target_amounts(&leaves, target_amounts);
@@ -554,8 +558,8 @@ impl InMemoryTreeStore {
     fn process_cancel_reservation(state: &mut LeavesState, id: &LeavesReservationId) {
         // Return leaves to pool - permit and pending change are dropped with the entry
         if let Some(entry) = state.leaves_reservations.remove(id) {
-            for leaf in entry.leaves {
-                state.leaves.insert(leaf.id.clone(), leaf);
+            for stored in entry.leaves {
+                state.leaves.insert(stored.node.id.clone(), stored);
             }
             trace!("Canceled leaves reservation: {}", id);
         }
@@ -572,10 +576,8 @@ impl InMemoryTreeStore {
         if let Some(entry) = state.leaves_reservations.remove(id) {
             // Mark all leaves from this reservation as spent to prevent re-adding during refresh
             let now = SystemTime::now();
-            for leaf in &entry.leaves {
-                state.spent_leaf_ids.insert(leaf.id.clone(), now);
-                // Clean up leaf added timestamp
-                state.leaf_added_at.remove(&leaf.id);
+            for stored in &entry.leaves {
+                state.spent_leaf_ids.insert(stored.node.id.clone(), now);
             }
 
             // If this was a swap reservation with new leaves, record completion time.
@@ -592,8 +594,13 @@ impl InMemoryTreeStore {
         if let Some(resulting_leaves) = new_leaves {
             let now = SystemTime::now();
             for leaf in resulting_leaves {
-                state.leaves.insert(leaf.id.clone(), leaf.clone());
-                state.leaf_added_at.insert(leaf.id.clone(), now);
+                state.leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
             }
         }
         trace!("Finalized leaves reservation: {}", id);
@@ -622,13 +629,24 @@ impl InMemoryTreeStore {
         // Add change leaves to the available pool with fresh timestamp
         let now = SystemTime::now();
         for leaf in change_leaves {
-            state.leaves.insert(leaf.id.clone(), leaf.clone());
-            state.leaf_added_at.insert(leaf.id.clone(), now);
+            state.leaves.insert(
+                leaf.id.clone(),
+                StoredLeaf {
+                    node: leaf.clone(),
+                    added_at: now,
+                },
+            );
         }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
-        let reserved = reserved_leaves.to_vec();
+        let reserved: Vec<StoredLeaf> = reserved_leaves
+            .iter()
+            .map(|leaf| StoredLeaf {
+                node: leaf.clone(),
+                added_at: now,
+            })
+            .collect();
         state.leaves_reservations.insert(
             reservation_id.clone(),
             ReservationEntry {
@@ -639,14 +657,18 @@ impl InMemoryTreeStore {
             },
         );
 
+        let reserved_nodes: Vec<TreeNode> = reserved.iter().map(|s| s.node.clone()).collect();
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves to pool",
             reservation_id,
-            reserved.len(),
+            reserved_nodes.len(),
             change_leaves.len()
         );
 
-        Ok(LeavesReservation::new(reserved, reservation_id.clone()))
+        Ok(LeavesReservation::new(
+            reserved_nodes,
+            reservation_id.clone(),
+        ))
     }
 
     /// Internal helper to reserve leaves (moves them from main pool to reservations).
@@ -667,18 +689,20 @@ impl InMemoryTreeStore {
             }
         }
         let id = Uuid::now_v7().to_string();
+        // Remove leaves from pool and collect as StoredLeaves for the reservation
+        let stored_leaves: Vec<StoredLeaf> = leaves
+            .iter()
+            .filter_map(|leaf| state.leaves.remove(&leaf.id))
+            .collect();
         state.leaves_reservations.insert(
             id.clone(),
             ReservationEntry {
-                leaves: leaves.to_vec(),
+                leaves: stored_leaves,
                 purpose,
                 _permit: permit,
                 pending_change_amount,
             },
         );
-        for leaf in leaves {
-            state.leaves.remove(&leaf.id);
-        }
         trace!("New leaves reservation {}: {:?}", id, leaves);
         Ok(id)
     }
@@ -796,6 +820,10 @@ impl TreeStore for InMemoryTreeStore {
             response_tx: tx,
         })
         .await
+    }
+
+    async fn now(&self) -> Result<SystemTime, TreeServiceError> {
+        Ok(SystemTime::now())
     }
 
     fn subscribe_balance_changes(&self) -> watch::Receiver<()> {
