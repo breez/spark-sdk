@@ -53,18 +53,25 @@ features and configuration options, but with {{LANG_NAME}}-specific syntax and u
 - **Preserve existing {{LANG_NAME}}-specific content**: Don't remove the Makefile targets,
   {{DOC_PRESERVE_ITEMS}}.
 
-### Step 4: Scope constraint
+### Step 4: Write findings summary
+After comparing all file pairs, write a short summary to `sync-findings.md` with:
+- **Differences found**: list each divergence (1 line each)
+- **Changes applied**: which differences you fixed
+- **Skipped**: which differences you could not fix and why (missing bindings, platform limitation, etc.)
+- If no differences were found, write "No differences found — CLIs are in sync."
+
+### Step 5: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`
 Do NOT modify any other files.
 
-### Step 5: Build check
+### Step 6: Build check
 After making changes, verify the code is syntactically valid:
 ```bash
 {{BUILD_CHECK}}
 ```
 If any check fails, fix the errors before proceeding.
 
-### Step 6: Verify and create PR
+### Step 7: Verify and create PR
 After making changes:
 1. Read back each modified file to verify correctness
 2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
@@ -79,5 +86,5 @@ gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
   --base main
 ```
 
-### Step 7: No-op check
+### Step 8: No-op check
 If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."
