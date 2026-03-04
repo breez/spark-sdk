@@ -36,7 +36,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
       actions: read
 
     steps:
@@ -123,8 +122,8 @@ jobs:
             --model claude-opus-4-6
             --allowed-tools
             Read,Write,Edit,Glob,Grep,
-            Bash(git diff:*),Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git log:*),Bash(git status:*),
-            Bash(gh pr create:*),Bash(gh pr list:*),
+            Bash(git diff:*),Bash(git checkout -b claude/sync-:*),Bash(git add crates/breez-sdk/bindings/examples/cli/langs/python/:*),Bash(git commit -m:*),Bash(git push -u origin HEAD:*),
+            Bash(gh pr create --title:*),
             Bash(make -C crates/breez-sdk/bindings/examples/cli check-python:*)
           prompt: |
             ## Task: Sync Python CLI with Rust CLI changes
