@@ -9,7 +9,13 @@ ${{ steps.diff-info.outputs.diff_summary }}
 If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
 The diff is a hint for what changed recently, but it may not reveal all differences.
 
-**Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and identify any divergences: missing features, outdated SDK calls, different argument sets, or removed/renamed APIs. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
+**Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and compare them carefully — do not skim or summarize. For each file pair, explicitly list every difference you find before deciding whether changes are needed. Categories to check:
+- **SDK API calls**: function names, request types, builder patterns, method signatures
+- **CLI flags/options**: names, types, defaults, short aliases
+- **Command handlers**: logic, control flow, error handling
+- **Imports**: removed or renamed SDK symbols
+
+Only after listing all differences should you decide which ones to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
 
 Also check the {{LANG_NAME}} SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the {{LANG_NAME}} CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
 
