@@ -9,6 +9,15 @@ on:
         description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
         required: false
         type: string
+      dry-run:
+        description: 'Run the sync without creating a PR (test mode)'
+        required: false
+        type: boolean
+        default: false
+      approve-run:
+        description: 'Run ID of a previous dry-run to approve (applies cached diff and creates PR)'
+        required: false
+        type: string
   workflow_run:
     workflows: ["Sync CLI Languages"]
     types: [completed]
@@ -28,14 +37,52 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      actions: read
 
     steps:
+      - name: Validate inputs
+        if: inputs.dry-run == 'true' && inputs.approve-run != ''
+        run: |
+          echo "::error::Cannot use dry-run and approve-run together."
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ── Approve flow ────────────────────────────────────────────────
+      - name: Download dry-run patch
+        if: inputs.approve-run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-dart-patch
+          run-id: ${{ inputs.approve-run }}
+          github-token: ${{ github.token }}
+
+      - name: Apply patch and create PR
+        if: inputs.approve-run != ''
+        run: |
+          if [ ! -s sync-dart.patch ]; then
+            echo "::notice::Patch is empty — no changes to apply."
+            exit 0
+          fi
+          if ! git apply sync-dart.patch; then
+            echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
+            exit 1
+          fi
+          make -C crates/breez-sdk/bindings/examples/cli check-dart
+          git checkout -b claude/sync-dart-cli-$(echo "${{ github.sha }}" | cut -c1-7)
+          git add crates/breez-sdk/bindings/examples/cli/langs/dart/
+          git commit -m "chore: sync Dart CLI with Rust CLI changes (${{ github.sha }})"
+          git push -u origin HEAD
+          gh pr create --title "chore: sync Dart CLI with Rust CLI changes" \
+            --body "Automated sync of Dart CLI from Rust CLI changes in ${{ github.sha }}. Approved from dry-run https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }}" \
+            --base main
+
+      # ── Normal / dry-run flow ───────────────────────────────────────
       - name: Compute diff info
+        if: inputs.approve-run == ''
         id: diff-info
         run: |
           # Determine diff base. Priority:
@@ -51,14 +98,22 @@ jobs:
 
           if [ -n "$DIFF_BASE" ]; then
             echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
+            DIFF_STAT=$(git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md')
             {
               echo "diff_summary<<EODIFF"
-              git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'
+              echo "$DIFF_STAT"
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
+            if [ -z "$DIFF_STAT" ]; then
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              echo "No Rust CLI changes since last sync — nothing to do."
+            else
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            fi
           else
             # No language CLI commits yet — first sync
             echo "diff_base=" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             {
               echo "diff_summary<<EODIFF"
               echo "First sync — no previous language CLI commits found. Do a full comparison."
@@ -67,6 +122,7 @@ jobs:
           fi
 
       - name: Sync Dart CLI
+        if: inputs.approve-run == '' && steps.diff-info.outputs.has_changes == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -206,7 +262,8 @@ jobs:
             ### Step 6: Verify and create PR
             After making changes:
             1. Read back each modified file to verify correctness
-            2. Create a branch and PR:
+            2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
+            3. **Otherwise**, create a branch and PR:
             ```bash
             git checkout -b claude/sync-dart-cli-$(echo "${{ github.sha }}" | cut -c1-7)
             git add crates/breez-sdk/bindings/examples/cli/langs/dart/
@@ -220,7 +277,38 @@ jobs:
             ### Step 7: No-op check
             If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No Dart CLI changes needed."
 
+      - name: Create dry-run patch
+        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        run: git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/dart/' > sync-dart.patch
+
+      - name: Upload dry-run patch
+        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-dart-patch
+          path: sync-dart.patch
+          retention-days: 7
+
+      # ── Summary ─────────────────────────────────────────────────────
       - name: Summary
         if: always()
         run: |
-          echo "::notice::Claude Code sync completed — check for new PR"
+          if [ "${{ inputs.approve-run }}" != "" ]; then
+            echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
+          elif [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
+            echo "::notice::No Rust CLI changes to sync — Dart CLI is up to date."
+          elif [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "### Dry run — Dart CLI sync" >> "$GITHUB_STEP_SUMMARY"
+            if [ -s sync-dart.patch ]; then
+              echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+              cat sync-dart.patch >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "To approve, re-run this workflow with \`approve-run\` set to \`${{ github.run_id }}\`." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "No Dart CLI changes were needed." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "::notice::Dry run completed — no PR created. See job summary for diff."
+          else
+            echo "::notice::Claude Code sync completed — check for new PR"
+          fi
