@@ -72,6 +72,8 @@ jobs:
             exit 1
           fi
           make -C crates/breez-sdk/bindings/examples/cli check-python
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b claude/sync-python-cli-$(echo "${{ github.sha }}" | cut -c1-7)
           git add crates/breez-sdk/bindings/examples/cli/langs/python/
           git commit -m "chore: sync Python CLI with Rust CLI changes (${{ github.sha }})"

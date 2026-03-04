@@ -72,6 +72,8 @@ jobs:
             exit 1
           fi
           {{BUILD_CHECK}}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b claude/sync-{{LANG_ID}}-cli-$(echo "${{ github.sha }}" | cut -c1-7)
           git add {{TARGET_DIR}}
           git commit -m "chore: sync {{LANG_NAME}} CLI with Rust CLI changes (${{ github.sha }})"
