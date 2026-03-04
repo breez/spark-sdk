@@ -23,12 +23,8 @@ from breez_sdk_spark import (
     init_logging,
 )
 
-try:
-    from breez_sdk_spark import create_postgres_storage
-except ImportError:
-    create_postgres_storage = None
-
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
+from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
 from breez_cli.persistence import CliPersistence
 from breez_cli.serialization import serialize
@@ -89,13 +85,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:
-        if create_postgres_storage is None:
-            raise click.ClickException(
-                "--postgres-connection-string requires a newer version of breez-sdk-spark"
-            )
         pg_config = default_postgres_storage_config(connection_string=postgres_connection_string)
-        storage = await create_postgres_storage(config=pg_config)
-        await builder.with_storage(storage=storage)
+        await builder.with_postgres_storage(config=pg_config)
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 
@@ -117,7 +108,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(COMMAND_NAMES + ISSUER_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -155,7 +146,9 @@ async def run_repl(sdk, token_issuer, network, persistence):
             cmd_name = args[0]
             cmd_args = args[1:]
 
-            if cmd_name == "issuer":
+            if cmd_name == "contacts":
+                await dispatch_contacts_command(cmd_args, sdk)
+            elif cmd_name == "issuer":
                 await dispatch_issuer_command(cmd_args, token_issuer)
             elif cmd_name in registry:
                 parser, handler = registry[cmd_name]
@@ -191,7 +184,8 @@ def print_help(registry):
         parser, _ = registry[name]
         desc = parser.description or ""
         print(f"  {name:40s} {desc}")
-    print(f"\n  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
+    print(f"\n  {'contacts <subcommand>':40s} Contacts commands (use 'contacts help' for details)")
+    print(f"  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
     print(f"  {'exit / quit':40s} Exit the CLI")
     print(f"  {'help':40s} Show this help message")
     print()
