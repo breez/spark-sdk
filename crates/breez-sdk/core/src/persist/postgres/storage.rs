@@ -31,7 +31,7 @@ use super::base::{
 const MIGRATIONS_TABLE: &str = "schema_migrations";
 
 /// PostgreSQL-based storage implementation using connection pooling
-pub struct PostgresStorage {
+pub(crate) struct PostgresStorage {
     pool: Pool,
 }
 

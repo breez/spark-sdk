@@ -48,7 +48,7 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 /// This implementation uses database-level concurrency control (row locking)
 /// to safely handle concurrent operations, making it suitable for multi-instance
 /// deployments.
-pub struct PostgresTreeStore {
+pub(crate) struct PostgresTreeStore {
     pool: Pool,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,

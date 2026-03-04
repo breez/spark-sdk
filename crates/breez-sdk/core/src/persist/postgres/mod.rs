@@ -14,5 +14,5 @@ mod tree_store;
 pub use base::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config};
 
 // Re-export storage implementations
-pub use storage::PostgresStorage;
-pub use tree_store::{PostgresTreeStore, create_postgres_tree_store};
+pub(crate) use storage::PostgresStorage;
+pub(crate) use tree_store::create_postgres_tree_store;
