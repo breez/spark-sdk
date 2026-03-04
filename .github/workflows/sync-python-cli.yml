@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Validate inputs
-        if: inputs.dry-run == 'true' && inputs.approve-run != ''
+        if: inputs.dry-run && inputs.approve-run != ''
         run: |
           echo "::error::Cannot use dry-run and approve-run together."
           exit 1
@@ -242,11 +242,11 @@ jobs:
             If the Rust and Python CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No Python CLI changes needed."
 
       - name: Create dry-run patch
-        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        if: inputs.approve-run == '' && inputs.dry-run
         run: git diff HEAD -- 'crates/breez-sdk/bindings/examples/cli/langs/python/' > sync-python.patch
 
       - name: Upload dry-run patch
-        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        if: inputs.approve-run == '' && inputs.dry-run
         uses: actions/upload-artifact@v4
         with:
           name: sync-python-patch

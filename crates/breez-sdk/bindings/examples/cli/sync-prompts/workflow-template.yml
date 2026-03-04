@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Validate inputs
-        if: inputs.dry-run == 'true' && inputs.approve-run != ''
+        if: inputs.dry-run && inputs.approve-run != ''
         run: |
           echo "::error::Cannot use dry-run and approve-run together."
           exit 1
@@ -121,11 +121,11 @@ jobs:
 {{PROMPT}}
 
       - name: Create dry-run patch
-        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        if: inputs.approve-run == '' && inputs.dry-run
         run: git diff HEAD -- '{{TARGET_DIR}}' > sync-{{LANG_ID}}.patch
 
       - name: Upload dry-run patch
-        if: inputs.approve-run == '' && inputs.dry-run == 'true'
+        if: inputs.approve-run == '' && inputs.dry-run
         uses: actions/upload-artifact@v4
         with:
           name: sync-{{LANG_ID}}-patch
