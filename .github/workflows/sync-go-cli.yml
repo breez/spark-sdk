@@ -63,7 +63,7 @@ jobs:
       - name: Apply patch and create PR
         if: inputs.approve-run != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
         run: |
           if [ ! -s sync-go.patch ]; then
             echo "::notice::Patch is empty — no changes to apply."
@@ -126,6 +126,8 @@ jobs:
       - name: Sync Go CLI
         if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: 'github-actions[bot]'
