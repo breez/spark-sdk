@@ -4,7 +4,8 @@ version.workspace = true
 edition = "2024"
 
 [features]
-browser-tests = [] # Enable browser wasm-pack tests
+browser-tests = []                    # Enable browser wasm-pack tests
+test-utils = ["spark/test-utils"]     # Expose shared test helpers for downstream crates
 
 [dependencies]
 bitcoin = { workspace = true, features = ["serde"] }

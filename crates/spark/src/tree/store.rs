@@ -1,10 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use web_time::SystemTime;
+
 use tokio_with_wasm::alias as tokio;
 use tokio_with_wasm::alias::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::tree::{
@@ -19,10 +21,17 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A leaf bundled with the timestamp it was added/returned to the pool.
+#[derive(Clone)]
+struct StoredLeaf {
+    node: TreeNode,
+    added_at: SystemTime,
+}
+
 /// Entry in the reservation map, containing leaves, purpose, and the semaphore permit.
 /// The permit is automatically released when this entry is dropped.
 struct ReservationEntry {
-    leaves: Vec<TreeNode>,
+    leaves: Vec<StoredLeaf>,
     purpose: ReservationPurpose,
     /// Semaphore permit held for the duration of this reservation.
     /// Dropped automatically when the reservation is cancelled or finalized.
@@ -34,11 +43,17 @@ struct ReservationEntry {
 
 #[derive(Default)]
 struct LeavesState {
-    leaves: HashMap<TreeNodeId, TreeNode>,
-    missing_operators_leaves: HashMap<TreeNodeId, TreeNode>,
+    leaves: HashMap<TreeNodeId, StoredLeaf>,
+    missing_operators_leaves: HashMap<TreeNodeId, StoredLeaf>,
     leaves_reservations: HashMap<LeavesReservationId, ReservationEntry>,
-    /// Leaf IDs that have been finalized (spent). Prevents re-adding during refresh.
-    spent_leaf_ids: HashSet<TreeNodeId>,
+    /// Leaf IDs that have been finalized (spent) with their spent timestamp.
+    /// Prevents re-adding during refresh. Cleaned up when leaf is no longer
+    /// in refresh data AND was spent before the refresh started.
+    spent_leaf_ids: HashMap<TreeNodeId, SystemTime>,
+    /// Timestamp of when the most recent swap finalization completed.
+    /// Used to detect if a refresh started before a swap finished,
+    /// which would cause stale data to be applied.
+    last_swap_completed_at: Option<SystemTime>,
 }
 
 impl LeavesState {
@@ -46,8 +61,8 @@ impl LeavesState {
     fn available_balance(&self) -> u64 {
         self.leaves
             .values()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .map(|leaf| leaf.value)
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.value)
             .sum()
     }
 
@@ -72,6 +87,7 @@ enum StoreCommand {
     SetLeaves {
         leaves: Vec<TreeNode>,
         missing_operators_leaves: Vec<TreeNode>,
+        refresh_started_at: SystemTime,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     TryReserveLeaves {
@@ -96,11 +112,6 @@ enum StoreCommand {
         change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
-    #[cfg(test)]
-    GetReservation {
-        id: LeavesReservationId,
-        response_tx: oneshot::Sender<Option<Vec<TreeNode>>>,
-    },
 }
 
 /// Queue-based in-memory tree store.
@@ -124,7 +135,7 @@ enum StoreCommand {
 pub struct InMemoryTreeStore {
     command_tx: mpsc::Sender<StoreCommand>,
     /// Watch channel for balance change notifications.
-    balance_changed_rx: watch::Receiver<u64>,
+    balance_changed_rx: watch::Receiver<()>,
     /// Semaphore to limit concurrent reservations.
     reservation_semaphore: Arc<Semaphore>,
     /// Maximum concurrent reservations (stored for trace logging).
@@ -155,7 +166,7 @@ impl InMemoryTreeStore {
     pub fn with_config(max_concurrent_reservations: usize, reservation_timeout: Duration) -> Self {
         // Bounded channel provides backpressure under extreme load
         let (command_tx, command_rx) = mpsc::channel(1024);
-        let (balance_changed_tx, balance_changed_rx) = watch::channel(0u64);
+        let (balance_changed_tx, balance_changed_rx) = watch::channel(());
         let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
 
         // Spawn the processor task - it will exit when command_tx is dropped
@@ -173,7 +184,7 @@ impl InMemoryTreeStore {
     /// Main processor loop that handles all commands sequentially.
     async fn run_processor(
         mut command_rx: mpsc::Receiver<StoreCommand>,
-        balance_changed_tx: watch::Sender<u64>,
+        balance_changed_tx: watch::Sender<()>,
     ) {
         let mut state = LeavesState::default();
 
@@ -198,10 +209,15 @@ impl InMemoryTreeStore {
                 StoreCommand::SetLeaves {
                     leaves,
                     missing_operators_leaves,
+                    refresh_started_at,
                     response_tx,
                 } => {
-                    let result =
-                        Self::process_set_leaves(&mut state, &leaves, &missing_operators_leaves);
+                    let result = Self::process_set_leaves(
+                        &mut state,
+                        &leaves,
+                        &missing_operators_leaves,
+                        refresh_started_at,
+                    );
                     let _ = response_tx.send(result);
                 }
                 StoreCommand::TryReserveLeaves {
@@ -253,14 +269,6 @@ impl InMemoryTreeStore {
                     }
                     let _ = response_tx.send(result);
                 }
-                #[cfg(test)]
-                StoreCommand::GetReservation { id, response_tx } => {
-                    let result = state
-                        .leaves_reservations
-                        .get(&id)
-                        .map(|entry| entry.leaves.clone());
-                    let _ = response_tx.send(result);
-                }
             }
 
             // Notify waiters if available or pending balance changed, or if forced
@@ -274,7 +282,8 @@ impl InMemoryTreeStore {
                     "Sending balance notification: available {}→{}, pending {}→{}, force={}",
                     balance_before, balance_after, pending_before, pending_after, force_notify
                 );
-                let _ = balance_changed_tx.send(balance_after);
+                // Send notification - subscribers only use this as a trigger, not the value
+                let _ = balance_changed_tx.send(());
             }
         }
     }
@@ -283,9 +292,35 @@ impl InMemoryTreeStore {
         state: &mut LeavesState,
         leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        state
-            .leaves
-            .extend(leaves.iter().map(|l| (l.id.clone(), l.clone())));
+        let now = SystemTime::now();
+        trace!(
+            "process_add_leaves: Adding {} leaves at {:?}",
+            leaves.len(),
+            now
+        );
+        for leaf in leaves {
+            // Remove from spent_leaf_ids if present - when we receive a leaf through
+            // add_leaves (e.g., from a claimed transfer), it's no longer "spent" from
+            // our perspective. This handles the case where the same leaf returns to us
+            // after we sent it to someone else.
+            if state.spent_leaf_ids.remove(&leaf.id).is_some() {
+                trace!(
+                    "Removed leaf {} from spent_leaf_ids (receiving it back)",
+                    leaf.id
+                );
+            }
+            trace!(
+                "Adding leaf {} with value {} at {:?}",
+                leaf.id, leaf.value, now
+            );
+            state.leaves.insert(
+                leaf.id.clone(),
+                StoredLeaf {
+                    node: leaf.clone(),
+                    added_at: now,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -294,12 +329,13 @@ impl InMemoryTreeStore {
         let mut reserved_for_payment = Vec::new();
         let mut reserved_for_swap = Vec::new();
         for entry in state.leaves_reservations.values() {
+            let nodes = entry.leaves.iter().map(|stored| stored.node.clone());
             match entry.purpose {
                 ReservationPurpose::Payment => {
-                    reserved_for_payment.extend(entry.leaves.iter().cloned());
+                    reserved_for_payment.extend(nodes);
                 }
                 ReservationPurpose::Swap => {
-                    reserved_for_swap.extend(entry.leaves.iter().cloned());
+                    reserved_for_swap.extend(nodes);
                 }
             }
         }
@@ -308,20 +344,20 @@ impl InMemoryTreeStore {
             available: state
                 .leaves
                 .values()
-                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             not_available: state
                 .leaves
                 .values()
-                .filter(|leaf| leaf.status != TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status != TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             available_missing_from_operators: state
                 .missing_operators_leaves
                 .values()
-                .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-                .cloned()
+                .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+                .map(|stored| stored.node.clone())
                 .collect(),
             reserved_for_payment,
             reserved_for_swap,
@@ -332,60 +368,98 @@ impl InMemoryTreeStore {
         state: &mut LeavesState,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
-        // Collect IDs from the new refresh to clean up stale spent entries
-        let refreshed_ids: HashSet<TreeNodeId> = leaves
-            .iter()
-            .chain(missing_operators_leaves.iter())
-            .map(|l| l.id.clone())
-            .collect();
-
-        // Remove spent IDs that are no longer in the refresh (already gone from operators)
-        state.spent_leaf_ids.retain(|id| refreshed_ids.contains(id));
-
-        // Filter out leaves that were spent since refresh started
-        state.leaves = leaves
-            .iter()
-            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
-            .map(|l| (l.id.clone(), l.clone()))
-            .collect();
-
-        state.missing_operators_leaves = missing_operators_leaves
-            .iter()
-            .filter(|l| !state.spent_leaf_ids.contains(&l.id))
-            .map(|l| (l.id.clone(), l.clone()))
-            .collect();
-
-        for (key, entry) in state.leaves_reservations.iter_mut() {
-            // Try to update reserved leaves with fresh data from the pool.
-            // If a leaf is no longer in the pool (e.g., being swapped), keep the original.
-            // IMPORTANT: Never remove reservations here - they might be in the middle of a swap
-            // where leaves have been transferred but the swap hasn't completed yet.
-            // Reservations should only be removed by explicit cancel/finalize.
-
-            // Update leaves that exist in the refreshed pool
-            for l in entry.leaves.iter_mut() {
-                if let Some(leaf) = state.leaves.remove(&l.id) {
-                    *l = leaf;
-                } else if let Some(leaf) = state.missing_operators_leaves.remove(&l.id) {
-                    *l = leaf;
-                }
-                // If leaf is not in either pool, keep the original (it might be in-flight)
-            }
-
-            trace!(
-                "Updated reservation {}: refreshed {} leaves",
-                key,
-                entry.leaves.len()
+        // Skip if swap is active or completed during this refresh
+        let has_active_swap = state
+            .leaves_reservations
+            .values()
+            .any(|entry| entry.purpose == ReservationPurpose::Swap);
+        let swap_completed_during_refresh = state
+            .last_swap_completed_at
+            .is_some_and(|completed_at| completed_at >= refresh_started_at);
+        if has_active_swap || swap_completed_during_refresh {
+            debug!(
+                "Skipping set_leaves: active_swap={has_active_swap}, \
+                 swap_completed_during_refresh={swap_completed_during_refresh}"
             );
+            return Ok(());
         }
+
+        // Remove spent entries that operators have had time to process
+        state
+            .spent_leaf_ids
+            .retain(|_, spent_at| *spent_at >= refresh_started_at);
+
+        // Save old pools before replacing (moved, not cloned)
+        let old_leaves = std::mem::take(&mut state.leaves);
+        let old_missing = std::mem::take(&mut state.missing_operators_leaves);
+
+        // Build new pools from refresh data, excluding spent leaves
+        let now = SystemTime::now();
+        for leaf in leaves {
+            if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                state.leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
+            }
+        }
+        for leaf in missing_operators_leaves {
+            if !state.spent_leaf_ids.contains_key(&leaf.id) {
+                state.missing_operators_leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
+            }
+        }
+
+        // Re-add leaves from old state that were added after the refresh started
+        // and aren't in the refresh data (they weren't available when refresh collected data).
+        let mut preserved_count = 0u32;
+        for (id, stored) in old_leaves {
+            if stored.added_at >= refresh_started_at
+                && !state.leaves.contains_key(&id)
+                && !state.missing_operators_leaves.contains_key(&id)
+            {
+                state.leaves.insert(id, stored);
+                preserved_count += 1;
+            }
+        }
+        for (id, stored) in old_missing {
+            if stored.added_at >= refresh_started_at
+                && !state.leaves.contains_key(&id)
+                && !state.missing_operators_leaves.contains_key(&id)
+            {
+                state.missing_operators_leaves.insert(id, stored);
+                preserved_count += 1;
+            }
+        }
+
+        // Update reserved leaves with fresh data, removing them from the unreserved pool
+        for entry in state.leaves_reservations.values_mut() {
+            for stored in &mut entry.leaves {
+                if let Some(fresh) = state.leaves.remove(&stored.node.id) {
+                    *stored = fresh;
+                } else if let Some(fresh) = state.missing_operators_leaves.remove(&stored.node.id) {
+                    *stored = fresh;
+                }
+            }
+        }
+
         trace!(
-            "Updated {:?} leaves in the local state (filtered {} spent)",
+            "set_leaves: {} leaves, {} missing, {} preserved from previous state",
             state.leaves.len(),
-            refreshed_ids
-                .len()
-                .saturating_sub(state.leaves.len() + state.missing_operators_leaves.len())
+            state.missing_operators_leaves.len(),
+            preserved_count
         );
+
         Ok(())
     }
 
@@ -408,8 +482,8 @@ impl InMemoryTreeStore {
         let leaves: Vec<TreeNode> = state
             .leaves
             .values()
-            .filter(|leaf| leaf.status == TreeNodeStatus::Available)
-            .cloned()
+            .filter(|stored| stored.node.status == TreeNodeStatus::Available)
+            .map(|stored| stored.node.clone())
             .collect();
 
         let selected = select_helper::select_leaves_by_target_amounts(&leaves, target_amounts);
@@ -484,8 +558,8 @@ impl InMemoryTreeStore {
     fn process_cancel_reservation(state: &mut LeavesState, id: &LeavesReservationId) {
         // Return leaves to pool - permit and pending change are dropped with the entry
         if let Some(entry) = state.leaves_reservations.remove(id) {
-            for leaf in entry.leaves {
-                state.leaves.insert(leaf.id.clone(), leaf);
+            for stored in entry.leaves {
+                state.leaves.insert(stored.node.id.clone(), stored);
             }
             trace!("Canceled leaves reservation: {}", id);
         }
@@ -501,18 +575,33 @@ impl InMemoryTreeStore {
         // Remove reservation and record spent leaf IDs
         if let Some(entry) = state.leaves_reservations.remove(id) {
             // Mark all leaves from this reservation as spent to prevent re-adding during refresh
-            for leaf in &entry.leaves {
-                state.spent_leaf_ids.insert(leaf.id.clone());
+            let now = SystemTime::now();
+            for stored in &entry.leaves {
+                state.spent_leaf_ids.insert(stored.node.id.clone(), now);
+            }
+
+            // If this was a swap reservation with new leaves, record completion time.
+            // This is used to detect if a refresh started before a swap finished,
+            // which would cause stale data to be applied.
+            if entry.purpose == ReservationPurpose::Swap && new_leaves.is_some() {
+                state.last_swap_completed_at = Some(now);
             }
         } else {
             warn!("Tried to finalize a non existing reservation");
         }
 
-        // Add new leaves (e.g., change from swap)
+        // Add new leaves (e.g., change from swap) with fresh timestamp
         if let Some(resulting_leaves) = new_leaves {
-            state
-                .leaves
-                .extend(resulting_leaves.iter().map(|l| (l.id.clone(), l.clone())));
+            let now = SystemTime::now();
+            for leaf in resulting_leaves {
+                state.leaves.insert(
+                    leaf.id.clone(),
+                    StoredLeaf {
+                        node: leaf.clone(),
+                        added_at: now,
+                    },
+                );
+            }
         }
         trace!("Finalized leaves reservation: {}", id);
     }
@@ -537,14 +626,27 @@ impl InMemoryTreeStore {
         let purpose = old_entry.purpose;
         let permit = old_entry._permit;
 
-        // Add change leaves to the available pool
-        state
-            .leaves
-            .extend(change_leaves.iter().map(|l| (l.id.clone(), l.clone())));
+        // Add change leaves to the available pool with fresh timestamp
+        let now = SystemTime::now();
+        for leaf in change_leaves {
+            state.leaves.insert(
+                leaf.id.clone(),
+                StoredLeaf {
+                    node: leaf.clone(),
+                    added_at: now,
+                },
+            );
+        }
 
         // Re-insert the reservation with updated leaves but same permit
         // Pending change is cleared since the swap completed
-        let reserved = reserved_leaves.to_vec();
+        let reserved: Vec<StoredLeaf> = reserved_leaves
+            .iter()
+            .map(|leaf| StoredLeaf {
+                node: leaf.clone(),
+                added_at: now,
+            })
+            .collect();
         state.leaves_reservations.insert(
             reservation_id.clone(),
             ReservationEntry {
@@ -555,14 +657,18 @@ impl InMemoryTreeStore {
             },
         );
 
+        let reserved_nodes: Vec<TreeNode> = reserved.iter().map(|s| s.node.clone()).collect();
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves to pool",
             reservation_id,
-            reserved.len(),
+            reserved_nodes.len(),
             change_leaves.len()
         );
 
-        Ok(LeavesReservation::new(reserved, reservation_id.clone()))
+        Ok(LeavesReservation::new(
+            reserved_nodes,
+            reservation_id.clone(),
+        ))
     }
 
     /// Internal helper to reserve leaves (moves them from main pool to reservations).
@@ -583,33 +689,37 @@ impl InMemoryTreeStore {
             }
         }
         let id = Uuid::now_v7().to_string();
+        // Remove leaves from pool and collect as StoredLeaves for the reservation
+        let stored_leaves: Vec<StoredLeaf> = leaves
+            .iter()
+            .filter_map(|leaf| state.leaves.remove(&leaf.id))
+            .collect();
         state.leaves_reservations.insert(
             id.clone(),
             ReservationEntry {
-                leaves: leaves.to_vec(),
+                leaves: stored_leaves,
                 purpose,
                 _permit: permit,
                 pending_change_amount,
             },
         );
-        for leaf in leaves {
-            state.leaves.remove(&leaf.id);
-        }
         trace!("New leaves reservation {}: {:?}", id, leaves);
         Ok(id)
     }
 
-    #[cfg(test)]
-    async fn get_reservation(&self, id: &LeavesReservationId) -> Option<Vec<TreeNode>> {
+    /// Sends a command to the processor and returns the response.
+    async fn send_command<T>(
+        &self,
+        f: impl FnOnce(oneshot::Sender<Result<T, TreeServiceError>>) -> StoreCommand,
+    ) -> Result<T, TreeServiceError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
-            .send(StoreCommand::GetReservation {
-                id: id.clone(),
-                response_tx,
-            })
+            .send(f(response_tx))
             .await
-            .ok()?;
-        response_rx.await.ok()?
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+        response_rx
+            .await
+            .map_err(|_| TreeServiceError::ProcessorShutdown)?
     }
 }
 
@@ -622,61 +732,43 @@ impl Default for InMemoryTreeStore {
 #[macros::async_trait]
 impl TreeStore for InMemoryTreeStore {
     async fn add_leaves(&self, leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::AddLeaves {
-                leaves: leaves.to_vec(),
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let leaves = leaves.to_vec();
+        self.send_command(|tx| StoreCommand::AddLeaves {
+            leaves,
+            response_tx: tx,
+        })
+        .await
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::GetLeaves { response_tx })
+        self.send_command(|tx| StoreCommand::GetLeaves { response_tx: tx })
             .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
     }
 
     async fn set_leaves(
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::SetLeaves {
-                leaves: leaves.to_vec(),
-                missing_operators_leaves: missing_operators_leaves.to_vec(),
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let leaves = leaves.to_vec();
+        let missing_operators_leaves = missing_operators_leaves.to_vec();
+        self.send_command(|tx| StoreCommand::SetLeaves {
+            leaves,
+            missing_operators_leaves,
+            refresh_started_at,
+            response_tx: tx,
+        })
+        .await
     }
 
     async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::CancelReservation {
-                id: id.clone(),
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let id = id.clone();
+        self.send_command(|tx| StoreCommand::CancelReservation {
+            id,
+            response_tx: tx,
+        })
+        .await
     }
 
     async fn finalize_reservation(
@@ -684,18 +776,14 @@ impl TreeStore for InMemoryTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::FinalizeReservation {
-                id: id.clone(),
-                new_leaves: new_leaves.map(|l| l.to_vec()),
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let id = id.clone();
+        let new_leaves = new_leaves.map(<[TreeNode]>::to_vec);
+        self.send_command(|tx| StoreCommand::FinalizeReservation {
+            id,
+            new_leaves,
+            response_tx: tx,
+        })
+        .await
     }
 
     async fn try_reserve_leaves(
@@ -723,24 +811,22 @@ impl TreeStore for InMemoryTreeStore {
         .map_err(|_| TreeServiceError::ProcessorShutdown)?;
         trace!("try_reserve_leaves: acquired permit");
 
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::TryReserveLeaves {
-                target_amounts: target_amounts.cloned(),
-                exact_only,
-                purpose,
-                permit,
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let target_amounts = target_amounts.cloned();
+        self.send_command(|tx| StoreCommand::TryReserveLeaves {
+            target_amounts,
+            exact_only,
+            purpose,
+            permit,
+            response_tx: tx,
+        })
+        .await
     }
 
-    fn subscribe_balance_changes(&self) -> watch::Receiver<u64> {
+    async fn now(&self) -> Result<SystemTime, TreeServiceError> {
+        Ok(SystemTime::now())
+    }
+
+    fn subscribe_balance_changes(&self) -> watch::Receiver<()> {
         self.balance_changed_rx.clone()
     }
 
@@ -750,1038 +836,294 @@ impl TreeStore for InMemoryTreeStore {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(StoreCommand::UpdateReservation {
-                reservation_id: reservation_id.clone(),
-                reserved_leaves: reserved_leaves.to_vec(),
-                change_leaves: change_leaves.to_vec(),
-                response_tx,
-            })
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?;
-        response_rx
-            .await
-            .map_err(|_| TreeServiceError::ProcessorShutdown)?
+        let reservation_id = reservation_id.clone();
+        let reserved_leaves = reserved_leaves.to_vec();
+        let change_leaves = change_leaves.to_vec();
+        self.send_command(|tx| StoreCommand::UpdateReservation {
+            reservation_id,
+            reserved_leaves,
+            change_leaves,
+            response_tx: tx,
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::ReservationPurpose;
-    use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
-    use frost_secp256k1_tr::Identifier;
+    use crate::tree::tests as shared_tests;
     use macros::async_test_all;
-    use std::str::FromStr;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    fn create_test_tree_node(id: &str, value: u64) -> TreeNode {
-        TreeNode {
-            id: TreeNodeId::from_str(id).unwrap(),
-            tree_id: "test_tree".to_string(),
-            value,
-            parent_node_id: None,
-            node_tx: Transaction {
-                version: Version::non_standard(3),
-                lock_time: LockTime::ZERO,
-                input: vec![],
-                output: vec![],
-            },
-            refund_tx: None,
-            direct_tx: None,
-            direct_refund_tx: None,
-            direct_from_cpfp_refund_tx: None,
-            vout: 0,
-            verifying_public_key: PublicKey::from_str(
-                "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-            )
-            .unwrap(),
-            owner_identity_public_key: PublicKey::from_str(
-                "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-            )
-            .unwrap(),
-            signing_keyshare: crate::tree::SigningKeyshare {
-                public_key: PublicKey::from_str(
-                    "02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443",
-                )
-                .unwrap(),
-                owner_identifiers: vec![Identifier::try_from(1u16).unwrap()],
-                threshold: 2,
-            },
-            status: crate::tree::TreeNodeStatus::Available,
-        }
-    }
-
-    /// Helper function to reserve leaves in tests.
-    /// Wraps try_reserve_leaves and expects success.
-    async fn reserve_leaves(
-        state: &InMemoryTreeStore,
-        target_amounts: Option<&TargetAmounts>,
-        exact_only: bool,
-        purpose: ReservationPurpose,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        match state
-            .try_reserve_leaves(target_amounts, exact_only, purpose)
-            .await?
-        {
-            ReserveResult::Success(reservation) => Ok(reservation),
-            ReserveResult::InsufficientFunds => Err(TreeServiceError::InsufficientFunds),
-            ReserveResult::WaitForPending { .. } => Err(TreeServiceError::Generic(
-                "Unexpected WaitForPending".into(),
-            )),
-        }
-    }
+    // ==================== Shared tests ====================
 
     #[async_test_all]
     async fn test_new() {
-        let state: InMemoryTreeStore = InMemoryTreeStore::new();
-        assert!(state.get_leaves().await.unwrap().available.is_empty());
+        shared_tests::test_new(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_add_leaves() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-
-        state.add_leaves(&leaves).await.unwrap();
-
-        let stored_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 2);
-        assert!(
-            stored_leaves
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 100)
-        );
-        assert!(
-            stored_leaves
-                .iter()
-                .any(|l| l.id.to_string() == "node2" && l.value == 200)
-        );
+        shared_tests::test_add_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_add_leaves_duplicate_ids() {
-        let state = InMemoryTreeStore::new();
-        let leaf1 = create_test_tree_node("node1", 100);
-        let leaf2 = create_test_tree_node("node1", 200); // Same ID, different value
-
-        state.add_leaves(&[leaf1]).await.unwrap();
-        state.add_leaves(&[leaf2]).await.unwrap();
-
-        let stored_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 1);
-        // Should have the second value (200) as it overwrites the first
-        assert_eq!(stored_leaves[0].value, 200);
+        shared_tests::test_add_leaves_duplicate_ids(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_set_leaves() {
-        let state = InMemoryTreeStore::new();
-        let initial_leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&initial_leaves).await.unwrap();
-
-        let new_leaves = vec![
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        state.set_leaves(&new_leaves, &[]).await.unwrap();
-
-        let stored_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(stored_leaves.len(), 2);
-        assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node2"));
-        assert!(stored_leaves.iter().any(|l| l.id.to_string() == "node3"));
-        assert!(!stored_leaves.iter().any(|l| l.id.to_string() == "node1"));
+        shared_tests::test_set_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_set_leaves_with_reservations() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve some leaves
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(600, None)),
-            false,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Update leaves with new data (including updated versions of reserved leaves)
-        let non_existing_operator_leaf = create_test_tree_node("node7", 1000); // Updated value
-        let mut updated_leaf1 = create_test_tree_node("node1", 150); // Updated value
-        updated_leaf1.status = crate::tree::TreeNodeStatus::TransferLocked;
-        let new_leaves = vec![
-            updated_leaf1,
-            create_test_tree_node("node2", 250), // Updated value
-            create_test_tree_node("node4", 400), // New leaf, node3 removed
-        ];
-        state
-            .set_leaves(&new_leaves, &[non_existing_operator_leaf])
-            .await
-            .unwrap();
-
-        // Check that reserved leaves were updated with new data where available.
-        // With the new behavior, reservations are NEVER removed by set_leaves.
-        // Leaves that exist in the pool are updated; others keep their original values.
-        let reservation = state.get_reservation(&reservation.id).await.unwrap();
-        // All 3 original leaves are preserved (node3 keeps original value since not in pool)
-        assert_eq!(reservation.len(), 3);
-        // Find each leaf and verify
-        let node1 = reservation
-            .iter()
-            .find(|l| l.id.to_string() == "node1")
-            .unwrap();
-        let node2 = reservation
-            .iter()
-            .find(|l| l.id.to_string() == "node2")
-            .unwrap();
-        let node3 = reservation
-            .iter()
-            .find(|l| l.id.to_string() == "node3")
-            .unwrap();
-        assert_eq!(node1.value, 150); // Updated
-        assert_eq!(node1.status, crate::tree::TreeNodeStatus::TransferLocked);
-        assert_eq!(node2.value, 250); // Updated
-        assert_eq!(node3.value, 300); // Original (not in new pool)
-
-        // Check main pool
-        let all_leaves = state.get_leaves().await.unwrap();
-        // Reserved balance is now 150 + 250 + 300 = 700 (but node3 was updated before reservation)
-        // Actually the original test reserved all 3 nodes (100+200+300=600)
-        // After set_leaves, the reservation has updated values: 150+250+300=700
-        assert_eq!(all_leaves.payment_reserved_balance(), 700);
-        assert_eq!(all_leaves.available_balance(), 400);
-        assert_eq!(all_leaves.missing_operators_balance(), 1000);
-        // balance() excludes payment-reserved leaves
-        assert_eq!(all_leaves.balance(), 400 + 1000);
-        assert_eq!(all_leaves.available.len(), 1); // Only node4 should be in main pool
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node4")
-        );
+        shared_tests::test_set_leaves_with_reservations(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_set_leaves_preserves_reservations_for_in_flight_swaps() {
-        // Test that reservations are preserved even when leaves are no longer in the pool.
-        // This is important for swaps where leaves are transferred but the swap hasn't completed.
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve leaves (simulating start of a swap)
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            false,
-            ReservationPurpose::Payment,
+        shared_tests::test_set_leaves_preserves_reservations_for_in_flight_swaps(
+            &InMemoryTreeStore::new(),
         )
-        .await
-        .unwrap();
-
-        // Set new leaves that don't include the reserved ones
-        // (simulating a refresh while swap is in progress)
-        let new_leaves = vec![create_test_tree_node("node3", 300)];
-        state.set_leaves(&new_leaves, &[]).await.unwrap();
-
-        // Reservation should be PRESERVED (not removed) - the swap might still complete
-        let reserved = state.get_reservation(&reservation.id).await;
-        assert!(reserved.is_some());
-        // The reserved leaves keep their original values since they're not in the new pool
-        let reserved = reserved.unwrap();
-        assert_eq!(reserved.len(), 2);
-        assert!(
-            reserved
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 100)
-        );
-        assert!(
-            reserved
-                .iter()
-                .any(|l| l.id.to_string() == "node2" && l.value == 200)
-        );
+        .await;
     }
 
     #[async_test_all]
     async fn test_reserve_leaves() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check that reservation was created
-        let reserved = state.get_reservation(&reservation.id).await.unwrap();
-        assert_eq!(reserved.len(), 1);
-        assert_eq!(reserved[0].id, leaves[0].id);
-        // Check that leaf was removed from main pool
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(main_leaves.len(), 1);
-        assert_eq!(main_leaves[0].id, leaves[1].id);
+        shared_tests::test_reserve_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_cancel_reservation() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Cancel the reservation
-        state.cancel_reservation(&reservation.id).await.unwrap();
-
-        // Check that reservation was removed
-        assert!(state.get_reservation(&reservation.id).await.is_none());
-
-        // Check that leaf was returned to main pool
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(main_leaves.len(), 2);
-        assert!(main_leaves.iter().any(|l| l.id == leaves[0].id));
-        assert!(main_leaves.iter().any(|l| l.id == leaves[1].id));
+        shared_tests::test_cancel_reservation(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_cancel_reservation_nonexistent() {
-        let state = InMemoryTreeStore::new();
-        let fake_id = "fake-reservation-id".to_string();
-
-        // Should not panic or cause issues
-        state.cancel_reservation(&fake_id).await.unwrap();
-
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert!(main_leaves.is_empty());
+        shared_tests::test_cancel_reservation_nonexistent(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_finalize_reservation() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Finalize the reservation
-        state
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
-
-        // Check that reservation was removed
-        assert!(state.get_reservation(&reservation.id).await.is_none());
-
-        // Check that leaf was NOT returned to main pool (it's considered used)
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(main_leaves.len(), 1);
-        assert_eq!(main_leaves[0].id, leaves[1].id);
+        shared_tests::test_finalize_reservation(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_finalize_reservation_nonexistent() {
-        let state = InMemoryTreeStore::new();
-        let fake_id = "fake-reservation-id".to_string();
-
-        // Should not panic or cause issues
-        state.finalize_reservation(&fake_id, None).await.unwrap();
-
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert!(main_leaves.is_empty());
+        shared_tests::test_finalize_reservation_nonexistent(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_multiple_reservations() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Create multiple reservations
-        let reservation1 = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        let reservation2 = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(200, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check both reservations exist
-        assert!(state.get_reservation(&reservation1.id).await.is_some());
-        assert!(state.get_reservation(&reservation2.id).await.is_some());
-        assert_eq!(
-            state.get_reservation(&reservation1.id).await.unwrap().len(),
-            1
-        );
-        assert_eq!(
-            state.get_reservation(&reservation2.id).await.unwrap().len(),
-            1
-        );
-
-        // Check main pool has only one leaf left
-        let main_leaves = state.get_leaves().await.unwrap().available;
-        assert_eq!(main_leaves.len(), 1);
-        assert_eq!(main_leaves[0].id, leaves[2].id);
-
-        // Cancel one reservation
-        state.cancel_reservation(&reservation1.id).await.unwrap();
-        assert!(state.get_reservation(&reservation1.id).await.is_none());
-        assert_eq!(state.get_leaves().await.unwrap().available.len(), 2);
-
-        // Finalize the other
-        state
-            .finalize_reservation(&reservation2.id, None)
-            .await
-            .unwrap();
-        assert!(state.get_reservation(&reservation2.id).await.is_none());
-        assert_eq!(state.get_leaves().await.unwrap().available.len(), 2); // node1 returned, node3 was always there
+        shared_tests::test_multiple_reservations(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_reservation_ids_are_unique() {
-        let state = InMemoryTreeStore::new();
-        let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
-
-        let r1 = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        state.cancel_reservation(&r1.id).await.unwrap();
-        let r2 = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        assert_ne!(r1.id, r2.id);
+        shared_tests::test_reservation_ids_are_unique(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_non_reservable_leaves() {
-        let state = InMemoryTreeStore::new();
-        let leaf = create_test_tree_node("node1", 100);
-        state.add_leaves(std::slice::from_ref(&leaf)).await.unwrap();
-
-        reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-        let result = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(result, TreeServiceError::InsufficientFunds));
+        shared_tests::test_non_reservable_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_reserve_leaves_empty() {
-        let state = InMemoryTreeStore::new();
-        let err = reserve_leaves(&state, None, false, ReservationPurpose::Payment)
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, TreeServiceError::NonReservableLeaves));
+        shared_tests::test_reserve_leaves_empty(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_swap_reservation_included_in_balance() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve some leaves for swap
-        let _reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            true,
-            ReservationPurpose::Swap,
-        )
-        .await
-        .unwrap();
-
-        // Check that swap-reserved leaves are included in balance
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.swap_reserved_balance(), 300);
-        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
-        // balance() should include swap-reserved leaves
-        assert_eq!(all_leaves.balance(), 300 + 300); // available + swap-reserved
+        shared_tests::test_swap_reservation_included_in_balance(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_payment_reservation_excluded_from_balance() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve some leaves for payment
-        let _reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(300, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Check that payment-reserved leaves are excluded from balance
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.payment_reserved_balance(), 300);
-        assert_eq!(all_leaves.available_balance(), 300); // node1 + node2 remaining
-        // balance() should NOT include payment-reserved leaves
-        assert_eq!(all_leaves.balance(), 300); // only available
+        shared_tests::test_payment_reservation_excluded_from_balance(&InMemoryTreeStore::new())
+            .await;
     }
-
-    // Tests for try_reserve_leaves and balance notifications
 
     #[async_test_all]
     async fn test_try_reserve_success() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        let result = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                true,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(result, ReserveResult::Success(_)));
-        if let ReserveResult::Success(reservation) = result {
-            assert_eq!(reservation.sum(), 100);
-        }
+        shared_tests::test_try_reserve_success(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_try_reserve_insufficient_funds() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        let result = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(500, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(result, ReserveResult::InsufficientFunds));
+        shared_tests::test_try_reserve_insufficient_funds(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_try_reserve_wait_for_pending() {
-        let state = InMemoryTreeStore::new();
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - store will reserve 1000 and auto-track pending=900
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(r1, ReserveResult::Success(_)));
-
-        // Try to reserve 300 more - should get WaitForPending since pending=900 > 300
-        let r2 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        match r2 {
-            ReserveResult::WaitForPending {
-                needed,
-                available,
-                pending,
-            } => {
-                assert_eq!(needed, 300);
-                assert_eq!(available, 0);
-                assert_eq!(pending, 900);
-            }
-            _ => panic!("Expected WaitForPending, got {:?}", r2),
-        }
+        shared_tests::test_try_reserve_wait_for_pending(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_try_reserve_fail_immediately_when_insufficient() {
-        let state = InMemoryTreeStore::new();
-        // Add 100 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve it for 50 sats - pending will be 50
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(50, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(r1, ReserveResult::Success(_)));
-
-        // Request 500 - more than available + pending (0 + 50 < 500)
-        let result = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(500, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(result, ReserveResult::InsufficientFunds));
+        shared_tests::test_try_reserve_fail_immediately_when_insufficient(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
     }
 
     #[async_test_all]
     async fn test_balance_change_notification() {
-        let state = InMemoryTreeStore::new();
-        let mut rx = state.subscribe_balance_changes();
-
-        // Add leaves
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Wait for notification with timeout
-        let result =
-            tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), async {
-                rx.changed().await.ok();
-                *rx.borrow()
-            })
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 100);
+        shared_tests::test_balance_change_notification(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_pending_cleared_on_cancel() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - auto-tracks pending=900
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Cancel the reservation - pending should be cleared
-        state.cancel_reservation(&reservation_id).await.unwrap();
-
-        // Try to reserve 300 - should succeed since 1000 sat leaf is back
-        let r2 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        // Now 1000 sat leaf is back, so we should succeed
-        assert!(matches!(r2, ReserveResult::Success(_)));
+        shared_tests::test_pending_cleared_on_cancel(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_pending_cleared_on_finalize() {
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve with target 100 - auto-tracks pending=900
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Finalize with new leaves (the change from swap)
-        let change_leaf = create_test_tree_node("node2", 900);
-        state
-            .finalize_reservation(&reservation_id, Some(&[change_leaf]))
-            .await
-            .unwrap();
-
-        // Try to reserve 300 - should succeed since change is now available
-        let r2 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(300, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        assert!(matches!(r2, ReserveResult::Success(_)));
+        shared_tests::test_pending_cleared_on_finalize(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_notification_after_swap_with_exact_amount() {
-        // This test verifies that waiters are notified even when a swap returns
-        // exactly the target amount (net balance doesn't change)
-        let state = InMemoryTreeStore::new();
-        let mut rx = state.subscribe_balance_changes();
-
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Consume the initial notification
-        let _ = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        // Reserve it with target 100 - will reserve all 1000, pending=900
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Consume the reservation notification
-        let _ = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        // Simulate a swap that returns exactly the target amount (100 sats)
-        // This is the scenario that was causing hanging - balance goes 0 -> 100 -> 0
-        let swap_result_leaf = create_test_tree_node("node2", 100);
-        // reserved_leaves: the leaf we want to keep (100 sats)
-        // change_leaves: empty (no change since swap returned exact amount)
-        state
-            .update_reservation(&reservation_id, &[swap_result_leaf], &[])
-            .await
-            .unwrap();
-
-        // Verify that we still get a notification even though net balance is 0 -> 0
-        let notification_result = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        // The notification should be received (not timeout)
-        assert!(
-            notification_result.is_ok(),
-            "Expected notification after swap update with exact amount"
-        );
+        shared_tests::test_notification_after_swap_with_exact_amount(&InMemoryTreeStore::new())
+            .await;
     }
 
     #[async_test_all]
     async fn test_notification_on_pending_balance_change() {
-        // Test that notifications are sent when pending balance changes
-        let state = InMemoryTreeStore::new();
-        let mut rx = state.subscribe_balance_changes();
-
-        // Add a single 1000 sat leaf
-        let leaves = vec![create_test_tree_node("node1", 1000)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Consume initial notification
-        let _ = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        // Reserve with target 100 - pending=900 (since we reserved 1000 for 100 target)
-        let r1 = state
-            .try_reserve_leaves(
-                Some(&TargetAmounts::new_amount_and_fee(100, None)),
-                false,
-                ReservationPurpose::Payment,
-            )
-            .await
-            .unwrap();
-
-        // Consume reservation notification
-        let _ = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        let reservation_id = match r1 {
-            ReserveResult::Success(r) => r.id,
-            _ => panic!("Expected Success"),
-        };
-
-        // Cancel the reservation - this clears pending from 900 to 0
-        // Even though available balance goes back to 1000, pending changed too
-        state.cancel_reservation(&reservation_id).await.unwrap();
-
-        // Should get notification because pending balance changed
-        let notification_result = tokio_with_wasm::alias::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.changed(),
-        )
-        .await;
-
-        assert!(
-            notification_result.is_ok(),
-            "Expected notification when pending balance changes"
-        );
+        shared_tests::test_notification_on_pending_balance_change(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_spent_leaves_not_restored_by_set_leaves() {
-        // Test that finalized (spent) leaves are not restored when set_leaves is called
-        // with stale data from operators. This prevents the TOCTOU race condition where
-        // a refresh started before a payment completes would re-add spent leaves.
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![
-            create_test_tree_node("node1", 100),
-            create_test_tree_node("node2", 200),
-        ];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve node1 for payment
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
-        )
-        .await
-        .unwrap();
-
-        // Finalize the reservation (node1 is now spent)
-        state
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
-
-        // Verify node1 is not in the pool
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1")
-        );
-
-        // Now simulate a refresh that returns stale data including the spent leaf
-        // (this is the race condition scenario - refresh started before finalize completed)
-        let stale_leaves = vec![
-            create_test_tree_node("node1", 100), // This was spent!
-            create_test_tree_node("node2", 200),
-            create_test_tree_node("node3", 300), // New leaf
-        ];
-        state.set_leaves(&stale_leaves, &[]).await.unwrap();
-
-        // Verify node1 was NOT restored (it's in spent_leaf_ids)
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 2); // node2 and node3 only
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node3")
-        );
-        assert!(
-            !all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1"),
-            "Spent leaf node1 should not be restored by set_leaves"
-        );
+        shared_tests::test_spent_leaves_not_restored_by_set_leaves(&InMemoryTreeStore::new()).await;
     }
 
     #[async_test_all]
     async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
-        // Test that spent_leaf_ids are cleaned up when the operators no longer
-        // return those leaves (they've been fully processed on the operator side)
-        let state = InMemoryTreeStore::new();
-        let leaves = vec![create_test_tree_node("node1", 100)];
-        state.add_leaves(&leaves).await.unwrap();
-
-        // Reserve and finalize node1
-        let reservation = reserve_leaves(
-            &state,
-            Some(&TargetAmounts::new_amount_and_fee(100, None)),
-            true,
-            ReservationPurpose::Payment,
+        shared_tests::test_spent_ids_cleaned_up_when_no_longer_in_refresh(
+            &InMemoryTreeStore::new(),
         )
-        .await
-        .unwrap();
-        state
-            .finalize_reservation(&reservation.id, None)
-            .await
-            .unwrap();
+        .await;
+    }
 
-        // First refresh still includes node1 (stale) - should be filtered
-        let stale_leaves = vec![create_test_tree_node("node1", 100)];
-        state.set_leaves(&stale_leaves, &[]).await.unwrap();
-        assert!(state.get_leaves().await.unwrap().available.is_empty());
+    #[async_test_all]
+    async fn test_add_leaves_not_deleted_by_set_leaves() {
+        shared_tests::test_add_leaves_not_deleted_by_set_leaves(&InMemoryTreeStore::new()).await;
+    }
 
-        // Second refresh no longer includes node1 (operators caught up)
-        // The spent_leaf_ids entry should be cleaned up
-        let fresh_leaves = vec![create_test_tree_node("node2", 200)];
-        state.set_leaves(&fresh_leaves, &[]).await.unwrap();
+    #[async_test_all]
+    async fn test_old_leaves_deleted_by_set_leaves() {
+        // The shared test uses future_refresh_start() to ensure leaves added
+        // "now" are treated as old relative to the refresh start.
+        shared_tests::test_old_leaves_deleted_by_set_leaves(&InMemoryTreeStore::new()).await;
+    }
 
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 1);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node2")
-        );
+    #[async_test_all]
+    async fn test_change_leaves_from_swap_protected() {
+        shared_tests::test_change_leaves_from_swap_protected(&InMemoryTreeStore::new()).await;
+    }
 
-        // Now if a new node1 appears (different transaction, same ID pattern is unlikely
-        // but tests the cleanup), it should be accepted since it's no longer in spent_leaf_ids
-        let new_node1_leaves = vec![
-            create_test_tree_node("node1", 150), // New node1, different value
-            create_test_tree_node("node2", 200),
-        ];
-        state.set_leaves(&new_node1_leaves, &[]).await.unwrap();
+    #[async_test_all]
+    async fn test_finalize_with_new_leaves_protected() {
+        shared_tests::test_finalize_with_new_leaves_protected(&InMemoryTreeStore::new()).await;
+    }
 
-        let all_leaves = state.get_leaves().await.unwrap();
-        assert_eq!(all_leaves.available.len(), 2);
-        assert!(
-            all_leaves
-                .available
-                .iter()
-                .any(|l| l.id.to_string() == "node1" && l.value == 150)
-        );
+    #[async_test_all]
+    async fn test_add_leaves_clears_spent_status() {
+        shared_tests::test_add_leaves_clears_spent_status(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_skipped_during_active_swap() {
+        shared_tests::test_set_leaves_skipped_during_active_swap(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_skipped_after_swap_completes_during_refresh() {
+        shared_tests::test_set_leaves_skipped_after_swap_completes_during_refresh(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later() {
+        shared_tests::test_set_leaves_proceeds_after_swap_when_refresh_starts_later(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn test_payment_reservation_does_not_block_set_leaves() {
+        shared_tests::test_payment_reservation_does_not_block_set_leaves(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_basic() {
+        shared_tests::test_update_reservation_basic(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_nonexistent() {
+        shared_tests::test_update_reservation_nonexistent(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_clears_pending() {
+        shared_tests::test_update_reservation_clears_pending(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_update_reservation_preserves_purpose() {
+        shared_tests::test_update_reservation_preserves_purpose(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_leaves_not_available() {
+        shared_tests::test_get_leaves_not_available(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_leaves_missing_operators_filters_spent() {
+        shared_tests::test_get_leaves_missing_operators_filters_spent(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_missing_operators_replaced_on_set_leaves() {
+        shared_tests::test_missing_operators_replaced_on_set_leaves(&InMemoryTreeStore::new())
+            .await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_with_none_target_reserves_all() {
+        shared_tests::test_reserve_with_none_target_reserves_all(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_reserve_skips_non_available_leaves() {
+        shared_tests::test_reserve_skips_non_available_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_add_leaves_empty_slice() {
+        shared_tests::test_add_leaves_empty_slice(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_full_payment_cycle() {
+        shared_tests::test_full_payment_cycle(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_set_leaves_replaces_fully() {
+        shared_tests::test_set_leaves_replaces_fully(&InMemoryTreeStore::new()).await;
     }
 }

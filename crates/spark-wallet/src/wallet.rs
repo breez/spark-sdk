@@ -146,6 +146,10 @@ macro_rules! with_leafs_spent_retry {
                     continue;
                 }
                 Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
+                    warn!(
+                        "{} got leaf spending error: {:?}",
+                        $operation_name, e
+                    );
                     attempt += 1;
                     continue;
                 }
@@ -1738,11 +1742,18 @@ async fn claim_pending_transfers(
         .collect()
         .await;
 
-    // Collect successful claims, log failures (best-effort)
+    // Collect successful claims, log failures (best-effort).
+    // TransferAlreadyClaimed is treated as success - the leaves are already in the store.
     let mut successful_items = Vec::new();
 
     for (transfer, result) in claim_results {
-        if result.is_ok() {
+        let is_already_claimed = matches!(
+            &result,
+            Err(SparkWalletError::ServiceError(
+                ServiceError::TransferAlreadyClaimed
+            ))
+        );
+        if result.is_ok() || is_already_claimed {
             let mut completed = transfer;
             completed.status = TransferStatus::Completed;
             successful_items.push(completed);
@@ -1879,12 +1890,8 @@ async fn claim_transfer(
     transfer_service: &Arc<TransferService>,
     tree_service: &Arc<dyn TreeService>,
 ) -> Result<Vec<TreeNode>, SparkWalletError> {
-    trace!("Claiming transfer with id: {}", transfer.id);
     let claimed_nodes = transfer_service.claim_transfer(transfer, None).await?;
-
-    trace!("Inserting claimed leaves after claiming transfer");
-    let result_nodes = tree_service.insert_leaves(claimed_nodes.clone()).await?;
-
+    let result_nodes = tree_service.insert_leaves(claimed_nodes).await?;
     Ok(result_nodes)
 }
 
@@ -2123,8 +2130,13 @@ impl BackgroundProcessor {
             ));
 
         trace!("Claiming transfer from event");
-        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
-        trace!("Claimed transfer from event");
+        match claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await {
+            Ok(_) => trace!("Claimed transfer from event"),
+            Err(SparkWalletError::ServiceError(ServiceError::TransferAlreadyClaimed)) => {
+                trace!("Transfer already claimed by another instance");
+            }
+            Err(e) => return Err(e),
+        }
 
         // Update transfer status before notifying listeners
         let mut claimed_transfer = transfer;

@@ -1115,9 +1115,21 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
             })
             .await?;
 
-        // Wait for Spark transfer to complete
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
-        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+        // Wait for Spark transfer to complete (filter by method to avoid picking up other payments)
+        wait_for_payment_succeeded_event_with_method(
+            &mut alice.events,
+            PaymentType::Send,
+            PaymentMethod::Spark,
+            60,
+        )
+        .await?;
+        wait_for_payment_succeeded_event_with_method(
+            &mut bob.events,
+            PaymentType::Receive,
+            PaymentMethod::Spark,
+            60,
+        )
+        .await?;
 
         // Sync and verify
         alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -1178,12 +1190,23 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
 
     info!("Full balance payment initiated");
 
-    // Wait for payment to complete on both sides
-    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    // Wait for payment to complete on both sides (filter by Lightning method)
+    wait_for_payment_succeeded_event_with_method(
+        &mut alice.events,
+        PaymentType::Send,
+        PaymentMethod::Lightning,
+        30,
+    )
+    .await?;
     info!("Full balance payment completed on Alice's side");
 
-    let bob_payment =
-        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    let bob_payment = wait_for_payment_succeeded_event_with_method(
+        &mut bob.events,
+        PaymentType::Receive,
+        PaymentMethod::Lightning,
+        30,
+    )
+    .await?;
     info!("Full balance payment completed on Bob's side");
 
     // Verify Alice's balance is zero

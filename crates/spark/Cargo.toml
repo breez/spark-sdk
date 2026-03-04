@@ -5,6 +5,7 @@ edition = "2024"
 
 [features]
 browser-tests = [] # Enable browser wasm-pack tests
+test-utils = []    # Expose shared test helpers for downstream crates
 
 [dependencies]
 async-trait.workspace = true

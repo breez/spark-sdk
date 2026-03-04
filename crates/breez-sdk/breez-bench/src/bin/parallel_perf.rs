@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_custom_config};
+use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
@@ -59,6 +59,18 @@ struct Args {
     /// Run leaf optimization before test starts with specified multiplicity
     #[arg(long, value_name = "MULTIPLICITY")]
     pre_optimize: Option<u8>,
+
+    /// PostgreSQL connection string for sender tree store (e.g., "host=localhost user=postgres dbname=sender")
+    #[arg(long)]
+    sender_postgres: Option<String>,
+
+    /// PostgreSQL connection string for receiver tree store (e.g., "host=localhost user=postgres dbname=receiver")
+    #[arg(long)]
+    receiver_postgres: Option<String>,
+
+    /// Clean (drop) specified PostgreSQL databases before starting the test
+    #[arg(long)]
+    clean_postgres: bool,
 }
 
 /// Type of payment to execute
@@ -131,6 +143,21 @@ async fn main() -> Result<()> {
         .with_env_filter(filter)
         .init();
 
+    // Clean postgres databases if requested
+    if args.clean_postgres {
+        if let Some(conn_str) = &args.sender_postgres {
+            drop_postgres_database(conn_str).await?;
+        }
+        if let Some(conn_str) = &args.receiver_postgres {
+            drop_postgres_database(conn_str).await?;
+        }
+        if args.sender_postgres.is_none() && args.receiver_postgres.is_none() {
+            warn!(
+                "--clean-postgres specified but no --sender-postgres or --receiver-postgres provided, skipping cleanup"
+            );
+        }
+    }
+
     // Determine seed
     let seed = args.seed.unwrap_or_else(|| {
         let s = std::time::SystemTime::now()
@@ -175,8 +202,13 @@ async fn main() -> Result<()> {
 
     // Initialize SDKs
     info!("Initializing sender and receiver SDKs...");
-    let (mut sender, mut receiver) =
-        initialize_sdk_pair(args.no_auto_optimize, args.pre_optimize).await?;
+    let (mut sender, mut receiver) = initialize_sdk_pair(
+        args.no_auto_optimize,
+        args.pre_optimize,
+        args.sender_postgres.clone(),
+        args.receiver_postgres.clone(),
+    )
+    .await?;
 
     // Wait for initial sync
     info!("Waiting for sender sync...");
@@ -553,6 +585,8 @@ fn print_summary(
 async fn initialize_sdk_pair(
     no_auto_optimize: bool,
     pre_optimize: Option<u8>,
+    sender_postgres: Option<String>,
+    receiver_postgres: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     // Create sender SDK
     let sender_dir = TempDir::new("parallel-perf-sender")?;
@@ -570,8 +604,15 @@ async fn initialize_sdk_pair(
     if let Some(multiplicity) = pre_optimize {
         sender_config.optimization_config.multiplicity = multiplicity;
     }
-    let itest_sender =
-        build_sdk_with_custom_config(sender_path, sender_seed, sender_config, None, true).await?;
+    let itest_sender = build_sdk_with_tree_store_config(
+        sender_path,
+        sender_seed,
+        sender_config,
+        None,
+        true,
+        sender_postgres,
+    )
+    .await?;
 
     // Create receiver SDK
     let receiver_dir = TempDir::new("parallel-perf-receiver")?;
@@ -582,9 +623,15 @@ async fn initialize_sdk_pair(
     let mut receiver_config = default_config(Network::Regtest);
     // Disable auto-optimization for receiver if requested
     receiver_config.optimization_config.auto_enabled = false;
-    let itest_receiver =
-        build_sdk_with_custom_config(receiver_path, receiver_seed, receiver_config, None, true)
-            .await?;
+    let itest_receiver = build_sdk_with_tree_store_config(
+        receiver_path,
+        receiver_seed,
+        receiver_config,
+        None,
+        true,
+        receiver_postgres,
+    )
+    .await?;
 
     Ok((
         BenchSdkInstance {

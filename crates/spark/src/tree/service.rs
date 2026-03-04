@@ -136,12 +136,6 @@ impl TreeService for SynchronousTreeService {
                 ReserveResult::Success(r) => r,
             };
 
-            trace!(
-                "Selected leaves got reservation: {:?} ({})",
-                reservation.id,
-                reservation.sum()
-            );
-
             let reservation = self.renew_reservation_timelocks(reservation).await?;
 
             // Check if swap is needed
@@ -158,6 +152,11 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn refresh_leaves(&self) -> Result<(), TreeServiceError> {
+        // Capture the start time before any network calls from the store's clock.
+        // This uses the DB server time for database-backed stores to avoid clock skew.
+        // Leaves added after this time will be preserved even if not in the refresh data.
+        let refresh_started_at = self.state.now().await?;
+
         // Prepare queries for coordinator and all operators and run them in parallel
         let coordinator_client = self.operator_pool.get_coordinator().client.clone();
         let operators: Vec<_> = self
@@ -263,7 +262,10 @@ impl TreeService for SynchronousTreeService {
                 // If this is a partial check timelock error, the extend node timelock failed
                 // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
-                    && let Err(e) = self.state.set_leaves(nodes, &missing_operator_leaves).await
+                    && let Err(e) = self
+                        .state
+                        .set_leaves(nodes, &missing_operator_leaves, refresh_started_at)
+                        .await
                 {
                     error!("Failed to set leaves: {e:?}");
                 }
@@ -271,7 +273,11 @@ impl TreeService for SynchronousTreeService {
             .await?;
 
         self.state
-            .set_leaves(&refreshed_leaves, &missing_operator_leaves)
+            .set_leaves(
+                &refreshed_leaves,
+                &missing_operator_leaves,
+                refresh_started_at,
+            )
             .await?;
 
         Ok(())
@@ -319,7 +325,7 @@ impl SynchronousTreeService {
     /// Waits for pending balance to become available.
     async fn wait_for_pending_balance(
         &self,
-        balance_rx: &mut tokio::sync::watch::Receiver<u64>,
+        balance_rx: &mut tokio::sync::watch::Receiver<()>,
         wait_start: &web_time::Instant,
         wait_count: &mut u32,
         max_wait: Duration,
@@ -448,10 +454,6 @@ impl SynchronousTreeService {
         source: Option<Source>,
         paging: PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
-        trace!(
-            "Querying nodes with limit: {:?}, offset: {:?}",
-            paging.limit, paging.offset
-        );
         let source = source.unwrap_or(Source::OwnerIdentityPubkey(
             self.identity_pubkey.serialize().to_vec(),
         ));
@@ -465,15 +467,17 @@ impl SynchronousTreeService {
                 statuses: vec![],
             })
             .await?;
+        let items: Vec<TreeNode> = nodes
+            .nodes
+            .into_values()
+            .map(TreeNode::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                TreeServiceError::Generic(format!("Failed to deserialize leaves: {e:?}"))
+            })?;
+
         Ok(PagingResult {
-            items: nodes
-                .nodes
-                .into_values()
-                .map(TreeNode::try_from)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    TreeServiceError::Generic(format!("Failed to deserialize leaves: {e:?}"))
-                })?,
+            items,
             next: paging.next_from_offset(nodes.offset),
         })
     }

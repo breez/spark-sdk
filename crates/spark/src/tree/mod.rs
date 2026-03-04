@@ -3,8 +3,13 @@ mod select_helper;
 mod service;
 mod store;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod tests;
+
 pub use error::TreeServiceError;
-pub use select_helper::{select_leaves_by_target_amounts, with_reserved_leaves};
+pub use select_helper::{
+    select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
+};
 use serde::{Deserialize, Serialize};
 pub use service::SynchronousTreeService;
 pub use store::{
@@ -87,6 +92,26 @@ pub enum TreeNodeStatus {
     Reimbursed,
 }
 
+impl std::fmt::Display for TreeNodeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TreeNodeStatus::Creating => write!(f, "Creating"),
+            TreeNodeStatus::Available => write!(f, "Available"),
+            TreeNodeStatus::FrozenByIssuer => write!(f, "FrozenByIssuer"),
+            TreeNodeStatus::TransferLocked => write!(f, "TransferLocked"),
+            TreeNodeStatus::SplitLocked => write!(f, "SplitLocked"),
+            TreeNodeStatus::Splitted => write!(f, "Splitted"),
+            TreeNodeStatus::Aggregated => write!(f, "Aggregated"),
+            TreeNodeStatus::OnChain => write!(f, "OnChain"),
+            TreeNodeStatus::Exited => write!(f, "Exited"),
+            TreeNodeStatus::AggregateLock => write!(f, "AggregateLock"),
+            TreeNodeStatus::Investigation => write!(f, "Investigation"),
+            TreeNodeStatus::Lost => write!(f, "Lost"),
+            TreeNodeStatus::Reimbursed => write!(f, "Reimbursed"),
+        }
+    }
+}
+
 impl std::str::FromStr for TreeNodeStatus {
     type Err = String;
 
@@ -110,7 +135,7 @@ impl std::str::FromStr for TreeNodeStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TreeNode {
     pub id: TreeNodeId,
     pub tree_id: String,
@@ -255,6 +280,27 @@ pub enum ReservationPurpose {
     /// Leaves will be swapped. Included in balance since we will receive
     /// the same amount back. Not removed by set_leaves to ensure consistent balance calculation.
     Swap,
+}
+
+impl std::fmt::Display for ReservationPurpose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReservationPurpose::Payment => write!(f, "Payment"),
+            ReservationPurpose::Swap => write!(f, "Swap"),
+        }
+    }
+}
+
+impl std::str::FromStr for ReservationPurpose {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Payment" => Ok(ReservationPurpose::Payment),
+            "Swap" => Ok(ReservationPurpose::Swap),
+            _ => Err(format!("Unknown ReservationPurpose: {s}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -442,9 +488,17 @@ pub trait TreeStore: Send + Sync {
     /// adding or updating leaves as necessary. Reserved leaves may be
     /// updated with new data while maintaining their reservation status.
     ///
+    /// Only leaves that were added BEFORE `refresh_started_at` will be deleted
+    /// if they are not in the provided set. This prevents race conditions where
+    /// a leaf is added (e.g., from a payment) after the refresh started but
+    /// before it completed, which would otherwise cause the new leaf to be lost.
+    ///
     /// # Parameters
     ///
     /// * `leaves` - A slice of `TreeNode` objects that will replace all existing leaves
+    /// * `missing_operators_leaves` - Leaves that are missing from some operators
+    /// * `refresh_started_at` - The time when the refresh operation started. Leaves
+    ///   added after this time will be preserved even if not in the refresh data.
     ///
     /// # Returns
     ///
@@ -462,10 +516,14 @@ pub trait TreeStore: Send + Sync {
     ///
     /// ```
     /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
+    /// use web_time::SystemTime;
     ///
     /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode], missing_operators_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
-    /// // Replace all leaves with a new set
-    /// store.set_leaves(updated_leaves, missing_operators_leaves).await?;
+    /// // Capture time before querying operators
+    /// let refresh_started_at = SystemTime::now();
+    /// // ... query operators for leaves ...
+    /// // Replace all leaves with a new set, preserving any added after refresh started
+    /// store.set_leaves(updated_leaves, missing_operators_leaves, refresh_started_at).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -473,6 +531,7 @@ pub trait TreeStore: Send + Sync {
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
+        refresh_started_at: web_time::SystemTime,
     ) -> Result<(), TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the leaves to the available pool.
@@ -579,12 +638,19 @@ pub trait TreeStore: Send + Sync {
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError>;
 
+    /// Returns the current time from the store's clock.
+    ///
+    /// For in-memory stores this returns `SystemTime::now()`. For database-backed
+    /// stores this queries the database server time, avoiding clock skew between
+    /// the application and database servers.
+    async fn now(&self) -> Result<web_time::SystemTime, TreeServiceError>;
+
     /// Subscribe to balance change notifications.
     ///
-    /// Returns a `watch::Receiver` that will receive the current available
-    /// balance whenever it changes. Callers can use `changed().await` to
-    /// wait for balance changes.
-    fn subscribe_balance_changes(&self) -> watch::Receiver<u64>;
+    /// Returns a `watch::Receiver` that notifies when the balance changes.
+    /// Callers can use `changed().await` to wait for balance changes.
+    /// The value sent is not meaningful - only the notification matters.
+    fn subscribe_balance_changes(&self) -> watch::Receiver<()>;
 
     /// Updates a reservation after a swap operation.
     ///

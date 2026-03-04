@@ -4,11 +4,8 @@ use std::{collections::HashMap, sync::Arc};
 use crate::Network;
 use crate::address::SparkAddress;
 use crate::operator::OperatorPool;
-use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::transfer_filter::Participant;
-use crate::operator::rpc::spark::{
-    QueryNodesRequest, StartTransferRequest, TransferFilter, TreeNodeIds,
-};
+use crate::operator::rpc::spark::{StartTransferRequest, TransferFilter};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
@@ -731,6 +728,10 @@ impl TransferService {
                 .await
             {
                 Ok(res) => res,
+                Err(ServiceError::TransferAlreadyClaimed) => {
+                    // Transfer was already claimed by another instance - don't retry.
+                    return Err(ServiceError::TransferAlreadyClaimed);
+                }
                 Err(e) => {
                     error!("Failed to claim transfer with leaves: {}", e);
                     retry_count += 1;
@@ -796,37 +797,10 @@ impl TransferService {
             .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
             .await;
 
-        let node_signatures = match node_signatures_result {
-            Ok(sigs) => sigs,
-            Err(ServiceError::TransferAlreadyClaimed) => {
-                debug!("Transfer already claimed, fetching nodes from coordinator");
-                let nodes = self
-                    .operator_pool
-                    .get_coordinator()
-                    .client
-                    .query_nodes(QueryNodesRequest {
-                        network: self.network.to_proto_network() as i32,
-                        source: Some(Source::NodeIds(TreeNodeIds {
-                            node_ids: leaves_to_claim
-                                .iter()
-                                .map(|l| l.node.id.to_string())
-                                .collect(),
-                        })),
-                        ..Default::default()
-                    })
-                    .await?
-                    .nodes
-                    .into_iter()
-                    .map(|n| n.1.try_into())
-                    .collect::<Result<Vec<TreeNode>, ServiceError>>()?;
-                debug!("Fetched nodes from coordinator: {:?}", nodes);
-                return Ok(nodes);
-            }
-            Err(e) => {
-                debug!("Failed to claim transfer sign refunds: {}", e);
-                return Err(e);
-            }
-        };
+        let node_signatures = node_signatures_result.map_err(|e| {
+            debug!("Failed to claim transfer sign refunds: {}", e);
+            e
+        })?;
         debug!("Claim transfer sign refunds successful.");
 
         // Finalize the node signatures with the coordinator

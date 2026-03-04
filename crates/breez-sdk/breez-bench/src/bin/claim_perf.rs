@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_custom_config};
+use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, ListPaymentsRequest, Network, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
@@ -45,6 +45,18 @@ struct Args {
     /// Maximum payment amount in satoshis
     #[arg(long, default_value = "2000")]
     max_amount: u64,
+
+    /// PostgreSQL connection string for sender tree store (e.g., "host=localhost user=postgres dbname=sender")
+    #[arg(long)]
+    sender_postgres: Option<String>,
+
+    /// PostgreSQL connection string for receiver tree store (e.g., "host=localhost user=postgres dbname=receiver")
+    #[arg(long)]
+    receiver_postgres: Option<String>,
+
+    /// Clean (drop) specified PostgreSQL databases before starting the test
+    #[arg(long)]
+    clean_postgres: bool,
 }
 
 /// Result of a single claim benchmark run
@@ -78,6 +90,21 @@ async fn main() -> Result<()> {
         .with_env_filter(filter)
         .init();
 
+    // Clean postgres databases if requested
+    if args.clean_postgres {
+        if let Some(conn_str) = &args.sender_postgres {
+            drop_postgres_database(conn_str).await?;
+        }
+        if let Some(conn_str) = &args.receiver_postgres {
+            drop_postgres_database(conn_str).await?;
+        }
+        if args.sender_postgres.is_none() && args.receiver_postgres.is_none() {
+            tracing::warn!(
+                "--clean-postgres specified but no --sender-postgres or --receiver-postgres provided, skipping cleanup"
+            );
+        }
+    }
+
     let concurrency_levels: Vec<u32> = args
         .concurrency_levels
         .split(',')
@@ -103,6 +130,8 @@ async fn main() -> Result<()> {
             concurrency,
             args.min_amount,
             args.max_amount,
+            args.sender_postgres.clone(),
+            args.receiver_postgres.clone(),
         )
         .await?;
         results.push(result);
@@ -118,6 +147,8 @@ async fn run_single_claim_benchmark(
     concurrency: u32,
     min_amount: u64,
     max_amount: u64,
+    sender_postgres: Option<String>,
+    receiver_postgres: Option<String>,
 ) -> Result<ClaimBenchmarkResult> {
     // Generate receiver seed upfront so we can get its address before creating the SDK
     let mut receiver_seed = [0u8; 32];
@@ -129,12 +160,13 @@ async fn run_single_claim_benchmark(
     rand::thread_rng().fill_bytes(&mut sender_seed);
     let mut sender_config = default_config(Network::Regtest);
     sender_config.optimization_config.auto_enabled = false;
-    let itest_sender = build_sdk_with_custom_config(
+    let itest_sender = build_sdk_with_tree_store_config(
         sender_dir.path().to_string_lossy().to_string(),
         sender_seed,
         sender_config,
         None,
         true,
+        sender_postgres,
     )
     .await?;
     let sender_sdk = Arc::new(itest_sender.sdk);
@@ -144,12 +176,13 @@ async fn run_single_claim_benchmark(
     let receiver_dir = TempDir::new("claim-bench-receiver")?;
     let mut temp_receiver_config = default_config(Network::Regtest);
     temp_receiver_config.optimization_config.auto_enabled = false;
-    let mut temp_receiver = build_sdk_with_custom_config(
+    let mut temp_receiver = build_sdk_with_tree_store_config(
         receiver_dir.path().to_string_lossy().to_string(),
         receiver_seed,
         temp_receiver_config,
         None,
         true,
+        receiver_postgres.clone(),
     )
     .await?;
 
@@ -255,12 +288,13 @@ async fn run_single_claim_benchmark(
     // Start timing from SDK creation since claims start during initialization
     let start = Instant::now();
 
-    let itest_receiver = build_sdk_with_custom_config(
+    let itest_receiver = build_sdk_with_tree_store_config(
         receiver_dir.path().to_string_lossy().to_string(),
         receiver_seed, // Same seed = same wallet
         receiver_config,
         None,
         true,
+        receiver_postgres,
     )
     .await?;
     let receiver_sdk = itest_receiver.sdk;
@@ -288,9 +322,6 @@ async fn run_single_claim_benchmark(
         "Triggering claims with concurrency {}, expecting {} payments...",
         concurrency, sends_succeeded
     );
-
-    // First sync triggers claim detection
-    receiver_sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     // Poll until all payments are completed or timeout
     let claim_timeout = Duration::from_secs(300); // 5 minute timeout
@@ -334,11 +365,6 @@ async fn run_single_claim_benchmark(
         }
 
         tokio::time::sleep(poll_interval).await;
-
-        // Trigger another sync to ensure claims are processed
-        if let Err(e) = receiver_sdk.sync_wallet(SyncWalletRequest {}).await {
-            warn!("Sync failed during claim polling: {}", e);
-        }
     }
 
     let total_duration = start.elapsed();
