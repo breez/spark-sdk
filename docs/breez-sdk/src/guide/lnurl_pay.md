@@ -44,7 +44,7 @@ By default when the LNURL-pay results in a success action with a URL, the URL is
 
 ## Managing contacts
 
-You can save frequently used Lightning addresses and other payment identifiers as contacts for quick access. See [Managing contacts](contacts.md) for details.
+You can save frequently used Lightning addresses as contacts for quick access. See [Managing contacts](contacts.md) for details.
 
 ## Supported Specs
 

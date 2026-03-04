@@ -1551,7 +1551,7 @@ pub struct OptimizationProgress {
 pub struct Contact {
     pub id: String,
     pub name: String,
-    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    /// A Lightning address (user@domain).
     pub payment_identifier: String,
     pub created_at: u64,
     pub updated_at: u64,
@@ -1561,7 +1561,7 @@ pub struct Contact {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AddContactRequest {
     pub name: String,
-    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    /// A Lightning address (user@domain).
     pub payment_identifier: String,
 }
 
@@ -1570,7 +1570,7 @@ pub struct AddContactRequest {
 pub struct UpdateContactRequest {
     pub id: String,
     pub name: String,
-    /// A payment identifier such as a Lightning address, BOLT12 offer, or BIP353 address.
+    /// A Lightning address (user@domain).
     pub payment_identifier: String,
 }
 

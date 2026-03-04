@@ -9,7 +9,7 @@ pub enum ContactCommand {
     Add {
         /// Name of the contact
         name: String,
-        /// Payment identifier (Lightning address, BOLT12 offer, BIP353 address, etc.)
+        /// Lightning address (user@domain)
         payment_identifier: String,
     },
     /// Update an existing contact
@@ -18,7 +18,7 @@ pub enum ContactCommand {
         id: String,
         /// New name for the contact
         name: String,
-        /// New payment identifier (Lightning address, BOLT12 offer, BIP353 address, etc.)
+        /// New Lightning address (user@domain)
         payment_identifier: String,
     },
     /// Delete a contact

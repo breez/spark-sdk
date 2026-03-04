@@ -1,13 +1,13 @@
 # Managing contacts
 
-Contacts allow you to save payment identifiers for quick access. Each contact stores a name and payment identifier (such as a Lightning address, BOLT12 offer, or BIP353 address), making it easy to send payments to frequently used recipients without re-entering their identifier. Contacts are synced across all instances of the SDK.
+Contacts allow you to save Lightning addresses for quick access. Each contact stores a name and a Lightning address, making it easy to send payments to frequently used recipients. Contacts are synced across all instances of the SDK.
 
 <h2 id="adding-a-contact">
     <a class="header" href="#adding-a-contact">Adding a contact</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.add_contact">API docs</a>
 </h2>
 
-To add a new contact, provide a name and payment identifier.
+To add a new contact, provide a name and a Lightning address.
 
 {{#tabs contacts:add-contact}}
 
@@ -16,7 +16,7 @@ To add a new contact, provide a name and payment identifier.
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.update_contact">API docs</a>
 </h2>
 
-To update an existing contact, provide the contact ID along with the new name and payment identifier.
+To update an existing contact, provide the contact ID along with the new name and Lightning address.
 
 {{#tabs contacts:update-contact}}
 
@@ -34,6 +34,6 @@ To remove a contact, pass its ID to the delete method.
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.list_contacts">API docs</a>
 </h2>
 
-To retrieve your saved contacts, use the list method. The results support pagination through offset and limit parameters. You can also filter by exact name match using the optional name parameter.
+To retrieve your saved contacts, use the list method. The results support pagination through offset and limit parameters.
 
 {{#tabs contacts:list-contacts}}
