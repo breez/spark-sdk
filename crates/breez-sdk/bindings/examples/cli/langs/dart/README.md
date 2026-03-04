@@ -43,10 +43,13 @@ make run-mainnet
 ## CLI Options
 
 ```
--d, --data-dir          Path to the data directory (default: ./.data)
-    --network           Network to use: regtest, mainnet (default: regtest)
-    --account-number    Account number for the Spark signer
--h, --help              Show usage
+-d, --data-dir                          Path to the data directory (default: ./.data)
+    --network                           Network to use: regtest, mainnet (default: regtest)
+    --account-number                    Account number for the Spark signer
+    --postgres-connection-string        PostgreSQL connection string (not yet supported, uses SQLite)
+    --stable-balance-token-identifier   Stable balance token identifier
+    --stable-balance-threshold          Stable balance threshold in sats
+-h, --help                              Show usage
 ```
 
 ## Commands
@@ -81,6 +84,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `set-user-settings` — Update user settings
 - `get-spark-status` — Get Spark network status
 - `issuer <subcommand>` — Token issuer commands
+- `contacts <subcommand>` — Contacts commands (add, update, delete, list)
 
 ## Dart/FRB-Specific Notes
 
