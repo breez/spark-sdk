@@ -23,11 +23,6 @@ from breez_sdk_spark import (
     init_logging,
 )
 
-try:
-    from breez_sdk_spark import create_postgres_storage
-except ImportError:
-    create_postgres_storage = None
-
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
 from breez_cli.persistence import CliPersistence
@@ -89,13 +84,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:
-        if create_postgres_storage is None:
-            raise click.ClickException(
-                "--postgres-connection-string requires a newer version of breez-sdk-spark"
-            )
         pg_config = default_postgres_storage_config(connection_string=postgres_connection_string)
-        storage = await create_postgres_storage(config=pg_config)
-        await builder.with_storage(storage=storage)
+        await builder.with_postgres_storage(config=pg_config)
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 
