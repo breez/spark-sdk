@@ -9,7 +9,13 @@ ${{ steps.diff-info.outputs.diff_summary }}
 If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
 The diff is a hint for what changed recently, but it may not reveal all differences.
 
-**Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and identify any divergences: missing features, outdated SDK calls, different argument sets, or removed/renamed APIs. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
+**Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and compare them carefully — do not skim or summarize. For each file pair, explicitly list every difference you find before deciding whether changes are needed. Categories to check:
+- **SDK API calls**: function names, request types, builder patterns, method signatures
+- **CLI flags/options**: names, types, defaults, short aliases
+- **Command handlers**: logic, control flow, error handling
+- **Imports**: removed or renamed SDK symbols
+
+Only after listing all differences should you decide which ones to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
 
 Also check the {{LANG_NAME}} SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the {{LANG_NAME}} CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
 
@@ -47,18 +53,25 @@ features and configuration options, but with {{LANG_NAME}}-specific syntax and u
 - **Preserve existing {{LANG_NAME}}-specific content**: Don't remove the Makefile targets,
   {{DOC_PRESERVE_ITEMS}}.
 
-### Step 4: Scope constraint
+### Step 4: Write findings summary
+After comparing all file pairs, write a short summary to `sync-findings.md` with:
+- **Differences found**: list each divergence (1 line each)
+- **Changes applied**: which differences you fixed
+- **Skipped**: which differences you could not fix and why (missing bindings, platform limitation, etc.)
+- If no differences were found, write "No differences found — CLIs are in sync."
+
+### Step 5: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`
 Do NOT modify any other files.
 
-### Step 5: Build check
+### Step 6: Build check
 After making changes, verify the code is syntactically valid:
 ```bash
 {{BUILD_CHECK}}
 ```
 If any check fails, fix the errors before proceeding.
 
-### Step 6: Verify and create PR
+### Step 7: Verify and create PR
 After making changes:
 1. Read back each modified file to verify correctness
 2. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
@@ -73,5 +86,5 @@ gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
   --base main
 ```
 
-### Step 7: No-op check
+### Step 8: No-op check
 If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."
