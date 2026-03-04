@@ -123,6 +123,10 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+
+      - name: Set up Dart
+        if: inputs.approve-run == ''
+        uses: dart-lang/setup-dart@v1
       - name: Sync Dart CLI
         if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1

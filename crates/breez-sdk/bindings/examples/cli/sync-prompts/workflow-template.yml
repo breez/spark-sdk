@@ -123,6 +123,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+{{SETUP_STEPS}}
       - name: {{STEP_NAME}}
         if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1

@@ -39,6 +39,12 @@ build_check = "make -C crates/breez-sdk/bindings/examples/cli check-dart"
 # Format instructions appended to the build check step
 format_instructions = "The Dart project uses 110-character line length. Run `dart format -l 110 lib/ bin/` before the build check to ensure formatting passes."
 
+# Setup steps injected before the Claude action step
+setup_steps = """
+      - name: Set up Dart
+        if: inputs.approve-run == ''
+        uses: dart-lang/setup-dart@v1"""
+
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),Bash(git checkout -b claude/sync-:*),Bash(git add crates/breez-sdk/bindings/examples/cli/langs/dart/:*),Bash(git commit -m:*),Bash(git push -u origin HEAD:*),

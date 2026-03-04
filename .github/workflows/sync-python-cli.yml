@@ -123,6 +123,7 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+
       - name: Sync Python CLI
         if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1
