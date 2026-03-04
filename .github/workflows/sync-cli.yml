@@ -97,6 +97,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
           fetch-depth: ${{ inputs.approve-run != '' && 1 || 0 }}
 
       # ── Load per-language config from TOML ──────────────────────────
