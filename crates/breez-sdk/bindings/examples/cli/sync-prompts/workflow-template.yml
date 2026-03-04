@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       base-sha:
-        description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
+        description: 'Optional base commit SHA to diff against (leave empty for full comparison)'
         required: false
         type: string
       dry-run:
@@ -85,44 +85,31 @@ jobs:
         if: inputs.approve-run == ''
         id: diff-info
         run: |
-          # Determine diff base. Priority:
-          # 1. Explicit base-sha from workflow_dispatch input
-          # 2. Auto-detect: last commit that touched this language CLI (= last sync point)
           DIFF_BASE="${{ inputs.base-sha }}"
-          if [ -z "$DIFF_BASE" ] || [ "$DIFF_BASE" = "0000000000000000000000000000000000000000" ]; then
-            DIFF_BASE=$(git log -1 --format=%H -- '{{TARGET_DIR}}')
-            if [ -n "$DIFF_BASE" ]; then
-              echo "Auto-detected diff base from last sync commit: $DIFF_BASE"
+          if [ -n "$DIFF_BASE" ] && [ "$DIFF_BASE" != "0000000000000000000000000000000000000000" ]; then
+            if ! git cat-file -e "$DIFF_BASE" 2>/dev/null; then
+              echo "::error::Provided base-sha ($DIFF_BASE) not found in repository."
+              exit 1
             fi
-          fi
-
-          if [ -n "$DIFF_BASE" ]; then
             echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
             DIFF_STAT=$(git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md')
             {
               echo "diff_summary<<EODIFF"
+              echo "Rust CLI changes since $DIFF_BASE:"
               echo "$DIFF_STAT"
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
-            if [ -z "$DIFF_STAT" ]; then
-              echo "has_changes=false" >> "$GITHUB_OUTPUT"
-              echo "No Rust CLI changes since last sync — nothing to do."
-            else
-              echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            fi
           else
-            # No language CLI commits yet — first sync
             echo "diff_base=" >> "$GITHUB_OUTPUT"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             {
               echo "diff_summary<<EODIFF"
-              echo "First sync — no previous language CLI commits found. Do a full comparison."
+              echo "No base SHA provided — perform a full comparison of the Rust CLI against the {{LANG_NAME}} CLI."
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
           fi
 
       - name: {{STEP_NAME}}
-        if: inputs.approve-run == '' && steps.diff-info.outputs.has_changes == 'true'
+        if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -150,8 +137,6 @@ jobs:
         run: |
           if [ "${{ inputs.approve-run }}" != "" ]; then
             echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
-          elif [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
-            echo "::notice::No Rust CLI changes to sync — {{LANG_NAME}} CLI is up to date."
           elif [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "### Dry run — {{LANG_NAME}} CLI sync" >> "$GITHUB_STEP_SUMMARY"
             if [ -s sync-{{LANG_ID}}.patch ]; then

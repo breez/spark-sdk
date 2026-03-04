@@ -7,8 +7,11 @@ ${{ steps.diff-info.outputs.diff_summary }}
 
 ### Step 1: Analyze the changes
 If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
-Otherwise (manual trigger without a base SHA), read the full Rust CLI source files and compare them against the current {{LANG_NAME}} CLI to identify all differences.
-Always read the current Rust files for full context.
+The diff is a hint for what changed recently, but it may not reveal all differences.
+
+**Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and identify any divergences: missing features, outdated SDK calls, different argument sets, or removed/renamed APIs. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
+
+Also check the {{LANG_NAME}} SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the {{LANG_NAME}} CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
 
 ### Step 2: File mapping
 
@@ -71,4 +74,4 @@ gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
 ```
 
 ### Step 7: No-op check
-If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."
+If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."

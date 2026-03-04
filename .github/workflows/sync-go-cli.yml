@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       base-sha:
-        description: 'Base commit SHA to diff against (leave empty to auto-detect from last sync commit)'
+        description: 'Optional base commit SHA to diff against (leave empty for full comparison)'
         required: false
         type: string
       dry-run:
@@ -85,44 +85,31 @@ jobs:
         if: inputs.approve-run == ''
         id: diff-info
         run: |
-          # Determine diff base. Priority:
-          # 1. Explicit base-sha from workflow_dispatch input
-          # 2. Auto-detect: last commit that touched this language CLI (= last sync point)
           DIFF_BASE="${{ inputs.base-sha }}"
-          if [ -z "$DIFF_BASE" ] || [ "$DIFF_BASE" = "0000000000000000000000000000000000000000" ]; then
-            DIFF_BASE=$(git log -1 --format=%H -- 'crates/breez-sdk/bindings/examples/cli/langs/go/')
-            if [ -n "$DIFF_BASE" ]; then
-              echo "Auto-detected diff base from last sync commit: $DIFF_BASE"
+          if [ -n "$DIFF_BASE" ] && [ "$DIFF_BASE" != "0000000000000000000000000000000000000000" ]; then
+            if ! git cat-file -e "$DIFF_BASE" 2>/dev/null; then
+              echo "::error::Provided base-sha ($DIFF_BASE) not found in repository."
+              exit 1
             fi
-          fi
-
-          if [ -n "$DIFF_BASE" ]; then
             echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
             DIFF_STAT=$(git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md')
             {
               echo "diff_summary<<EODIFF"
+              echo "Rust CLI changes since $DIFF_BASE:"
               echo "$DIFF_STAT"
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
-            if [ -z "$DIFF_STAT" ]; then
-              echo "has_changes=false" >> "$GITHUB_OUTPUT"
-              echo "No Rust CLI changes since last sync — nothing to do."
-            else
-              echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            fi
           else
-            # No language CLI commits yet — first sync
             echo "diff_base=" >> "$GITHUB_OUTPUT"
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             {
               echo "diff_summary<<EODIFF"
-              echo "First sync — no previous language CLI commits found. Do a full comparison."
+              echo "No base SHA provided — perform a full comparison of the Rust CLI against the Go CLI."
               echo "EODIFF"
             } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync Go CLI
-        if: inputs.approve-run == '' && steps.diff-info.outputs.has_changes == 'true'
+        if: inputs.approve-run == ''
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -142,8 +129,11 @@ jobs:
 
             ### Step 1: Analyze the changes
             If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
-            Otherwise (manual trigger without a base SHA), read the full Rust CLI source files and compare them against the current Go CLI to identify all differences.
-            Always read the current Rust files for full context.
+            The diff is a hint for what changed recently, but it may not reveal all differences.
+
+            **Always read the current Rust CLI source files and compare them against the Go CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 2) and identify any divergences: missing features, outdated SDK calls, different argument sets, or removed/renamed APIs. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but 'use `handleNotYetSupported` as the handler' and leave a comment explaining why.
+
+            Also check the Go SDK snippets at `docs/breez-sdk/snippets/` for the correct API calling conventions. The snippets are always up-to-date — if the Go CLI uses an SDK function that doesn't appear in the snippets, it has likely been removed or renamed.
 
             ### Step 2: File mapping
 
@@ -254,7 +244,7 @@ jobs:
             ```
 
             ### Step 7: No-op check
-            If the Rust changes don't affect CLI commands or documentation (e.g., only Cargo.toml changes or internal-only refactoring with no user-facing impact), do NOT create a PR. Output: "No Go CLI changes needed."
+            If the Rust and Go CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No Go CLI changes needed."
 
       - name: Create dry-run patch
         if: inputs.approve-run == '' && inputs.dry-run == 'true'
@@ -274,8 +264,6 @@ jobs:
         run: |
           if [ "${{ inputs.approve-run }}" != "" ]; then
             echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
-          elif [ "${{ steps.diff-info.outputs.has_changes }}" != "true" ]; then
-            echo "::notice::No Rust CLI changes to sync — Go CLI is up to date."
           elif [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "### Dry run — Go CLI sync" >> "$GITHUB_STEP_SUMMARY"
             if [ -s sync-go.patch ]; then
