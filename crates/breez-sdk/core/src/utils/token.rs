@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
 use spark_wallet::{BURN_PUBLIC_KEY, PublicKey, SparkWallet};
-use tracing::warn;
+use tracing::{debug, warn};
 use web_time::UNIX_EPOCH;
 
 use crate::{
@@ -62,15 +62,18 @@ pub async fn token_transaction_to_payments(
     transaction: &spark_wallet::TokenTransaction,
     tx_inputs_are_ours: bool,
 ) -> Result<Vec<Payment>, SdkError> {
+    // Transactions with no outputs (e.g. Create) produce no payments
+    let Some(first_output) = transaction.outputs.first() else {
+        debug!(
+            "Skipping token transaction with no outputs: hash={}, inputs={:?}",
+            hex::encode(&transaction.hash),
+            transaction.inputs,
+        );
+        return Ok(Vec::new());
+    };
+
     // Get token metadata for the first output (assuming all outputs have the same token)
-    let token_identifier = transaction
-        .outputs
-        .first()
-        .ok_or(SdkError::Generic(
-            "No outputs in token transaction".to_string(),
-        ))?
-        .token_identifier
-        .as_ref();
+    let token_identifier = first_output.token_identifier.as_ref();
 
     let metadata =
         get_tokens_metadata_cached_or_query(spark_wallet, object_repository, &[token_identifier])
