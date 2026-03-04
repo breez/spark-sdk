@@ -19,9 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       languages:
-        description: 'Comma-separated languages to sync, or "all" (default: all)'
+        description: 'Languages to sync (remove what you do not want)'
         required: false
-        default: 'all'
+        default: '["dart", "go", "python", "swift"]'
         type: string
       base-sha:
         description: 'Base commit SHA to diff against (leave empty for full comparison)'
@@ -33,13 +33,14 @@ on:
         type: boolean
         default: false
       approve-run:
-        description: 'Run ID of a previous dry-run to approve (set languages to the single language)'
+        description: 'Run ID of a previous dry-run to approve (set languages to match)'
         required: false
         type: string
 
 jobs:
   # ── Build a filtered matrix from the `languages` input ──────────
-  filter:
+  setup:
+    name: Setup
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
@@ -55,11 +56,11 @@ jobs:
             {"lang":"python","runner":"ubuntu-latest","timeout":30},
             {"lang":"swift","runner":"macos-latest","timeout":45}
           ]'
-          if [ -z "$REQUESTED" ] || [ "$REQUESTED" = "all" ]; then
+          if [ -z "$REQUESTED" ]; then
             echo "matrix={\"include\":$(echo "$ALL" | jq -c '.')}" >> "$GITHUB_OUTPUT"
           else
-            FILTERED=$(echo "$ALL" | jq -c --arg langs "$REQUESTED" \
-              '[.[] | select(.lang as $l | ($langs | split(",") | map(gsub("\\s+";"")) | index($l)))]')
+            FILTERED=$(echo "$ALL" | jq -c --argjson langs "$REQUESTED" \
+              '[.[] | select(.lang as $l | $langs | index($l))]')
             if [ "$FILTERED" = "[]" ]; then
               echo "::error::No valid languages in: $REQUESTED (available: dart, go, python, swift)"
               exit 1
@@ -68,11 +69,12 @@ jobs:
           fi
 
   sync:
-    needs: filter
+    name: ${{ matrix.lang }}
+    needs: setup
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.filter.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
