@@ -85,25 +85,14 @@ Do NOT modify any other files.
 Read back each modified file to verify correctness.
 
 ### Step 7: Build check (final gate)
-**This must be the very last step before creating a branch/PR.** Do NOT make any code edits after this step passes.
+**This must be the very last step.** Do NOT make any code edits after this step passes.
 Run the build check to verify the code is syntactically valid and properly formatted:
 ```bash
 {{BUILD_CHECK}}
 ```
 If any check fails, fix the errors and re-run until it passes. {{FORMAT_INSTRUCTIONS}}
 
-### Step 8: Create PR or stop
-1. **If this is a dry run** (`${{ inputs.dry-run }}` is `true`): do NOT create a branch or PR. Leave the changes in the working tree and stop here.
-2. **Otherwise**, create a branch and PR:
-```bash
-git checkout -b claude/sync-{{LANG_ID}}-cli-$(echo "${{ github.sha }}" | cut -c1-7)
-git add {{TARGET_DIR}}
-git commit -m "chore: sync {{LANG_NAME}} CLI with Rust CLI changes (${{ github.sha }})"
-git push -u origin HEAD
-gh pr create --title "chore: sync {{LANG_NAME}} CLI with Rust CLI changes" \
-  --body "Automated sync of {{LANG_NAME}} CLI from Rust CLI changes in ${{ github.sha }}" \
-  --base main
-```
+### Step 8: No-op check
+If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT modify any files. Output: "No {{LANG_NAME}} CLI changes needed."
 
-### Step 9: No-op check
-If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT create a PR. Output: "No {{LANG_NAME}} CLI changes needed."
+**Important:** Do NOT create git branches, commits, or pull requests. The CI workflow handles all git operations after you finish. Just leave your changes in the working tree.
