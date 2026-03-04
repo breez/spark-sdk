@@ -34,6 +34,7 @@ For every divergence found, check the {{LANG_NAME}} SDK snippets at `docs/breez-
 
 Only after completing 1a–1d should you decide which divergences to fix. Implement what's feasible — if a feature can't be ported (missing bindings, no equivalent package, platform limitation), add the CLI flag but {{UNSUPPORTED_HANDLER}} and leave a comment explaining why.
 
+**Direction of sync**: Only sync Rust → {{LANG_NAME}} (add missing features, fix outdated API calls). If the {{LANG_NAME}} CLI has additions not in Rust (e.g., success messages, extra help text, UX improvements), keep them — note them in findings as suggestions for the Rust CLI, but do not remove them.
 
 ### Step 2: File mapping
 
