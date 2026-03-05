@@ -196,20 +196,27 @@ impl BreezSdk {
             processed_success_action: success_action.clone().map(From::from),
             raw_success_action: request.prepare_response.success_action,
         };
-        let Some(crate::PaymentDetails::Lightning {
-            lnurl_pay_info,
-            description,
-            ..
-        }) = &mut payment.details
-        else {
-            return Err(SdkError::Generic(
-                "Expected Lightning payment details".to_string(),
-            ));
-        };
-        *lnurl_pay_info = Some(lnurl_info.clone());
-
         let lnurl_description = lnurl_info.extract_description();
-        description.clone_from(&lnurl_description);
+
+        match &mut payment.details {
+            Some(crate::PaymentDetails::Lightning {
+                lnurl_pay_info,
+                description,
+                ..
+            }) => {
+                *lnurl_pay_info = Some(lnurl_info.clone());
+                description.clone_from(&lnurl_description);
+            }
+            // When the LNURL server includes a Spark routing hint, the payment
+            // is routed via Spark transfer. The Spark variant doesn't carry
+            // lnurl fields, so we just persist the metadata separately below.
+            Some(crate::PaymentDetails::Spark { .. }) => {}
+            _ => {
+                return Err(SdkError::Generic(
+                    "Expected Lightning or Spark payment details".to_string(),
+                ));
+            }
+        }
 
         self.storage
             .insert_payment_metadata(

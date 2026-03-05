@@ -775,6 +775,14 @@ async fn test_06_client_side_zap_receipt(
     Ok(())
 }
 
+/// Fixture: Lnurl service with include_spark_address enabled
+#[fixture]
+async fn lnurl_spark_address_fixture() -> LnurlFixture {
+    LnurlFixture::with_config(LnurlImageConfig::default().with_include_spark_address(true))
+        .await
+        .expect("Failed to start Lnurl service with Spark address")
+}
+
 fn percent_encode(input: &str) -> Cow<'_, str> {
     let mut result = String::new();
     for byte in input.bytes() {
@@ -1564,5 +1572,147 @@ async fn test_10_lud21_verify(
     info!("Verified invoice IS settled with correct preimage after payment");
 
     info!("=== Test test_10_lud21_verify PASSED ===");
+    Ok(())
+}
+
+/// Test LNURL payment when the LNURL server includes a Spark address routing hint.
+/// When both sender and receiver are on Spark, the invoice returned by the LNURL server
+/// will contain a Spark routing hint, causing the payment to go via Spark transfer
+/// instead of Lightning. This previously caused an "Expected Lightning payment details"
+/// error despite the funds being transferred successfully.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_11_lnurl_spark_address_payment(
+    #[future] lnurl_spark_address_fixture: LnurlFixture,
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_11_lnurl_spark_address_payment ===");
+
+    // Setup Bob with the Spark address LNURL server
+    let lnurl = Arc::new(lnurl_spark_address_fixture.await);
+    let lnurl_domain = lnurl.http_url().to_string();
+
+    let mut bob = async {
+        let temp_dir = TempDir::new("breez-sdk-bob-spark-addr")?;
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+
+        let mut config = default_config(Network::Regtest);
+        config.api_key = None;
+        config.lnurl_domain = Some(lnurl_domain.clone());
+        config.sync_interval_secs = 1;
+        config.real_time_sync_server_url = None;
+        config.support_lnurl_verify = true;
+
+        let mut sdk_instance = build_sdk_with_custom_config(
+            temp_dir.path().to_string_lossy().to_string(),
+            seed,
+            config,
+            Some(temp_dir),
+            false,
+        )
+        .await?;
+        sdk_instance.lnurl_fixture = Some(Arc::clone(&lnurl));
+        Ok::<_, anyhow::Error>(sdk_instance)
+    }
+    .instrument(tracing::info_span!(target: "breez_sdk_spark", "bob"))
+    .await?;
+
+    let mut alice = alice_sdk.await?;
+
+    let username = "bobsparkaddr";
+    let description = "Bob's Spark address test Lightning address";
+    let payment_amount_sats = 5_000;
+    let payment_comment = "Spark address LNURL payment from Alice";
+
+    // Bob registers a Lightning address (LNURL server has include_spark_address=true)
+    let bob_lightning_address = async {
+        let register_response = bob
+            .sdk
+            .register_lightning_address(RegisterLightningAddressRequest {
+                username: username.to_string(),
+                description: Some(description.to_string()),
+            })
+            .await?;
+
+        let addr = register_response.lightning_address.clone();
+        info!("Registered Lightning address: {}", addr);
+        Ok::<_, anyhow::Error>(addr)
+    }
+    .instrument(bob.span.clone())
+    .await?;
+
+    // Fund Alice with sats for testing
+    receive_and_fund(&mut alice, 50_000, false).await?;
+    info!("Alice funded with sats");
+
+    // Alice parses Bob's Lightning address
+    let parse_response = alice.sdk.parse(&bob_lightning_address).await?;
+    let InputType::LightningAddress(details) = parse_response else {
+        anyhow::bail!("Expected Lightning address");
+    };
+    info!("Alice parsed Lightning address successfully");
+
+    // Alice prepares LNURL pay request
+    let prepare_response = alice
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount_sats: payment_amount_sats,
+            pay_request: details.pay_request,
+            comment: Some(payment_comment.to_string()),
+            validate_success_action_url: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let amount_sats = prepare_response.amount_sats;
+    info!("Alice prepared payment for {amount_sats} sats to {bob_lightning_address}");
+
+    // Alice sends the payment via lnurl_pay
+    // This is the key part: the LNURL server returns an invoice with a Spark routing hint,
+    // so the SDK pays via Spark transfer. Previously this returned
+    // "Expected Lightning payment details" error.
+    let pay_response = alice
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response,
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice initiated Spark-routed LNURL payment to Bob");
+
+    // Wait for payment to complete on Alice's side
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 30).await?;
+    info!("Payment completed on Alice's side");
+
+    // Wait for payment to complete on Bob's side
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+    info!("Payment completed on Bob's side");
+
+    // Verify payment details on Alice's side
+    let alice_payment = alice
+        .sdk
+        .get_payment(GetPaymentRequest {
+            payment_id: pay_response.payment.id,
+        })
+        .await?
+        .payment;
+
+    assert_eq!(alice_payment.payment_type, PaymentType::Send);
+    assert_eq!(alice_payment.amount, payment_amount_sats as u128);
+    assert_eq!(alice_payment.status, PaymentStatus::Completed);
+    // The payment went via Spark, so method should be Spark
+    assert_eq!(alice_payment.method, PaymentMethod::Spark);
+
+    // The payment went via Spark, so details should be Spark variant
+    assert!(
+        matches!(&alice_payment.details, Some(PaymentDetails::Spark { .. })),
+        "Expected Spark payment details, got: {:?}",
+        alice_payment.details,
+    );
+
+    info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
     Ok(())
 }

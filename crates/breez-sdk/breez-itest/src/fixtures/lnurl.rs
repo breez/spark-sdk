@@ -22,6 +22,8 @@ pub struct LnurlImageConfig {
     /// Database URL. Use `:memory:` for in-memory SQLite or a
     /// `postgres://...` URL for PostgreSQL.
     pub db_url: String,
+    /// Whether to include Spark address routing hints in Lightning invoices
+    pub include_spark_address: bool,
 }
 
 impl Default for LnurlImageConfig {
@@ -37,6 +39,7 @@ impl Default for LnurlImageConfig {
             network: "regtest".to_string(),
             auto_migrate: true,
             db_url: ":memory:".to_string(),
+            include_spark_address: false,
         }
     }
 }
@@ -64,6 +67,12 @@ impl LnurlImageConfig {
     /// Set the database URL (`:memory:` for SQLite, `postgres://...` for PostgreSQL)
     pub fn with_db_url(mut self, db_url: impl Into<String>) -> Self {
         self.db_url = db_url.into();
+        self
+    }
+
+    /// Set whether to include Spark address routing hints in invoices
+    pub fn with_include_spark_address(mut self, include_spark_address: bool) -> Self {
+        self.include_spark_address = include_spark_address;
         self
     }
 }
@@ -117,6 +126,10 @@ impl LnurlFixture {
             )
             .with_env_var("BREEZ_LNURL_MIN_SENDABLE", "1000")
             .with_env_var("BREEZ_LNURL_MAX_SENDABLE", "1000000000")
+            .with_env_var(
+                "BREEZ_LNURL_INCLUDE_SPARK_ADDRESS",
+                config.include_spark_address.to_string(),
+            )
             // Allow the container to reach services on the host via host.docker.internal
             .with_host("host.docker.internal", Host::HostGateway);
 
