@@ -76,17 +76,17 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: list-claimable-htlc-payments
             var request = new ListPaymentsRequest(
-                typeFilter: new List<PaymentType> { PaymentType.Receive },
-                statusFilter: new List<PaymentStatus> { PaymentStatus.Pending },
-                paymentDetailsFilter: new List<PaymentDetailsFilter> {
+                typeFilter: new PaymentType[] { PaymentType.Receive },
+                statusFilter: new PaymentStatus[] { PaymentStatus.Pending },
+                paymentDetailsFilter: new PaymentDetailsFilter[] {
                     new PaymentDetailsFilter.Spark(
-                        htlcStatus: new List<SparkHtlcStatus> {
+                        htlcStatus: new SparkHtlcStatus[] {
                             SparkHtlcStatus.WaitingForPreimage
                         },
                         conversionRefundNeeded: null
                     ),
                     new PaymentDetailsFilter.Lightning(
-                        htlcStatus: new List<SparkHtlcStatus> {
+                        htlcStatus: new SparkHtlcStatus[] {
                             SparkHtlcStatus.WaitingForPreimage
                         }
                     )

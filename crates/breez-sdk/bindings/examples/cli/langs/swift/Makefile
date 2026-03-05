@@ -14,7 +14,6 @@ setup: ## Build local Swift bindings from Rust source
 	cd $(BINDINGS_DIR) && $(MAKE) bindings-swift
 	mkdir -p $(SDK_PKG_DIR)/Sources/BreezSdkSpark
 	cp $(BINDINGS_DIR)/ffi/swift/*.swift $(SDK_PKG_DIR)/Sources/BreezSdkSpark/
-	find $(SDK_PKG_DIR)/Sources/BreezSdkSpark -name "*.swift" -exec sed -i '' 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
 	cp $(BINDINGS_DIR)/ffi/swift/breez_sdk_*FFI.h $(MACOS_FW)/Headers/
 	cp $(RELEASE_DIR)/libbreez_sdk_spark_bindings.dylib $(MACOS_FW)/breez_sdk_sparkFFI
 	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI $(MACOS_FW)/breez_sdk_sparkFFI

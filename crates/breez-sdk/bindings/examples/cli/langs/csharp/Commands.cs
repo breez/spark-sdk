@@ -379,21 +379,21 @@ public static class Commands
         var offset = uint.Parse(offsetStr);
 
         // Parse type filter
-        List<PaymentType>? typeFilter = null;
+        PaymentType[]? typeFilter = null;
         if (typeFilterStr != null)
         {
             typeFilter = typeFilterStr.Split(',')
                 .Select(s => Enum.Parse<PaymentType>(s.Trim(), ignoreCase: true))
-                .ToList();
+                .ToArray();
         }
 
         // Parse status filter
-        List<PaymentStatus>? statusFilter = null;
+        PaymentStatus[]? statusFilter = null;
         if (statusFilterStr != null)
         {
             statusFilter = statusFilterStr.Split(',')
                 .Select(s => Enum.Parse<PaymentStatus>(s.Trim(), ignoreCase: true))
-                .ToList();
+                .ToArray();
         }
 
         // Parse asset filter
@@ -411,17 +411,16 @@ public static class Commands
         }
 
         // Payment details filters
-        List<PaymentDetailsFilter>? paymentDetailsFilter = null;
+        var paymentDetailsFilterList = new List<PaymentDetailsFilter>();
         if (htlcStatusStr != null || txHash != null || txTypeStr != null)
         {
-            paymentDetailsFilter = new List<PaymentDetailsFilter>();
 
             if (htlcStatusStr != null)
             {
                 var statuses = htlcStatusStr.Split(',')
                     .Select(s => Enum.Parse<SparkHtlcStatus>(s.Trim(), ignoreCase: true))
-                    .ToList();
-                paymentDetailsFilter.Add(new PaymentDetailsFilter.Spark(
+                    .ToArray();
+                paymentDetailsFilterList.Add(new PaymentDetailsFilter.Spark(
                     htlcStatus: statuses,
                     conversionRefundNeeded: null
                 ));
@@ -429,7 +428,7 @@ public static class Commands
 
             if (txHash != null)
             {
-                paymentDetailsFilter.Add(new PaymentDetailsFilter.Token(
+                paymentDetailsFilterList.Add(new PaymentDetailsFilter.Token(
                     conversionRefundNeeded: null,
                     txType: null,
                     txHash: txHash
@@ -439,7 +438,7 @@ public static class Commands
             if (txTypeStr != null)
             {
                 var txType = Enum.Parse<TokenTransactionType>(txTypeStr, ignoreCase: true);
-                paymentDetailsFilter.Add(new PaymentDetailsFilter.Token(
+                paymentDetailsFilterList.Add(new PaymentDetailsFilter.Token(
                     conversionRefundNeeded: null,
                     txType: txType,
                     txHash: null
@@ -455,7 +454,7 @@ public static class Commands
             typeFilter: typeFilter,
             statusFilter: statusFilter,
             assetFilter: assetFilter,
-            paymentDetailsFilter: paymentDetailsFilter,
+            paymentDetailsFilter: paymentDetailsFilterList.Count > 0 ? paymentDetailsFilterList.ToArray() : null,
             fromTimestamp: ParseOptionalUlong(fromTimestampStr),
             toTimestamp: ParseOptionalUlong(toTimestampStr),
             sortAscending: sortAscending
@@ -1034,7 +1033,7 @@ public static class Commands
         }
 
         var result = await sdk.GetTokensMetadata(new GetTokensMetadataRequest(
-            tokenIdentifiers: args.ToList()
+            tokenIdentifiers: args
         ));
         Serialization.PrintValue(result);
     }

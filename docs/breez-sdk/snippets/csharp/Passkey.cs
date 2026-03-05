@@ -42,7 +42,7 @@ namespace BreezSdkSnippets
             return sdk;
         }
 
-        async Task<List<string>> ListLabels()
+        async Task<string[]> ListLabels()
         {
             // ANCHOR: list-labels
             var prfProvider = new ExamplePasskeyPrfProvider();

@@ -81,7 +81,7 @@ namespace BreezSdkSnippets
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>",
-                externalInputParsers = new List<ExternalInputParser>
+                externalInputParsers = new ExternalInputParser[]
                 {
                 new ExternalInputParser(
                     providerId: "provider_a",
