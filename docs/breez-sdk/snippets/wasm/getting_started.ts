@@ -21,7 +21,7 @@ const exampleGettingStarted = async () => {
   // import init, { BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
   await init()
 
-  // Construct the seed using mnemonic words or entropy bytes
+  // Construct the seed using a mnemonic, entropy or passkey
   const mnemonic = '<mnemonic words>'
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 

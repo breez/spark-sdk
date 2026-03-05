@@ -4,7 +4,7 @@ import breez_sdk_spark.*
 class GettingStarted {
     suspend fun initSdk() {
         // ANCHOR: init-sdk
-        // Construct the seed using mnemonic words or entropy bytes
+        // Construct the seed using a mnemonic, entropy or passkey
         val mnemonic = "<mnemonic words>"
         val seed = Seed.Mnemonic(mnemonic, null)
 

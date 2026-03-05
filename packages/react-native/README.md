@@ -38,6 +38,22 @@ Then add the plugin to your `app.json` or `app.config.js`:
 }
 ```
 
+#### Plugin Options
+
+To enable [Passkey](https://sdk-doc-spark.breez.technology/guide/passkey.html) support, set `enablePasskey` to `true`. This adds `webcredentials:keys.breez.technology` to the iOS Associated Domains entitlement:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      ["@breeztech/breez-sdk-spark-react-native", {
+        "enablePasskey": true
+      }]
+    ]
+  }
+}
+```
+
 After adding the plugin, rebuild your app:
 
 ```sh

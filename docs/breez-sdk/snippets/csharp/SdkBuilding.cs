@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         async Task InitSdkAdvanced()
         {
             // ANCHOR: init-sdk-advanced
-            // Construct the seed using mnemonic words or entropy bytes
+            // Construct the seed using a mnemonic, entropy or passkey
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
             // Create the default config
@@ -84,7 +84,7 @@ namespace BreezSdkSnippets
         async Task InitSdkPostgres()
         {
             // ANCHOR: init-sdk-postgres
-            // Construct the seed using mnemonic words or entropy bytes
+            // Construct the seed using a mnemonic, entropy or passkey
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
 

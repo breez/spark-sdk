@@ -3,6 +3,7 @@ mod event;
 mod issuer;
 mod logger;
 mod models;
+mod passkey;
 mod persist;
 mod sdk;
 mod sdk_builder;
