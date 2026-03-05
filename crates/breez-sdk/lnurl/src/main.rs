@@ -3,7 +3,7 @@ use anyhow::anyhow;
 use axum::{
     Extension, Router,
     extract::DefaultBodyLimit,
-    http::Method,
+    http::{Method, StatusCode},
     middleware,
     routing::{delete, get, post},
 };
@@ -351,6 +351,7 @@ where
             get(LnurlServer::<DB>::handle_invoice),
         )
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
+        .route("/health", get(|| async { StatusCode::OK }))
         .layer(Extension(state))
         .layer(
             CorsLayer::new()
