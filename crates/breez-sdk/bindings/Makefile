@@ -40,13 +40,13 @@ build-release-target-%: install-target-%
 	cargo build --release --target $*
 
 install-uniffi-bindgen-cs:
-	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch jssdwt-fix-async-event-listener
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch v0.29.4-with-fixes
 
 install-uniffi-bindgen-gobley:
-	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --rev 72753910f54a157de2f84b78dc6f78415e28d4f2
+	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --branch v0.3.7-with-fixes
 
 install-uniffi-bindgen-golang:
-	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 8b8c58f78b2dc16a252f325da91ce409f409fe3c
+	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
 
 install-target-%:
 	$(CLANG_PREFIX) rustup target add $*
@@ -100,8 +100,6 @@ build-x86_64-apple-darwin: install-target-x86_64-apple-darwin
 package-xcframework-no-binaries: bindings-swift
 	mkdir -p langs/swift/Sources/BreezSdkSpark
 	mv $(FFI_DIR)swift/*.swift langs/swift/Sources/BreezSdkSpark/
-	# WA pre 0.29.0: Fix redeclaration of protocol UniffiForeignFutureTask https://github.com/mozilla/uniffi-rs/pull/2341
-	find langs/swift/Sources/BreezSdkSpark -name "*.swift" -exec sed -i '' 's/protocol UniffiForeignFutureTask/fileprivate protocol UniffiForeignFutureTask/g' {} \;
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
 	cp $(FFI_DIR)swift/breez_sdk_*FFI.h langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Headers

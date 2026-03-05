@@ -113,11 +113,13 @@ jobs:
             packages/react-native/ubrn.config.yaml
             packages/react-native/android/generated
             packages/react-native/android/CMakeLists.txt
+            packages/react-native/android/proguard-rules.pro
             packages/react-native/cpp
             packages/react-native/lib
             packages/react-native/plugin/build
             packages/react-native/scripts
             packages/react-native/src
+            packages/react-native/patches
             packages/react-native/*.podspec
             packages/react-native/package.json
             packages/react-native/README.md
@@ -167,6 +169,7 @@ jobs:
           git rm -r plugin || true
           git rm -r scripts || true
           git rm -r src || true
+          git rm -r patches || true
 
       - name: Download React Native bindings
         uses: actions/download-artifact@v4
