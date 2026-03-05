@@ -7,3 +7,4 @@ mod persist;
 mod sdk;
 mod sdk_builder;
 mod signer;
+mod tree_store;

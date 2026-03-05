@@ -12,7 +12,6 @@ use platform_utils::DefaultHttpClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-#[cfg(feature = "postgres")]
 use spark_wallet::TreeStore;
 use tokio::sync::watch;
 use tracing::{debug, info};
@@ -66,6 +65,7 @@ pub struct SdkBuilder {
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
+    tree_store: Option<Arc<dyn TreeStore>>,
     #[cfg(feature = "postgres")]
     postgres_tree_store_config: Option<crate::persist::postgres::PostgresStorageConfig>,
 }
@@ -100,6 +100,7 @@ impl SdkBuilder {
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
+            tree_store: None,
             #[cfg(feature = "postgres")]
             postgres_tree_store_config: None,
         }
@@ -127,6 +128,7 @@ impl SdkBuilder {
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
+            tree_store: None,
             #[cfg(feature = "postgres")]
             postgres_tree_store_config: None,
         }
@@ -259,6 +261,16 @@ impl SdkBuilder {
     #[allow(unused)]
     pub fn with_payment_observer(mut self, payment_observer: Arc<dyn PaymentObserver>) -> Self {
         self.payment_observer = Some(payment_observer);
+        self
+    }
+
+    /// Sets a custom tree store implementation.
+    ///
+    /// # Arguments
+    /// - `tree_store`: The tree store implementation to use.
+    #[must_use]
+    pub fn with_tree_store(mut self, tree_store: Arc<dyn TreeStore>) -> Self {
+        self.tree_store = Some(tree_store);
         self
     }
 
@@ -456,13 +468,15 @@ impl SdkBuilder {
         let shutdown_sender = watch::channel::<()>(()).0;
 
         // Create tree store if configured
+        #[allow(unused_mut)]
+        let mut tree_store: Option<Arc<dyn TreeStore>> = self.tree_store;
+
         #[cfg(feature = "postgres")]
-        let tree_store: Option<Arc<dyn TreeStore>> =
-            if let Some(config) = self.postgres_tree_store_config {
-                Some(crate::persist::postgres::create_postgres_tree_store(config).await?)
-            } else {
-                None
-            };
+        if tree_store.is_none()
+            && let Some(config) = self.postgres_tree_store_config
+        {
+            tree_store = Some(crate::persist::postgres::create_postgres_tree_store(config).await?);
+        }
 
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
@@ -472,7 +486,6 @@ impl SdkBuilder {
                 Arc::new(SparkTransferObserver::new(observer));
             wallet_builder = wallet_builder.with_transfer_observer(observer);
         }
-        #[cfg(feature = "postgres")]
         if let Some(tree_store) = tree_store {
             wallet_builder = wallet_builder.with_tree_store(tree_store);
         }

@@ -771,6 +771,8 @@ dependencies = [
  "macros",
  "serde",
  "serde-wasm-bindgen",
+ "spark-wallet",
+ "tokio_with_wasm",
  "tracing",
  "tracing-subscriber",
  "tsify-next",
@@ -778,6 +780,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

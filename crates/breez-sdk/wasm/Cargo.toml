@@ -18,12 +18,15 @@ js-sys.workspace = true
 macros.workspace = true
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
+spark-wallet.workspace = true
+tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tsify-next = {workspace = true, default-features = false, features = ["js"]}
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
+web-time.workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
