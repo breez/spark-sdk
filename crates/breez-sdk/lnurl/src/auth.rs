@@ -1,6 +1,6 @@
 use axum::{
     extract::{self, Request},
-    http::{StatusCode, header::AUTHORIZATION},
+    http::{Method, StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
@@ -18,6 +18,12 @@ pub async fn auth<DB>(
 where
     DB: Send + Sync + 'static,
 {
+    // CORS preflight requests don't carry credentials; let them through
+    // so the CorsLayer can add the appropriate response headers.
+    if req.method() == Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
+
     let Some(ca_cert) = state.ca_cert.as_ref() else {
         return Ok(next.run(req).await);
     };
