@@ -71,6 +71,10 @@ When a user no longer wants to use the Lightning address, you can delete it.
 
 {{#tabs lightning_address:delete-lightning-address}}
 
+### Listening for Lightning address changes
+
+When using the SDK on multiple devices, Lightning address changes made on one device are automatically synced to others. The SDK emits a {{#enum SdkEvent::LightningAddressChanged}} event when a change from another device is detected, containing the updated {{#name LightningAddressInfo}} or no value if the address was deleted. See [Listening to events](./events.md) for how to subscribe to events.
+
 ## Accessing LNURL payment metadata
 
 When receiving payments via LNURL-Pay or Lightning addresses, additional metadata may be included with the payment. This metadata is available on the received payment.

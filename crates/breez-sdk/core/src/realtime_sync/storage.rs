@@ -269,7 +269,7 @@ impl SyncedStorage {
                     .await
             }
             RecordType::LightningAddress => {
-                return Ok(self.handle_lightning_address_change().await);
+                return Ok(self.handle_lightning_address_change());
             }
         }?;
         Ok(RecordOutcome::Completed)
@@ -372,49 +372,77 @@ impl SyncedStorage {
         }
     }
 
-    async fn handle_lightning_address_change(&self) -> RecordOutcome {
+    fn handle_lightning_address_change(&self) -> RecordOutcome {
         let Some(client) = &self.lnurl_server_client else {
             return RecordOutcome::Completed;
         };
 
-        let cache = ObjectCacheRepository::new(Arc::clone(&self.inner));
-        let old = cache
-            .fetch_lightning_address()
-            .await
-            .ok()
-            .flatten()
-            .flatten();
+        let client = Arc::clone(client);
+        let inner = Arc::clone(&self.inner);
+        let event_emitter = Arc::clone(&self.event_emitter);
+        let span = tracing::Span::current();
 
-        let resp = match client.recover_lightning_address().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                warn!("Failed to recover lightning address after sync trigger, deferring: {e:?}");
-                return RecordOutcome::Deferred;
-            }
-        };
+        tokio::spawn(
+            async move {
+                let cache = ObjectCacheRepository::new(Arc::clone(&inner));
+                let old = cache
+                    .fetch_lightning_address()
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten();
 
-        let new = if let Some(resp) = resp {
-            let address_info = resp.into();
-            if let Err(e) = cache.save_lightning_address(&address_info).await {
-                error!("Failed to save recovered lightning address: {e:?}");
-                return RecordOutcome::Deferred;
-            }
-            Some(address_info)
-        } else {
-            if let Err(e) = cache.delete_lightning_address().await {
-                error!("Failed to delete lightning address from cache: {e:?}");
-                return RecordOutcome::Deferred;
-            }
-            None
-        };
+                let resp = match client.recover_lightning_address().await {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        warn!("Failed to recover lightning address after sync trigger: {e:?}");
+                        if let Err(e) = inner
+                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                            .await
+                        {
+                            error!("Failed to reset lightning address cache: {e:?}");
+                        }
+                        return;
+                    }
+                };
 
-        if old != new {
-            self.event_emitter
-                .emit(&SdkEvent::LightningAddressChanged {
-                    lightning_address: new,
-                })
-                .await;
-        }
+                let new = if let Some(resp) = resp {
+                    let address_info = resp.into();
+                    if let Err(e) = cache.save_lightning_address(&address_info).await {
+                        error!("Failed to save recovered lightning address: {e:?}");
+                        if let Err(e) = inner
+                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                            .await
+                        {
+                            error!("Failed to reset lightning address cache: {e:?}");
+                        }
+                        return;
+                    }
+                    Some(address_info)
+                } else {
+                    if let Err(e) = cache.delete_lightning_address().await {
+                        error!("Failed to delete lightning address from cache: {e:?}");
+                        if let Err(e) = inner
+                            .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
+                            .await
+                        {
+                            error!("Failed to reset lightning address cache: {e:?}");
+                        }
+                        return;
+                    }
+                    None
+                };
+
+                if old != new {
+                    event_emitter
+                        .emit(&SdkEvent::LightningAddressChanged {
+                            lightning_address: new,
+                        })
+                        .await;
+                }
+            }
+            .instrument(span),
+        );
 
         RecordOutcome::Completed
     }
