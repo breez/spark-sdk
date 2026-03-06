@@ -28,6 +28,12 @@ On some platforms (e.g., Android, iOS), you must use an application-specific wri
 
 </div>
 
+### Connecting with a Passkey
+
+Instead of managing mnemonics directly, you can use passkeys to derive wallet seeds deterministically. This eliminates the need for mnemonic backup and provides a seamless authentication experience using biometrics or device PIN.
+
+See [Connecting with a Passkey](passkey.md) for the full setup guide including PRF provider implementation, platform configuration, and wallet name management.
+
 ## Advanced Initialization
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:

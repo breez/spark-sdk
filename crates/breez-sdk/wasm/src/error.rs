@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use breez_sdk_spark::{ParseError, SdkError};
+use breez_sdk_spark::{ParseError, SdkError, passkey::PasskeyError};
 use tracing_subscriber::util::TryInitError;
 use wasm_bindgen::{JsError, JsValue};
 
@@ -45,4 +45,4 @@ macro_rules! wasm_error_wrapper {
     }
 }
 
-wasm_error_wrapper!(SdkError, ParseError);
+wasm_error_wrapper!(SdkError, ParseError, PasskeyError);

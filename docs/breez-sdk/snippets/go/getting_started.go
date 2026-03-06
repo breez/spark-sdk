@@ -9,7 +9,7 @@ import (
 
 func InitSdk() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: init-sdk
-	// Construct the seed using mnemonic words or entropy bytes
+	// Construct the seed using a mnemonic, entropy or passkey
 	mnemonic := "<mnemonic words>"
 	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
 		Mnemonic:   mnemonic,

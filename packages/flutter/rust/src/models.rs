@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
+pub use breez_sdk_spark::passkey::*;
 pub use breez_sdk_spark::sync_storage::*;
 pub use breez_sdk_spark::*;
 use flutter_rust_bridge::frb;
-use std::collections::HashMap;
 
 #[frb(mirror(BitcoinAddressDetails))]
 pub struct _BitcoinAddressDetails {
@@ -1181,4 +1183,16 @@ pub struct _UpdateContactRequest {
 pub struct _ListContactsRequest {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+}
+
+#[frb(mirror(NostrRelayConfig))]
+pub struct _NostrRelayConfig {
+    pub breez_api_key: Option<String>,
+    pub timeout_secs: Option<u32>,
+}
+
+#[frb(mirror(Wallet))]
+pub struct _Wallet {
+    pub seed: Seed,
+    pub name: String,
 }

@@ -17,6 +17,7 @@
     - [C#](guide/install_csharp.md)
   - [Testing and development](guide/testing.md)
   - [Initializing the SDK](guide/initializing.md)
+    - [Connecting with a Passkey](guide/passkey.md)
     - [Customizing the SDK](guide/customizing.md)
   - [Getting the SDK info](guide/get_info.md)
   - [Listening to events](guide/events.md)

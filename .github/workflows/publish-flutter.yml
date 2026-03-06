@@ -82,7 +82,7 @@ jobs:
         run: |
           HASH=$(git rev-parse HEAD)
           sed -i.bak -e 's/^breez-sdk-common = .*/breez-sdk-common = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'" }/' Cargo.toml
-          sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = ["openssl-vendored"] }/' Cargo.toml
+          sed -i.bak -e 's/^breez-sdk-spark = .*/breez-sdk-spark = { git = "https:\/\/github.com\/breez\/spark-sdk.git", rev = "'"$HASH"'", features = [/' Cargo.toml
           rm Cargo.toml.bak
 
       - name: Install flutter_rust_bridge_codegen

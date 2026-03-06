@@ -11,9 +11,16 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 async-trait = "0.1.88"
 # Replaced with release commit during publishing
-breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = ["openssl-vendored"] }
+breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [
+    "openssl-vendored",
+    "passkey",
+] }
 extend = "1.2.0"
 flutter_rust_bridge = "=2.11.1"
+futures = { version = "0.3", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
@@ -21,12 +28,16 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 # Support for 16KB page sizes on Android 15+ 64-bit architectures
 [target.aarch64-linux-android]
 rustflags = [
-    "-C", "link-arg=-Wl,--hash-style=both",
-    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,--hash-style=both",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
 ]
 
 [target.x86_64-linux-android]
 rustflags = [
-    "-C", "link-arg=-Wl,--hash-style=both",
-    "-C", "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,--hash-style=both",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
 ]

@@ -17,6 +17,7 @@ mod parsing_inputs;
 mod receive_payment;
 mod refunding_payments;
 mod sdk_building;
+mod passkey;
 mod send_payment;
 mod tokens;
 mod user_settings;

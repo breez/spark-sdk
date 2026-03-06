@@ -7,7 +7,7 @@ use log::info;
 
 pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-advanced
-    // Construct the seed using mnemonic words or entropy bytes
+    // Construct the seed using a mnemonic, entropy or passkey
     let mnemonic = "<mnemonic words>".to_string();
     let seed = Seed::Mnemonic {
         mnemonic,
@@ -84,7 +84,7 @@ pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {
 
 pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // ANCHOR: init-sdk-postgres
-    // Construct the seed using mnemonic words or entropy bytes
+    // Construct the seed using a mnemonic, entropy or passkey
     let mnemonic = "<mnemonic words>".to_string();
     let seed = Seed::Mnemonic {
         mnemonic,

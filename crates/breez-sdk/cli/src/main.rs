@@ -1,8 +1,10 @@
 mod command;
+mod passkey;
 mod persist;
 
-use crate::command::CliHelper;
-use crate::persist::CliPersistence;
+use std::fs;
+use std::path::PathBuf;
+
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, default_config,
@@ -13,8 +15,11 @@ use command::{Command, execute_command};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::hint::HistoryHinter;
-use std::{fs, path::PathBuf};
 use tracing::{error, info};
+
+use crate::command::CliHelper;
+use crate::passkey::{PasskeyConfig, PasskeyProvider};
+use crate::persist::CliPersistence;
 
 #[derive(Parser)]
 #[command(version, about = "CLI client for Breez SDK with Spark", long_about = None)]
@@ -43,6 +48,26 @@ struct Cli {
     /// Stable balance threshold, in sats
     #[arg(long)]
     stable_balance_threshold: Option<u64>,
+
+    /// Use passkey with `file`, `yubikey`, or `fido2` provider
+    #[arg(long, value_name = "PROVIDER")]
+    passkey: Option<PasskeyProvider>,
+
+    /// Wallet name for seed derivation (defaults to "Default" if omitted)
+    #[arg(long, requires = "passkey")]
+    wallet_name: Option<String>,
+
+    /// List and select from wallet names published to Nostr
+    #[arg(long, requires = "passkey", conflicts_with_all = ["wallet_name", "store_wallet_name"])]
+    list_wallet_names: bool,
+
+    /// Publish the wallet name to Nostr (requires --wallet-name)
+    #[arg(long, requires_all = ["passkey", "wallet_name"], conflicts_with = "list_wallet_names")]
+    store_wallet_name: bool,
+
+    /// Relying party ID for FIDO2 provider (default: keys.breez.technology)
+    #[arg(long, requires = "passkey")]
+    rpid: Option<String>,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -89,12 +114,14 @@ impl EventListener for CliEventListener {
     }
 }
 
+#[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
 async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
     stable_balance_config: Option<StableBalanceConfig>,
+    passkey_config: Option<PasskeyConfig>,
 ) -> Result<()> {
     breez_sdk_spark::init_logging(Some(data_dir.to_string_lossy().into()), None, None)?;
     let persistence = CliPersistence {
@@ -111,18 +138,33 @@ async fn run_interactive_mode(
         info!("No history found");
     }
 
-    let mnemonic = persistence.get_or_create_mnemonic()?;
     fs::create_dir_all(&data_dir)?;
 
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
-    config.api_key = breez_api_key;
+    config.api_key = breez_api_key.clone();
     config.stable_balance_config = stable_balance_config;
 
-    let seed = Seed::Mnemonic {
-        mnemonic: mnemonic.to_string(),
-        passphrase: None,
+    let seed = if let Some(config) = passkey_config {
+        let prf = config
+            .provider
+            .into_provider(&data_dir, config.rpid)
+            .map_err(|e| anyhow!("PRF initialization failed: {e}"))?;
+        passkey::resolve_passkey_seed(
+            prf,
+            breez_api_key,
+            config.wallet_name,
+            config.list_wallet_names,
+            config.store_wallet_name,
+        )
+        .await?
+    } else {
+        let mnemonic = persistence.get_or_create_mnemonic()?;
+        Seed::Mnemonic {
+            mnemonic: mnemonic.to_string(),
+            passphrase: None,
+        }
     };
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
@@ -229,12 +271,21 @@ async fn main() -> Result<(), anyhow::Error> {
                 reserved_sats: None,
             });
 
+    let passkey_config = cli.passkey.map(|provider| PasskeyConfig {
+        provider,
+        wallet_name: cli.wallet_name,
+        list_wallet_names: cli.list_wallet_names,
+        store_wallet_name: cli.store_wallet_name,
+        rpid: cli.rpid,
+    });
+
     Box::pin(run_interactive_mode(
         data_dir,
         network,
         cli.account_number,
         cli.postgres_connection_string,
         stable_balance_config,
+        passkey_config,
     ))
     .await?;
 

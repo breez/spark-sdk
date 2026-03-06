@@ -8,6 +8,8 @@ mod issuer;
 mod lnurl;
 mod logger;
 mod models;
+#[cfg(feature = "passkey")]
+pub mod passkey;
 mod persist;
 mod realtime_sync;
 mod sdk;
