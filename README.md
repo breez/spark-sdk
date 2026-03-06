@@ -115,7 +115,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Fiat on-ramp
 - [x] BTC <> USDB swaps
 - [x] Hodl invoice support
-- [ ] Seedless restore 
+- [ ] Passkey login (seedless restore) 
 - [ ] Stable balance
 - [ ] USDT send support
 - [ ] USDC send support
