@@ -25,6 +25,47 @@ const { StorageError } = require("./errors.cjs");
 const { PostgresMigrationManager } = require("./migrations.cjs");
 
 /**
+ * JSON.stringify wrapper that tags BigInt values with a "$BI:" prefix
+ * so they round-trip through JSON without type-specific normalizers.
+ */
+function jsonStringify(value) {
+  return JSON.stringify(value, (_key, val) =>
+    typeof val === "bigint" ? `$BI:${val}` : val
+  );
+}
+
+/**
+ * JSON.parse wrapper that restores "$BI:"-tagged strings back to BigInt.
+ * Accepts both a JSON string and an already-parsed object (for JSONB columns).
+ */
+function jsonParse(value) {
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string") {
+    return JSON.parse(value, (_key, val) =>
+      typeof val === "string" && val.startsWith("$BI:")
+        ? BigInt(val.slice(4))
+        : val
+    );
+  }
+  return _reviveBigInts(value);
+}
+
+function _reviveBigInts(obj) {
+  if (typeof obj === "string") {
+    return obj.startsWith("$BI:") ? BigInt(obj.slice(4)) : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(_reviveBigInts);
+  }
+  if (obj !== null && typeof obj === "object") {
+    for (const key of Object.keys(obj)) {
+      obj[key] = _reviveBigInts(obj[key]);
+    }
+  }
+  return obj;
+}
+
+/**
  * Base query for payment lookups.
  * All columns are accessed by name in _rowToPayment.
  * parent_payment_id is only used by getPaymentsByParentIds.
@@ -381,7 +422,7 @@ class PostgresStorage {
             payment.amount.toString(),
             payment.fees.toString(),
             payment.timestamp,
-            payment.method ? JSON.stringify(payment.method) : null,
+            payment.method ? jsonStringify(payment.method) : null,
             withdrawTxId,
             depositTxId,
             spark,
@@ -402,10 +443,10 @@ class PostgresStorage {
             [
               payment.id,
               payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
+                ? jsonStringify(payment.details.invoiceDetails)
                 : null,
               payment.details.htlcDetails
-                ? JSON.stringify(payment.details.htlcDetails)
+                ? jsonStringify(payment.details.htlcDetails)
                 : null,
             ]
           );
@@ -449,11 +490,11 @@ class PostgresStorage {
                 invoice_details=COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)`,
             [
               payment.id,
-              JSON.stringify(payment.details.metadata),
+              jsonStringify(payment.details.metadata),
               payment.details.txHash,
               payment.details.txType,
               payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
+                ? jsonStringify(payment.details.invoiceDetails)
                 : null,
             ]
           );
@@ -576,14 +617,14 @@ class PostgresStorage {
           paymentId,
           metadata.parentPaymentId,
           metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
+            ? jsonStringify(metadata.lnurlPayInfo)
             : null,
           metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            ? jsonStringify(metadata.lnurlWithdrawInfo)
             : null,
           metadata.lnurlDescription,
           metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
+            ? jsonStringify(metadata.conversionInfo)
             : null,
         ]
       );
@@ -656,7 +697,7 @@ class PostgresStorage {
           `UPDATE unclaimed_deposits
            SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL
            WHERE txid = $2 AND vout = $3`,
-          [JSON.stringify(payload.error), txid, vout]
+          [jsonStringify(payload.error), txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
@@ -736,14 +777,14 @@ class PostgresStorage {
       if (row.lnurl_pay_info) {
         details.lnurlPayInfo =
           typeof row.lnurl_pay_info === "string"
-            ? JSON.parse(row.lnurl_pay_info)
+            ? jsonParse(row.lnurl_pay_info)
             : row.lnurl_pay_info;
       }
 
       if (row.lnurl_withdraw_info) {
         details.lnurlWithdrawInfo =
           typeof row.lnurl_withdraw_info === "string"
-            ? JSON.parse(row.lnurl_withdraw_info)
+            ? jsonParse(row.lnurl_withdraw_info)
             : row.lnurl_withdraw_info;
       }
 
@@ -768,39 +809,28 @@ class PostgresStorage {
       details = {
         type: "spark",
         invoiceDetails: row.spark_invoice_details
-          ? typeof row.spark_invoice_details === "string"
-            ? JSON.parse(row.spark_invoice_details)
-            : row.spark_invoice_details
+          ? jsonParse(row.spark_invoice_details)
           : null,
         htlcDetails: row.spark_htlc_details
           ? typeof row.spark_htlc_details === "string"
-            ? JSON.parse(row.spark_htlc_details)
+            ? jsonParse(row.spark_htlc_details)
             : row.spark_htlc_details
           : null,
         conversionInfo: row.conversion_info
-          ? typeof row.conversion_info === "string"
-            ? JSON.parse(row.conversion_info)
-            : row.conversion_info
+          ? jsonParse(row.conversion_info)
           : null,
       };
     } else if (row.token_metadata) {
       details = {
         type: "token",
-        metadata:
-          typeof row.token_metadata === "string"
-            ? JSON.parse(row.token_metadata)
-            : row.token_metadata,
+        metadata: jsonParse(row.token_metadata),
         txHash: row.token_tx_hash,
         txType: row.token_tx_type,
         invoiceDetails: row.token_invoice_details
-          ? typeof row.token_invoice_details === "string"
-            ? JSON.parse(row.token_invoice_details)
-            : row.token_invoice_details
+          ? jsonParse(row.token_invoice_details)
           : null,
         conversionInfo: row.conversion_info
-          ? typeof row.conversion_info === "string"
-            ? JSON.parse(row.conversion_info)
-            : row.conversion_info
+          ? jsonParse(row.conversion_info)
           : null,
       };
     }
@@ -808,10 +838,7 @@ class PostgresStorage {
     let method = null;
     if (row.method) {
       try {
-        method =
-          typeof row.method === "string"
-            ? JSON.parse(row.method)
-            : row.method;
+        method = jsonParse(row.method);
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment method JSON for payment ${row.id}: ${e.message}`,
@@ -952,7 +979,7 @@ class PostgresStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.updatedFields),
+            jsonStringify(record.updatedFields),
             revision.toString(),
           ]
         );
@@ -1009,7 +1036,7 @@ class PostgresStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            jsonStringify(record.data),
           ]
         );
 
@@ -1057,10 +1084,7 @@ class PostgresStorage {
             dataId: row.data_id,
           },
           schemaVersion: row.schema_version,
-          updatedFields:
-            typeof row.updated_fields_json === "string"
-              ? JSON.parse(row.updated_fields_json)
-              : row.updated_fields_json,
+          updatedFields: jsonParse(row.updated_fields_json),
           localRevision: BigInt(row.revision),
         };
 
@@ -1073,10 +1097,7 @@ class PostgresStorage {
             },
             revision: BigInt(row.existing_revision),
             schemaVersion: row.existing_schema_version,
-            data:
-              typeof row.existing_data === "string"
-                ? JSON.parse(row.existing_data)
-                : row.existing_data,
+            data: jsonParse(row.existing_data),
           };
         }
 
@@ -1132,7 +1153,7 @@ class PostgresStorage {
               record.id.dataId,
               record.schemaVersion,
               Math.floor(Date.now() / 1000),
-              JSON.stringify(record.data),
+              jsonStringify(record.data),
               record.revision.toString(),
             ]
           );
@@ -1191,10 +1212,7 @@ class PostgresStorage {
           },
           revision: BigInt(row.revision),
           schemaVersion: row.schema_version,
-          data:
-            typeof row.data === "string"
-              ? JSON.parse(row.data)
-              : row.data,
+          data: jsonParse(row.data),
         };
 
         let oldState = null;
@@ -1206,10 +1224,7 @@ class PostgresStorage {
             },
             revision: BigInt(row.existing_revision),
             schemaVersion: row.existing_schema_version,
-            data:
-              typeof row.existing_data === "string"
-                ? JSON.parse(row.existing_data)
-                : row.existing_data,
+            data: jsonParse(row.existing_data),
           };
         }
 
@@ -1257,10 +1272,7 @@ class PostgresStorage {
           dataId: row.data_id,
         },
         schemaVersion: row.schema_version,
-        updatedFields:
-          typeof row.updated_fields_json === "string"
-            ? JSON.parse(row.updated_fields_json)
-            : row.updated_fields_json,
+        updatedFields: jsonParse(row.updated_fields_json),
         localRevision: BigInt(row.revision),
       };
 
@@ -1273,10 +1285,7 @@ class PostgresStorage {
           },
           revision: BigInt(row.existing_revision),
           schemaVersion: row.existing_schema_version,
-          data:
-            typeof row.existing_data === "string"
-              ? JSON.parse(row.existing_data)
-              : row.existing_data,
+          data: jsonParse(row.existing_data),
         };
       }
 
@@ -1312,7 +1321,7 @@ class PostgresStorage {
             record.revision.toString(),
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            jsonStringify(record.data),
           ]
         );
 

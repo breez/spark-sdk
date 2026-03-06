@@ -3,6 +3,47 @@
  * This provides an ES6 interface to IndexedDB storage for web browsers
  */
 
+/**
+ * JSON.stringify wrapper that tags BigInt values with a "$BI:" prefix
+ * so they round-trip through JSON without type-specific normalizers.
+ */
+function jsonStringify(value) {
+  return JSON.stringify(value, (_key, val) =>
+    typeof val === "bigint" ? `$BI:${val}` : val
+  );
+}
+
+/**
+ * JSON.parse wrapper that restores "$BI:"-tagged strings back to BigInt.
+ * Accepts both a JSON string and an already-parsed object (for JSONB columns).
+ */
+function jsonParse(value) {
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string") {
+    return JSON.parse(value, (_key, val) =>
+      typeof val === "string" && val.startsWith("$BI:")
+        ? BigInt(val.slice(4))
+        : val
+    );
+  }
+  return _reviveBigInts(value);
+}
+
+function _reviveBigInts(obj) {
+  if (typeof obj === "string") {
+    return obj.startsWith("$BI:") ? BigInt(obj.slice(4)) : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(_reviveBigInts);
+  }
+  if (obj !== null && typeof obj === "object") {
+    for (const key of Object.keys(obj)) {
+      obj[key] = _reviveBigInts(obj[key]);
+    }
+  }
+  return obj;
+}
+
 class MigrationManager {
   constructor(db, StorageError, logger = null) {
     this.db = db;
@@ -268,7 +309,7 @@ class MigrationManager {
                 let details = null;
                 if (payment.details && typeof payment.details === "string") {
                   try {
-                    details = JSON.parse(payment.details);
+                    details = jsonParse(payment.details);
                   } catch (e) {
                     return; // Skip this payment if parsing fails
                   }
@@ -279,7 +320,7 @@ class MigrationManager {
                 // Add default txType to token payments
                 if (details && details.type === "token" && !details.txType) {
                   details.txType = "transfer";
-                  payment.details = JSON.stringify(details);
+                  payment.details = jsonStringify(details);
                   paymentStore.put(payment);
                 }
               });
@@ -356,7 +397,7 @@ class MigrationManager {
                 let details;
                 if (typeof payment.details === "string") {
                   try {
-                    details = JSON.parse(payment.details);
+                    details = jsonParse(payment.details);
                   } catch (e) {
                     return;
                   }
@@ -379,7 +420,7 @@ class MigrationManager {
                     expiryTime: 0,
                     status: htlcStatus,
                   };
-                  payment.details = JSON.stringify(details);
+                  payment.details = jsonStringify(details);
                   paymentStore.put(payment);
                 }
               });
@@ -428,6 +469,33 @@ class MigrationManager {
           }
         }
       },
+      {
+        // Clear all data stores and reset sync state to force a full re-sync.
+        // This is safer than trying to retroactively tag BigInt fields in existing data.
+        // All data will be re-populated from the sync server with correct $BI: tagging.
+        name: "Clear data and re-sync for BigInt u128 format change",
+        upgrade: (db, transaction) => {
+          for (const storeName of [
+            "payments", "payment_metadata", "payment_details",
+            "lnurl_receive_metadata", "unclaimed_deposits", "contacts",
+            "sync_outgoing", "sync_state", "sync_incoming",
+          ]) {
+            if (db.objectStoreNames.contains(storeName)) {
+              transaction.objectStore(storeName).clear();
+            }
+          }
+
+          if (db.objectStoreNames.contains("sync_revision")) {
+            const syncRevision = transaction.objectStore("sync_revision");
+            syncRevision.clear();
+            syncRevision.put({ id: 1, revision: "0" });
+          }
+
+          if (db.objectStoreNames.contains("settings")) {
+            transaction.objectStore("settings").clear();
+          }
+        },
+      },
     ];
   }
 }
@@ -451,7 +519,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 14; // Current schema version
+    this.dbVersion = 15; // Current schema version
   }
 
   /**
@@ -785,8 +853,8 @@ class IndexedDBStorage {
       // Ensure details and method are serialized properly
       const paymentToStore = {
         ...payment,
-        details: payment.details ? JSON.stringify(payment.details) : null,
-        method: payment.method ? JSON.stringify(payment.method) : null,
+        details: payment.details ? jsonStringify(payment.details) : null,
+        method: payment.method ? jsonStringify(payment.method) : null,
       };
 
       const request = store.put(paymentToStore);
@@ -1114,14 +1182,14 @@ class IndexedDBStorage {
           paymentId,
           parentPaymentId: metadata.parentPaymentId ?? existing.parentPaymentId ?? null,
           lnurlPayInfo: metadata.lnurlPayInfo
-            ? JSON.stringify(metadata.lnurlPayInfo)
+            ? jsonStringify(metadata.lnurlPayInfo)
             : existing.lnurlPayInfo ?? null,
           lnurlWithdrawInfo: metadata.lnurlWithdrawInfo
-            ? JSON.stringify(metadata.lnurlWithdrawInfo)
+            ? jsonStringify(metadata.lnurlWithdrawInfo)
             : existing.lnurlWithdrawInfo ?? null,
           lnurlDescription: metadata.lnurlDescription ?? existing.lnurlDescription ?? null,
           conversionInfo: metadata.conversionInfo
-            ? JSON.stringify(metadata.conversionInfo)
+            ? jsonStringify(metadata.conversionInfo)
             : existing.conversionInfo ?? null,
         };
 
@@ -1227,7 +1295,7 @@ class IndexedDBStorage {
           txid: row.txid,
           vout: row.vout,
           amountSats: row.amountSats,
-          claimError: row.claimError ? JSON.parse(row.claimError) : null,
+          claimError: row.claimError ? jsonParse(row.claimError) : null,
           refundTx: row.refundTx,
           refundTxId: row.refundTxId,
         }));
@@ -1272,7 +1340,7 @@ class IndexedDBStorage {
         let updatedDeposit = { ...existingDeposit };
 
         if (payload.type === "claimError") {
-          updatedDeposit.claimError = JSON.stringify(payload.error);
+          updatedDeposit.claimError = jsonStringify(payload.error);
           updatedDeposit.refundTx = null;
           updatedDeposit.refundTxId = null;
         } else if (payload.type === "refund") {
@@ -2012,7 +2080,7 @@ class IndexedDBStorage {
       // Parse details if it's a string (stored in IndexedDB)
       if (payment.details && typeof payment.details === "string") {
         try {
-          details = JSON.parse(payment.details);
+          details = jsonParse(payment.details);
         } catch (e) {
           // If parsing fails, treat as no details
           details = null;
@@ -2135,7 +2203,7 @@ class IndexedDBStorage {
       // Parse details if it's a string (stored in IndexedDB)
       if (payment.details && typeof payment.details === "string") {
         try {
-          details = JSON.parse(payment.details);
+          details = jsonParse(payment.details);
         } catch (e) {
           // If parsing fails, treat as no details
           details = null;
@@ -2176,7 +2244,7 @@ class IndexedDBStorage {
     let details = null;
     if (payment.details) {
       try {
-        details = JSON.parse(payment.details);
+        details = jsonParse(payment.details);
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment details JSON for payment ${payment.id}: ${e.message}`,
@@ -2188,7 +2256,7 @@ class IndexedDBStorage {
     let method = null;
     if (payment.method) {
       try {
-        method = JSON.parse(payment.method);
+        method = jsonParse(payment.method);
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment method JSON for payment ${payment.id}: ${e.message}`,
@@ -2211,7 +2279,7 @@ class IndexedDBStorage {
         // If lnurlPayInfo exists, parse and add to details
         if (metadata.lnurlPayInfo) {
           try {
-            details.lnurlPayInfo = JSON.parse(metadata.lnurlPayInfo);
+            details.lnurlPayInfo = jsonParse(metadata.lnurlPayInfo);
           } catch (e) {
             throw new StorageError(
               `Failed to parse lnurlPayInfo JSON for payment ${payment.id}: ${e.message}`,
@@ -2222,7 +2290,7 @@ class IndexedDBStorage {
         // If lnurlWithdrawInfo exists, parse and add to details
         if (metadata.lnurlWithdrawInfo) {
           try {
-            details.lnurlWithdrawInfo = JSON.parse(metadata.lnurlWithdrawInfo);
+            details.lnurlWithdrawInfo = jsonParse(metadata.lnurlWithdrawInfo);
           } catch (e) {
             throw new StorageError(
               `Failed to parse lnurlWithdrawInfo JSON for payment ${payment.id}: ${e.message}`,
@@ -2234,7 +2302,7 @@ class IndexedDBStorage {
         // If conversionInfo exists, parse and add to details
         if (metadata.conversionInfo) {
           try {
-            details.conversionInfo = JSON.parse(metadata.conversionInfo);
+            details.conversionInfo = jsonParse(metadata.conversionInfo);
           } catch (e) {
             throw new StorageError(
               `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,

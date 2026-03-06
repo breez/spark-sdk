@@ -234,6 +234,27 @@ class PostgresMigrationManager {
           )`,
         ],
       },
+      {
+        // Clear all data tables and reset sync state to force a full re-sync.
+        // This is safer than trying to retroactively tag BigInt fields in existing data.
+        // All data will be re-populated from the sync server with correct $BI: tagging.
+        name: "Clear data and re-sync for BigInt u128 format change",
+        sql: [
+          `TRUNCATE payments CASCADE`,
+          `TRUNCATE payment_metadata`,
+          `TRUNCATE payment_details_lightning`,
+          `TRUNCATE payment_details_token`,
+          `TRUNCATE payment_details_spark`,
+          `TRUNCATE lnurl_receive_metadata`,
+          `TRUNCATE unclaimed_deposits`,
+          `TRUNCATE contacts`,
+          `TRUNCATE sync_outgoing`,
+          `TRUNCATE sync_state`,
+          `TRUNCATE sync_incoming`,
+          `UPDATE sync_revision SET revision = 0`,
+          `DELETE FROM settings`,
+        ],
+      },
     ];
   }
 }

@@ -28,6 +28,47 @@ const { StorageError } = require("./errors.cjs");
 const { MigrationManager } = require("./migrations.cjs");
 
 /**
+ * JSON.stringify wrapper that tags BigInt values with a "$BI:" prefix
+ * so they round-trip through JSON without type-specific normalizers.
+ */
+function jsonStringify(value) {
+  return JSON.stringify(value, (_key, val) =>
+    typeof val === "bigint" ? `$BI:${val}` : val
+  );
+}
+
+/**
+ * JSON.parse wrapper that restores "$BI:"-tagged strings back to BigInt.
+ * Accepts both a JSON string and an already-parsed object (for JSONB columns).
+ */
+function jsonParse(value) {
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string") {
+    return JSON.parse(value, (_key, val) =>
+      typeof val === "string" && val.startsWith("$BI:")
+        ? BigInt(val.slice(4))
+        : val
+    );
+  }
+  return _reviveBigInts(value);
+}
+
+function _reviveBigInts(obj) {
+  if (typeof obj === "string") {
+    return obj.startsWith("$BI:") ? BigInt(obj.slice(4)) : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(_reviveBigInts);
+  }
+  if (obj !== null && typeof obj === "object") {
+    for (const key of Object.keys(obj)) {
+      obj[key] = _reviveBigInts(obj[key]);
+    }
+  }
+  return obj;
+}
+
+/**
  * Base query for payment lookups.
  * All columns are accessed by name in _rowToPayment.
  * parent_payment_id is only used by getPaymentsByParentIds.
@@ -388,7 +429,7 @@ class SqliteStorage {
           amount: payment.amount.toString(),
           fees: payment.fees.toString(),
           timestamp: payment.timestamp,
-          method: payment.method ? JSON.stringify(payment.method) : null,
+          method: payment.method ? jsonStringify(payment.method) : null,
           withdrawTxId:
             payment.details?.type === "withdraw" ? payment.details.txId : null,
           depositTxId:
@@ -404,10 +445,10 @@ class SqliteStorage {
           sparkInsert.run({
             id: payment.id,
             invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
+              ? jsonStringify(payment.details.invoiceDetails)
               : null,
             htlcDetails: payment.details.htlcDetails
-              ? JSON.stringify(payment.details.htlcDetails)
+              ? jsonStringify(payment.details.htlcDetails)
               : null,
           });
         }
@@ -428,11 +469,11 @@ class SqliteStorage {
         if (payment.details?.type === "token") {
           tokenInsert.run({
             id: payment.id,
-            metadata: JSON.stringify(payment.details.metadata),
+            metadata: jsonStringify(payment.details.metadata),
             txHash: payment.details.txHash,
             txType: payment.details.txType,
             invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
+              ? jsonStringify(payment.details.invoiceDetails)
               : null,
           });
         }
@@ -573,13 +614,13 @@ class SqliteStorage {
       stmt.run(
         paymentId,
         metadata.parentPaymentId,
-        metadata.lnurlPayInfo ? JSON.stringify(metadata.lnurlPayInfo) : null,
+        metadata.lnurlPayInfo ? jsonStringify(metadata.lnurlPayInfo) : null,
         metadata.lnurlWithdrawInfo
-          ? JSON.stringify(metadata.lnurlWithdrawInfo)
+          ? jsonStringify(metadata.lnurlWithdrawInfo)
           : null,
         metadata.lnurlDescription,
         metadata.conversionInfo
-          ? JSON.stringify(metadata.conversionInfo)
+          ? jsonStringify(metadata.conversionInfo)
           : null
       );
       return Promise.resolve();
@@ -645,7 +686,7 @@ class SqliteStorage {
           txid: row.txid,
           vout: row.vout,
           amountSats: row.amount_sats,
-          claimError: row.claim_error ? JSON.parse(row.claim_error) : null,
+          claimError: row.claim_error ? jsonParse(row.claim_error) : null,
           refundTx: row.refund_tx,
           refundTxId: row.refund_tx_id,
         }))
@@ -666,7 +707,7 @@ class SqliteStorage {
           WHERE txid = ? AND vout = ?
         `);
 
-        stmt.run(JSON.stringify(payload.error), txid, vout);
+        stmt.run(jsonStringify(payload.error), txid, vout);
       } else if (payload.type === "refund") {
         const stmt = this.db.prepare(`
           UPDATE unclaimed_deposits 
@@ -744,7 +785,7 @@ class SqliteStorage {
 
       if (row.lnurl_pay_info) {
         try {
-          details.lnurlPayInfo = JSON.parse(row.lnurl_pay_info);
+          details.lnurlPayInfo = jsonParse(row.lnurl_pay_info);
         } catch (e) {
           throw new StorageError(
             `Failed to parse lnurl_pay_info JSON for payment ${row.id}: ${e.message}`,
@@ -755,7 +796,7 @@ class SqliteStorage {
 
       if (row.lnurl_withdraw_info) {
         try {
-          details.lnurlWithdrawInfo = JSON.parse(row.lnurl_withdraw_info);
+          details.lnurlWithdrawInfo = jsonParse(row.lnurl_withdraw_info);
         } catch (e) {
           throw new StorageError(
             `Failed to parse lnurl_withdraw_info JSON for payment ${row.id}: ${e.message}`,
@@ -785,26 +826,26 @@ class SqliteStorage {
       details = {
         type: "spark",
         invoiceDetails: row.spark_invoice_details
-          ? JSON.parse(row.spark_invoice_details)
+          ? jsonParse(row.spark_invoice_details)
           : null,
         htlcDetails: row.spark_htlc_details
-          ? JSON.parse(row.spark_htlc_details)
+          ? jsonParse(row.spark_htlc_details)
           : null,
         conversionInfo: row.conversion_info
-          ? JSON.parse(row.conversion_info)
+          ? jsonParse(row.conversion_info)
           : null,
       };
     } else if (row.token_metadata) {
       details = {
         type: "token",
-        metadata: JSON.parse(row.token_metadata),
+        metadata: jsonParse(row.token_metadata),
         txHash: row.token_tx_hash,
         txType: row.token_tx_type,
         invoiceDetails: row.token_invoice_details
-          ? JSON.parse(row.token_invoice_details)
+          ? jsonParse(row.token_invoice_details)
           : null,
         conversionInfo: row.conversion_info
-          ? JSON.parse(row.conversion_info)
+          ? jsonParse(row.conversion_info)
           : null,
       };
     }
@@ -812,7 +853,7 @@ class SqliteStorage {
     let method = null;
     if (row.method) {
       try {
-        method = JSON.parse(row.method);
+        method = jsonParse(row.method);
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment method JSON for payment ${row.id}: ${e.message}`,
@@ -863,7 +904,7 @@ class SqliteStorage {
           record.id.dataId,
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.updatedFields),
+          jsonStringify(record.updatedFields),
           revision.toString()
         );
 
@@ -914,7 +955,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          jsonStringify(record.data)
         );
 
         // Update sync_revision to track the highest known revision
@@ -967,7 +1008,7 @@ class SqliteStorage {
             dataId: row.data_id,
           },
           schemaVersion: row.schema_version,
-          updatedFields: JSON.parse(row.updated_fields_json),
+          updatedFields: jsonParse(row.updated_fields_json),
           localRevision: BigInt(row.revision),
         };
 
@@ -980,7 +1021,7 @@ class SqliteStorage {
             },
             revision: BigInt(row.existing_revision),
             schemaVersion: row.existing_schema_version,
-            data: JSON.parse(row.existing_data),
+            data: jsonParse(row.existing_data),
           };
         }
 
@@ -1040,7 +1081,7 @@ class SqliteStorage {
             record.id.dataId,
             record.schemaVersion,
             Math.floor(Date.now() / 1000),
-            JSON.stringify(record.data),
+            jsonStringify(record.data),
             record.revision.toString()
           );
         }
@@ -1111,7 +1152,7 @@ class SqliteStorage {
             },
             revision: BigInt(row.revision),
             schemaVersion: row.schema_version,
-            data: JSON.parse(row.data),
+            data: jsonParse(row.data),
           };
 
           // Create parent if exists
@@ -1124,7 +1165,7 @@ class SqliteStorage {
               },
               revision: BigInt(row.existing_revision),
               schemaVersion: row.existing_schema_version,
-              data: JSON.parse(row.existing_data),
+              data: jsonParse(row.existing_data),
             };
           }
 
@@ -1183,7 +1224,7 @@ class SqliteStorage {
           dataId: row.data_id,
         },
         schemaVersion: row.schema_version,
-        updatedFields: JSON.parse(row.updated_fields_json),
+        updatedFields: jsonParse(row.updated_fields_json),
         localRevision: BigInt(row.revision),
       };
 
@@ -1196,7 +1237,7 @@ class SqliteStorage {
           },
           revision: BigInt(row.existing_revision),
           schemaVersion: row.existing_schema_version,
-          data: JSON.parse(row.existing_data),
+          data: jsonParse(row.existing_data),
         };
       }
 
@@ -1234,7 +1275,7 @@ class SqliteStorage {
           record.revision.toString(),
           record.schemaVersion,
           Math.floor(Date.now() / 1000),
-          JSON.stringify(record.data)
+          jsonStringify(record.data)
         );
 
         // Update sync_revision to track the highest known revision

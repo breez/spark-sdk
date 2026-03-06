@@ -392,6 +392,27 @@ class MigrationManager {
           updated_at INTEGER NOT NULL
         )`
       },
+      {
+        // Clear all data tables and reset sync state to force a full re-sync.
+        // This is safer than trying to retroactively tag BigInt fields in existing data.
+        // All data will be re-populated from the sync server with correct $BI: tagging.
+        name: "Clear data and re-sync for BigInt u128 format change",
+        sql: [
+          `DELETE FROM payments`,
+          `DELETE FROM payment_metadata`,
+          `DELETE FROM payment_details_lightning`,
+          `DELETE FROM payment_details_token`,
+          `DELETE FROM payment_details_spark`,
+          `DELETE FROM lnurl_receive_metadata`,
+          `DELETE FROM unclaimed_deposits`,
+          `DELETE FROM contacts`,
+          `DELETE FROM sync_outgoing`,
+          `DELETE FROM sync_state`,
+          `DELETE FROM sync_incoming`,
+          `UPDATE sync_revision SET revision = 0`,
+          `DELETE FROM settings`,
+        ],
+      },
     ];
   }
 }

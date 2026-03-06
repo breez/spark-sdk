@@ -20,6 +20,7 @@ extern "C" {
 extern "C" {
     #[wasm_bindgen(js_name = "createTestConnectionString", catch)]
     async fn create_test_connection_string(test_name: &str) -> Result<JsValue, JsValue>;
+
 }
 
 /// Helper to create a WasmStorage instance for testing using postgres-storage
