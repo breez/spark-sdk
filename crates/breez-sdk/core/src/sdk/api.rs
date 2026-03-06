@@ -11,7 +11,7 @@ use crate::{
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse},
+    models::{GetInfoRequest, GetInfoResponse, StableBalanceActiveTicker},
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
@@ -206,10 +206,14 @@ impl BreezSdk {
 
         let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
 
-        // We may in the future have user settings that are stored locally and synced using real-time sync.
+        let stable_balance_active_ticker = match &self.stable_balance {
+            Some(sb) => sb.get_active_ticker().await,
+            None => None,
+        };
 
         Ok(UserSettings {
             spark_private_mode_enabled: spark_user_settings.private_enabled,
+            stable_balance_active_ticker,
         })
     }
 
@@ -246,6 +250,20 @@ impl BreezSdk {
                 error!("Failed to reregister lightning address during user settings update: {e:?}");
             }
         }
+
+        if let Some(active_ticker) = request.stable_balance_active_ticker {
+            let sb = self
+                .stable_balance
+                .as_ref()
+                .ok_or_else(|| SdkError::Generic("Stable balance is not configured".to_string()))?;
+            let ticker = if let StableBalanceActiveTicker::Set { ticker } = active_ticker {
+                Some(ticker)
+            } else {
+                None
+            };
+            sb.set_active_token(ticker).await?;
+        }
+
         Ok(())
     }
 

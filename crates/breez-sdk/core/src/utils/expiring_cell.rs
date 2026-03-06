@@ -16,6 +16,11 @@ impl<T> ExpiringCell<T> {
             inner: RwLock::new(None),
         }
     }
+
+    /// Clears the cached value, if any.
+    pub async fn clear(&self) {
+        *self.inner.write().await = None;
+    }
 }
 
 impl<T: Clone> ExpiringCell<T> {

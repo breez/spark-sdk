@@ -6,6 +6,8 @@ pub use error::ConversionError;
 pub(crate) use flashnet::FlashnetTokenConverter;
 pub use models::*;
 
+use spark_wallet::TransferId;
+
 /// Trait for conversion implementations.
 ///
 /// This trait abstracts the conversion mechanics, allowing different
@@ -20,12 +22,14 @@ pub(crate) trait TokenConverter: Send + Sync {
     /// * `purpose` - The purpose of the conversion
     /// * `token_identifier` - Optional token identifier for `FromBitcoin` conversions
     /// * `amount` - Either the minimum output amount or exact input amount
+    /// * `transfer_id` - Optional transfer ID for idempotency
     async fn convert(
         &self,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
         amount: ConversionAmount,
+        transfer_id: Option<TransferId>,
     ) -> Result<TokenConversionResponse, ConversionError>;
 
     /// Validate a conversion and return the estimated conversion.

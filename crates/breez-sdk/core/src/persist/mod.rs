@@ -32,6 +32,7 @@ const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
+pub(crate) const STABLE_BALANCE_ACTIVE_TICKER_KEY: &str = "stable_balance_active_ticker";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -671,6 +672,32 @@ impl ObjectCacheRepository {
             Some(value) => Ok(value == "true"),
             None => Ok(false),
         }
+    }
+
+    pub(crate) async fn save_stable_balance_active_ticker(
+        &self,
+        ticker: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string(),
+                ticker.to_string(),
+            )
+            .await
+    }
+
+    pub(crate) async fn fetch_stable_balance_active_ticker(
+        &self,
+    ) -> Result<Option<String>, StorageError> {
+        self.storage
+            .get_cached_item(STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string())
+            .await
+    }
+
+    pub(crate) async fn delete_stable_balance_active_ticker(&self) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string())
+            .await
     }
 
     pub(crate) async fn save_lnurl_metadata_updated_after(

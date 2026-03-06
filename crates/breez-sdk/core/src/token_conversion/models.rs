@@ -13,6 +13,17 @@ pub const DEFAULT_INTEGRATOR_PUBKEY: &str =
 /// Default integrator fee BPS used when simulating/executing conversions
 pub const DEFAULT_INTEGRATOR_FEE_BPS: u32 = 5;
 
+/// Fee split between the sent and received sides of a conversion.
+/// The fee from the pool may be denominated in either asset, so each
+/// side carries its own optional fee amount.
+#[derive(Default)]
+pub(crate) struct FeeSplit {
+    /// Fee on the sent (outbound/`asset_in`) payment, if denominated in `asset_in`
+    pub sent: Option<u128>,
+    /// Fee on the received (inbound/`asset_out`) payment, if denominated in `asset_out`
+    pub received: Option<u128>,
+}
+
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]

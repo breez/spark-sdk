@@ -50,9 +50,16 @@ pub struct _OptimizationConfig {
     pub multiplicity: u8,
 }
 
+#[frb(mirror(StableBalanceToken))]
+pub struct _StableBalanceToken {
+    pub ticker: String,
+    pub token_identifier: String,
+}
+
 #[frb(mirror(StableBalanceConfig))]
 pub struct _StableBalanceConfig {
-    pub token_identifier: String,
+    pub tokens: Vec<StableBalanceToken>,
+    pub default_active_ticker: Option<String>,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
     pub reserved_sats: Option<u64>,
@@ -558,7 +565,7 @@ pub struct _Payment {
 #[frb(mirror(ConversionDetails))]
 pub struct _ConversionDetails {
     pub from: ConversionStep,
-    pub to: ConversionStep,
+    pub to: Option<ConversionStep>,
 }
 
 #[frb(mirror(ConversionStep))]
@@ -996,11 +1003,19 @@ pub struct _RecordChange {
 #[frb(mirror(UserSettings))]
 pub struct _UserSettings {
     pub spark_private_mode_enabled: bool,
+    pub stable_balance_active_ticker: Option<String>,
+}
+
+#[frb(mirror(StableBalanceActiveTicker))]
+pub enum _StableBalanceActiveTicker {
+    Set { ticker: String },
+    Unset,
 }
 
 #[frb(mirror(UpdateUserSettingsRequest))]
 pub struct _UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+    pub stable_balance_active_ticker: Option<StableBalanceActiveTicker>,
 }
 
 #[frb(mirror(CreateIssuerTokenRequest))]

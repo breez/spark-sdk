@@ -16,6 +16,8 @@ use spark_wallet::TreeStore;
 use tokio::sync::watch;
 use tracing::{debug, info};
 
+use flashnet::{FlashnetConfig, IntegratorConfig};
+
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
     chain::{
@@ -32,6 +34,11 @@ use crate::{
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
+    },
+    stable_balance::StableBalance,
+    token_conversion::{
+        DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
+        TokenConverter,
     },
 };
 
@@ -533,6 +540,43 @@ impl SdkBuilder {
         let buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi> =
             Arc::new(MoonpayProvider::new(breez_server.clone()));
 
+        // Create the FlashnetTokenConverter (spawns its own refunder background task)
+        let flashnet_config = FlashnetConfig::default_config(
+            self.config.network.into(),
+            DEFAULT_INTEGRATOR_PUBKEY
+                .parse()
+                .ok()
+                .map(|pubkey| IntegratorConfig {
+                    pubkey,
+                    fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
+                }),
+        );
+        let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
+            flashnet_config,
+            Arc::clone(&storage),
+            Arc::clone(&spark_wallet),
+            self.config.network,
+            shutdown_sender.subscribe(),
+        ));
+
+        // Create StableBalance if configured (spawns its own background tasks)
+        let stable_balance = if let Some(config) = &self.config.stable_balance_config {
+            Some(Arc::new(
+                StableBalance::new(
+                    config.clone(),
+                    Arc::clone(&token_converter),
+                    Arc::clone(&spark_wallet),
+                    Arc::clone(&storage),
+                    shutdown_sender.subscribe(),
+                    sync_signing_client.clone(),
+                    &event_emitter,
+                )
+                .await,
+            ))
+        } else {
+            None
+        };
+
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
@@ -545,8 +589,9 @@ impl SdkBuilder {
             shutdown_sender,
             spark_wallet,
             event_emitter,
-            sync_signing_client,
             buy_bitcoin_provider,
+            token_converter,
+            stable_balance,
         })?;
         debug!("Initialized and started breez sdk.");
 

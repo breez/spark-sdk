@@ -4,9 +4,6 @@ use breez_sdk_spark::*;
 use rstest::*;
 use tracing::info;
 
-/// Default token identifier for regtest (no USDB available)
-const REGTEST_TOKEN_ID: &str = "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c";
-
 /// Test token conversions in both directions:
 /// - Part A: Bitcoin → Token (Alice pays Bob's Spark address with token conversion)
 /// - Part B: Token → Bitcoin (Bob pays Alice's Lightning invoice using received tokens)
@@ -49,7 +46,7 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
     info!(
@@ -73,7 +70,7 @@ async fn test_token_conversion_success(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             amount: Some(sats_to_token_success_amount),
-            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
+            token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(200), // 2%
@@ -130,17 +127,17 @@ async fn test_token_conversion_success(
             .is_none(),
         "From step should have no token metadata"
     );
+    let btc_to_token_to_step = btc_to_token_conversion_details
+        .to
+        .expect("Conversion should have a 'to' step");
     assert_eq!(
-        btc_to_token_conversion_details.to.method,
+        btc_to_token_to_step.method,
         PaymentMethod::Token,
         "To step should be a token payment"
     );
-    assert_eq!(
-        btc_to_token_conversion_details.to.fee, 0,
-        "To step should have no fee"
-    );
+    assert_eq!(btc_to_token_to_step.fee, 0, "To step should have no fee");
     assert!(
-        btc_to_token_conversion_details.to.token_metadata.is_some(),
+        btc_to_token_to_step.token_metadata.is_some(),
         "To step should have token metadata"
     );
 
@@ -173,7 +170,7 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -234,7 +231,7 @@ async fn test_token_conversion_success(
             token_identifier: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::ToBitcoin {
-                    from_token_identifier: REGTEST_TOKEN_ID.to_string(),
+                    from_token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
                 },
                 max_slippage_bps: Some(200), // 2%
                 completion_timeout_secs: None,
@@ -291,17 +288,17 @@ async fn test_token_conversion_success(
             .is_some(),
         "From step should have token metadata"
     );
+    let token_to_btc_to_step = token_to_btc_conversion_details
+        .to
+        .expect("Conversion should have a 'to' step");
     assert_eq!(
-        token_to_btc_conversion_details.to.method,
+        token_to_btc_to_step.method,
         PaymentMethod::Spark,
         "To step should be a spark payment"
     );
-    assert_eq!(
-        token_to_btc_conversion_details.to.fee, 0,
-        "To step should have no fee"
-    );
+    assert_eq!(token_to_btc_to_step.fee, 0, "To step should have no fee");
     assert!(
-        token_to_btc_conversion_details.to.token_metadata.is_none(),
+        token_to_btc_to_step.token_metadata.is_none(),
         "To step should have no token metadata"
     );
 
@@ -354,7 +351,7 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -465,7 +462,7 @@ async fn test_token_conversion_failure(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             amount: Some(sats_to_token_failure_amount),
-            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
+            token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
                 max_slippage_bps: Some(2), // 0.02% - very low, likely to fail

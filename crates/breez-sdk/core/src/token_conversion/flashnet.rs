@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     ConversionError, ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose,
-    ConversionStatus, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
+    ConversionStatus, FeeSplit, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
     TokenConversionPool, TokenConversionResponse, TokenConverter,
 };
 
@@ -439,7 +439,7 @@ impl FlashnetTokenConverter {
     /// * `outbound_identifier` - The outbound spark transfer id or token transaction hash.
     /// * `inbound_identifier` - The inbound spark transfer id or token transaction hash if the conversion was successful.
     /// * `refund_identifier` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
-    /// * `fee` - The fee paid for the conversion.
+    /// * `fee_split` - The fee split between sent and received sides of the conversion.
     /// * `purpose` - The purpose of the conversion.
     ///
     /// Returns:
@@ -451,11 +451,12 @@ impl FlashnetTokenConverter {
         outbound_identifier: String,
         inbound_identifier: Option<String>,
         refund_identifier: Option<String>,
-        fee: Option<u128>,
+        fee_split: FeeSplit,
         purpose: &ConversionPurpose,
     ) -> Result<(String, Option<String>), ConversionError> {
         debug!(
-            "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}"
+            "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}, sent_fee: {:?}, received_fee: {:?}",
+            fee_split.sent, fee_split.received
         );
 
         let cache = ObjectCacheRepository::new(self.storage.clone());
@@ -480,7 +481,7 @@ impl FlashnetTokenConverter {
                         pool_id: pool_id_str.clone(),
                         conversion_id: conversion_id.clone(),
                         status: status.clone(),
-                        fee,
+                        fee: fee_split.sent,
                         purpose: None,
                     }),
                     ..Default::default()
@@ -495,7 +496,7 @@ impl FlashnetTokenConverter {
                     pool_id: pool_id_str.clone(),
                     conversion_id: conversion_id.clone(),
                     status: status.clone(),
-                    fee: None,
+                    fee: fee_split.received,
                     purpose: Some(purpose.clone()),
                 }),
                 ..Default::default()
@@ -547,6 +548,7 @@ impl TokenConverter for FlashnetTokenConverter {
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
         amount: ConversionAmount,
+        transfer_id: Option<TransferId>,
     ) -> Result<TokenConversionResponse, ConversionError> {
         // Determine amount_in and min_amount_out based on ConversionAmount variant
         let (amount_in, min_amount_out) = match amount {
@@ -613,6 +615,7 @@ impl TokenConverter for FlashnetTokenConverter {
                 min_amount_out,
                 integrator_fee_rate_bps: None,
                 integrator_public_key: None,
+                transfer_id,
             })
             .await;
 
@@ -622,13 +625,28 @@ impl TokenConverter for FlashnetTokenConverter {
                     "Conversion executed: accepted {}, error {:?}",
                     response.accepted, response.error
                 );
+                // Fee from ExecuteSwapResponse is denominated in pool's asset_b.
+                // Route to sent payment if asset_in == asset_b, otherwise to received.
+                let fee_split =
+                    if conversion_pool.asset_in_address == conversion_pool.pool.asset_b_address {
+                        FeeSplit {
+                            sent: response.fee_amount,
+                            received: None,
+                        }
+                    } else {
+                        FeeSplit {
+                            sent: None,
+                            received: response.fee_amount,
+                        }
+                    };
+
                 let (sent_payment_id, received_payment_id) = self
                     .update_payment_conversion_info(
                         &pool_id,
                         response.transfer_id,
                         response.outbound_transfer_id,
                         response.refund_transfer_id,
-                        response.fee_amount,
+                        fee_split,
                         purpose,
                     )
                     .await?;
@@ -662,7 +680,7 @@ impl TokenConverter for FlashnetTokenConverter {
                             transaction_identifier.clone(),
                             None,
                             None,
-                            None,
+                            FeeSplit::default(),
                             purpose,
                         )
                         .await;

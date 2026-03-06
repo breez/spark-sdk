@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::DisplayFromStr;
 use serde_with::serde_as;
 use spark::Network;
-use spark_wallet::PublicKey;
+use spark_wallet::{PublicKey, TransferId};
 
 use crate::utils::decode_token_identifier;
 use crate::{BTC_ASSET_ADDRESS, FlashnetError};
@@ -93,6 +93,9 @@ pub struct ExecuteSwapRequest {
     pub min_amount_out: u128,
     pub integrator_fee_rate_bps: Option<u32>,
     pub integrator_public_key: Option<PublicKey>,
+    /// Optional transfer ID for idempotency. If provided, the same transfer ID
+    /// will be used for the underlying spark transfer, allowing deduplication.
+    pub transfer_id: Option<TransferId>,
 }
 
 impl ExecuteSwapRequest {

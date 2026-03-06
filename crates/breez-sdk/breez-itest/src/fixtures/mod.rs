@@ -3,7 +3,7 @@ pub mod docker;
 pub mod lnurl;
 
 use anyhow::Result;
-use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, default_config};
+use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, StableBalanceToken, default_config};
 use rand::RngCore;
 use rstest::fixture;
 use tempdir::TempDir;
@@ -12,6 +12,12 @@ use tracing::info;
 use crate::{
     SdkInstance, build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
 };
+
+/// Token identifiers for regtest
+pub const BEAN_REGTEST_TOKEN_ID: &str =
+    "btknrt1muwlm2aeur2jhe4pkuh7v08jjaleqgeu69c5sk7p7qfhkywg7nkqerzl06";
+pub const SHELL_REGTEST_TOKEN_ID: &str =
+    "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c";
 
 /// Fixture: Alice's SDK with temporary storage
 #[fixture]
@@ -101,8 +107,17 @@ pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
 
     let mut cfg = default_config(Network::Regtest);
     cfg.stable_balance_config = Some(StableBalanceConfig {
-        token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
-            .to_string(),
+        tokens: vec![
+            StableBalanceToken {
+                ticker: "SHELL".to_string(),
+                token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
+            },
+            StableBalanceToken {
+                ticker: "BEAN".to_string(),
+                token_identifier: BEAN_REGTEST_TOKEN_ID.to_string(),
+            },
+        ],
+        default_active_ticker: Some("SHELL".to_string()),
         threshold_sats: Some(1000),
         max_slippage_bps: Some(500),
         reserved_sats: None,
@@ -120,8 +135,17 @@ pub async fn alice_sdk_stable_balance_with_reserve() -> Result<SdkInstance> {
 
     let mut cfg = default_config(Network::Regtest);
     cfg.stable_balance_config = Some(StableBalanceConfig {
-        token_identifier: "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c"
-            .to_string(),
+        tokens: vec![
+            StableBalanceToken {
+                ticker: "SHELL".to_string(),
+                token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
+            },
+            StableBalanceToken {
+                ticker: "BEAN".to_string(),
+                token_identifier: BEAN_REGTEST_TOKEN_ID.to_string(),
+            },
+        ],
+        default_active_ticker: Some("SHELL".to_string()),
         threshold_sats: Some(1000),
         max_slippage_bps: Some(500),
         reserved_sats: Some(2000),

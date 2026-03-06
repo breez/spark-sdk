@@ -232,8 +232,8 @@ pub struct Payment {
 pub struct ConversionDetails {
     /// First step is converting from the available asset
     pub from: ConversionStep,
-    /// Second step is converting to the requested asset
-    pub to: ConversionStep,
+    /// Second step is converting to the requested asset (None for auto-conversions)
+    pub to: Option<ConversionStep>,
 }
 
 /// Conversions have one send and one receive payment that are associated to the
@@ -250,13 +250,10 @@ impl TryFrom<&Vec<Payment>> for ConversionDetails {
             ))?;
         let to = payments
             .iter()
-            .find(|p| p.payment_type == PaymentType::Receive)
-            .ok_or(SdkError::Generic(
-                "To step of conversion not found".to_string(),
-            ))?;
+            .find(|p| p.payment_type == PaymentType::Receive);
         Ok(ConversionDetails {
             from: from.try_into()?,
-            to: to.try_into()?,
+            to: to.map(TryInto::try_into).transpose()?,
         })
     }
 }
@@ -614,22 +611,43 @@ pub struct OptimizationConfig {
     pub multiplicity: u8,
 }
 
+/// A stable token that can be used for automatic balance conversion.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StableBalanceToken {
+    /// Short identifier for the token, e.g. "USDB".
+    pub ticker: String,
+
+    /// The full token identifier string used for conversions.
+    pub token_identifier: String,
+}
+
 /// Configuration for automatic conversion of Bitcoin to stable tokens.
 ///
 /// When configured, the SDK automatically monitors the Bitcoin balance after each
 /// wallet sync. When the balance exceeds the configured threshold plus the reserved
 /// amount, the SDK automatically converts the excess balance (above the reserve)
-/// to the specified stable token.
+/// to the active stable token.
 ///
 /// When the balance is held in a stable token, Bitcoin payments can still be sent.
 /// The SDK automatically detects when there's not enough Bitcoin balance to cover a
 /// payment and auto-populates the token-to-Bitcoin conversion options to facilitate
 /// the payment.
+///
+/// The active token can be changed at runtime via [`UpdateUserSettingsRequest`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct StableBalanceConfig {
-    /// The token identifier to convert Bitcoin to (required).
-    pub token_identifier: String,
+    /// Available tokens that can be used for stable balance.
+    pub tokens: Vec<StableBalanceToken>,
+
+    /// The ticker of the token to activate by default.
+    ///
+    /// If `None`, stable balance starts deactivated. The user can activate it
+    /// at runtime via [`UpdateUserSettingsRequest`]. If a user setting is cached
+    /// locally, it takes precedence over this default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_active_ticker: Option<String>,
 
     /// The minimum sats balance that triggers auto-conversion.
     ///
@@ -652,6 +670,16 @@ pub struct StableBalanceConfig {
     pub reserved_sats: Option<u64>,
 }
 
+/// Specifies how to update the active stable balance token.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum StableBalanceActiveTicker {
+    /// Activate stable balance with the given ticker.
+    Set { ticker: String },
+    /// Deactivate stable balance.
+    Unset,
+}
+
 impl Config {
     /// Validates the configuration.
     ///
@@ -662,6 +690,33 @@ impl Config {
                 "max_concurrent_claims must be greater than 0".to_string(),
             ));
         }
+
+        if let Some(sb) = &self.stable_balance_config {
+            if sb.tokens.is_empty() {
+                return Err(SdkError::InvalidInput(
+                    "tokens must not be empty".to_string(),
+                ));
+            }
+
+            let mut seen = std::collections::HashSet::new();
+            for token in &sb.tokens {
+                if !seen.insert(&token.ticker) {
+                    return Err(SdkError::InvalidInput(format!(
+                        "tokens contains duplicate ticker: {}",
+                        token.ticker
+                    )));
+                }
+            }
+
+            if let Some(default_ticker) = &sb.default_active_ticker
+                && !sb.tokens.iter().any(|t| t.ticker == *default_ticker)
+            {
+                return Err(SdkError::InvalidInput(format!(
+                    "default_active_ticker '{default_ticker}' not found in tokens list"
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -1513,11 +1568,18 @@ pub struct CheckMessageResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct UserSettings {
     pub spark_private_mode_enabled: bool,
+
+    /// The ticker of the currently active stable balance token, or `None` if deactivated.
+    pub stable_balance_active_ticker: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+
+    /// Update the active stable balance token. `None` means no change.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub stable_balance_active_ticker: Option<StableBalanceActiveTicker>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

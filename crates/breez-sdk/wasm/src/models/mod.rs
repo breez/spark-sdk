@@ -454,7 +454,7 @@ pub struct Payment {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionDetails)]
 pub struct ConversionDetails {
     pub from: ConversionStep,
-    pub to: ConversionStep,
+    pub to: Option<ConversionStep>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStep)]
@@ -640,9 +640,16 @@ pub struct OptimizationConfig {
     pub multiplicity: u8,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceToken)]
+pub struct StableBalanceToken {
+    pub ticker: String,
+    pub token_identifier: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConfig)]
 pub struct StableBalanceConfig {
-    pub token_identifier: String,
+    pub tokens: Vec<StableBalanceToken>,
+    pub default_active_ticker: Option<String>,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
     pub reserved_sats: Option<u64>,
@@ -1199,11 +1206,19 @@ pub struct OutgoingChange {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UserSettings)]
 pub struct UserSettings {
     pub spark_private_mode_enabled: bool,
+    pub stable_balance_active_ticker: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceActiveTicker)]
+pub enum StableBalanceActiveTicker {
+    Set { ticker: String },
+    Unset,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateUserSettingsRequest)]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+    pub stable_balance_active_ticker: Option<StableBalanceActiveTicker>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]

@@ -4,9 +4,6 @@ use breez_sdk_spark::*;
 use rstest::*;
 use tracing::info;
 
-/// Default token identifier for regtest
-const REGTEST_TOKEN_ID: &str = "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c";
-
 /// Test stable balance auto-conversion feature:
 /// 1. Fund bob and send sats to Alice (below threshold) - verify no auto-conversion
 /// 2. Bob sends sats again to Alice (to exceed threshold) - verify auto-conversion triggers
@@ -48,7 +45,7 @@ async fn test_stable_balance_auto_conversion(
         })
         .await?
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -93,7 +90,7 @@ async fn test_stable_balance_auto_conversion(
         alice_info_after_small.balance_sats,
         alice_info_after_small
             .token_balances
-            .get(REGTEST_TOKEN_ID)
+            .get(SHELL_REGTEST_TOKEN_ID)
             .map(|b| b.balance)
             .unwrap_or(0)
     );
@@ -108,7 +105,7 @@ async fn test_stable_balance_auto_conversion(
     // Verify token balance didn't change (no auto-conversion)
     let alice_token_balance_after_small = alice_info_after_small
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -160,7 +157,7 @@ async fn test_stable_balance_auto_conversion(
         .await?;
     let alice_token_balance_after_large = alice_info_after_large
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -209,7 +206,7 @@ async fn test_stable_balance_auto_conversion(
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
             amount: Some(token_payment_amount),
-            token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
+            token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: None,
             fee_policy: None,
         })
@@ -251,7 +248,7 @@ async fn test_stable_balance_auto_conversion(
 
     let alice_final_token_balance = alice_final_info
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -307,7 +304,7 @@ async fn test_stable_balance_reserved_sats(
         })
         .await?
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -355,7 +352,7 @@ async fn test_stable_balance_reserved_sats(
         .await?;
     let alice_token_balance_after_first = alice_info_after_first
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -401,7 +398,7 @@ async fn test_stable_balance_reserved_sats(
         .await?;
     let alice_token_balance = alice_info
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -496,7 +493,7 @@ async fn test_stable_balance_reserved_sats(
         .await?;
     let alice_final_token_balance = alice_final_info
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -590,7 +587,7 @@ async fn test_stable_balance_reserved_sats(
         .await?;
     let alice_final_token_balance = alice_final_info
         .token_balances
-        .get(REGTEST_TOKEN_ID)
+        .get(SHELL_REGTEST_TOKEN_ID)
         .map(|b| b.balance)
         .unwrap_or(0);
 

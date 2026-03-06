@@ -99,15 +99,16 @@ impl FlashnetClient {
     }
 
     async fn get_access_token(&self) -> Result<String, FlashnetError> {
-        let access_token =
-            if let Some(access_token) = self.cache_store.get(ACCESS_TOKEN_CACHE_KEY).await? {
-                trace!("Using cached access token");
-                access_token
-            } else {
-                debug!("No access token in cache, authenticating");
-                self.authenticate().await?
-            };
-        Ok(access_token)
+        // Acquire lock to serialize authentication attempts
+        let _guard = self.auth_mutex.lock().await;
+
+        if let Some(access_token) = self.cache_store.get(ACCESS_TOKEN_CACHE_KEY).await? {
+            trace!("Using cached access token");
+            return Ok(access_token);
+        }
+
+        debug!("No access token in cache, authenticating");
+        self.authenticate().await
     }
 
     async fn auth_challenge(

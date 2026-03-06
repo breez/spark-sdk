@@ -600,6 +600,7 @@ impl BreezSdk {
                             &conversion_purpose,
                             token_identifier.as_ref(),
                             ConversionAmount::MinAmountOut(amount),
+                            None,
                         )
                         .await?;
                     (conversion_response, conversion_purpose)
@@ -629,6 +630,7 @@ impl BreezSdk {
                             &conversion_purpose,
                             token_identifier.as_ref(),
                             ConversionAmount::MinAmountOut(amount),
+                            None,
                         )
                         .await?;
                     (conversion_response, conversion_purpose)
@@ -695,8 +697,17 @@ impl BreezSdk {
             .map_err(|e| {
                 SdkError::Generic(format!("Timeout waiting for conversion to complete: {e}"))
             })?;
-        // For self-payments, we can skip sending the actual payment
+        // For self-transfers, link the sent payment as child of received and return
         if conversion_purpose == ConversionPurpose::SelfTransfer {
+            self.storage
+                .insert_payment_metadata(
+                    conversion_response.sent_payment_id,
+                    PaymentMetadata {
+                        parent_payment_id: Some(conversion_response.received_payment_id),
+                        ..Default::default()
+                    },
+                )
+                .await?;
             *suppress_payment_event = true;
             return Ok(SendPaymentResponse { payment });
         }
@@ -1306,6 +1317,7 @@ impl BreezSdk {
                 conversion_purpose,
                 token_identifier,
                 ConversionAmount::MinAmountOut(min_amount_out),
+                None,
             )
             .await
             .map_err(Into::into)
@@ -1361,6 +1373,7 @@ impl BreezSdk {
                 conversion_purpose,
                 token_identifier,
                 ConversionAmount::MinAmountOut(min_amount_out),
+                None,
             )
             .await
             .map_err(Into::into)
