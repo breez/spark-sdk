@@ -8,6 +8,7 @@
 lang_name = "Python"
 lang_id   = "python"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/python/"
+snippet_dir = "docs/breez-sdk/snippets/python/src/"
 
 # File layout
 serialization_file = "serialization.py"
