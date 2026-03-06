@@ -93,6 +93,9 @@ class SdkListener(EventListener):
         elif isinstance(event, SdkEvent.OPTIMIZATION):
             # An optimization event occurred
             optimization_event = event.optimization_event
+        elif isinstance(event, SdkEvent.LIGHTNING_ADDRESS_CHANGED):
+            # The lightning address has changed
+            lightning_address = event.lightning_address
         else:
             # Handle any future event types
             pass

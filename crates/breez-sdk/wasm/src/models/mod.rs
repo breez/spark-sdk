@@ -79,6 +79,9 @@ pub enum SdkEvent {
     Optimization {
         optimization_event: OptimizationEvent,
     },
+    LightningAddressChanged {
+        lightning_address: Option<LightningAddressInfo>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]

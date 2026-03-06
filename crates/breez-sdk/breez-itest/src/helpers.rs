@@ -813,6 +813,8 @@ pub enum EventResult {
     PaymentFailed(Box<Payment>),
     /// Synced event occurred
     Synced,
+    /// Lightning address changed
+    LightningAddressChanged(Option<LightningAddressInfo>),
 }
 
 pub async fn clear_event_receiver(event_rx: &mut mpsc::Receiver<SdkEvent>) {
@@ -1077,6 +1079,39 @@ pub async fn wait_for_synced_event(
     })
     .await
     .map(|_| ())
+}
+
+pub async fn wait_for_lightning_address_changed_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<Option<LightningAddressInfo>> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "LightningAddressChanged",
+        |event| match event {
+            SdkEvent::LightningAddressChanged {
+                lightning_address, ..
+            } => {
+                info!(
+                    "Received LightningAddressChanged event: {:?}",
+                    lightning_address
+                );
+                Ok(Some(EventResult::LightningAddressChanged(
+                    lightning_address,
+                )))
+            }
+            other => {
+                info!("Ignored SDK event: {:?}", other);
+                Ok(None)
+            }
+        },
+    )
+    .await
+    .and_then(|result| match result {
+        EventResult::LightningAddressChanged(addr) => Ok(addr),
+        _ => Err(anyhow::anyhow!("Unexpected event result")),
+    })
 }
 
 /// Wait for a set of payment events in any order.

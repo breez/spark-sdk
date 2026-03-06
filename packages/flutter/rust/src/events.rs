@@ -1,5 +1,5 @@
 use crate::frb_generated::StreamSink;
-use breez_sdk_spark::{DepositInfo, EventListener, Payment};
+use breez_sdk_spark::{DepositInfo, EventListener, LightningAddressInfo, Payment};
 pub use breez_sdk_spark::{OptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
@@ -23,6 +23,9 @@ pub enum _SdkEvent {
     },
     Optimization {
         optimization_event: OptimizationEvent,
+    },
+    LightningAddressChanged {
+        lightning_address: Option<LightningAddressInfo>,
     },
 }
 

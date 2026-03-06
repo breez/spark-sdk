@@ -5,8 +5,8 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    EventEmitter, error::SdkError, persist::Storage, realtime_sync::SyncedStorage,
-    sync_storage::SyncStorageWrapper,
+    EventEmitter, error::SdkError, lnurl::LnurlServerClient, persist::Storage,
+    realtime_sync::SyncedStorage, sync_storage::SyncStorageWrapper,
 };
 
 pub struct RealTimeSyncParams {
@@ -16,6 +16,7 @@ pub struct RealTimeSyncParams {
     pub storage: Arc<dyn Storage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
     pub event_emitter: Arc<EventEmitter>,
+    pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
 pub struct RealTimeSyncResult {
@@ -34,6 +35,7 @@ pub async fn init_and_start_real_time_sync(
         Arc::clone(&params.storage),
         Arc::clone(&sync_service),
         params.event_emitter,
+        params.lnurl_server_client,
     ));
 
     synced_storage.initial_setup();

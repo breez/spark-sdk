@@ -8,7 +8,7 @@ use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-use crate::{DepositInfo, Payment};
+use crate::{DepositInfo, LightningAddressInfo, Payment};
 
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
@@ -36,6 +36,9 @@ pub enum SdkEvent {
     Optimization {
         // Named with `optimization` prefix to avoid collision with `event` keyword in C#
         optimization_event: OptimizationEvent,
+    },
+    LightningAddressChanged {
+        lightning_address: Option<LightningAddressInfo>,
     },
 }
 
@@ -72,6 +75,9 @@ impl fmt::Display for SdkEvent {
                 optimization_event: event,
             } => {
                 write!(f, "Optimization: {event:?}")
+            }
+            SdkEvent::LightningAddressChanged { lightning_address } => {
+                write!(f, "LightningAddressChanged: {lightning_address:?}")
             }
         }
     }

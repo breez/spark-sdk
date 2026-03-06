@@ -1329,7 +1329,7 @@ pub struct RegisterLightningAddressRequest {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct LnurlInfo {
     pub url: String,
     pub bech32: String,
@@ -1344,7 +1344,7 @@ impl LnurlInfo {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct LightningAddressInfo {
     pub description: String,
     pub lightning_address: String,

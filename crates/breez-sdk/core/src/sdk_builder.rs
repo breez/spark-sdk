@@ -508,6 +508,7 @@ impl SdkBuilder {
                     storage: Arc::clone(&storage),
                     shutdown_receiver: shutdown_sender.subscribe(),
                     event_emitter: Arc::clone(&event_emitter),
+                    lnurl_server_client: lnurl_server_client.clone(),
                 })
                 .await?;
                 (result.storage, Some(result.signing_client))

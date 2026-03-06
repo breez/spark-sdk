@@ -74,6 +74,9 @@ class SdkEventListener: EventListener {
         case .optimization(let optimizationEvent):
             // An optimization event occurred
             let _ = optimizationEvent
+        case .lightningAddressChanged(let lightningAddress):
+            // The lightning address has changed
+            let _ = lightningAddress
         default:
             // Handle any future event types
             break

@@ -24,7 +24,7 @@ use crate::{
 
 const ACCOUNT_INFO_KEY: &str = "account_info";
 const LAST_SYNC_TIME_KEY: &str = "last_sync_time";
-const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
+pub(crate) const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";

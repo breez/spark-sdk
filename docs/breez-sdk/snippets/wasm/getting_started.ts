@@ -103,6 +103,11 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const optimizationEvent = event.optimizationEvent
           break
         }
+        case 'lightningAddressChanged': {
+          // The lightning address has changed
+          const lightningAddress = event.lightningAddress
+          break
+        }
         default: {
           // Handle any future event types
           break

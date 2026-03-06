@@ -85,6 +85,11 @@ impl EventListener for SdkEventListener {
             SdkEvent::Optimization { optimization_event } => {
                 // An optimization event occurred
             }
+            SdkEvent::LightningAddressChanged {
+                lightning_address,
+            } => {
+                // The lightning address has changed
+            }
         }
     }
 }

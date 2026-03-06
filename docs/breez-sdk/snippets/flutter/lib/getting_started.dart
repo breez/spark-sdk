@@ -142,6 +142,10 @@ class BreezSdkSpark {
           // An optimization event occurred
           final _ = optimizationEvent;
           break;
+        case SdkEvent_LightningAddressChanged(:final lightningAddress):
+          // The lightning address has changed
+          final _ = lightningAddress;
+          break;
       }
       _eventStreamController.add(sdkEvent);
     }, onError: (e) {

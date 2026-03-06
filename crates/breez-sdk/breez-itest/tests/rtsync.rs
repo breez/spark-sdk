@@ -88,14 +88,23 @@ async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
 // ---------------------
 
 async fn create_sdk_with_rtsync(name: &str, seed: [u8; 32], sync_url: &str) -> Result<SdkInstance> {
+    create_sdk_with_rtsync_and_lnurl(name, seed, sync_url, None).await
+}
+
+async fn create_sdk_with_rtsync_and_lnurl(
+    name: &str,
+    seed: [u8; 32],
+    sync_url: &str,
+    lnurl_domain: Option<String>,
+) -> Result<SdkInstance> {
     let temp_dir = TempDir::new(&format!("breez-sdk-{name}"))?;
 
     let mut config = default_config(Network::Regtest);
-    config.api_key = None; // Regtest: no API key needed
+    config.api_key = None;
     config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 1; // Faster sync for testing
+    config.sync_interval_secs = 1;
     config.real_time_sync_server_url = Some(sync_url.to_string());
-    config.lnurl_domain = None;
+    config.lnurl_domain = lnurl_domain;
 
     build_sdk_with_custom_config(
         temp_dir.path().to_string_lossy().to_string(),
@@ -206,5 +215,98 @@ async fn test_01_rtsync_lnurl_info_sync(
     );
 
     info!("=== Test test_01_rtsync_lnurl_info_sync PASSED ===");
+    Ok(())
+}
+
+/// Test real-time synchronization of lightning address changes between SDK instances.
+/// Instance 1 registers a lightning address, instance 2 receives the change event.
+/// Instance 1 deletes the address, instance 2 receives the deletion event.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_02_rtsync_lightning_address_sync(
+    #[future] data_sync_fixture: DataSyncFixture,
+    #[future] lnurl_fixture: LnurlFixture,
+    alice_seed: [u8; 32],
+) -> Result<()> {
+    info!("=== Starting test_02_rtsync_lightning_address_sync ===");
+
+    let data_sync = Arc::new(data_sync_fixture.await);
+    let sync_url = data_sync.grpc_url().to_string();
+    let lnurl = Arc::new(lnurl_fixture.await);
+    let lnurl_domain = lnurl.http_url().to_string();
+
+    // Create two instances from the same seed with rtsync + lnurl
+    let mut alice1 = create_sdk_with_rtsync_and_lnurl(
+        "alice1-la",
+        alice_seed,
+        &sync_url,
+        Some(lnurl_domain.clone()),
+    )
+    .await?;
+    alice1.data_sync_fixture = Some(Arc::clone(&data_sync));
+    alice1.lnurl_fixture = Some(Arc::clone(&lnurl));
+
+    let mut alice2 = create_sdk_with_rtsync_and_lnurl(
+        "alice2-la",
+        alice_seed,
+        &sync_url,
+        Some(lnurl_domain.clone()),
+    )
+    .await?;
+    alice2.data_sync_fixture = Some(Arc::clone(&data_sync));
+    alice2.lnurl_fixture = Some(Arc::clone(&lnurl));
+
+    // Instance 1 registers a lightning address
+    let registered = alice1
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "alicesync".to_string(),
+            description: Some("Alice's synced address".to_string()),
+        })
+        .await?;
+    info!(
+        "Alice1 registered lightning address: {}",
+        registered.lightning_address
+    );
+
+    // Instance 2 should receive a LightningAddressChanged event
+    let changed_addr = wait_for_lightning_address_changed_event(&mut alice2.events, 30).await?;
+    let changed_addr = changed_addr.expect("Expected Some(address) after register");
+    assert_eq!(changed_addr.lightning_address, registered.lightning_address);
+    assert_eq!(changed_addr.username, registered.username);
+    info!(
+        "Alice2 received LightningAddressChanged: {}",
+        changed_addr.lightning_address
+    );
+
+    // Verify alice2 can also fetch it via the API
+    let alice2_addr = alice2.sdk.get_lightning_address().await?;
+    assert_eq!(
+        alice2_addr.as_ref().map(|a| &a.lightning_address),
+        Some(&registered.lightning_address)
+    );
+    info!("Alice2 get_lightning_address matches");
+
+    // Instance 1 deletes the lightning address
+    alice1.sdk.delete_lightning_address().await?;
+    info!("Alice1 deleted lightning address");
+
+    // Instance 2 should receive a LightningAddressChanged event with None
+    let deleted_addr = wait_for_lightning_address_changed_event(&mut alice2.events, 30).await?;
+    assert!(
+        deleted_addr.is_none(),
+        "Expected None after delete, got: {deleted_addr:?}"
+    );
+    info!("Alice2 received LightningAddressChanged: None");
+
+    // Verify alice2's API also returns None
+    let alice2_addr = alice2.sdk.get_lightning_address().await?;
+    assert!(
+        alice2_addr.is_none(),
+        "Expected None from get_lightning_address after delete"
+    );
+    info!("Alice2 get_lightning_address returns None");
+
+    info!("=== Test test_02_rtsync_lightning_address_sync PASSED ===");
     Ok(())
 }
