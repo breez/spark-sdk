@@ -11,7 +11,7 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.Framework
  * Gradle plugin that auto-configures iOS framework search paths for breez_sdk_sparkFFI.
  *
  * The plugin detects the framework location from Xcode environment variables (BUILD_DIR,
- * PLATFORM_NAME) and searches SPM artifacts, CocoaPods, and Xcode build products directories.
+ * PLATFORM_NAME) and searches SPM artifacts and Xcode build products directories.
  *
  * ## Properties
  *
@@ -71,18 +71,7 @@ class BreezSdkSparkPlugin : Plugin<Project> {
                     searchPaths.add(spmSearchPath)
                 }
 
-                // CocoaPods path (PODS_ROOT is set by Xcode from CocoaPods)
-                val podsRoot = System.getenv("PODS_ROOT")
-                if (podsRoot != null) {
-                    val podsXcfwSlice = java.io.File(
-                        "$podsRoot/breez_sdk_sparkFFI/breez_sdk_sparkFFI.xcframework/$slice"
-                    )
-                    if (podsXcfwSlice.exists()) {
-                        searchPaths.add(podsXcfwSlice.absolutePath)
-                    }
-                }
-
-                // Xcode build products (covers both SPM and CocoaPods at link time)
+                // Xcode build products (covers SPM at link time)
                 val builtProductsDir = System.getenv("BUILT_PRODUCTS_DIR")
                 if (builtProductsDir != null && java.io.File(builtProductsDir).exists()) {
                     searchPaths.add(builtProductsDir)
@@ -92,7 +81,7 @@ class BreezSdkSparkPlugin : Plugin<Project> {
             if (searchPaths.isEmpty()) {
                 project.logger.warn(
                     "breez-sdk-spark: Could not find breez_sdk_sparkFFI framework. " +
-                    "Install it via Swift Package Manager or CocoaPods, " +
+                    "Install it via Swift Package Manager, " +
                     "or set the breezSdkSparkFrameworkPath project property. " +
                     "See: https://breez.technology"
                 )
