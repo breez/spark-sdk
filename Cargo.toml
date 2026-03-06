@@ -105,8 +105,8 @@ rusqlite = { version = "0.32.1", features = ["backup", "bundled"] }
 rusqlite_migration = { version = "1.3.1" }
 rustls = { version = "0.23.28", default-features = false, features = ["ring"] }
 rustyline = "16.0.0"
-serde = "1.0.219"
-serde_json = "1.0.140"
+serde = "1.0.228"
+serde_json = { version = "1.0.140", features = ["arbitrary_precision"] }
 serde-wasm-bindgen = "0.6.5"
 serde_with = "3.13.0"
 shlex = "1.3.0"
@@ -152,3 +152,9 @@ web-sys = { version = "0.3.77", features = ["console", "DomException"] }
 web-time = { version = "1.1.0", features = ["serde"] }
 webpki-roots = "1.0"
 xshell = "0.2"
+
+[patch.crates-io]
+serde = { git = "https://github.com/breez/serde", branch = "u128-content-support" }
+serde_derive = { git = "https://github.com/breez/serde", branch = "u128-content-support" }
+serde_core = { git = "https://github.com/breez/serde", branch = "u128-content-support" }
+serde-wasm-bindgen = { git = "https://github.com/breez/serde-wasm-bindgen", branch = "u128-bigint-support" }

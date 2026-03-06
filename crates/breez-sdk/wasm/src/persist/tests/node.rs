@@ -30,6 +30,9 @@ extern "C" {
 
     #[wasm_bindgen(js_name = "createOldV20Database", catch)]
     fn create_old_v20_database(db_path: &str) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(js_name = "createOldV24Database", catch)]
+    fn create_old_v24_database(db_path: &str) -> Result<Promise, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -539,4 +542,111 @@ async fn test_migration_from_v20_to_v21() {
     .expect("Failed to list returned payments");
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].id, "ln-failed");
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_from_v24_to_v25() {
+    let data_dir = "/tmp/breez-sdk-node-migration-v24-to-v25-test";
+    let db_path = format!("{}/storage.sql", data_dir);
+
+    // Step 1: Remove any existing test directory
+    let future = JsFuture::from(remove_dir_all(data_dir).expect("Failed to remove test data_dir"));
+    let _ = future.await.expect("Failed to remove test data_dir");
+
+    // Step 2: Create directory
+    let fs = js_sys::eval("require('fs').promises").expect("Failed to get fs module");
+    let mkdir = js_sys::Reflect::get(&fs, &"mkdir".into())
+        .expect("Failed to get mkdir")
+        .dyn_into::<js_sys::Function>()
+        .expect("mkdir is not a function");
+    let mkdir_options = js_sys::Object::new();
+    js_sys::Reflect::set(&mkdir_options, &"recursive".into(), &true.into())
+        .expect("Failed to set recursive");
+    let mkdir_promise = mkdir
+        .call2(&fs, &data_dir.into(), &mkdir_options)
+        .expect("Failed to call mkdir");
+    JsFuture::from(
+        mkdir_promise
+            .dyn_into::<Promise>()
+            .expect("mkdir didn't return promise"),
+    )
+    .await
+    .expect("Failed to create directory");
+
+    // Step 3: Create old v24 database with untagged u128 string values
+    let create_future = JsFuture::from(
+        create_old_v24_database(&db_path).expect("Failed to call create_old_v24_database"),
+    );
+    create_future
+        .await
+        .expect("Failed to create old v24 format database");
+
+    // Step 4: Open with new code (triggers migration to v25 - BigInt tagging)
+    let storage = create_default_storage(data_dir, None)
+        .await
+        .expect("Failed to create node storage instance");
+    let storage = WasmStorage { storage };
+
+    // Step 5: Verify large values (> u64::MAX) survived migration
+    let payment =
+        breez_sdk_spark::Storage::get_payment_by_id(&storage, "bigint-token-payment".to_string())
+            .await
+            .expect("Failed to get migrated payment");
+
+    match &payment.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply,
+                u128::MAX,
+                "maxSupply > u64::MAX should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "TST");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(u128::from(u64::MAX) + 1),
+                "conversion fee > u64::MAX should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment"),
+    }
+
+    // Step 6: Verify small values (< u64::MAX) also survived migration
+    let payment_small = breez_sdk_spark::Storage::get_payment_by_id(
+        &storage,
+        "bigint-token-payment-small".to_string(),
+    )
+    .await
+    .expect("Failed to get migrated small payment");
+
+    match &payment_small.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply, 1_000_000u128,
+                "small maxSupply should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "SML");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(500u128),
+                "small conversion fee should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment-small"),
+    }
 }

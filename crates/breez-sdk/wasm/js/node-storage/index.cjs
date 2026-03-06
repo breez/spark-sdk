@@ -28,6 +28,47 @@ const { StorageError } = require("./errors.cjs");
 const { MigrationManager } = require("./migrations.cjs");
 
 /**
+ * JSON.stringify wrapper that tags BigInt values with a "$BI:" prefix
+ * so they round-trip through JSON without type-specific normalizers.
+ */
+function jsonStringify(value) {
+  return JSON.stringify(value, (_key, val) =>
+    typeof val === "bigint" ? `$BI:${val}` : val
+  );
+}
+
+/**
+ * JSON.parse wrapper that restores "$BI:"-tagged strings back to BigInt.
+ * Accepts both a JSON string and an already-parsed object (for JSONB columns).
+ */
+function jsonParse(value) {
+  if (value === undefined || value === null) return value;
+  if (typeof value === "string") {
+    return JSON.parse(value, (_key, val) =>
+      typeof val === "string" && val.startsWith("$BI:")
+        ? BigInt(val.slice(4))
+        : val
+    );
+  }
+  return _reviveBigInts(value);
+}
+
+function _reviveBigInts(obj) {
+  if (typeof obj === "string") {
+    return obj.startsWith("$BI:") ? BigInt(obj.slice(4)) : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(_reviveBigInts);
+  }
+  if (obj !== null && typeof obj === "object") {
+    for (const key of Object.keys(obj)) {
+      obj[key] = _reviveBigInts(obj[key]);
+    }
+  }
+  return obj;
+}
+
+/**
  * Base query for payment lookups.
  * All columns are accessed by name in _rowToPayment.
  * parent_payment_id is only used by getPaymentsByParentIds.
@@ -388,7 +429,7 @@ class SqliteStorage {
           amount: payment.amount.toString(),
           fees: payment.fees.toString(),
           timestamp: payment.timestamp,
-          method: payment.method ? JSON.stringify(payment.method) : null,
+          method: payment.method ? jsonStringify(payment.method) : null,
           withdrawTxId:
             payment.details?.type === "withdraw" ? payment.details.txId : null,
           depositTxId:
@@ -404,10 +445,10 @@ class SqliteStorage {
           sparkInsert.run({
             id: payment.id,
             invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
+              ? jsonStringify(payment.details.invoiceDetails)
               : null,
             htlcDetails: payment.details.htlcDetails
-              ? JSON.stringify(payment.details.htlcDetails)
+              ? jsonStringify(payment.details.htlcDetails)
               : null,
           });
         }
@@ -428,11 +469,11 @@ class SqliteStorage {
         if (payment.details?.type === "token") {
           tokenInsert.run({
             id: payment.id,
-            metadata: JSON.stringify(payment.details.metadata),
+            metadata: jsonStringify(payment.details.metadata),
             txHash: payment.details.txHash,
             txType: payment.details.txType,
             invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
+              ? jsonStringify(payment.details.invoiceDetails)
               : null,
           });
         }
@@ -579,7 +620,7 @@ class SqliteStorage {
           : null,
         metadata.lnurlDescription,
         metadata.conversionInfo
-          ? JSON.stringify(metadata.conversionInfo)
+          ? jsonStringify(metadata.conversionInfo)
           : null
       );
       return Promise.resolve();
@@ -785,26 +826,26 @@ class SqliteStorage {
       details = {
         type: "spark",
         invoiceDetails: row.spark_invoice_details
-          ? JSON.parse(row.spark_invoice_details)
+          ? jsonParse(row.spark_invoice_details)
           : null,
         htlcDetails: row.spark_htlc_details
           ? JSON.parse(row.spark_htlc_details)
           : null,
         conversionInfo: row.conversion_info
-          ? JSON.parse(row.conversion_info)
+          ? jsonParse(row.conversion_info)
           : null,
       };
     } else if (row.token_metadata) {
       details = {
         type: "token",
-        metadata: JSON.parse(row.token_metadata),
+        metadata: jsonParse(row.token_metadata),
         txHash: row.token_tx_hash,
         txType: row.token_tx_type,
         invoiceDetails: row.token_invoice_details
-          ? JSON.parse(row.token_invoice_details)
+          ? jsonParse(row.token_invoice_details)
           : null,
         conversionInfo: row.conversion_info
-          ? JSON.parse(row.conversion_info)
+          ? jsonParse(row.conversion_info)
           : null,
       };
     }
@@ -812,7 +853,7 @@ class SqliteStorage {
     let method = null;
     if (row.method) {
       try {
-        method = JSON.parse(row.method);
+        method = jsonParse(row.method);
       } catch (e) {
         throw new StorageError(
           `Failed to parse payment method JSON for payment ${row.id}: ${e.message}`,

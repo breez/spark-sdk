@@ -10,53 +10,6 @@ use std::collections::HashMap;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
-// Helper module for serializing u128 as string
-mod serde_u128_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-mod serde_option_u128_as_string {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &Option<u128>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(value) = value {
-            serializer.serialize_str(&value.to_string())
-        } else {
-            serializer.serialize_none()
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = <Option<String>>::deserialize(deserializer)?;
-        if let Some(s) = s {
-            s.parse().map_err(serde::de::Error::custom).map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-}
-
 #[allow(clippy::large_enum_variant)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SdkEvent)]
 pub enum SdkEvent {
@@ -232,8 +185,6 @@ pub struct SparkInvoiceDetails {
     pub invoice: String,
     pub identity_public_key: String,
     pub network: BitcoinNetwork,
-    #[tsify(type = "string")]
-    #[serde(with = "serde_option_u128_as_string")]
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
     pub expiry_time: Option<u64>,
@@ -699,11 +650,6 @@ pub struct TokenMetadata {
     pub name: String,
     pub ticker: String,
     pub decimals: u32,
-    // Serde doesn't support deserializing u128 types whenever they are used with flatten: https://github.com/serde-rs/json/issues/625
-    // This occurs in the storage implementation when parsing `PaymentDetails` due to the use of flatten in LnurlRequestDetails
-    // Serializing as string is a workaround to avoid the issue.
-    #[tsify(type = "string")]
-    #[serde(with = "serde_u128_as_string")]
     pub max_supply: u128,
     pub is_freezable: bool,
 }
@@ -718,8 +664,6 @@ pub struct SyncWalletResponse {}
 pub enum ReceivePaymentMethod {
     SparkAddress,
     SparkInvoice {
-        #[tsify(type = "string")]
-        #[serde(with = "serde_option_u128_as_string")]
         amount: Option<u128>,
         token_identifier: Option<String>,
         expiry_time: Option<u64>,
@@ -763,15 +707,11 @@ pub enum SendPaymentMethod {
     }, // should be replaced with the parsed invoice
     SparkAddress {
         address: String,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
     SparkInvoice {
         spark_invoice_details: SparkInvoiceDetails,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
     },
@@ -1256,8 +1196,6 @@ pub struct ConversionInfo {
     pub pool_id: String,
     pub conversion_id: String,
     pub status: ConversionStatus,
-    #[tsify(type = "string")]
-    #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub purpose: Option<ConversionPurpose>,
 }

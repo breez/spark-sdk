@@ -234,6 +234,33 @@ class PostgresMigrationManager {
           )`,
         ],
       },
+      {
+        name: "Tag BigInt values with $BI: prefix for u128 fields",
+        sql: [
+          // TokenMetadata.maxSupply in payment_details_token.metadata (JSONB)
+          `UPDATE payment_details_token SET metadata = jsonb_set(metadata, '{maxSupply}', to_jsonb(concat('$BI:', metadata->>'maxSupply')))
+           WHERE metadata IS NOT NULL AND metadata ? 'maxSupply' AND metadata->>'maxSupply' IS NOT NULL
+           AND left(metadata->>'maxSupply', 4) != '$BI:'`,
+          // ConversionInfo.fee in payment_metadata.conversion_info (JSONB)
+          `UPDATE payment_metadata SET conversion_info = jsonb_set(conversion_info, '{fee}', to_jsonb(concat('$BI:', conversion_info->>'fee')))
+           WHERE conversion_info IS NOT NULL AND conversion_info ? 'fee' AND conversion_info->>'fee' IS NOT NULL
+           AND left(conversion_info->>'fee', 4) != '$BI:'`,
+          // SparkInvoiceDetails.amount in payment_details_spark.invoice_details (JSONB)
+          `UPDATE payment_details_spark SET invoice_details = jsonb_set(invoice_details, '{amount}', to_jsonb(concat('$BI:', invoice_details->>'amount')))
+           WHERE invoice_details IS NOT NULL AND invoice_details ? 'amount' AND invoice_details->>'amount' IS NOT NULL
+           AND left(invoice_details->>'amount', 4) != '$BI:'`,
+          // SparkInvoiceDetails.amount in payment_details_token.invoice_details (JSONB)
+          `UPDATE payment_details_token SET invoice_details = jsonb_set(invoice_details, '{amount}', to_jsonb(concat('$BI:', invoice_details->>'amount')))
+           WHERE invoice_details IS NOT NULL AND invoice_details ? 'amount' AND invoice_details->>'amount' IS NOT NULL
+           AND left(invoice_details->>'amount', 4) != '$BI:'`,
+          // fee in payments.method (TEXT)
+          `UPDATE payments SET method = replace(method, '"fee":"', '"fee":"$BI:')
+           WHERE method IS NOT NULL AND method LIKE '%"fee":"%' AND method NOT LIKE '%"fee":"$BI:%'`,
+          // amount in payments.method (TEXT)
+          `UPDATE payments SET method = replace(method, '"amount":"', '"amount":"$BI:')
+           WHERE method IS NOT NULL AND method LIKE '%"amount":"%' AND method NOT LIKE '%"amount":"$BI:%'`,
+        ],
+      },
     ];
   }
 }
