@@ -1,0 +1,20 @@
+[package]
+name = "nip65-publisher"
+edition = "2024"
+version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+bitcoin.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+dotenvy = "0.15"
+nostr.workspace = true
+nostr-sdk.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
