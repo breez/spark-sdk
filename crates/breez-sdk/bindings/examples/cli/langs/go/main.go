@@ -81,6 +81,11 @@ func main() {
 	postgresConnectionString := flag.String("postgres-connection-string", "", "PostgreSQL connection string (uses SQLite by default)")
 	stableBalanceTokenIdentifier := flag.String("stable-balance-token-identifier", "", "Stable balance token identifier")
 	stableBalanceThreshold := flag.Uint64("stable-balance-threshold", 0, "Stable balance threshold in sats")
+	passkeyProviderStr := flag.String("passkey", "", "Use passkey with PRF provider (file, yubikey, or fido2)")
+	walletName := flag.String("wallet-name", "", "Wallet name for seed derivation (requires --passkey)")
+	listWalletNames := flag.Bool("list-wallet-names", false, "List and select from wallet names published to Nostr (requires --passkey)")
+	storeWalletName := flag.Bool("store-wallet-name", false, "Publish the wallet name to Nostr (requires --passkey and --wallet-name)")
+	_ = flag.String("rpid", "", "Relying party ID for FIDO2 provider (requires --passkey)")
 	flag.Parse()
 
 	resolvedDir := expandPath(*dataDir)
@@ -102,12 +107,8 @@ func main() {
 	// Init logging
 	breez_sdk_spark.InitLogging(&resolvedDir, nil, nil)
 
-	// Persistence: mnemonic
+	// Persistence
 	persistence := &CliPersistence{dataDir: resolvedDir}
-	mnemonic, err := persistence.GetOrCreateMnemonic()
-	if err != nil {
-		log.Fatalf("Failed to get/create mnemonic: %v", err)
-	}
 
 	// Config
 	config := breez_sdk_spark.DefaultConfig(networkEnum)
@@ -127,8 +128,38 @@ func main() {
 		config.StableBalanceConfig = &sbc
 	}
 
+	// Resolve seed: passkey or mnemonic
+	var seed breez_sdk_spark.Seed
+	if *passkeyProviderStr != "" {
+		provider, err := parsePasskeyProvider(*passkeyProviderStr)
+		if err != nil {
+			log.Fatalf("Invalid passkey provider: %v", err)
+		}
+		prfProvider, err := buildPrfProvider(provider, resolvedDir)
+		if err != nil {
+			log.Fatalf("PRF initialization failed: %v", err)
+		}
+		var wn *string
+		if *walletName != "" {
+			wn = walletName
+		}
+		var apiKeyPtr *string
+		if apiKey != "" {
+			apiKeyPtr = &apiKey
+		}
+		seed, err = resolvePasskeySeed(prfProvider, apiKeyPtr, wn, *listWalletNames, *storeWalletName)
+		if err != nil {
+			log.Fatalf("Passkey seed resolution failed: %v", err)
+		}
+	} else {
+		mnemonic, err := persistence.GetOrCreateMnemonic()
+		if err != nil {
+			log.Fatalf("Failed to get/create mnemonic: %v", err)
+		}
+		seed = breez_sdk_spark.SeedMnemonic{Mnemonic: mnemonic}
+	}
+
 	// Build SDK
-	seed := breez_sdk_spark.SeedMnemonic{Mnemonic: mnemonic}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	if *postgresConnectionString != "" {
 		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
