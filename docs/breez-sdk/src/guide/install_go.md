@@ -10,7 +10,7 @@ go get github.com/breez/breez-sdk-spark-go
 
 For [Android](#android) and [Windows](#windows) the provided binding libraries need to be copied into a location where they need to be found during runtime. 
 
-For [iOS](#ios) the native binary framework need additionaly installing using [Swift Package Manager](#swift-package-manager) or [CocoaPods](#cocoapods).
+For [iOS](#ios) the native binary framework needs to be additionally installed using [Swift Package Manager](#swift-package-manager).
 
 ### Android
 
@@ -52,9 +52,9 @@ lipo -create \
 
 ### iOS
 
-When targeting iOS, you must also install the native binary framework. This is the same framework used by the [Swift Breez SDK package](install_ios_swift.md) and can be installed via [Swift Package Manager](#swift-package-manager) or [CocoaPods](#cocoapods).
+When targeting iOS, you must also install the native binary framework. This is the same framework used by the [Swift Breez SDK package](install_ios_swift.md) and can be installed via [Swift Package Manager](#swift-package-manager).
 
-**Note:** The Go and Swift packages (installed via SPM or CocoaPods) **MUST** have the same version. A version mismatch between the two will cause linking or runtime errors.
+**Note:** The Go and Swift packages **MUST** have the same version. A version mismatch between the two will cause linking or runtime errors.
 
 
 #### Swift Package Manager
@@ -75,17 +75,6 @@ Add the following to the dependencies array of your `Package.swift`:
 
 ``` swift
 .package(url: "https://github.com/breez/breez-sdk-spark-swift.git"),
-```
-
-#### CocoaPods
-
-Add the Breez SDK to your `Podfile` like so and run `pod install`:
-
-``` ruby
-target '<YourApp>' do
-  use_frameworks!
-  pod 'breez_sdk_sparkFFI'
-end
 ```
 
 ### Windows
