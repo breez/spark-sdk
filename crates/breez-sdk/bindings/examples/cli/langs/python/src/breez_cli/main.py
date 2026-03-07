@@ -26,6 +26,7 @@ from breez_sdk_spark import (
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
+from breez_cli.passkey import create_provider, resolve_passkey_seed
 from breez_cli.persistence import CliPersistence
 from breez_cli.serialization import serialize
 
@@ -58,20 +59,40 @@ def expand_path(path: str) -> Path:
 @click.option("--postgres-connection-string", default=None, help="PostgreSQL connection string")
 @click.option("--stable-balance-token-identifier", default=None, help="Stable balance token identifier")
 @click.option("--stable-balance-threshold", type=int, default=None, help="Stable balance threshold in sats")
+@click.option("--passkey", "passkey_provider", default=None, help="Use passkey with file, yubikey, or fido2 provider")
+@click.option("--wallet-name", default=None, help="Wallet name for seed derivation (requires --passkey)")
+@click.option("--list-wallet-names", is_flag=True, default=False, help="List and select from wallet names published to Nostr (requires --passkey)")
+@click.option("--store-wallet-name", is_flag=True, default=False, help="Publish the wallet name to Nostr (requires --passkey and --wallet-name)")
+@click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 async def main(data_dir, network, account_number, postgres_connection_string,
-               stable_balance_token_identifier, stable_balance_threshold):
+               stable_balance_token_identifier, stable_balance_threshold,
+               passkey_provider, wallet_name, list_wallet_names, store_wallet_name, rpid):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Validate passkey flag combinations
+    if wallet_name and not passkey_provider:
+        raise click.UsageError("--wallet-name requires --passkey")
+    if list_wallet_names and not passkey_provider:
+        raise click.UsageError("--list-wallet-names requires --passkey")
+    if store_wallet_name and not passkey_provider:
+        raise click.UsageError("--store-wallet-name requires --passkey")
+    if store_wallet_name and not wallet_name:
+        raise click.UsageError("--store-wallet-name requires --wallet-name")
+    if rpid and not passkey_provider:
+        raise click.UsageError("--rpid requires --passkey")
+    if list_wallet_names and (wallet_name or store_wallet_name):
+        raise click.UsageError("--list-wallet-names conflicts with --wallet-name and --store-wallet-name")
+
     init_logging(log_dir=str(data_dir), app_logger=None, log_filter=None)
 
     persistence = CliPersistence(data_dir)
-    mnemonic = persistence.get_or_create_mnemonic()
 
     network_enum = Network.MAINNET if network == "mainnet" else Network.REGTEST
+    breez_api_key = os.environ.get("BREEZ_API_KEY")
     config = default_config(network=network_enum)
-    config.api_key = os.environ.get("BREEZ_API_KEY")
+    config.api_key = breez_api_key
 
     if stable_balance_token_identifier:
         config.stable_balance_config = StableBalanceConfig(
@@ -81,7 +102,14 @@ async def main(data_dir, network, account_number, postgres_connection_string,
             reserved_sats=None,
         )
 
-    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+    if passkey_provider:
+        provider = create_provider(passkey_provider, data_dir, rpid=rpid)
+        seed = await resolve_passkey_seed(
+            provider, breez_api_key, wallet_name, list_wallet_names, store_wallet_name,
+        )
+    else:
+        mnemonic = persistence.get_or_create_mnemonic()
+        seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:

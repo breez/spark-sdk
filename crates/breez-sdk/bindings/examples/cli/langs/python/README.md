@@ -50,6 +50,11 @@ make clean            Remove venv and build artifacts
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
+| `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
+| `--wallet-name` | `Default` | Requires `--passkey`. The wallet name to use |
+| `--list-wallet-names` | false | Requires `--passkey`. Select wallet name from NOSTR |
+| `--store-wallet-name` | false | Requires `--passkey`. Publish wallet name to NOSTR |
+| `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 
 ## Environment Variables
 
@@ -89,3 +94,43 @@ source .venv/bin/activate
 pip install -e .
 breez-cli --help
 ```
+
+## Passkey
+
+Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a file-based secret is used to deterministically derive wallet seeds via HMAC challenge-response.
+
+Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+
+### How It Works
+
+1. **Account master derivation**: `PRF(key, magic_salt)` produces a 32-byte account master used to derive a Nostr identity.
+2. **Wallet name storage**: Wallet names are published as Nostr events, allowing discovery during restore.
+3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes that are converted to a 24-word BIP39 mnemonic.
+
+### PRF Providers
+
+#### File Provider
+
+Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
+
+```bash
+# Use passkey with the default wallet name
+breez-cli --passkey file
+
+# Use passkey with a specific wallet name
+breez-cli --passkey file --wallet-name personal
+
+# Use passkey after selecting a wallet name published to Nostr
+breez-cli --passkey file --list-wallet-names
+
+# Use passkey with a specific wallet name and publish the wallet name to Nostr
+breez-cli --passkey file --wallet-name personal --store-wallet-name
+```
+
+#### YubiKey Provider
+
+Not yet available in the Python CLI. See the [Rust CLI](../../../../../cli/) for YubiKey support.
+
+#### FIDO2 Provider
+
+Not yet available in the Python CLI. See the [Rust CLI](../../../../../cli/) for FIDO2/WebAuthn PRF support.
