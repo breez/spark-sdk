@@ -9,6 +9,7 @@ lang_name = "Swift"
 lang_id   = "swift"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/swift/"
 snippet_dir = "docs/breez-sdk/snippets/swift/BreezSdkSnippets/Sources/"
+package_registry = "Swift Package Index (https://swiftpackageindex.com)"
 
 # File layout
 serialization_file = "Serialization.swift"

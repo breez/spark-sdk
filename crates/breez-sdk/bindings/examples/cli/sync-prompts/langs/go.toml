@@ -9,6 +9,7 @@ lang_name = "Go"
 lang_id   = "go"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/go/"
 snippet_dir = "docs/breez-sdk/snippets/go/"
+package_registry = "pkg.go.dev (https://pkg.go.dev)"
 
 # File layout
 serialization_file = "serialization.go"
