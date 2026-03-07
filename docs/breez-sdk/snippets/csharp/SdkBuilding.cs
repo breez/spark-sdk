@@ -65,7 +65,7 @@ namespace BreezSdkSnippets
         // ANCHOR: with-payment-observer
         class ExamplePaymentObserver : PaymentObserver
         {
-            public async Task BeforeSend(List<ProvisionalPayment> payments)
+            public async Task BeforeSend(ProvisionalPayment[] payments)
             {
                 foreach (var payment in payments)
                 {

@@ -42,7 +42,7 @@ namespace BreezSdkSnippets
             return sdk;
         }
 
-        async Task<List<string>> ListWalletNames()
+        async Task<string[]> ListWalletNames()
         {
             // ANCHOR: list-wallet-names
             var prfProvider = new ExamplePasskeyPrfProvider();

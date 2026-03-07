@@ -32,7 +32,7 @@ namespace BreezSdkSnippets
             // ANCHOR: fetch-token-metadata
             var response = await sdk.GetTokensMetadata(
                 request: new GetTokensMetadataRequest(
-                    tokenIdentifiers: new List<string> { "<token identifier 1>", "<token identifier 2>" }
+                    tokenIdentifiers: new string[] { "<token identifier 1>", "<token identifier 2>" }
                 )
             );
 
