@@ -282,6 +282,20 @@ fn wasm_test_cmd(
                     .with_context(|| "Failed to install postgres-storage npm dependencies.")?;
                 sh.change_dir(&current_dir);
             }
+
+            // Install postgres-tree-store dependencies
+            let pg_tree_store_path = Path::new("crates/breez-sdk/wasm/js/postgres-tree-store");
+            if pg_tree_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    pg_tree_store_path.display()
+                );
+                sh.change_dir(pg_tree_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install postgres-tree-store npm dependencies.")?;
+                sh.change_dir(&current_dir);
+            }
         }
 
         let package_dir = pkg

@@ -12,6 +12,7 @@ use crate::{
     },
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
+    tree_store::{TreeStoreJs, WasmTreeStore},
 };
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_spark::KeySet;
@@ -56,6 +57,7 @@ pub struct SdkBuilder {
     default_storage_dir: Option<String>,
     storage: Option<Storage>,
     postgres_config: Option<PostgresStorageConfig>,
+    postgres_tree_store_config: Option<PostgresStorageConfig>,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -75,6 +77,7 @@ impl SdkBuilder {
             default_storage_dir: None,
             storage: None,
             postgres_config: None,
+            postgres_tree_store_config: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -97,6 +100,7 @@ impl SdkBuilder {
             default_storage_dir: None,
             storage: None,
             postgres_config: None,
+            postgres_tree_store_config: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -118,6 +122,12 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "withPostgresStorage")]
     pub fn with_postgres_storage(mut self, config: PostgresStorageConfig) -> Self {
         self.postgres_config = Some(config);
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withPostgresTreeStore")]
+    pub fn with_postgres_tree_store(mut self, config: PostgresStorageConfig) -> Self {
+        self.postgres_tree_store_config = Some(config);
         self
     }
 
@@ -224,6 +234,13 @@ impl SdkBuilder {
             }
         }
 
+        if let Some(tree_store_config) = self.postgres_tree_store_config {
+            let logger_ref = get_wasm_logger_ref();
+            let tree_store_js = create_postgres_tree_store(tree_store_config, logger_ref).await?;
+            let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
+            self.builder = self.builder.with_tree_store(tree_store);
+        }
+
         let sdk = self.builder.build().await?;
         Ok(BreezSdk { sdk: Rc::new(sdk) })
     }
@@ -269,4 +286,10 @@ extern "C" {
         config: PostgresStorageConfig,
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
+
+    #[wasm_bindgen(js_name = "createPostgresTreeStore", catch)]
+    async fn create_postgres_tree_store(
+        config: PostgresStorageConfig,
+        logger: Option<&Logger>,
+    ) -> Result<TreeStoreJs, JsValue>;
 }
