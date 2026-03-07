@@ -56,6 +56,11 @@ make clean            Remove build artifacts
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
+| `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
+| `--wallet-name` | `Default` | Requires `--passkey`. The wallet name to use |
+| `--list-wallet-names` | false | Requires `--passkey`. Select wallet name from Nostr |
+| `--store-wallet-name` | false | Requires `--passkey`. Publish wallet name to Nostr |
+| `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 
 ## Environment Variables
 
@@ -82,6 +87,40 @@ The CLI supports:
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`, `recommended-fees`
+
+## Passkey
+
+Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a file-based secret (or hardware key) is used to deterministically derive wallet seeds via HMAC challenge-response.
+
+Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+
+### PRF Providers
+
+#### File Provider
+
+Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
+
+```bash
+# Use passkey with the default wallet name
+make run ARGS="--passkey file"
+
+# Use passkey with a specific wallet name
+make run ARGS="--passkey file --wallet-name personal"
+
+# Use passkey after selecting a wallet name published to Nostr
+make run ARGS="--passkey file --list-wallet-names"
+
+# Use passkey with a specific wallet name and publish the wallet name to Nostr
+make run ARGS="--passkey file --wallet-name personal --store-wallet-name"
+```
+
+#### YubiKey Provider
+
+Not yet available in the Swift CLI. See the [Rust CLI](../../../../../cli/README.md) for the reference implementation.
+
+#### FIDO2 Provider
+
+Not yet available in the Swift CLI. See the [Rust CLI](../../../../../cli/README.md) for the reference implementation.
 
 ## Development
 

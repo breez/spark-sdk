@@ -11,6 +11,11 @@ struct CliOptions {
     var postgresConnectionString: String?
     var stableBalanceTokenIdentifier: String?
     var stableBalanceThreshold: UInt64?
+    var passkey: String?
+    var walletName: String?
+    var listWalletNames: Bool = false
+    var storeWalletName: Bool = false
+    var rpid: String?
 }
 
 func parseCliFlags() -> CliOptions {
@@ -37,6 +42,19 @@ func parseCliFlags() -> CliOptions {
         case "--stable-balance-threshold":
             i += 1
             if i < args.count { opts.stableBalanceThreshold = UInt64(args[i]) }
+        case "--passkey":
+            i += 1
+            if i < args.count { opts.passkey = args[i] }
+        case "--wallet-name":
+            i += 1
+            if i < args.count { opts.walletName = args[i] }
+        case "--list-wallet-names":
+            opts.listWalletNames = true
+        case "--store-wallet-name":
+            opts.storeWalletName = true
+        case "--rpid":
+            i += 1
+            if i < args.count { opts.rpid = args[i] }
         default:
             break
         }
@@ -174,15 +192,18 @@ default:
 // Init logging
 try initLogging(logDir: resolvedDir, appLogger: nil, logFilter: nil)
 
-// Persistence: mnemonic
+// Persistence
 let persistence = CliPersistence(dataDir: resolvedDir)
-let mnemonic = try persistence.getOrCreateMnemonic()
 
 // Config
 var config = defaultConfig(network: network)
-if let apiKey = ProcessInfo.processInfo.environment["BREEZ_API_KEY"], !apiKey.isEmpty {
-    config.apiKey = apiKey
-}
+let breezApiKey: String? = {
+    if let key = ProcessInfo.processInfo.environment["BREEZ_API_KEY"], !key.isEmpty {
+        return key
+    }
+    return nil
+}()
+config.apiKey = breezApiKey
 if let tokenIdentifier = opts.stableBalanceTokenIdentifier {
     config.stableBalanceConfig = StableBalanceConfig(
         tokenIdentifier: tokenIdentifier,
@@ -192,8 +213,27 @@ if let tokenIdentifier = opts.stableBalanceTokenIdentifier {
     )
 }
 
+// Resolve seed (passkey or mnemonic)
+let seed: Seed
+if let passkeyStr = opts.passkey {
+    guard let providerType = PasskeyProviderType(rawValue: passkeyStr.lowercased()) else {
+        print("Invalid passkey provider '\(passkeyStr)'. Use 'file', 'yubikey', or 'fido2'.")
+        exit(1)
+    }
+    let prfProvider = try createPrfProvider(type: providerType, dataDir: resolvedDir)
+    seed = try await resolvePasskeySeed(
+        provider: prfProvider,
+        breezApiKey: breezApiKey,
+        walletName: opts.walletName,
+        listWalletNames: opts.listWalletNames,
+        storeWalletName: opts.storeWalletName
+    )
+} else {
+    let mnemonic = try persistence.getOrCreateMnemonic()
+    seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+}
+
 // Build SDK
-let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 let builder = SdkBuilder(config: config, seed: seed)
 if let connectionString = opts.postgresConnectionString {
     await builder.withPostgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
