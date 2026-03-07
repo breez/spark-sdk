@@ -9,6 +9,7 @@ lang_name = "Dart"
 lang_id   = "dart"
 target_dir = "crates/breez-sdk/bindings/examples/cli/langs/dart/"
 snippet_dir = "docs/breez-sdk/snippets/flutter/lib/"
+package_registry = "pub.dev (https://pub.dev)"
 
 # File layout
 serialization_file = "serialization.dart"
