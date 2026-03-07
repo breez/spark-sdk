@@ -383,6 +383,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     // Test 3: Transfer token payment with invoice
+    // Use u128::MAX to verify large values survive JSON round-trip without truncation
     let token_metadata = TokenMetadata {
         identifier: "token123".to_string(),
         issuer_public_key: "02abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
@@ -390,7 +391,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         name: "Test Token".to_string(),
         ticker: "TTK".to_string(),
         decimals: 8,
-        max_supply: 21_000_000,
+        max_supply: u128::MAX,
         is_freezable: false,
     };
     let token_transfer_payment = Payment {
@@ -633,13 +634,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     // Test 13: Successful conversion payment
+    // Use a fee > u64::MAX to verify large u128 round-trip through JSON storage
     let successful_sent_conversion_payment_metadata = PaymentMetadata {
         parent_payment_id: Some("after_conversion_pmt124".to_string()),
         conversion_info: Some(crate::ConversionInfo {
             pool_id: "pool_abc".to_string(),
             conversion_id: "conversion_sent_pmt123".to_string(),
             status: crate::ConversionStatus::Completed,
-            fee: Some(21),
+            fee: Some(u128::from(u64::MAX) + 1),
             purpose: None,
         }),
         ..Default::default()

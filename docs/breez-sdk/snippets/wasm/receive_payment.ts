@@ -54,7 +54,7 @@ const exampleReceiveSparkAddress = async (sdk: BreezSdk) => {
 const exampleReceiveSparkInvoice = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-spark-invoice
   const optionalDescription = '<invoice description>'
-  const optionalAmountSats = '5000'
+  const optionalAmountSats = BigInt(5_000)
   // Optionally set the expiry UNIX timestamp in seconds
   const optionalExpiryTimeSeconds = 1716691200
   const optionalSenderPublicKey = '<sender public key>'

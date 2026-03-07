@@ -174,3 +174,105 @@ export async function createOldV10Database(dbName) {
     tx.onerror = () => { db.close(); reject(new Error(`Failed to create old v10 database: ${tx.error?.message}`)); };
   });
 }
+
+/**
+ * Creates an old v13 format IndexedDB database for BigInt tagging migration testing.
+ * This simulates the database state before the v13→v14 migration.
+ * The v14 migration tags u128 string values with "$BI:" prefix.
+ */
+export async function createOldV13Database(dbName) {
+  // Run real migrations 0-12 to build schema at version 13
+  const db = await openDatabaseAtVersion(dbName, 13);
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["payments", "payment_metadata"], "readwrite");
+    const paymentStore = tx.objectStore("payments");
+    const metadataStore = tx.objectStore("payment_metadata");
+
+    // Insert a token payment with old-format (untagged) u128 values in details JSON
+    // Uses a value > u64::MAX to verify large u128 migration
+    paymentStore.put({
+      id: "bigint-token-payment",
+      paymentType: "send",
+      status: "completed",
+      amount: BigInt(5000),
+      fees: BigInt(10),
+      timestamp: 1700000001,
+      details: JSON.stringify({
+        type: "token",
+        metadata: {
+          identifier: "test-token-id",
+          issuerPublicKey: "02" + "a".repeat(64),
+          name: "Test Token",
+          ticker: "TST",
+          decimals: 8,
+          maxSupply: "340282366920938463463374607431768211455",
+          isFreezable: false,
+        },
+        txHash: "0xabcdef1234567890",
+        txType: "transfer",
+      }),
+      method: JSON.stringify("token"),
+    });
+
+    // Insert a second token payment with small maxSupply (< u64::MAX)
+    paymentStore.put({
+      id: "bigint-token-payment-small",
+      paymentType: "send",
+      status: "completed",
+      amount: BigInt(1000),
+      fees: BigInt(5),
+      timestamp: 1700000002,
+      details: JSON.stringify({
+        type: "token",
+        metadata: {
+          identifier: "test-token-id-small",
+          issuerPublicKey: "02" + "b".repeat(64),
+          name: "Small Token",
+          ticker: "SML",
+          decimals: 6,
+          maxSupply: "1000000",
+          isFreezable: false,
+        },
+        txHash: "0x1234567890abcdef",
+        txType: "transfer",
+      }),
+      method: JSON.stringify("token"),
+    });
+
+    // Insert conversion_info with old-format fee > u64::MAX in payment_metadata
+    metadataStore.put({
+      paymentId: "bigint-token-payment",
+      parentPaymentId: null,
+      lnurlPayInfo: null,
+      lnurlWithdrawInfo: null,
+      lnurlDescription: null,
+      conversionInfo: JSON.stringify({
+        poolId: "pool-1",
+        conversionId: "conv-1",
+        status: "completed",
+        fee: "18446744073709551616",
+        purpose: null,
+      }),
+    });
+
+    // Insert conversion_info with small fee (< u64::MAX)
+    metadataStore.put({
+      paymentId: "bigint-token-payment-small",
+      parentPaymentId: null,
+      lnurlPayInfo: null,
+      lnurlWithdrawInfo: null,
+      lnurlDescription: null,
+      conversionInfo: JSON.stringify({
+        poolId: "pool-2",
+        conversionId: "conv-2",
+        status: "completed",
+        fee: "500",
+        purpose: null,
+      }),
+    });
+
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(new Error(`Failed to create old v13 database: ${tx.error?.message}`)); };
+  });
+}

@@ -109,4 +109,131 @@ async function createTestConnectionString(testName) {
   return `postgres://${PG_USER}:${PG_PASSWORD}@${host}:${port}/${dbName}`;
 }
 
-module.exports = { createTestConnectionString };
+/**
+ * Creates a PostgreSQL database seeded with old-format (untagged) u128 data
+ * at migration version 1, for BigInt tagging migration testing.
+ * Returns the connection string for the test to open storage (triggering migration 2).
+ */
+async function createOldV1Database(testName) {
+  const connString = await createTestConnectionString(testName);
+
+  const pool = new Pool({ connectionString: connString, max: 1 });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Create migrations tracking table and run migration 1 SQL
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    const { PostgresMigrationManager } = require("./postgres-storage/migrations.cjs");
+    const mgr = new PostgresMigrationManager();
+    const migrations = mgr._getMigrations();
+
+    // Run only migration 1 (index 0)
+    for (const sql of migrations[0].sql) {
+      await client.query(sql);
+    }
+    await client.query("INSERT INTO schema_migrations (version) VALUES (1)");
+
+    // Insert token payments with old-format (untagged) u128 values
+
+    // Large values payment (maxSupply = u128::MAX, fee > u64::MAX)
+    await client.query(
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      ["bigint-token-payment", "send", "completed", "5000", "10", 1700000001, JSON.stringify("token")]
+    );
+
+    await client.query(
+      `INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        "bigint-token-payment",
+        JSON.stringify({
+          identifier: "test-token-id",
+          issuerPublicKey: "02" + "a".repeat(64),
+          name: "Test Token",
+          ticker: "TST",
+          decimals: 8,
+          maxSupply: "340282366920938463463374607431768211455",
+          isFreezable: false,
+        }),
+        "0xabcdef1234567890",
+        "transfer",
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO payment_metadata (payment_id, conversion_info)
+       VALUES ($1, $2)`,
+      [
+        "bigint-token-payment",
+        JSON.stringify({
+          poolId: "pool-1",
+          conversionId: "conv-1",
+          status: "completed",
+          fee: "18446744073709551616",
+          purpose: null,
+        }),
+      ]
+    );
+
+    // Small values payment (maxSupply < u64::MAX, fee = 500)
+    await client.query(
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      ["bigint-token-payment-small", "send", "completed", "1000", "5", 1700000002, JSON.stringify("token")]
+    );
+
+    await client.query(
+      `INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        "bigint-token-payment-small",
+        JSON.stringify({
+          identifier: "test-token-id-small",
+          issuerPublicKey: "02" + "b".repeat(64),
+          name: "Small Token",
+          ticker: "SML",
+          decimals: 6,
+          maxSupply: "1000000",
+          isFreezable: false,
+        }),
+        "0x1234567890abcdef",
+        "transfer",
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO payment_metadata (payment_id, conversion_info)
+       VALUES ($1, $2)`,
+      [
+        "bigint-token-payment-small",
+        JSON.stringify({
+          poolId: "pool-2",
+          conversionId: "conv-2",
+          status: "completed",
+          fee: "500",
+          purpose: null,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw new Error(`Failed to create old v1 database: ${error.message}`);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+
+  return connString;
+}
+
+module.exports = { createTestConnectionString, createOldV1Database };

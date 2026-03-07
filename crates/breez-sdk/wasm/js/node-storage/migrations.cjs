@@ -392,6 +392,29 @@ class MigrationManager {
           updated_at INTEGER NOT NULL
         )`
       },
+      {
+        name: "Tag BigInt values with $BI: prefix for u128 fields",
+        sql: [
+          // TokenMetadata.maxSupply in payment_details_token.metadata
+          `UPDATE payment_details_token SET metadata = replace(metadata, '"maxSupply":"', '"maxSupply":"$BI:')
+           WHERE metadata IS NOT NULL AND metadata LIKE '%"maxSupply":"%' AND metadata NOT LIKE '%"maxSupply":"$BI:%'`,
+          // ConversionInfo.fee in payment_metadata.conversion_info
+          `UPDATE payment_metadata SET conversion_info = replace(conversion_info, '"fee":"', '"fee":"$BI:')
+           WHERE conversion_info IS NOT NULL AND conversion_info LIKE '%"fee":"%' AND conversion_info NOT LIKE '%"fee":"$BI:%'`,
+          // SparkInvoiceDetails.amount in payment_details_spark.invoice_details
+          `UPDATE payment_details_spark SET invoice_details = replace(invoice_details, '"amount":"', '"amount":"$BI:')
+           WHERE invoice_details IS NOT NULL AND invoice_details LIKE '%"amount":"%' AND invoice_details NOT LIKE '%"amount":"$BI:%'`,
+          // SparkInvoiceDetails.amount in payment_details_token.invoice_details
+          `UPDATE payment_details_token SET invoice_details = replace(invoice_details, '"amount":"', '"amount":"$BI:')
+           WHERE invoice_details IS NOT NULL AND invoice_details LIKE '%"amount":"%' AND invoice_details NOT LIKE '%"amount":"$BI:%'`,
+          // fee in payments.method (SparkAddress, SparkInvoice, OnchainWithdraw)
+          `UPDATE payments SET method = replace(method, '"fee":"', '"fee":"$BI:')
+           WHERE method IS NOT NULL AND method LIKE '%"fee":"%' AND method NOT LIKE '%"fee":"$BI:%'`,
+          // amount in payments.method (SparkInvoice, LnurlPay receive)
+          `UPDATE payments SET method = replace(method, '"amount":"', '"amount":"$BI:')
+           WHERE method IS NOT NULL AND method LIKE '%"amount":"%' AND method NOT LIKE '%"amount":"$BI:%'`,
+        ],
+      },
     ];
   }
 }

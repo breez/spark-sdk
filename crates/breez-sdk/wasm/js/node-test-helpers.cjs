@@ -183,4 +183,129 @@ function createOldV20Database(dbPath) {
   }
 }
 
-module.exports = { createOldV17Database, createOldV20Database };
+/**
+ * Creates an old v24 format SQLite database for BigInt tagging migration testing.
+ * This simulates the database state before the v24→v25 migration.
+ * The v25 migration (index 24) tags u128 string values with "$BI:" prefix.
+ */
+function createOldV24Database(dbPath) {
+  const db = new Database(dbPath);
+
+  try {
+    // Run real migrations 0-23 to build the schema at version 24
+    const mgr = new MigrationManager(db, Error);
+    mgr.migrate(24);
+
+    // Insert a token payment with old-format (untagged) u128 values
+    const insertPayment = db.prepare(`
+      INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+    `);
+
+    const insertToken = db.prepare(`
+      INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
+      VALUES (?, ?, ?, ?, NULL)
+    `);
+
+    const insertMetadata = db.prepare(`
+      INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
+      VALUES (?, NULL, NULL, NULL, NULL, ?)
+    `);
+
+    // Token metadata with old-format maxSupply > u64::MAX (plain string, no $BI: prefix)
+    const tokenMetadataLarge = JSON.stringify({
+      identifier: "test-token-id",
+      issuerPublicKey: "02" + "a".repeat(64),
+      name: "Test Token",
+      ticker: "TST",
+      decimals: 8,
+      maxSupply: "340282366920938463463374607431768211455",
+      isFreezable: false,
+    });
+
+    // Token metadata with small maxSupply < u64::MAX
+    const tokenMetadataSmall = JSON.stringify({
+      identifier: "test-token-id-small",
+      issuerPublicKey: "02" + "b".repeat(64),
+      name: "Small Token",
+      ticker: "SML",
+      decimals: 6,
+      maxSupply: "1000000",
+      isFreezable: false,
+    });
+
+    // ConversionInfo with fee > u64::MAX (plain string, no $BI: prefix)
+    const conversionInfoLarge = JSON.stringify({
+      poolId: "pool-1",
+      conversionId: "conv-1",
+      status: "completed",
+      fee: "18446744073709551616",
+      purpose: null,
+    });
+
+    // ConversionInfo with small fee < u64::MAX
+    const conversionInfoSmall = JSON.stringify({
+      poolId: "pool-2",
+      conversionId: "conv-2",
+      status: "completed",
+      fee: "500",
+      purpose: null,
+    });
+
+    // Large values payment
+    insertPayment.run(
+      "bigint-token-payment",
+      "send",
+      "completed",
+      "5000",
+      "10",
+      1700000001,
+      JSON.stringify("token")
+    );
+
+    insertToken.run(
+      "bigint-token-payment",
+      tokenMetadataLarge,
+      "0xabcdef1234567890",
+      "transfer"
+    );
+
+    insertMetadata.run(
+      "bigint-token-payment",
+      conversionInfoLarge
+    );
+
+    // Small values payment
+    insertPayment.run(
+      "bigint-token-payment-small",
+      "send",
+      "completed",
+      "1000",
+      "5",
+      1700000002,
+      JSON.stringify("token")
+    );
+
+    insertToken.run(
+      "bigint-token-payment-small",
+      tokenMetadataSmall,
+      "0x1234567890abcdef",
+      "transfer"
+    );
+
+    insertMetadata.run(
+      "bigint-token-payment-small",
+      conversionInfoSmall
+    );
+
+    db.close();
+    return Promise.resolve();
+  } catch (error) {
+    db.close();
+    return Promise.reject(
+      new Error(`Failed to create old v24 database: ${error.message}`)
+    );
+  }
+}
+
+module.exports = { createOldV17Database, createOldV20Database, createOldV24Database };

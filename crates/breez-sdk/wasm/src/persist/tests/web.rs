@@ -26,6 +26,9 @@ extern "C" {
 
     #[wasm_bindgen(js_name = "createOldV10Database", catch)]
     async fn create_old_v10_database(db_name: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_name = "createOldV13Database", catch)]
+    async fn create_old_v13_database(db_name: &str) -> Result<JsValue, JsValue>;
 }
 
 // Helper to create a WasmStorage instance for testing using node-storage
@@ -551,4 +554,178 @@ async fn test_migration_from_v10_to_v11() {
     .expect("Failed to list returned payments");
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].id, "ln-failed");
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_from_v13_to_v14() {
+    let db_name = "migration_v13_to_v14_test";
+
+    // Step 1: Create old v13 database with untagged u128 string values
+    create_old_v13_database(db_name)
+        .await
+        .expect("Failed to create old v13 format database");
+
+    // Step 2: Open with new code (triggers migration to v14 - BigInt tagging)
+    let storage = create_test_storage(db_name).await;
+
+    // Step 3: Verify large values (> u64::MAX) survived migration
+    let payment =
+        breez_sdk_spark::Storage::get_payment_by_id(&storage, "bigint-token-payment".to_string())
+            .await
+            .expect("Failed to get migrated payment");
+
+    match &payment.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply,
+                u128::MAX,
+                "maxSupply > u64::MAX should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "TST");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(u128::from(u64::MAX) + 1),
+                "conversion fee > u64::MAX should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment"),
+    }
+
+    // Step 4: Verify small values (< u64::MAX) also survived migration
+    let payment_small = breez_sdk_spark::Storage::get_payment_by_id(
+        &storage,
+        "bigint-token-payment-small".to_string(),
+    )
+    .await
+    .expect("Failed to get migrated small payment");
+
+    match &payment_small.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply, 1_000_000u128,
+                "small maxSupply should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "SML");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(500u128),
+                "small conversion fee should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment-small"),
+    }
+}
+
+/// Diagnostic test: verify u128::MAX round-trips through serde-wasm-bindgen
+/// without going through JS storage. This isolates serde-wasm-bindgen from
+/// the JS storage layer.
+#[wasm_bindgen_test]
+async fn test_u128_serde_wasm_bindgen_roundtrip() {
+    use serde::{Deserialize, Serialize};
+
+    // Test 1: Plain struct (no internal tagging)
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct PlainStruct {
+        value: u128,
+    }
+
+    let original = PlainStruct { value: u128::MAX };
+    let js = serde_wasm_bindgen::to_value(&original).expect("serialize plain struct");
+    let restored: PlainStruct =
+        serde_wasm_bindgen::from_value(js).expect("deserialize plain struct");
+    assert_eq!(
+        restored.value,
+        u128::MAX,
+        "Plain struct u128::MAX round-trip failed"
+    );
+
+    // Test 2: Internally tagged enum (the problematic case)
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[serde(tag = "type")]
+    enum Tagged {
+        Variant { big_value: u128 },
+    }
+
+    let original = Tagged::Variant {
+        big_value: u128::MAX,
+    };
+    let js = serde_wasm_bindgen::to_value(&original).expect("serialize tagged enum");
+
+    // Check the serialized value: is big_value a BigInt on the JS side?
+    let big_value_js = js_sys::Reflect::get(&js, &"big_value".into())
+        .expect("get big_value from serialized tagged enum");
+    assert!(
+        big_value_js.is_bigint(),
+        "Serialized big_value should be a BigInt, but typeof is: {:?}",
+        big_value_js.js_typeof()
+    );
+
+    // Check the BigInt value hasn't been truncated during serialization
+    let big_value_str = big_value_js.as_string();
+    let big_value_via_u128 = u128::try_from(big_value_js.clone());
+    assert!(
+        big_value_via_u128.is_ok(),
+        "BigInt should be convertible to u128"
+    );
+    assert_eq!(
+        big_value_via_u128.unwrap(),
+        u128::MAX,
+        "Serialized BigInt value should be u128::MAX, string repr: {:?}",
+        big_value_str
+    );
+
+    let restored: Tagged = serde_wasm_bindgen::from_value(js).expect("deserialize tagged enum");
+    assert_eq!(
+        restored,
+        Tagged::Variant {
+            big_value: u128::MAX
+        },
+        "Tagged enum u128::MAX round-trip failed"
+    );
+
+    // Test 3: Nested struct inside tagged enum (mimics TokenMetadata inside PaymentDetails)
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct Inner {
+        max_supply: u128,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[serde(tag = "type")]
+    enum Outer {
+        Token { metadata: Inner },
+    }
+
+    let original = Outer::Token {
+        metadata: Inner {
+            max_supply: u128::MAX,
+        },
+    };
+    let js = serde_wasm_bindgen::to_value(&original).expect("serialize nested tagged enum");
+    let restored: Outer =
+        serde_wasm_bindgen::from_value(js).expect("deserialize nested tagged enum");
+    assert_eq!(
+        restored,
+        Outer::Token {
+            metadata: Inner {
+                max_supply: u128::MAX
+            }
+        },
+        "Nested tagged enum u128::MAX round-trip failed"
+    );
 }

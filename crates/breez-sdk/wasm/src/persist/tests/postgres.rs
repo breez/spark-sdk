@@ -20,6 +20,9 @@ extern "C" {
 extern "C" {
     #[wasm_bindgen(js_name = "createTestConnectionString", catch)]
     async fn create_test_connection_string(test_name: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(js_name = "createOldV1Database", catch)]
+    async fn create_old_v1_database(test_name: &str) -> Result<JsValue, JsValue>;
 }
 
 /// Helper to create a WasmStorage instance for testing using postgres-storage
@@ -156,4 +159,85 @@ async fn test_contacts_crud() {
 async fn test_sync_storage() {
     let storage = create_test_storage("pg_sync_storage").await;
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_migration_bigint_tagging() {
+    // Step 1: Create DB seeded at migration v1 with untagged u128 string values
+    let conn_string_js = create_old_v1_database("pg_bigint_migration")
+        .await
+        .expect("Failed to create old v1 database");
+    let conn_string = conn_string_js
+        .as_string()
+        .expect("Connection string should be a string");
+
+    // Step 2: Open storage (triggers migration v2 - BigInt tagging)
+    let config = crate::sdk_builder::default_postgres_storage_config(&conn_string);
+    let storage = create_postgres_storage(config, None)
+        .await
+        .expect("Failed to create postgres storage instance");
+    let storage = WasmStorage { storage };
+
+    // Step 3: Verify large values (> u64::MAX) survived migration
+    let payment =
+        breez_sdk_spark::Storage::get_payment_by_id(&storage, "bigint-token-payment".to_string())
+            .await
+            .expect("Failed to get migrated payment");
+
+    match &payment.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply,
+                u128::MAX,
+                "maxSupply > u64::MAX should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "TST");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(u128::from(u64::MAX) + 1),
+                "conversion fee > u64::MAX should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment"),
+    }
+
+    // Step 4: Verify small values (< u64::MAX) also survived migration
+    let payment_small = breez_sdk_spark::Storage::get_payment_by_id(
+        &storage,
+        "bigint-token-payment-small".to_string(),
+    )
+    .await
+    .expect("Failed to get migrated small payment");
+
+    match &payment_small.details {
+        Some(breez_sdk_spark::PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) => {
+            assert_eq!(
+                metadata.max_supply, 1_000_000u128,
+                "small maxSupply should be migrated correctly"
+            );
+            assert_eq!(metadata.ticker, "SML");
+
+            let info = conversion_info
+                .as_ref()
+                .expect("conversion_info should be present");
+            assert_eq!(
+                info.fee,
+                Some(500u128),
+                "small conversion fee should be migrated correctly"
+            );
+        }
+        _ => panic!("Expected Token payment details for bigint-token-payment-small"),
+    }
 }
