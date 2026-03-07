@@ -7,6 +7,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'commands.dart';
 import 'contacts.dart';
 import 'issuer.dart';
+import 'passkey.dart';
 import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
@@ -18,6 +19,7 @@ Future<void> runCli({
   String? postgresConnectionString,
   String? stableBalanceTokenIdentifier,
   BigInt? stableBalanceThreshold,
+  PasskeyConfig? passkeyConfig,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
@@ -27,7 +29,6 @@ Future<void> runCli({
   }
 
   final persistence = CliPersistence(dataDir);
-  final mnemonic = persistence.getOrCreateMnemonic();
 
   final networkEnum = network == 'mainnet' ? Network.mainnet : Network.regtest;
   var config = defaultConfig(network: networkEnum);
@@ -47,7 +48,14 @@ Future<void> runCli({
     );
   }
 
-  final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+  Seed seed;
+  if (passkeyConfig != null) {
+    seed = await resolvePasskeySeed(passkeyConfig, dataDir, apiKey);
+  } else {
+    final mnemonic = persistence.getOrCreateMnemonic();
+    seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
+  }
+
   var builder = SdkBuilder(config: config, seed: seed);
 
   if (postgresConnectionString != null) {
