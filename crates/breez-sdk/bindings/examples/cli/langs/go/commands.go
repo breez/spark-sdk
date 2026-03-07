@@ -643,9 +643,10 @@ func handleLnurlWithdraw(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, a
 		return fmt.Errorf("input is not an LNURL-withdraw")
 	}
 
-	printValue(withdrawData.Field0)
-
-	amountLine, err := readlinePrompt(rl, "Amount to withdraw (sats): ")
+	minWithdrawable := (withdrawData.Field0.MinWithdrawable + 999) / 1000
+	maxWithdrawable := withdrawData.Field0.MaxWithdrawable / 1000
+	prompt := fmt.Sprintf("Amount to withdraw (min %d sat, max %d sat): ", minWithdrawable, maxWithdrawable)
+	amountLine, err := readlinePrompt(rl, prompt)
 	if err != nil {
 		return err
 	}
@@ -673,7 +674,7 @@ func handleLnurlWithdraw(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, a
 
 // --- lnurl-auth ---
 
-func handleLnurlAuth(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+func handleLnurlAuth(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
 	if len(args) < 1 {
 		fmt.Println("Usage: lnurl-auth <lnurl>")
 		return nil
@@ -687,6 +688,19 @@ func handleLnurlAuth(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args [
 	authData, ok := parsed.(breez_sdk_spark.InputTypeLnurlAuth)
 	if !ok {
 		return fmt.Errorf("input is not an LNURL-auth")
+	}
+
+	action := "auth"
+	if authData.Field0.Action != nil {
+		action = *authData.Field0.Action
+	}
+	prompt := fmt.Sprintf("Authenticate with %s (action: %s)? (y/n): ", authData.Field0.Domain, action)
+	line, err := readlineWithDefault(rl, prompt, "y")
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(line)) != "y" {
+		return nil
 	}
 
 	result, err := sdk.LnurlAuth(authData.Field0)
@@ -711,7 +725,7 @@ func handleClaimHtlcPayment(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance,
 	if err = liftError(err); err != nil {
 		return err
 	}
-	printValue(result)
+	printValue(result.Payment)
 	return nil
 }
 
@@ -866,7 +880,8 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 	if err = liftError(err); err != nil {
 		return err
 	}
-	printValue(result)
+	fmt.Println("Open this URL in a browser to complete the purchase:")
+	fmt.Println(result.Url)
 	return nil
 }
 
