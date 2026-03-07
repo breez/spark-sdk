@@ -1,0 +1,930 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Connecting with a Passkey - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/passkey.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="connecting-with-a-passkey"><a class="header" href="#connecting-with-a-passkey">Connecting with a Passkey</a></h1>
+<p>Using passkeys eliminates the need to backup mnemonic phrases. Seeds are instead derived deterministically from a passkey, using a default or user-chosen wallet name. Wallet names can be discovered and stored on Nostr relays using a passkey derived Nostr key.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>The passkey flow uses the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">WebAuthn PRF extension</a> (Pseudo-Random Function), which allows a passkey to deterministically derive secret bytes from a given salt. Two key derivations are used:</p>
+<ol>
+<li><strong>Nostr Identity</strong>: <code>PRF(passkey, magic_salt)</code> derives a Nostr keypair used to publish and discover wallet names</li>
+<li><strong>Wallet Seed</strong>: <code>PRF(passkey, wallet_name)</code> derives a 24-word BIP39 mnemonic</li>
+</ol>
+<p>Wallet names are published as Nostr kind-1 events, allowing users to discover their wallets on any device with access to their passkey.</p>
+<pre><code>┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐     ┌───────────────┐
+│ Application │────▶│ PRF Provider     │────▶│ SDK               │────▶│ Nostr Relays  │
+│             │     │ (platform-       │     │ Passkey           │     │ (wallet name  │
+│             │     │  specific)       │     │                   │     │  discovery)   │
+└─────────────┘     └──────────────────┘     └───────────────────┘     └───────────────┘
+</code></pre>
+<div class="warning">
+<h4 id="developer-note"><a class="header" href="#developer-note">Developer note</a></h4>
+The passkey PRF functionality must be implemented by your application using platform-specific APIs (WebAuthn in browsers, native passkey APIs on mobile). The SDK orchestrates the flow but requires you to provide a PRF provider implementation.
+</div>
+<h2 id="application-configuration"><a class="header" href="#application-configuration">Application configuration</a></h2>
+<h3 id="relying-party-id"><a class="header" href="#relying-party-id">Relying Party ID</a></h3>
+<p>The domain <code>keys.breez.technology</code> serves as a common Relying Party (RP) that enables cross-app passkey sharing. Applications that use this RP ID allow users to access the same passkey credentials across different platforms and apps.</p>
+<p>To enable this cross-domain passkey sharing, <code>keys.breez.technology</code> serves three configuration files that declare which origins and apps are authorized to use it as an RP ID.</p>
+<h4 id="web-related-origins"><a class="header" href="#web-related-origins">Web: Related Origins</a></h4>
+<p><strong>File</strong>: <code>https://keys.breez.technology/.well-known/webauthn</code></p>
+<p>Declares which web origins can use the centralized RP ID for WebAuthn operations:</p>
+<pre><code class="language-json">{
+  "related_origins": [
+    "https://keys.breez.technology",
+    "https://your-app.example.com"
+  ]
+}
+</code></pre>
+<p>To register your web origin, <a href="mailto:contact@breez.technology?subject=Passkey%20configuration">contact us</a> to have it added to this file.</p>
+<h4 id="android-asset-links"><a class="header" href="#android-asset-links">Android: Asset Links</a></h4>
+<p><strong>File</strong>: <code>https://keys.breez.technology/.well-known/assetlinks.json</code></p>
+<p>Establishes digital asset links between the domain and Android applications:</p>
+<pre><code class="language-json">[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.yourapp",
+      "sha256_cert_fingerprints": [
+        "B6:16:AD:FE:C5:C6:D3:4C:93:01:5B:4A:79:20:21:4E:62:43:AB:29:28:EE:34:9A:F2:46:55:4B:54:FC:42:DF"
+      ]
+    }
+  }
+]
+</code></pre>
+<p>Replace <code>com.example.yourapp</code> with your application package name and the fingerprint with your app's signing certificate SHA256 fingerprint. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a> for details.</p>
+<p>To register your Android app, <a href="mailto:contact@breez.technology?subject=Passkey%20configuration">contact us</a> with the details outlined to have it added to this file.</p>
+<h4 id="ios-apple-app-site-association"><a class="header" href="#ios-apple-app-site-association">iOS: Apple App Site Association</a></h4>
+<p><strong>File</strong>: <code>https://keys.breez.technology/.well-known/apple-app-site-association</code></p>
+<p>Connects the domain to iOS applications for passkey sharing:</p>
+<pre><code class="language-json">{
+  "webcredentials": {
+    "apps": [
+      "TEAMID.com.example.yourapp"
+    ]
+  }
+}
+</code></pre>
+<p>Replace <code>TEAMID</code> with your Apple Developer Team ID and <code>com.example.yourapp</code> with your application bundle identifier.</p>
+<p>Your app must have the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability enabled. In Xcode, go to <strong>Signing &amp; Capabilities</strong> → add <strong>Associated Domains</strong> → add the entry <code>webcredentials:keys.breez.technology</code>.</p>
+<div class="warning">
+<h4 id="expo-managed-workflow"><a class="header" href="#expo-managed-workflow">Expo Managed Workflow</a></h4>
+If you're using Expo, the Breez SDK plugin can configure this automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
+</div>
+<p>To register your iOS app, <a href="mailto:contact@breez.technology?subject=Passkey%20configuration">contact us</a> with the details outlined to have it added to this file.</p>
+<h3 id="nostr-relay-configuration"><a class="header" href="#nostr-relay-configuration">Nostr relay configuration</a></h3>
+<p>The SDK uses Nostr relays to store and discover wallet names. A Breez API key is required for authenticated access to the Breez-managed relay via <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>. The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.</p>
+<h2 id="implementing-the-prf-provider"><a class="header" href="#implementing-the-prf-provider">Implementing the PRF provider</a></h2>
+<p>Your application must implement the PRF provider to interface with platform passkey APIs.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">/// In practice, implement using platform-specific passkey APIs.
+struct ExamplePasskeyPrfProvider;
+
+#[async_trait::async_trait]
+impl PasskeyPrfProvider for ExamplePasskeyPrfProvider {
+    async fn derive_prf_seed(&amp;self, _salt: String) -&gt; Result&lt;Vec&lt;u8&gt;, PasskeyPrfError&gt; {
+        // Call platform passkey API with PRF extension
+        // Returns 32-byte PRF output
+        todo!("Implement using WebAuthn or native passkey APIs")
+    }
+
+    async fn is_prf_available(&amp;self) -&gt; Result&lt;bool, PasskeyPrfError&gt; {
+        // Check if PRF-capable passkey exists
+        todo!("Check platform passkey availability")
+    }
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">// In practice, implement using platform-specific passkey APIs.
+class ExamplePasskeyPrfProvider: PasskeyPrfProvider {
+    func derivePrfSeed(salt: String) async throws -&gt; Data {
+        // Call platform passkey API with PRF extension
+        // Returns 32-byte PRF output
+        fatalError("Implement using WebAuthn or native passkey APIs")
+    }
+
+    func isPrfAvailable() async throws -&gt; Bool {
+        // Check if PRF-capable passkey exists
+        fatalError("Check platform passkey availability")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">// In practice, implement PRF provider using platform passkey APIs
+class ExamplePasskeyPrfProvider : PasskeyPrfProvider {
+    override suspend fun derivePrfSeed(salt: String): ByteArray {
+        // Call platform passkey API with PRF extension
+        // Returns 32-byte PRF output
+        TODO("Implement using WebAuthn or native passkey APIs")
+    }
+
+    override suspend fun isPrfAvailable(): Boolean {
+        // Check if PRF-capable passkey exists
+        TODO("Check platform passkey availability")
+    }
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">// In practice, implement using platform-specific passkey APIs.
+class ExamplePasskeyPrfProvider : PasskeyPrfProvider
+{
+    public async Task&lt;byte[]&gt; DerivePrfSeed(string salt)
+    {
+        // Call platform passkey API with PRF extension
+        // Returns 32-byte PRF output
+        throw new NotImplementedException("Implement using WebAuthn or native passkey APIs");
+    }
+
+    public async Task&lt;bool&gt; IsPrfAvailable()
+    {
+        // Check if PRF-capable passkey exists
+        throw new NotImplementedException("Check platform passkey availability");
+    }
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">// In practice, implement PRF provider using WebAuthn API
+class ExamplePasskeyPrfProvider {
+  derivePrfSeed = async (salt: string): Promise&lt;Uint8Array&gt; =&gt; {
+    // Call platform passkey API with PRF extension
+    // Returns 32-byte PRF output
+    throw new Error('Implement using WebAuthn or native passkey APIs')
+  }
+
+  isPrfAvailable = async (): Promise&lt;boolean&gt; =&gt; {
+    // Check if PRF-capable passkey exists
+    throw new Error('Check platform passkey availability')
+  }
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">// In practice, implement PRF provider using platform passkey APIs
+class ExamplePasskeyPrfProvider {
+  derivePrfSeed = async (salt: string): Promise&lt;ArrayBuffer&gt; =&gt; {
+    // Call platform passkey API with PRF extension
+    // Returns 32-byte PRF output
+    throw new Error('Implement using WebAuthn or native passkey APIs')
+  }
+
+  isPrfAvailable = async (): Promise&lt;boolean&gt; =&gt; {
+    // Check if PRF-capable passkey exists
+    throw new Error('Check platform passkey availability')
+  }
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">// Implement these functions using platform passkey APIs.
+Future&lt;Uint8List&gt; derivePrfSeed(String salt) async {
+  // Call platform passkey API with PRF extension
+  // Returns 32-byte PRF output
+  throw UnimplementedError('Implement using platform passkey APIs');
+}
+
+Future&lt;bool&gt; isPrfAvailable() async {
+  // Check if PRF-capable passkey exists
+  throw UnimplementedError('Check platform passkey availability');
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore"># In practice, implement using platform-specific passkey APIs.
+class ExamplePasskeyPrfProvider(PasskeyPrfProvider):
+    async def derive_prf_seed(self, salt: str):
+        # Call platform passkey API with PRF extension
+        # Returns 32-byte PRF output
+        raise NotImplementedError("Implement using WebAuthn or native passkey APIs")
+
+    async def is_prf_available(self):
+        # Check if PRF-capable passkey exists
+        raise NotImplementedError("Check platform passkey availability")
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">// In practice, implement using platform-specific passkey APIs.
+type ExamplePasskeyPrfProvider struct{}
+
+func (p *ExamplePasskeyPrfProvider) DerivePrfSeed(salt string) ([]byte, error) {
+	// Call platform passkey API with PRF extension
+	// Returns 32-byte PRF output
+	panic("Implement using WebAuthn or native passkey APIs")
+}
+
+func (p *ExamplePasskeyPrfProvider) IsPrfAvailable() (bool, error) {
+	// Check if PRF-capable passkey exists
+	panic("Check platform passkey availability")
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h3 id="platform-considerations"><a class="header" href="#platform-considerations">Platform considerations</a></h3>
+<ul>
+<li>
+<p><strong>Web (browsers)</strong>: Use the WebAuthn API with the <code>prf</code> extension. Browsers handle the salt transformation internally. Use discoverable credentials (<code>residentKey: 'required'</code>) with empty <code>allowCredentials</code> for assertion so the browser discovers the credential by RP ID.</p>
+</li>
+<li>
+<p><strong>Android / iOS</strong>: Use native passkey APIs with PRF support. Ensure the Associated Domains / Asset Links configuration is in place for <code>keys.breez.technology</code>.</p>
+</li>
+<li>
+<p><strong>CLI / Desktop (CTAP2)</strong>: Use the <code>hmac-secret</code> extension directly. Non-browser implementations must apply the WebAuthn salt transformation manually to produce the same PRF output as browsers:</p>
+<pre><code>actualSalt = SHA-256("WebAuthn PRF" || 0x00 || developerSalt)
+</code></pre>
+<p>This transformation is defined in the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">W3C WebAuthn PRF extension spec</a> and ensures that the same passkey + salt produces identical seeds across browser and native implementations.</p>
+</li>
+</ul>
+<h2 id="connecting-with-passkey">
+    <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.get_wallet">API docs</a>
+</h2>
+<p>To connect with a passkey, call <code class="lang-fn"><span class="fn-rust">Passkey.get_wallet</span><span class="fn-python">Passkey.get_wallet</span><span class="fn-swift">Passkey.getWallet</span><span class="fn-kotlin">Passkey.getWallet</span><span class="fn-javascript">Passkey.getWallet</span><span class="fn-react-native">Passkey.getWallet</span><span class="fn-flutter">Passkey.getWallet</span><span class="fn-go">Passkey.GetWallet</span><span class="fn-csharp">Passkey.GetWallet</span></code> to derive a wallet, then pass its seed to <code class="lang-fn"><span class="fn-rust">connect</span><span class="fn-python">connect</span><span class="fn-swift">connect</span><span class="fn-kotlin">connect</span><span class="fn-javascript">connect</span><span class="fn-react-native">connect</span><span class="fn-flutter">connect</span><span class="fn-go">Connect</span><span class="fn-csharp">Connect</span></code>. The wallet name defaults to <code>"Default"</code> when omitted.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+let passkey = Passkey::new(prf_provider, None);
+
+// Derive the wallet from the passkey (pass None for the default wallet)
+let wallet = passkey.get_wallet(Some("personal".to_string())).await?;
+
+let config = default_config(Network::Mainnet);
+let sdk = connect(ConnectRequest {
+    config,
+    seed: wallet.seed,
+    storage_dir: "./.data".to_string(),
+})
+.await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let prfProvider = ExamplePasskeyPrfProvider()
+let passkey = Passkey(prfProvider: prfProvider, relayConfig: nil)
+
+// Derive the wallet from the passkey (pass nil for the default wallet)
+let wallet = try await passkey.getWallet(walletName: "personal")
+
+let config = defaultConfig(network: .mainnet)
+let sdk = try await connect(
+    request: ConnectRequest(
+        config: config,
+        seed: wallet.seed,
+        storageDir: "./.data"
+    ))
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val prfProvider = ExamplePasskeyPrfProvider()
+val passkey = Passkey(prfProvider, null)
+
+// Derive the wallet from the passkey (pass null for the default wallet)
+val wallet = passkey.getWallet("personal")
+
+val config = defaultConfig(Network.MAINNET)
+val sdk = connect(ConnectRequest(config, wallet.seed, "./.data"))
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var prfProvider = new ExamplePasskeyPrfProvider();
+var passkey = new Passkey(prfProvider, null);
+
+// Derive the wallet from the passkey (pass null for the default wallet)
+var wallet = await passkey.GetWallet(walletName: "personal");
+
+var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
+var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(
+    config: config,
+    seed: wallet.seed,
+    storageDir: "./.data"
+));
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const passkey = new Passkey(prfProvider, undefined)
+
+// Construct the wallet using the passkey (pass undefined for the default wallet)
+const wallet = await passkey.getWallet('personal')
+
+const config = defaultConfig('mainnet')
+const sdk = await connect({ config, seed: wallet.seed, storageDir: './.data' })
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const passkey = new Passkey(prfProvider, undefined)
+
+// Construct the wallet using the passkey (pass undefined for the default wallet)
+const wallet = await passkey.getWallet('personal')
+
+const config = defaultConfig(Network.Mainnet)
+const sdk = await connect({ config, seed: wallet.seed, storageDir: './.data' })
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final passkey = Passkey(
+  derivePrfSeed: derivePrfSeed,
+  isPrfAvailable: isPrfAvailable,
+);
+
+// Derive the wallet from the passkey (pass null for the default wallet)
+final wallet = await passkey.getWallet(walletName: "personal");
+
+final config = defaultConfig(network: Network.mainnet);
+final sdk = await connect(
+    request: ConnectRequest(
+        config: config, seed: wallet.seed, storageDir: "./.data"));
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">prf_provider = ExamplePasskeyPrfProvider()
+passkey = Passkey(prf_provider, None)
+
+# Derive the wallet from the passkey (pass None for the default wallet)
+wallet = await passkey.get_wallet("personal")
+
+config = default_config(network=Network.MAINNET)
+sdk = await connect(ConnectRequest(config=config, seed=wallet.seed, storage_dir="./.data"))
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">prfProvider := &amp;ExamplePasskeyPrfProvider{}
+passkey := breez_sdk_spark.NewPasskey(prfProvider, nil)
+
+// Derive the wallet from the passkey (pass nil for the default wallet)
+walletName := "personal"
+wallet, err := passkey.GetWallet(&amp;walletName)
+if err != nil {
+	return nil, err
+}
+
+config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+sdk, err := breez_sdk_spark.Connect(breez_sdk_spark.ConnectRequest{
+	Config:     config,
+	Seed:       wallet.Seed,
+	StorageDir: "./.data",
+})
+if err != nil {
+	return nil, err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="listing-wallet-names">
+    <a class="header" href="#listing-wallet-names">Listing wallet names</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.list_wallet_names">API docs</a>
+</h2>
+<p>Discover wallet names associated to the passkey using Nostr.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+let relay_config = NostrRelayConfig {
+    breez_api_key: Some("&lt;breez api key&gt;".to_string()),
+    ..NostrRelayConfig::default()
+};
+let passkey = Passkey::new(prf_provider, Some(relay_config));
+
+// Query Nostr for wallet names associated with this passkey
+let wallet_names = passkey.list_wallet_names().await?;
+
+for wallet_name in &amp;wallet_names {
+    println!("Found wallet: {}", wallet_name);
+}</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let prfProvider = ExamplePasskeyPrfProvider()
+let relayConfig = NostrRelayConfig(breezApiKey: "&lt;breez api key&gt;")
+let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
+
+// Query Nostr for wallet names associated with this passkey
+let walletNames = try await passkey.listWalletNames()
+
+for walletName in walletNames {
+    print("Found wallet: \(walletName)")
+}
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val prfProvider = ExamplePasskeyPrfProvider()
+val relayConfig = NostrRelayConfig(breezApiKey = "&lt;breez api key&gt;")
+val passkey = Passkey(prfProvider, relayConfig)
+
+// Query Nostr for wallet names associated with this passkey
+val walletNames = passkey.listWalletNames()
+
+for (walletName in walletNames) {
+    // Log.v("Breez", "Found wallet: $walletName")
+}
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var prfProvider = new ExamplePasskeyPrfProvider();
+var relayConfig = new NostrRelayConfig(
+    breezApiKey: "&lt;breez api key&gt;"
+);
+var passkey = new Passkey(prfProvider, relayConfig);
+
+// Query Nostr for wallet names associated with this passkey
+var walletNames = await passkey.ListWalletNames();
+
+foreach (var walletName in walletNames)
+{
+    Console.WriteLine($"Found wallet: {walletName}");
+}
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const relayConfig: NostrRelayConfig = {
+  breezApiKey: '&lt;breez api key&gt;'
+}
+const passkey = new Passkey(prfProvider, relayConfig)
+
+// Query Nostr for wallet names associated with this passkey
+const walletNames = await passkey.listWalletNames()
+
+for (const walletName of walletNames) {
+  console.log(`Found wallet: ${walletName}`)
+}
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const relayConfig: NostrRelayConfig = {
+  breezApiKey: '&lt;breez api key&gt;',
+  timeoutSecs: undefined
+}
+const passkey = new Passkey(prfProvider, relayConfig)
+
+// Query Nostr for wallet names associated with this passkey
+const walletNames = await passkey.listWalletNames()
+
+for (const walletName of walletNames) {
+  console.log(`Found wallet: ${walletName}`)
+}
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final relayConfig = NostrRelayConfig(
+  breezApiKey: '&lt;breez api key&gt;',
+);
+final passkey = Passkey(
+  derivePrfSeed: derivePrfSeed,
+  isPrfAvailable: isPrfAvailable,
+  relayConfig: relayConfig,
+);
+
+// Query Nostr for wallet names associated with this passkey
+final walletNames = await passkey.listWalletNames();
+
+for (final walletName in walletNames) {
+  print("Found wallet: $walletName");
+}
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">prf_provider = ExamplePasskeyPrfProvider()
+relay_config = NostrRelayConfig(breez_api_key="&lt;breez api key&gt;")
+passkey = Passkey(prf_provider, relay_config)
+
+# Query Nostr for wallet names associated with this passkey
+wallet_names = await passkey.list_wallet_names()
+
+for wallet_name in wallet_names:
+    print(f"Found wallet: {wallet_name}")
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">prfProvider := &amp;ExamplePasskeyPrfProvider{}
+breezApiKey := "&lt;breez api key&gt;"
+relayConfig := &amp;breez_sdk_spark.NostrRelayConfig{
+	BreezApiKey: &amp;breezApiKey,
+}
+passkey := breez_sdk_spark.NewPasskey(prfProvider, relayConfig)
+
+// Query Nostr for wallet names associated with this passkey
+walletNames, err := passkey.ListWalletNames()
+if err != nil {
+	return nil, err
+}
+
+for _, walletName := range walletNames {
+	log.Printf("Found wallet: %s", walletName)
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="storing-a-wallet-name">
+    <a class="header" href="#storing-a-wallet-name">Storing a wallet name</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.store_wallet_name">API docs</a>
+</h2>
+<p>Publish a wallet name to Nostr so it can be discovered later.</p>
+<custom-tabs category="lang">
+<div slot="title">Rust</div>
+<section>
+<pre><code class="language-rust ignore">let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+let relay_config = NostrRelayConfig {
+    breez_api_key: Some("&lt;breez api key&gt;".to_string()),
+    ..NostrRelayConfig::default()
+};
+let passkey = Passkey::new(prf_provider, Some(relay_config));
+
+// Publish the wallet name to Nostr for later discovery
+passkey.store_wallet_name("personal".to_string()).await?;</code></pre>
+</section>
+<div slot="title">Swift</div>
+<section>
+<pre><code class="language-swift ignore">let prfProvider = ExamplePasskeyPrfProvider()
+let relayConfig = NostrRelayConfig(breezApiKey: "&lt;breez api key&gt;")
+let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
+
+// Publish the wallet name to Nostr for later discovery
+try await passkey.storeWalletName(walletName: "personal")
+</code></pre>
+</section>
+<div slot="title">Kotlin</div>
+<section>
+<pre><code class="language-kotlin ignore">val prfProvider = ExamplePasskeyPrfProvider()
+val relayConfig = NostrRelayConfig(breezApiKey = "&lt;breez api key&gt;")
+val passkey = Passkey(prfProvider, relayConfig)
+
+// Publish the wallet name to Nostr for later discovery
+passkey.storeWalletName("personal")
+</code></pre>
+</section>
+<div slot="title">C#</div>
+<section>
+<pre><code class="language-csharp ignore">var prfProvider = new ExamplePasskeyPrfProvider();
+var relayConfig = new NostrRelayConfig(
+    breezApiKey: "&lt;breez api key&gt;"
+);
+var passkey = new Passkey(prfProvider, relayConfig);
+
+// Publish the wallet name to Nostr for later discovery
+await passkey.StoreWalletName(walletName: "personal");
+</code></pre>
+</section>
+<div slot="title">Javascript</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const relayConfig: NostrRelayConfig = {
+  breezApiKey: '&lt;breez api key&gt;'
+}
+const passkey = new Passkey(prfProvider, relayConfig)
+
+// Publish the wallet name to Nostr for later discovery
+await passkey.storeWalletName('personal')
+</code></pre>
+</section>
+<div slot="title">React Native</div>
+<section>
+<pre><code class="language-typescript ignore">const prfProvider = new ExamplePasskeyPrfProvider()
+const relayConfig: NostrRelayConfig = {
+  breezApiKey: '&lt;breez api key&gt;',
+  timeoutSecs: undefined
+}
+const passkey = new Passkey(prfProvider, relayConfig)
+
+// Publish the wallet name to Nostr for later discovery
+await passkey.storeWalletName('personal')
+</code></pre>
+</section>
+<div slot="title">Flutter</div>
+<section>
+<pre><code class="language-dart ignore">final relayConfig = NostrRelayConfig(
+  breezApiKey: '&lt;breez api key&gt;',
+);
+final passkey = Passkey(
+  derivePrfSeed: derivePrfSeed,
+  isPrfAvailable: isPrfAvailable,
+  relayConfig: relayConfig,
+);
+
+// Publish the wallet name to Nostr for later discovery
+await passkey.storeWalletName(walletName: "personal");
+</code></pre>
+</section>
+<div slot="title">Python</div>
+<section>
+<pre><code class="language-python ignore">prf_provider = ExamplePasskeyPrfProvider()
+relay_config = NostrRelayConfig(breez_api_key="&lt;breez api key&gt;")
+passkey = Passkey(prf_provider, relay_config)
+
+# Publish the wallet name to Nostr for later discovery
+await passkey.store_wallet_name(wallet_name="personal")
+</code></pre>
+</section>
+<div slot="title">Go</div>
+<section>
+<pre><code class="language-go ignore">prfProvider := &amp;ExamplePasskeyPrfProvider{}
+breezApiKey := "&lt;breez api key&gt;"
+relayConfig := &amp;breez_sdk_spark.NostrRelayConfig{
+	BreezApiKey: &amp;breezApiKey,
+}
+passkey := breez_sdk_spark.NewPasskey(prfProvider, relayConfig)
+
+// Publish the wallet name to Nostr for later discovery
+err := passkey.StoreWalletName("personal")
+if err != nil {
+	return err
+}
+</code></pre>
+</section>
+</custom-tabs>
+<h2 id="best-practices"><a class="header" href="#best-practices">Best practices</a></h2>
+<h3 id="cache-the-user-selected-wallet-name"><a class="header" href="#cache-the-user-selected-wallet-name">Cache the user-selected wallet name</a></h3>
+<p>Store the wallet name locally (e.g., <code>localStorage</code> on web, <code>SharedPreferences</code> on Android, <code>UserDefaults</code> on iOS) if selected by the user. This allows the app to skip the wallet name selection step on subsequent launches and go straight to passkey authentication.</p>
+<h3 id="never-store-the-derived-mnemonic"><a class="header" href="#never-store-the-derived-mnemonic">Never store the derived mnemonic</a></h3>
+<p>The mnemonic should always be re-derived from the passkey and wallet name on each session. The passkey authentication (biometric, PIN, etc.) is the security boundary — storing the mnemonic would bypass it. On app restart, check for a cached wallet name and prompt the user for passkey authentication to derive the seed.</p>
+<h3 id="allow-manual-mnemonic-backup"><a class="header" href="#allow-manual-mnemonic-backup">Allow manual mnemonic backup</a></h3>
+<p>Provide a way for users to reveal their derived 24-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via <code class="lang-fn"><span class="fn-rust">Passkey.get_wallet</span><span class="fn-python">Passkey.get_wallet</span><span class="fn-swift">Passkey.getWallet</span><span class="fn-kotlin">Passkey.getWallet</span><span class="fn-javascript">Passkey.getWallet</span><span class="fn-react-native">Passkey.getWallet</span><span class="fn-flutter">Passkey.getWallet</span><span class="fn-go">Passkey.GetWallet</span><span class="fn-csharp">Passkey.GetWallet</span></code> with the cached wallet name. This gives users a safety net if they lose access to their passkey.</p>
+<h3 id="offer-a-mnemonic-fallback"><a class="header" href="#offer-a-mnemonic-fallback">Offer a mnemonic fallback</a></h3>
+<p>Not all devices support the PRF extension. Check <code class="lang-fn"><span class="fn-rust">Passkey.is_available</span><span class="fn-python">Passkey.is_available</span><span class="fn-swift">Passkey.isAvailable</span><span class="fn-kotlin">Passkey.isAvailable</span><span class="fn-javascript">Passkey.isAvailable</span><span class="fn-react-native">Passkey.isAvailable</span><span class="fn-flutter">Passkey.isAvailable</span><span class="fn-go">Passkey.IsAvailable</span><span class="fn-csharp">Passkey.IsAvailable</span></code> at startup and present the appropriate flow — seedless for capable devices, traditional mnemonic backup/restore for others.</p>
+<h3 id="handle-wallet-name-discovery-failures"><a class="header" href="#handle-wallet-name-discovery-failures">Handle wallet name discovery failures</a></h3>
+<p>When discovering wallet names, <code class="lang-fn"><span class="fn-rust">Passkey.list_wallet_names</span><span class="fn-python">Passkey.list_wallet_names</span><span class="fn-swift">Passkey.listWalletNames</span><span class="fn-kotlin">Passkey.listWalletNames</span><span class="fn-javascript">Passkey.listWalletNames</span><span class="fn-react-native">Passkey.listWalletNames</span><span class="fn-flutter">Passkey.listWalletNames</span><span class="fn-go">Passkey.ListWalletNames</span><span class="fn-csharp">Passkey.ListWalletNames</span></code> may return an empty list if relays are unreachable or the wallet name events have been pruned. Always allow manual wallet name entry as a fallback alongside the Nostr-discovered list.</p>
+<h2 id="security-considerations"><a class="header" href="#security-considerations">Security considerations</a></h2>
+<ul>
+<li><strong>Passkey security</strong>: The wallet's security depends on the passkey. Different passkeys produce different wallets.</li>
+<li><strong>Wallet name visibility</strong>: Wallet names are published publicly on Nostr. Security comes from the passkey secret, not the wallet name.</li>
+<li><strong>PRF availability</strong>: Check <code class="lang-fn"><span class="fn-rust">Passkey.is_available</span><span class="fn-python">Passkey.is_available</span><span class="fn-swift">Passkey.isAvailable</span><span class="fn-kotlin">Passkey.isAvailable</span><span class="fn-javascript">Passkey.isAvailable</span><span class="fn-react-native">Passkey.isAvailable</span><span class="fn-flutter">Passkey.isAvailable</span><span class="fn-go">Passkey.IsAvailable</span><span class="fn-csharp">Passkey.IsAvailable</span></code> to gracefully handle devices without PRF support.</li>
+<li><strong>Discoverable credentials</strong>: Use resident keys so no credential IDs need to be stored by your application. The authenticator discovers the credential by RP ID.</li>
+<li><strong>User verification</strong>: All passkey operations should require user verification (<code>userVerification: 'required'</code>) to ensure biometric or PIN confirmation.</li>
+</ul>
+<h2 id="passkey-migration"><a class="header" href="#passkey-migration">Passkey migration</a></h2>
+<p>Passkey portability across platforms depends on Credential Provider (CXP) protocol support:</p>
+<ul>
+<li><strong>iOS</strong>: Supports CXP for exporting passkeys</li>
+<li><strong>Android</strong>: CXP support expected in future versions</li>
+<li><strong>Third-party password managers</strong>: Varying support for both CXP and PRF extensions. Neither iOS Password Manager nor Android's Google Password Manager currently support RP ID domain modification.</li>
+</ul>
+<p>For users who need to move between ecosystems, the manual mnemonic backup serves as a universal fallback.</p>
+<h2 id="supported-specs"><a class="header" href="#supported-specs">Supported specs</a></h2>
+<ul>
+<li><a href="https://github.com/breez/seedless-restore">Seedless Restore</a> Passkey-based wallet derivation and discovery</li>
+<li><a href="https://github.com/nostr-protocol/nostr">Nostr</a> Relay-based event protocol for wallet name storage</li>
+<li><a href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> Authentication of clients to relays</li>
+<li><a href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> Relay List Metadata</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/initializing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/customizing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/initializing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/customizing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
