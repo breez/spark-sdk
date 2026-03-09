@@ -337,21 +337,47 @@ impl TreeStore for WasmTreeStore {
 // ===== TypeScript interface =====
 
 #[wasm_bindgen(typescript_custom_section)]
-const TREE_STORE_INTERFACE: &str = r#"export interface TreeStore {
-    addLeaves: (leaves: any[]) => Promise<void>;
-    getLeaves: () => Promise<{
-        available: any[];
-        notAvailable: any[];
-        availableMissingFromOperators: any[];
-        reservedForPayment: any[];
-        reservedForSwap: any[];
-    }>;
-    setLeaves: (leaves: any[], missingLeaves: any[], refreshStartedAtMs: number) => Promise<void>;
+const TREE_STORE_INTERFACE: &str = r#"
+/** Serialized tree node. Key fields used by store implementations: id, status, value. */
+interface TreeNode {
+    id: string;
+    tree_id: string;
+    value: number;
+    status: string;
+    [key: string]: unknown;
+}
+
+interface Leaves {
+    available: TreeNode[];
+    notAvailable: TreeNode[];
+    availableMissingFromOperators: TreeNode[];
+    reservedForPayment: TreeNode[];
+    reservedForSwap: TreeNode[];
+}
+
+interface LeavesReservation {
+    id: string;
+    leaves: TreeNode[];
+}
+
+type TargetAmounts =
+    | { type: 'amountAndFee'; amountSats: number; feeSats: number | null }
+    | { type: 'exactDenominations'; denominations: number[] };
+
+type ReserveResult =
+    | { type: 'success'; reservation: LeavesReservation }
+    | { type: 'insufficientFunds' }
+    | { type: 'waitForPending'; needed: number; available: number; pending: number };
+
+export interface TreeStore {
+    addLeaves: (leaves: TreeNode[]) => Promise<void>;
+    getLeaves: () => Promise<Leaves>;
+    setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string) => Promise<void>;
-    finalizeReservation: (id: string, newLeaves: any[] | null) => Promise<void>;
-    tryReserveLeaves: (targetAmounts: any | null, exactOnly: boolean, purpose: string) => Promise<any>;
+    finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
+    tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;
-    updateReservation: (reservationId: string, reservedLeaves: any[], changeLeaves: any[]) => Promise<any>;
+    updateReservation: (reservationId: string, reservedLeaves: TreeNode[], changeLeaves: TreeNode[]) => Promise<LeavesReservation>;
 }"#;
 
 #[wasm_bindgen]

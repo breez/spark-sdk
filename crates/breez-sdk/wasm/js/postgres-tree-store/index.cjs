@@ -691,18 +691,23 @@ class PostgresTreeStore {
 
     if (filtered.length === 0) return;
 
-    for (const leaf of filtered) {
-      await client.query(
-        `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (id) DO UPDATE SET
-           status = EXCLUDED.status,
-           is_missing_from_operators = EXCLUDED.is_missing_from_operators,
-           data = EXCLUDED.data,
-           added_at = NOW()`,
-        [leaf.id, leaf.status, isMissingFromOperators, JSON.stringify(leaf)]
-      );
-    }
+    const ids = filtered.map((l) => l.id);
+    const statuses = filtered.map((l) => l.status);
+    const missingFlags = filtered.map(() => isMissingFromOperators);
+    const dataValues = filtered.map((l) => JSON.stringify(l));
+
+    await client.query(
+      `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at)
+       SELECT id, status, missing, data::jsonb, NOW()
+       FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
+           AS t(id, status, missing, data)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         is_missing_from_operators = EXCLUDED.is_missing_from_operators,
+         data = EXCLUDED.data,
+         added_at = NOW()`,
+      [ids, statuses, missingFlags, dataValues]
+    );
   }
 
   /**
@@ -723,12 +728,10 @@ class PostgresTreeStore {
   async _batchInsertSpentLeaves(client, leafIds) {
     if (leafIds.length === 0) return;
 
-    for (const id of leafIds) {
-      await client.query(
-        "INSERT INTO tree_spent_leaves (leaf_id) VALUES ($1) ON CONFLICT DO NOTHING",
-        [id]
-      );
-    }
+    await client.query(
+      "INSERT INTO tree_spent_leaves (leaf_id) SELECT * FROM UNNEST($1::text[]) ON CONFLICT DO NOTHING",
+      [leafIds]
+    );
   }
 
   /**
