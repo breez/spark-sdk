@@ -1,0 +1,27 @@
+{
+  "name": "breez-sdk-spark-cli-react-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Breez SDK CLI for React Native - a terminal/REPL-like app mirroring the Rust CLI",
+  "main": "index.js",
+  "scripts": {
+    "start": "react-native start",
+    "ios": "react-native run-ios",
+    "android": "react-native run-android",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf node_modules ios/Pods ios/build android/build"
+  },
+  "dependencies": {
+    "@breeztech/breez-sdk-spark-react-native": "*",
+    "react": "19.1.0",
+    "react-native": "0.79.2",
+    "react-native-fs": "^2.20.0",
+    "react-native-get-random-values": "^1.11.0",
+    "@react-native-async-storage/async-storage": "^2.1.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0",
+    "@react-native/typescript-config": "*"
+  }
+}
