@@ -489,7 +489,9 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
         if let Some(files_array) = files.as_array_mut() {
             files_array.push(serde_json::Value::String("storage/".to_string()));
             files_array.push(serde_json::Value::String("postgres-storage/".to_string()));
-            files_array.push(serde_json::Value::String("postgres-tree-store/".to_string()));
+            files_array.push(serde_json::Value::String(
+                "postgres-tree-store/".to_string(),
+            ));
             files_array.push(serde_json::Value::String("index.js".to_string()));
         }
     } else {
