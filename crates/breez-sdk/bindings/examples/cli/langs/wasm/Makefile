@@ -8,7 +8,7 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
 setup: ## Build local WASM bindings and install dependencies
-	cd $(WASM_PKG) && $(MAKE) build-nodejs
+	cd $(WASM_PKG) && $(MAKE) build-node
 	$(NPM) install
 	@echo "Local bindings ready. Run 'make run' to start the CLI."
 

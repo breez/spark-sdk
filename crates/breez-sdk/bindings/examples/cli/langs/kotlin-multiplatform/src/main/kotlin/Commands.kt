@@ -418,7 +418,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
 
     val conversionOptions = when {
         convertFromBitcoin -> ConversionOptions(
-            conversionType = ConversionType.FROM_BITCOIN,
+            conversionType = ConversionType.FromBitcoin,
             maxSlippageBps = maxSlippageBps,
             completionTimeoutSecs = null,
         )
@@ -444,7 +444,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
 
     // Show conversion estimate if applicable
     prepareResponse.conversionEstimate?.let { conversionEstimate ->
-        val units = if (conversionEstimate.options.conversionType == ConversionType.FROM_BITCOIN) "sats" else "token base units"
+        val units = if (conversionEstimate.options.conversionType == ConversionType.FromBitcoin) "sats" else "token base units"
         println("Estimated conversion of ${conversionEstimate.amount} $units with a ${conversionEstimate.fee} $units fee")
         val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
         if (line != "y") {
@@ -872,7 +872,7 @@ suspend fun handleFetchConversionLimits(sdk: BreezSdk, reader: LineReader, args:
 
     val req = if (fromBitcoin) {
         FetchConversionLimitsRequest(
-            conversionType = ConversionType.FROM_BITCOIN,
+            conversionType = ConversionType.FromBitcoin,
             tokenIdentifier = tokenId,
         )
     } else {

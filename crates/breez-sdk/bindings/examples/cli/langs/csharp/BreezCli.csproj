@@ -11,7 +11,7 @@
     <!-- Uses local bindings by default (run `make setup` first).
          To use the published SDK instead, replace with:
          <PackageReference Include="Breez.Sdk.Spark" Version="*-*" /> -->
-    <ProjectReference Include="../../../../../../langs/csharp/src/Breez.Sdk.Spark.csproj" />
+    <ProjectReference Include="../../../../langs/csharp/src/Breez.Sdk.Spark.csproj" />
     <PackageReference Include="NBitcoin" Version="7.*" />
     <PackageReference Include="ReadLine" Version="2.*" />
   </ItemGroup>

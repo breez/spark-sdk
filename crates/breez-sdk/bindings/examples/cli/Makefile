@@ -39,7 +39,7 @@ check-csharp: ## Check C# CLI (build with local bindings)
 
 check-kotlin-multiplatform: ## Check Kotlin CLI (build with local bindings)
 	cd $(KOTLIN_SRC) && $(MAKE) setup
-	cd $(KOTLIN_SRC) && gradle build
+	cd $(KOTLIN_SRC) && ./gradlew build
 
 check-react-native: ## Check React Native CLI (type check only)
 	cd $(RN_SRC) && npm install --ignore-scripts

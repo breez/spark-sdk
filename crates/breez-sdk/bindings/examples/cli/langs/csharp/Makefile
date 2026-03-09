@@ -7,8 +7,10 @@ BINDINGS_DIR := ../../../..
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-setup: ## Build local C# bindings from Rust source
+setup: ## Install .NET SDK (if needed) and build local C# bindings from Rust source
+	@command -v dotnet >/dev/null 2>&1 || { echo "Installing .NET SDK..."; brew install dotnet; }
 	cd $(BINDINGS_DIR) && $(MAKE) bindings-csharp
+	cp $(BINDINGS_DIR)/ffi/csharp/breez_sdk_spark.cs $(BINDINGS_DIR)/langs/csharp/src/
 	@echo "Local bindings ready. Run 'make build' to compile the CLI."
 
 build: ## Build the CLI project

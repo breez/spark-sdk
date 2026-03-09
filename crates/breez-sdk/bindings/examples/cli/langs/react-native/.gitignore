@@ -5,3 +5,5 @@ android/
 .expo/
 .data/
 dist/
+Gemfile
+Gemfile.lock

@@ -13,9 +13,9 @@ repositories {
 }
 
 dependencies {
-    // Uses local bindings by default (run `make setup` first).
-    // mavenLocal() is listed first so the locally published artifact takes precedence.
-    implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:0.+")
+    // Uses local bindings published to mavenLocal by `make setup`.
+    // Version must match libraryVersion in langs/kotlin-multiplatform/gradle.properties.
+    implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:0.1.0")
     implementation("com.ionspin.kotlin:bignum:0.3.10")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
