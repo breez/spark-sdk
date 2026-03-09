@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Breez.Sdk.Spark" Version="*" />
+    <PackageReference Include="Breez.Sdk.Spark" Version="*-*" />
     <PackageReference Include="NBitcoin" Version="7.*" />
     <PackageReference Include="ReadLine" Version="2.*" />
   </ItemGroup>

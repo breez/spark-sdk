@@ -171,7 +171,7 @@ class FilePrfProvider {
    */
   derivePrfSeed = async (salt: string): Promise<ArrayBuffer> => {
     const result = hmacSha256(this.secret, new TextEncoder().encode(salt))
-    return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength)
+    return (result.buffer as ArrayBuffer).slice(result.byteOffset, result.byteOffset + result.byteLength)
   }
 
   /**
