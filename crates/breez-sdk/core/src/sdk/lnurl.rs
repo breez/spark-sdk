@@ -1,4 +1,5 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
+use lnurl_models::PaidInvoice;
 use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, error, info};
 
@@ -564,50 +565,59 @@ impl BreezSdk {
 
             let len = pending.len();
 
-            for payment in pending {
+            // Collect preimages, invoices, and metadata for batch notification
+            let mut batch_items = Vec::new();
+            let mut batch_metadata = Vec::new();
+
+            for payment in &pending {
                 let Some(PaymentDetails::Lightning {
                     htlc_details,
+                    invoice,
                     lnurl_receive_metadata: Some(metadata),
                     ..
-                }) = payment.details
+                }) = &payment.details
                 else {
                     continue;
                 };
 
-                let Some(preimage) = htlc_details.preimage else {
+                let Some(preimage) = &htlc_details.preimage else {
                     continue;
                 };
 
-                // Notify the LNURL server about the paid invoice
-                if let Err(e) = lnurl_server_client.notify_invoice_paid(&preimage).await {
-                    error!(
-                        "Failed to notify invoice paid for payment_hash {}: {}",
-                        htlc_details.payment_hash, e
-                    );
-                    continue;
+                batch_items.push(PaidInvoice {
+                    preimage: preimage.clone(),
+                    invoice: invoice.clone(),
+                });
+                batch_metadata.push((htlc_details.clone(), metadata.clone()));
+            }
+
+            if !batch_items.is_empty() {
+                // Notify the LNURL server about all paid invoices in one request
+                if let Err(e) = lnurl_server_client.notify_invoices_paid(&batch_items).await {
+                    error!("Failed to notify invoices paid: {}", e);
+                    break;
                 }
 
                 debug!(
-                    "Notified LNURL server about paid invoice for payment_hash {}",
-                    htlc_details.payment_hash
+                    "Notified LNURL server about {} paid invoices",
+                    batch_items.len()
                 );
 
-                // Update the LNURL metadata to mark the preimage as sent
-                if let Err(e) = self
-                    .storage
-                    .set_lnurl_metadata(vec![SetLnurlMetadataItem {
+                // Update the LNURL metadata to mark all preimages as sent
+                let metadata_updates: Vec<SetLnurlMetadataItem> = batch_items
+                    .iter()
+                    .zip(&batch_metadata)
+                    .map(|(item, (htlc_details, metadata))| SetLnurlMetadataItem {
                         payment_hash: htlc_details.payment_hash.clone(),
-                        sender_comment: metadata.sender_comment,
-                        nostr_zap_request: metadata.nostr_zap_request,
-                        nostr_zap_receipt: metadata.nostr_zap_receipt,
-                        preimage: Some(preimage),
-                    }])
-                    .await
-                {
-                    error!(
-                        "Failed to update LNURL metadata for payment_hash {}: {}",
-                        htlc_details.payment_hash, e
-                    );
+                        sender_comment: metadata.sender_comment.clone(),
+                        nostr_zap_request: metadata.nostr_zap_request.clone(),
+                        nostr_zap_receipt: metadata.nostr_zap_receipt.clone(),
+                        preimage: Some(item.preimage.clone()),
+                    })
+                    .collect();
+
+                if let Err(e) = self.storage.set_lnurl_metadata(metadata_updates).await {
+                    error!("Failed to update LNURL metadata: {}", e);
                 }
             }
 

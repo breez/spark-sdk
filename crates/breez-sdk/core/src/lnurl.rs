@@ -1,6 +1,6 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, InvoicePaidRequest, ListMetadataResponse,
+    CheckUsernameAvailableResponse, InvoicesPaidRequest, ListMetadataResponse, PaidInvoice,
     PublishZapReceiptRequest as ModelPublishZapReceiptRequest, PublishZapReceiptResponse,
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
@@ -88,9 +88,9 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &PublishZapReceiptRequest,
     ) -> Result<String, LnurlServerError>;
-    /// Notify the server that an invoice has been paid with the given preimage.
+    /// Notify the server that invoices have been paid with the given preimages and invoices.
     /// This is used for LUD-21 and NIP-57 invoice tracking.
-    async fn notify_invoice_paid(&self, preimage: &str) -> Result<(), LnurlServerError>;
+    async fn notify_invoices_paid(&self, items: &[PaidInvoice]) -> Result<(), LnurlServerError>;
 }
 
 /// Default `LnurlServerClient` implementation using `HttpClient` abstraction.
@@ -363,17 +363,21 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         Ok(result.zap_receipt)
     }
 
-    async fn notify_invoice_paid(&self, preimage: &str) -> Result<(), LnurlServerError> {
+    async fn notify_invoices_paid(&self, items: &[PaidInvoice]) -> Result<(), LnurlServerError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(preimage).await?;
+        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
 
-        let url = format!("{}/lnurlpay/{}/invoice-paid", self.base_url(), pubkey);
+        let url = format!("{}/lnurlpay/{}/invoices-paid", self.base_url(), pubkey);
 
-        let payload = InvoicePaidRequest {
+        let payload = InvoicesPaidRequest {
             signature,
             timestamp: Some(timestamp),
-            preimage: preimage.to_string(),
+            invoices: items.to_vec(),
         };
         let body = serde_json::to_string(&payload)
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;

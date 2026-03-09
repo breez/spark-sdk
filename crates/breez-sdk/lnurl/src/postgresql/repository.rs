@@ -286,6 +286,27 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn filter_known_payment_hashes(
+        &self,
+        payment_hashes: &[String],
+    ) -> Result<Vec<String>, LnurlRepositoryError> {
+        if payment_hashes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let known: Vec<String> = sqlx::query_scalar(
+            "SELECT payment_hash FROM invoices WHERE payment_hash = ANY($1)
+             UNION
+             SELECT payment_hash FROM zaps WHERE payment_hash = ANY($1)
+             UNION
+             SELECT payment_hash FROM sender_comments WHERE payment_hash = ANY($1)",
+        )
+        .bind(payment_hashes)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(known)
+    }
+
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at)
@@ -307,6 +328,47 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn upsert_invoices_paid(
+        &self,
+        invoices: &[Invoice],
+    ) -> Result<Vec<String>, LnurlRepositoryError> {
+        if invoices.is_empty() {
+            return Ok(vec![]);
+        }
+        let payment_hashes: Vec<&str> = invoices.iter().map(|i| i.payment_hash.as_str()).collect();
+        let user_pubkeys: Vec<&str> = invoices.iter().map(|i| i.user_pubkey.as_str()).collect();
+        let invoice_strs: Vec<&str> = invoices.iter().map(|i| i.invoice.as_str()).collect();
+        let preimages: Vec<Option<&str>> = invoices.iter().map(|i| i.preimage.as_deref()).collect();
+        let invoice_expiries: Vec<i64> = invoices.iter().map(|i| i.invoice_expiry).collect();
+        let created_ats: Vec<i64> = invoices.iter().map(|i| i.created_at).collect();
+        let updated_ats: Vec<i64> = invoices.iter().map(|i| i.updated_at).collect();
+
+        let rows = sqlx::query(
+            "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at)
+             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::bigint[], $6::bigint[], $7::bigint[])
+             ON CONFLICT(payment_hash) DO UPDATE
+             SET preimage = excluded.preimage
+             ,   updated_at = excluded.updated_at
+             WHERE invoices.user_pubkey = excluded.user_pubkey AND invoices.preimage IS NULL
+             RETURNING payment_hash",
+        )
+        .bind(&payment_hashes)
+        .bind(&user_pubkeys)
+        .bind(&invoice_strs)
+        .bind(&preimages)
+        .bind(&invoice_expiries)
+        .bind(&created_ats)
+        .bind(&updated_ats)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let affected = rows
+            .into_iter()
+            .map(|row| row.try_get(0))
+            .collect::<Result<Vec<String>, sqlx::Error>>()?;
+        Ok(affected)
     }
 
     async fn get_invoice_by_payment_hash(
@@ -382,6 +444,33 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(newly_paid.created_at)
         .bind(newly_paid.retry_count)
         .bind(newly_paid.next_retry_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn insert_newly_paid_batch(
+        &self,
+        newly_paid: &[NewlyPaid],
+    ) -> Result<(), LnurlRepositoryError> {
+        if newly_paid.is_empty() {
+            return Ok(());
+        }
+        let payment_hashes: Vec<&str> =
+            newly_paid.iter().map(|n| n.payment_hash.as_str()).collect();
+        let created_ats: Vec<i64> = newly_paid.iter().map(|n| n.created_at).collect();
+        let retry_counts: Vec<i32> = newly_paid.iter().map(|n| n.retry_count).collect();
+        let next_retry_ats: Vec<i64> = newly_paid.iter().map(|n| n.next_retry_at).collect();
+
+        sqlx::query(
+            "INSERT INTO newly_paid (payment_hash, created_at, retry_count, next_retry_at)
+             SELECT * FROM UNNEST($1::text[], $2::bigint[], $3::int[], $4::bigint[])
+             ON CONFLICT(payment_hash) DO NOTHING",
+        )
+        .bind(&payment_hashes)
+        .bind(&created_ats)
+        .bind(&retry_counts)
+        .bind(&next_retry_ats)
         .execute(&self.pool)
         .await?;
         Ok(())
