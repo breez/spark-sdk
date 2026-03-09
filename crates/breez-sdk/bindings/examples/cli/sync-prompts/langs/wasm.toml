@@ -6,8 +6,8 @@
 
 [meta]
 lang_name = "TypeScript"
-lang_id   = "typescript"
-target_dir = "crates/breez-sdk/bindings/examples/cli/langs/typescript/"
+lang_id   = "wasm"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/wasm/"
 snippet_dir = "docs/breez-sdk/snippets/wasm/"
 package_registry = "npm (https://www.npmjs.com)"
 
@@ -30,7 +30,7 @@ doc_build_instructions = "npm install and run commands (`node src/main.js` inste
 doc_preserve_items = "npm install instructions, or Node.js/WASM-specific notes"
 
 # Build check command (syntax validation)
-build_check = "make -C crates/breez-sdk/bindings/examples/cli check-typescript"
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-wasm"
 
 # Format instructions appended to the build check step (empty = no extra instructions)
 format_instructions = ""
@@ -38,17 +38,17 @@ format_instructions = ""
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-typescript:*)"""
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-wasm:*)"""
 
 [file_mapping]
 content = """
 | Rust source | TypeScript target |
 |-------------|-------------------|
-| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/typescript/src/main.js` |
-| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/typescript/src/commands.js` |
-| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/typescript/src/issuer.js` |
-| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/typescript/src/persistence.js` |
-| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/typescript/README.md` |"""
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/main.js` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/commands.js` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/issuer.js` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/persistence.js` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/README.md` |"""
 
 [translation_rules]
 content = """

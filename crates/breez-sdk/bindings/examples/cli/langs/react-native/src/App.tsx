@@ -26,10 +26,12 @@ import {
   Network,
   Seed,
   SdkBuilder,
-  type BreezSdk,
-  type TokenIssuer,
-  type SdkEvent,
   SdkEvent_Tags,
+} from '@breeztech/breez-sdk-spark-react-native'
+import type {
+  BreezSdkInterface,
+  TokenIssuerInterface,
+  SdkEvent,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
@@ -48,7 +50,7 @@ import {
 // ---------------------------------------------------------------------------
 
 /** Default network for the CLI app. Change to Network.Mainnet for production. */
-const DEFAULT_NETWORK = Network.Regtest
+const DEFAULT_NETWORK = Network.Regtest as Network
 
 /** Data directory for the SDK. Uses the app's document directory. */
 const DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
@@ -67,7 +69,7 @@ const DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
  *
  * In a production app, these would come from a settings screen or launch config.
  */
-const PASSKEY_CONFIG: PasskeyConfig | undefined = undefined
+const PASSKEY_CONFIG = undefined as PasskeyConfig | undefined
 
 // ---------------------------------------------------------------------------
 // Event Listener
@@ -96,8 +98,6 @@ class CliEventListener {
       eventDesc = 'UnclaimedDeposits'
     } else if (event.tag === SdkEvent_Tags.Optimization) {
       eventDesc = 'Optimization'
-    } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
-      eventDesc = 'LightningAddressChanged'
     }
     this.appendLog(`[Event] ${eventDesc}: ${formatValue(event)}`)
   }
@@ -113,8 +113,8 @@ const App: React.FC = () => {
   const [isInitializing, setIsInitializing] = useState(true)
   const [isProcessing, setIsProcessing] = useState(false)
 
-  const sdkRef = useRef<BreezSdk | null>(null)
-  const tokenIssuerRef = useRef<TokenIssuer | null>(null)
+  const sdkRef = useRef<BreezSdkInterface | null>(null)
+  const tokenIssuerRef = useRef<TokenIssuerInterface | null>(null)
   const registryRef = useRef(buildCommandRegistry())
   const persistenceRef = useRef(new CliPersistence(DATA_DIR))
   const scrollViewRef = useRef<ScrollView>(null)
@@ -140,7 +140,7 @@ const App: React.FC = () => {
         // API key can be set via environment or hardcoded for testing
         // config.apiKey = '<your-api-key>'
 
-        let seed: InstanceType<typeof Seed.Mnemonic> | InstanceType<typeof Seed.Passkey>
+        let seed: Seed
 
         if (PASSKEY_CONFIG) {
           appendLog(`Using passkey provider: ${PASSKEY_CONFIG.provider}`)
@@ -169,7 +169,7 @@ const App: React.FC = () => {
             appendLog(`Wallet name '${PASSKEY_CONFIG.walletName}' published to Nostr`)
           }
 
-          seed = result.seed as InstanceType<typeof Seed.Mnemonic>
+          seed = result.seed
           appendLog('Passkey seed derived successfully')
         } else {
           const mnemonic = await persistence.getOrCreateMnemonic()

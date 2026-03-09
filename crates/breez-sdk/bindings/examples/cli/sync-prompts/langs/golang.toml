@@ -6,8 +6,8 @@
 
 [meta]
 lang_name = "Go"
-lang_id   = "go"
-target_dir = "crates/breez-sdk/bindings/examples/cli/langs/go/"
+lang_id   = "golang"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/golang/"
 snippet_dir = "docs/breez-sdk/snippets/go/"
 package_registry = "pkg.go.dev (https://pkg.go.dev)"
 
@@ -30,7 +30,7 @@ doc_build_instructions = "build and run commands (`make run` instead of `cargo r
 doc_preserve_items = "go build instructions, or Go-specific notes"
 
 # Build check command (builds local bindings from Rust source, then checks)
-build_check = "make -C crates/breez-sdk/bindings/examples/cli check-go"
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-golang"
 
 # Format instructions appended to the build check step (empty = no extra instructions)
 format_instructions = ""
@@ -38,17 +38,17 @@ format_instructions = ""
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-go:*)"""
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-golang:*)"""
 
 [file_mapping]
 content = """
 | Rust source | Go target |
 |-------------|-----------|
-| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/main.go` |
-| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/commands.go` |
-| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/issuer.go` |
-| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/go/persistence.go` |
-| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/go/README.md` |"""
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/golang/main.go` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/golang/commands.go` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/golang/issuer.go` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/golang/persistence.go` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/golang/README.md` |"""
 
 [translation_rules]
 content = """
@@ -81,7 +81,7 @@ content = """
 - `return Err(anyhow!("msg"))` → `return fmt.Errorf("msg")`
 
 **SDK version:**
-The Go CLI uses locally built bindings via a `replace` directive in `go.mod`. The `make check-go` build step generates bindings from the current Rust source, so all SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers.
+The Go CLI uses locally built bindings via a `replace` directive in `go.mod`. The `make check-golang` build step generates bindings from the current Rust source, so all SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers.
 
 **Subcommand groups (like Issuer, Contacts):**
 - Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`

@@ -6,8 +6,8 @@
 
 [meta]
 lang_name = "Dart"
-lang_id   = "dart"
-target_dir = "crates/breez-sdk/bindings/examples/cli/langs/dart/"
+lang_id   = "flutter"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/flutter/"
 snippet_dir = "docs/breez-sdk/snippets/flutter/lib/"
 package_registry = "pub.dev (https://pub.dev)"
 
@@ -30,7 +30,7 @@ doc_build_instructions = "setup commands (`make run` instead of `cargo run --`),
 doc_preserve_items = "Flutter pub get instructions, or Dart/FRB-specific notes"
 
 # Build check command (syntax validation without SDK installed)
-build_check = "make -C crates/breez-sdk/bindings/examples/cli check-dart"
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-flutter"
 
 # Format instructions appended to the build check step
 format_instructions = "The Dart project uses 110-character line length. Run `dart format -l 110 lib/ bin/` before the build check to ensure formatting passes."
@@ -38,17 +38,17 @@ format_instructions = "The Dart project uses 110-character line length. Run `dar
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-dart:*)"""
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-flutter:*)"""
 
 [file_mapping]
 content = """
 | Rust source | Dart target |
 |-------------|-------------|
-| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/cli.dart` |
-| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/commands.dart` |
-| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/issuer.dart` |
-| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/dart/lib/persistence.dart` |
-| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/dart/README.md` |"""
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/flutter/lib/cli.dart` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/flutter/lib/commands.dart` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/flutter/lib/issuer.dart` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/flutter/lib/persistence.dart` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/flutter/README.md` |"""
 
 [translation_rules]
 content = """

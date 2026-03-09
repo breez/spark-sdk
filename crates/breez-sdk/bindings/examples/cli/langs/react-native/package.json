@@ -12,7 +12,7 @@
     "clean": "rm -rf node_modules ios/Pods ios/build android/build"
   },
   "dependencies": {
-    "@breeztech/breez-sdk-spark-react-native": "*",
+    "@breeztech/breez-sdk-spark-react-native": "file:../../../../../../../packages/react-native",
     "react": "19.1.0",
     "react-native": "0.79.2",
     "react-native-fs": "^2.20.0",

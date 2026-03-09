@@ -12,9 +12,8 @@
  */
 
 import {
-  Passkey,
-  type Seed,
-  type NostrRelayConfig,
+  Seed,
+  type Seed as SeedType,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
@@ -238,58 +237,34 @@ export async function buildPrfProvider(
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a wallet seed using the given PRF provider, matching the Rust CLI's
- * resolve_passkey_seed logic and the Go CLI's resolvePasskeySeed function.
+ * Resolve a wallet seed using the given PRF provider.
  *
- * Handles:
- *   - --store-wallet-name: publish the wallet name to Nostr
- *   - --list-wallet-names: query Nostr and return the list (caller picks)
- *   - Default: derive wallet with optional wallet name
+ * Note: Full passkey functionality (Nostr wallet name listing/storing) is not
+ * yet supported in the React Native SDK. This stub derives a seed from the
+ * PRF provider and returns it as a Seed.Entropy variant.
  *
  * @param provider - The PRF provider to use
- * @param breezApiKey - Optional Breez API key for Nostr relay
+ * @param _breezApiKey - Optional Breez API key (unused - Nostr not yet supported)
  * @param walletName - Optional wallet name for seed derivation
- * @param listWalletNames - Whether to list wallet names from Nostr
- * @param storeWalletName - Whether to publish the wallet name to Nostr
+ * @param _listWalletNames - Whether to list wallet names (not yet supported)
+ * @param _storeWalletName - Whether to publish the wallet name (not yet supported)
  * @returns Object with { seed, walletNames? } - seed is the derived Seed,
  *          walletNames is populated when listWalletNames is true
  */
 export async function resolvePasskeySeed(
   provider: { derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> },
-  breezApiKey: string | undefined,
+  _breezApiKey: string | undefined,
   walletName: string | undefined,
-  listWalletNames: boolean,
-  storeWalletName: boolean,
-): Promise<{ seed: Seed; walletNames?: string[] }> {
-  const relayConfig: NostrRelayConfig = {
-    breezApiKey,
-    timeoutSecs: undefined,
-  }
-  const passkey = new Passkey(provider, relayConfig)
+  _listWalletNames: boolean,
+  _storeWalletName: boolean,
+): Promise<{ seed: SeedType; walletNames?: string[] }> {
+  // Derive seed bytes from the PRF provider
+  const seedBytes = await provider.derivePrfSeed(walletName ?? 'Default')
 
-  // --store-wallet-name: publish to Nostr
-  if (storeWalletName && walletName) {
-    await passkey.storeWalletName(walletName)
-  }
+  // Note: Passkey wallet name listing/storing via Nostr is not yet supported
+  // in React Native. Only basic seed derivation is available.
 
-  // --list-wallet-names: query Nostr and return the list
-  let resolvedName = walletName
-  let walletNamesList: string[] | undefined
-
-  if (listWalletNames) {
-    const names = await passkey.listWalletNames()
-    if (names.length === 0) {
-      throw new Error('No wallet names found on Nostr for this identity')
-    }
-    walletNamesList = names
-    // In the React Native CLI, the caller (App.tsx) handles selection
-    // since we can't do interactive stdin prompts. For now, use the first
-    // wallet name if none specified.
-    if (!resolvedName && names.length > 0) {
-      resolvedName = names[0]
-    }
-  }
-
-  const wallet = await passkey.getWallet(resolvedName ?? undefined)
-  return { seed: wallet.seed, walletNames: walletNamesList }
+  // Use Entropy variant since we have raw bytes
+  const seed = new Seed.Entropy(seedBytes)
+  return { seed }
 }

@@ -13,16 +13,26 @@
  */
 
 import {
-  type BreezSdk,
-  type TokenIssuer,
   InputType_Tags,
   ReceivePaymentMethod,
   SendPaymentMethod_Tags,
   SendPaymentOptions,
   OnchainConfirmationSpeed,
   ConversionType,
+  ConversionOptions,
   FeePolicy,
+  PaymentType,
+  PaymentStatus,
+  AssetFilter,
+  PaymentDetailsFilter,
+  MaxFee,
+  Fee,
+  SparkHtlcStatus,
   getSparkStatus,
+} from '@breeztech/breez-sdk-spark-react-native'
+import type {
+  BreezSdkInterface,
+  TokenIssuerInterface,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
@@ -37,7 +47,7 @@ import { dispatchContactsCommand } from './contacts'
 interface CommandDef {
   name: string
   description: string
-  run: (sdk: BreezSdk, tokenIssuer: TokenIssuer, args: string[]) => Promise<string>
+  run: (sdk: BreezSdkInterface, tokenIssuer: TokenIssuerInterface, args: string[]) => Promise<string>
 }
 
 // ---------------------------------------------------------------------------
@@ -230,15 +240,15 @@ export function printHelp(registry: Map<string, CommandDef>): string {
  * Execute a command string against the SDK.
  *
  * @param input - The raw command line string from the user
- * @param sdk - The BreezSdk instance
- * @param tokenIssuer - The TokenIssuer instance
+ * @param sdk - The BreezSdkInterface instance
+ * @param tokenIssuer - The TokenIssuerInterface instance
  * @param registry - The command registry
  * @returns Object with output text and whether to continue the REPL
  */
 export async function executeCommand(
   input: string,
-  sdk: BreezSdk,
-  tokenIssuer: TokenIssuer,
+  sdk: BreezSdkInterface,
+  tokenIssuer: TokenIssuerInterface,
   registry: Map<string, CommandDef>
 ): Promise<{ output: string; shouldContinue: boolean }> {
   const trimmed = input.trim()
@@ -282,7 +292,7 @@ export async function executeCommand(
 
 // --- get-info ---
 
-async function handleGetInfo(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleGetInfo(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   // --ensure-synced can be used as a bare flag (presence = true) or with a value
   const ensureSyncedStr = parseFlag(args, '--ensure-synced', '-e')
   let ensureSynced: boolean | undefined
@@ -298,7 +308,7 @@ async function handleGetInfo(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: str
 
 // --- get-payment ---
 
-async function handleGetPayment(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleGetPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: get-payment <payment_id>'
   }
@@ -309,14 +319,14 @@ async function handleGetPayment(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: 
 
 // --- sync ---
 
-async function handleSync(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleSync(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.syncWallet({})
   return formatValue(result)
 }
 
 // --- list-payments ---
 
-async function handleListPayments(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const limit = parseNumericFlag(args, '--limit', '-l') ?? 10
   const offset = parseNumericFlag(args, '--offset', '-o') ?? 0
   const fromTimestamp = parseBigIntFlag(args, '--from-timestamp')
@@ -326,41 +336,72 @@ async function handleListPayments(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args
 
   // Type filter: --type-filter or -t (comma-separated)
   const typeFilterStr = parseMultiFlag(args, '--type-filter', '-t')
-  const typeFilter = typeFilterStr ?? undefined
+  const typeFilter: PaymentType[] | undefined = typeFilterStr?.map(s => {
+    switch (s.toLowerCase()) {
+      case 'send': return PaymentType.Send
+      case 'receive': return PaymentType.Receive
+      default: return undefined
+    }
+  }).filter((v): v is PaymentType => v !== undefined)
 
   // Status filter: --status-filter or -s (comma-separated)
   const statusFilterStr = parseMultiFlag(args, '--status-filter', '-s')
-  const statusFilter = statusFilterStr ?? undefined
+  const statusFilter: PaymentStatus[] | undefined = statusFilterStr?.map(s => {
+    switch (s.toLowerCase()) {
+      case 'completed': return PaymentStatus.Completed
+      case 'pending': return PaymentStatus.Pending
+      case 'failed': return PaymentStatus.Failed
+      default: return undefined
+    }
+  }).filter((v): v is PaymentStatus => v !== undefined)
 
   // Asset filter: --asset-filter or -a
   const assetFilterStr = parseFlag(args, '--asset-filter', '-a')
-  const assetFilter = assetFilterStr ?? undefined
+  let assetFilter: AssetFilter | undefined
+  if (assetFilterStr) {
+    if (assetFilterStr.toLowerCase() === 'bitcoin') {
+      assetFilter = new AssetFilter.Bitcoin()
+    } else if (assetFilterStr.toLowerCase() === 'token') {
+      const assetTokenId = parseFlag(args, '--asset-token-id')
+      assetFilter = new AssetFilter.Token({ tokenIdentifier: assetTokenId })
+    }
+  }
 
   // Payment details filter
   const sparkHtlcStatusFilterStr = parseMultiFlag(args, '--spark-htlc-status-filter')
   const txHash = parseFlag(args, '--tx-hash')
   const txType = parseFlag(args, '--tx-type')
 
-  let paymentDetailsFilter: unknown[] | undefined
+  let paymentDetailsFilter: PaymentDetailsFilter[] | undefined
   if (sparkHtlcStatusFilterStr || txHash || txType) {
     paymentDetailsFilter = []
     if (sparkHtlcStatusFilterStr) {
-      paymentDetailsFilter.push({
-        tag: 'Spark',
-        inner: { htlcStatus: sparkHtlcStatusFilterStr, conversionRefundNeeded: undefined },
-      })
+      const htlcStatuses = sparkHtlcStatusFilterStr.map(s => {
+        switch (s.toLowerCase()) {
+          case 'waitingforpreimage': return SparkHtlcStatus.WaitingForPreimage
+          case 'preimageshared': return SparkHtlcStatus.PreimageShared
+          case 'returned': return SparkHtlcStatus.Returned
+          default: return undefined
+        }
+      }).filter((v): v is SparkHtlcStatus => v !== undefined)
+      paymentDetailsFilter.push(new PaymentDetailsFilter.Spark({
+        htlcStatus: htlcStatuses.length > 0 ? htlcStatuses : undefined,
+        conversionRefundNeeded: undefined,
+      }))
     }
     if (txHash) {
-      paymentDetailsFilter.push({
-        tag: 'Token',
-        inner: { txHash, txType: undefined, conversionRefundNeeded: undefined },
-      })
+      paymentDetailsFilter.push(new PaymentDetailsFilter.Token({
+        txHash,
+        txType: undefined,
+        conversionRefundNeeded: undefined,
+      }))
     }
     if (txType) {
-      paymentDetailsFilter.push({
-        tag: 'Token',
-        inner: { txType, txHash: undefined, conversionRefundNeeded: undefined },
-      })
+      paymentDetailsFilter.push(new PaymentDetailsFilter.Token({
+        txType: undefined,
+        txHash: undefined,
+        conversionRefundNeeded: undefined,
+      }))
     }
   }
 
@@ -380,7 +421,7 @@ async function handleListPayments(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args
 
 // --- receive ---
 
-async function handleReceive(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const method = parseFlag(args, '--method', '-m')
   if (!method) {
     return 'Usage: receive -m <method> [options]\nMethods: sparkaddress, sparkinvoice, bitcoin, bolt11\n\nOptions:\n  -d, --description <desc>       Optional description\n  -a, --amount <amount>          Amount in sats or token base units\n  -t, --token-identifier <id>    Token identifier (sparkinvoice only)\n  -e, --expiry-secs <secs>       Expiry time in seconds from now\n  -s, --sender-public-key <key>  Sender public key (sparkinvoice only)\n  --hodl                         Create a HODL invoice (bolt11 only)'
@@ -471,7 +512,7 @@ async function handleReceive(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: str
 
 // --- pay ---
 
-async function handlePay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const paymentRequest = parseFlag(args, '--payment-request', '-r')
   if (!paymentRequest) {
     return 'Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [-i <idempotency_key>] [--from-bitcoin] [--from-token <token_id>] [-s <max_slippage_bps>] [--fees-included]'
@@ -486,26 +527,22 @@ async function handlePay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[
   const feesIncluded = hasFlag(args, '--fees-included')
 
   // Build conversion options
-  let conversionOptions: {
-    conversionType: InstanceType<typeof ConversionType.FromBitcoin> | InstanceType<typeof ConversionType.ToBitcoin>
-    maxSlippageBps?: number
-    completionTimeoutSecs?: number
-  } | undefined
+  let conversionOptions: ConversionOptions | undefined
 
   if (convertFromBitcoin) {
-    conversionOptions = {
+    conversionOptions = ConversionOptions.create({
       conversionType: new ConversionType.FromBitcoin(),
       maxSlippageBps,
       completionTimeoutSecs: undefined,
-    }
+    })
   } else if (convertFromTokenIdentifier) {
-    conversionOptions = {
+    conversionOptions = ConversionOptions.create({
       conversionType: new ConversionType.ToBitcoin({
         fromTokenIdentifier: convertFromTokenIdentifier,
       }),
       maxSlippageBps,
       completionTimeoutSecs: undefined,
-    }
+    })
   }
 
   const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
@@ -592,7 +629,7 @@ async function handlePay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[
 
 // --- lnurl-pay ---
 
-async function handleLnurlPay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   // The first positional argument is the LNURL/lightning address
   const positional = args.filter(a => !a.startsWith('-'))
   const flagArgs = args
@@ -611,20 +648,16 @@ async function handleLnurlPay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: st
   const feesIncluded = hasFlag(flagArgs, '--fees-included')
 
   // Build conversion options
-  let conversionOptions: {
-    conversionType: InstanceType<typeof ConversionType.ToBitcoin>
-    maxSlippageBps?: number
-    completionTimeoutSecs?: number
-  } | undefined
+  let conversionOptions: ConversionOptions | undefined
 
   if (convertFromTokenIdentifier) {
-    conversionOptions = {
+    conversionOptions = ConversionOptions.create({
       conversionType: new ConversionType.ToBitcoin({
         fromTokenIdentifier: convertFromTokenIdentifier,
       }),
       maxSlippageBps,
       completionTimeoutSecs: undefined,
-    }
+    })
   }
 
   const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
@@ -681,7 +714,7 @@ async function handleLnurlPay(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: st
 
 // --- lnurl-withdraw ---
 
-async function handleLnurlWithdraw(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleLnurlWithdraw(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
 
   if (positional.length < 1) {
@@ -705,8 +738,8 @@ async function handleLnurlWithdraw(sdk: BreezSdk, _tokenIssuer: TokenIssuer, arg
   if (!amountSatsStr) {
     lines.push(formatValue(withdrawRequest))
     lines.push('')
-    const minWithdrawable = Math.ceil(withdrawRequest.minWithdrawable / 1000)
-    const maxWithdrawable = Math.floor(withdrawRequest.maxWithdrawable / 1000)
+    const minWithdrawable = Number((withdrawRequest.minWithdrawable + 999n) / 1000n)
+    const maxWithdrawable = Number(withdrawRequest.maxWithdrawable / 1000n)
     lines.push(`Please provide amount with -a flag (min ${minWithdrawable} sat, max ${maxWithdrawable} sat)`)
     return lines.join('\n')
   }
@@ -725,7 +758,7 @@ async function handleLnurlWithdraw(sdk: BreezSdk, _tokenIssuer: TokenIssuer, arg
 
 // --- lnurl-auth ---
 
-async function handleLnurlAuth(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleLnurlAuth(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: lnurl-auth <lnurl>'
   }
@@ -747,7 +780,7 @@ async function handleLnurlAuth(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: s
 
 // --- claim-htlc-payment ---
 
-async function handleClaimHtlcPayment(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleClaimHtlcPayment(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: claim-htlc-payment <preimage>'
   }
@@ -758,7 +791,7 @@ async function handleClaimHtlcPayment(sdk: BreezSdk, _tokenIssuer: TokenIssuer, 
 
 // --- claim-deposit ---
 
-async function handleClaimDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleClaimDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 2) {
     return 'Usage: claim-deposit <txid> <vout> [--fee-sat N | --sat-per-vbyte N | --recommended-fee-leeway N]'
@@ -774,19 +807,19 @@ async function handleClaimDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args
   const satPerVbyteStr = parseFlag(args, '--sat-per-vbyte')
   const recommendedFeeLeewayStr = parseFlag(args, '--recommended-fee-leeway')
 
-  let maxFee: { type: string; amount?: bigint; satPerVbyte?: bigint; leewaySatPerVbyte?: bigint } | undefined
+  let maxFee: MaxFee | undefined
 
   if (recommendedFeeLeewayStr !== undefined) {
     if (feeSatStr !== undefined || satPerVbyteStr !== undefined) {
       return 'Cannot specify fee_sat or sat_per_vbyte when using recommended fee'
     }
-    maxFee = { type: 'networkRecommended', leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr) }
+    maxFee = new MaxFee.NetworkRecommended({ leewaySatPerVbyte: BigInt(recommendedFeeLeewayStr) })
   } else if (feeSatStr !== undefined && satPerVbyteStr !== undefined) {
     return 'Cannot specify both --fee-sat and --sat-per-vbyte'
   } else if (feeSatStr !== undefined) {
-    maxFee = { type: 'fixed', amount: BigInt(feeSatStr) }
+    maxFee = new MaxFee.Fixed({ amount: BigInt(feeSatStr) })
   } else if (satPerVbyteStr !== undefined) {
-    maxFee = { type: 'rate', satPerVbyte: BigInt(satPerVbyteStr) }
+    maxFee = new MaxFee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) })
   }
 
   const result = await sdk.claimDeposit({
@@ -799,7 +832,7 @@ async function handleClaimDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args
 
 // --- parse ---
 
-async function handleParse(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleParse(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: parse <input>'
   }
@@ -810,7 +843,7 @@ async function handleParse(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: strin
 
 // --- refund-deposit ---
 
-async function handleRefundDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleRefundDeposit(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 3) {
     return 'Usage: refund-deposit <txid> <vout> <destination_address> [--fee-sat N | --sat-per-vbyte N]'
@@ -830,11 +863,11 @@ async function handleRefundDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, arg
     return 'Cannot specify both --fee-sat and --sat-per-vbyte'
   }
 
-  let fee: { type: string; amount?: bigint; satPerVbyte?: bigint }
+  let fee: Fee
   if (feeSatStr !== undefined) {
-    fee = { type: 'fixed', amount: BigInt(feeSatStr) }
+    fee = new Fee.Fixed({ amount: BigInt(feeSatStr) })
   } else if (satPerVbyteStr !== undefined) {
-    fee = { type: 'rate', satPerVbyte: BigInt(satPerVbyteStr) }
+    fee = new Fee.Rate({ satPerVbyte: BigInt(satPerVbyteStr) })
   } else {
     return 'Must specify either --fee-sat or --sat-per-vbyte'
   }
@@ -850,14 +883,14 @@ async function handleRefundDeposit(sdk: BreezSdk, _tokenIssuer: TokenIssuer, arg
 
 // --- list-unclaimed-deposits ---
 
-async function handleListUnclaimedDeposits(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleListUnclaimedDeposits(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.listUnclaimedDeposits({})
   return formatValue(result)
 }
 
 // --- buy-bitcoin ---
 
-async function handleBuyBitcoin(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const lockedAmountSatStr = parseFlag(args, '--locked-amount-sat', '--amount')
   const redirectUrl = parseFlag(args, '--redirect-url')
 
@@ -877,7 +910,7 @@ async function handleBuyBitcoin(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: 
 
 // --- check-lightning-address-available ---
 
-async function handleCheckLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleCheckLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: check-lightning-address-available <username>'
   }
@@ -888,7 +921,7 @@ async function handleCheckLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIss
 
 // --- get-lightning-address ---
 
-async function handleGetLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleGetLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.getLightningAddress()
   if (result === null || result === undefined) {
     return 'No lightning address registered'
@@ -898,7 +931,7 @@ async function handleGetLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIssue
 
 // --- register-lightning-address ---
 
-async function handleRegisterLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleRegisterLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 1) {
     return 'Usage: register-lightning-address <username> [-d <description>]'
@@ -916,35 +949,35 @@ async function handleRegisterLightningAddress(sdk: BreezSdk, _tokenIssuer: Token
 
 // --- delete-lightning-address ---
 
-async function handleDeleteLightningAddress(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleDeleteLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   await sdk.deleteLightningAddress()
   return 'Lightning address deleted'
 }
 
 // --- list-fiat-currencies ---
 
-async function handleListFiatCurrencies(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleListFiatCurrencies(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.listFiatCurrencies()
   return formatValue(result)
 }
 
 // --- list-fiat-rates ---
 
-async function handleListFiatRates(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleListFiatRates(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.listFiatRates()
   return formatValue(result)
 }
 
 // --- recommended-fees ---
 
-async function handleRecommendedFees(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleRecommendedFees(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.recommendedFees()
   return formatValue(result)
 }
 
 // --- get-tokens-metadata ---
 
-async function handleGetTokensMetadata(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleGetTokensMetadata(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: get-tokens-metadata <token_id> [<token_id2> ...]'
   }
@@ -955,7 +988,7 @@ async function handleGetTokensMetadata(sdk: BreezSdk, _tokenIssuer: TokenIssuer,
 
 // --- fetch-conversion-limits ---
 
-async function handleFetchConversionLimits(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleFetchConversionLimits(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const fromBitcoin = hasFlag(args, '--from-bitcoin', '-f')
   const tokenIdentifier = parseFlag(args, '--token', '--token-identifier')
 
@@ -989,14 +1022,14 @@ async function handleFetchConversionLimits(sdk: BreezSdk, _tokenIssuer: TokenIss
 
 // --- get-user-settings ---
 
-async function handleGetUserSettings(sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleGetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await sdk.getUserSettings()
   return formatValue(result)
 }
 
 // --- set-user-settings ---
 
-async function handleSetUserSettings(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleSetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const privateModeStr = parseFlag(args, '--private', '-p', '--spark-private-mode')
   let sparkPrivateModeEnabled: boolean | undefined
   if (privateModeStr !== undefined) {
@@ -1011,19 +1044,19 @@ async function handleSetUserSettings(sdk: BreezSdk, _tokenIssuer: TokenIssuer, a
 
 // --- get-spark-status ---
 
-async function handleGetSparkStatus(_sdk: BreezSdk, _tokenIssuer: TokenIssuer, _args: string[]): Promise<string> {
+async function handleGetSparkStatus(_sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
   const result = await getSparkStatus()
   return formatValue(result)
 }
 
 // --- issuer (delegation) ---
 
-async function handleIssuer(_sdk: BreezSdk, tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleIssuer(_sdk: BreezSdkInterface, tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchIssuerCommand(args, tokenIssuer)
 }
 
 // --- contacts (delegation) ---
 
-async function handleContacts(sdk: BreezSdk, _tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleContacts(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchContactsCommand(args, sdk)
 }

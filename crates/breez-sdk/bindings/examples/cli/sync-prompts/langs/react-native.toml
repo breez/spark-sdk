@@ -97,13 +97,20 @@ The React Native CLI uses the `@breeztech/breez-sdk-spark-react-native` package.
 - React Native: command handler checks `cmdName === "group"` and calls `dispatchGroupCommand(args, ...)`
 - Each group has its own file with `COMMAND_NAMES`, registry, dispatch function, handlers
 
-**React Native-specific quirks:**
+**React Native-specific UniFFI quirks:**
 - This is NOT a standalone CLI — it's a React Native app with a terminal-like screen
 - Import from `'@breeztech/breez-sdk-spark-react-native'` (not the WASM package)
+- Use `BreezSdkInterface` and `TokenIssuerInterface` types for parameters (not `BreezSdk`/`TokenIssuer` class types which include internal uniffi symbols)
 - Enum tags use `SdkEvent_Tags.Synced` pattern (not `event.type === 'synced'`)
-- Constructor syntax: `new Seed.Mnemonic({...})`, `new ReceivePaymentMethod.SparkAddress()`
+- Tagged union constructors: `new Seed.Mnemonic({...})`, `new ReceivePaymentMethod.SparkAddress()`
+- Tagged union instances for filters: `new MaxFee.Fixed({ amount })`, `new Fee.Rate({ satPerVbyte })`, `new PaymentDetailsFilter.Spark({...})`
+- Record factories: `ConversionOptions.create({ conversionType, maxSlippageBps, completionTimeoutSecs })`
+- Simple enums are numeric (not strings): `PaymentType.Send`, `PaymentStatus.Completed`, `FeePolicy.FeesIncluded`
+- `AssetFilter` is a tagged union: `new AssetFilter.Bitcoin()`, `new AssetFilter.Token({ tokenIdentifier })`
+- `Passkey`, `NostrRelayConfig`, and contacts API (`addContact`, `listContacts`, etc.) are NOT available in the React Native SDK — stub these features
 - Storage paths use `RNFS.DocumentDirectoryPath` from `react-native-fs`
 - AsyncStorage or react-native-fs for persistence (not Node.js `fs`)
 - CI can only validate TypeScript compilation (`npx tsc --noEmit`), not actual runtime
 - The `App.tsx` is the terminal UI — command logic lives in `commands.ts`
+- To avoid type narrowing issues: use `as Network` cast on `DEFAULT_NETWORK`, `as PasskeyConfig | undefined` on config constants
 """

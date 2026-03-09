@@ -6,8 +6,8 @@
 
 [meta]
 lang_name = "Kotlin"
-lang_id   = "kotlin"
-target_dir = "crates/breez-sdk/bindings/examples/cli/langs/kotlin/"
+lang_id   = "kotlin-multiplatform"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/"
 snippet_dir = "docs/breez-sdk/snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/"
 package_registry = "Maven Central (https://central.sonatype.com)"
 
@@ -30,7 +30,7 @@ doc_build_instructions = "Gradle build and run commands (`./gradlew run --args='
 doc_preserve_items = "Gradle setup, JDK requirements, or Kotlin-specific notes"
 
 # Build check command (builds with local bindings)
-build_check = "make -C crates/breez-sdk/bindings/examples/cli check-kotlin"
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-kotlin-multiplatform"
 
 # Format instructions appended to the build check step (empty = no extra instructions)
 format_instructions = ""
@@ -38,17 +38,17 @@ format_instructions = ""
 # Claude Code allowed tools (workflow YAML)
 allowed_tools = """Read,Write,Edit,Glob,Grep,
 Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-kotlin:*)"""
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-kotlin-multiplatform:*)"""
 
 [file_mapping]
 content = """
 | Rust source | Kotlin target |
 |-------------|---------------|
-| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin/src/main/kotlin/Main.kt` |
-| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin/src/main/kotlin/Commands.kt` |
-| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin/src/main/kotlin/Issuer.kt` |
-| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin/src/main/kotlin/Persistence.kt` |
-| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin/README.md` |"""
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Main.kt` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Commands.kt` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Issuer.kt` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Persistence.kt` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/README.md` |"""
 
 [translation_rules]
 content = """

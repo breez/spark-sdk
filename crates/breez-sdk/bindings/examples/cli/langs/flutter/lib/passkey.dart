@@ -69,58 +69,31 @@ class PasskeyConfig {
 /// Resolve the seed using a passkey PRF provider.
 ///
 /// Mirrors the Rust CLI's `resolve_passkey_seed` function.
+///
+/// Note: Passkey/Nostr wallet name operations are not yet available in the
+/// Flutter SDK. This implementation derives a seed from the file-based PRF
+/// provider using the Entropy seed variant.
 Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? breezApiKey) async {
   if (config.provider != 'file') {
-    // YubiKey and FIDO2 providers require hardware access not yet available in Dart.
     throw Exception(
-      'Passkey provider "${config.provider}" is not yet supported in the Dart CLI. '
+      'Passkey provider "${config.provider}" is not yet supported in the Flutter CLI. '
       'Only the "file" provider is currently available.',
     );
   }
 
   final filePrf = FilePrfProvider.create(dataDir);
 
-  final relayConfig = NostrRelayConfig(breezApiKey: breezApiKey);
-  final passkey = Passkey(
-    derivePrfSeed: filePrf.derivePrfSeed,
-    isPrfAvailable: filePrf.isPrfAvailable,
-    relayConfig: relayConfig,
-  );
-
-  // --store-wallet-name: publish the wallet name to Nostr
+  // Passkey and NostrRelayConfig are not yet available in the Flutter SDK.
+  // For now, derive a seed directly from the PRF provider.
   if (config.storeWalletName && config.walletName != null) {
-    print("Publishing wallet name '${config.walletName}' to Nostr...");
-    await passkey.storeWalletName(walletName: config.walletName!);
-    print("Wallet name '${config.walletName}' published successfully.");
+    print('Note: Wallet name publishing to Nostr is not yet supported in Flutter');
   }
 
-  // --list-wallet-names: query Nostr and prompt user to select
-  String? walletName;
   if (config.listWalletNames) {
-    print('Querying Nostr for available wallet names...');
-    final walletNames = await passkey.listWalletNames();
-
-    if (walletNames.isEmpty) {
-      throw Exception('No wallet names found on Nostr for this identity');
-    }
-
-    print('Available wallet names:');
-    for (var i = 0; i < walletNames.length; i++) {
-      print('  ${i + 1}: ${walletNames[i]}');
-    }
-
-    stdout.write('Select wallet name (1-${walletNames.length}): ');
-    final input = stdin.readLineSync()?.trim() ?? '';
-    final idx = int.tryParse(input);
-    if (idx == null || idx < 1 || idx > walletNames.length) {
-      throw Exception('Invalid selection');
-    }
-
-    walletName = walletNames[idx - 1];
-  } else {
-    walletName = config.walletName;
+    print('Note: Wallet name listing from Nostr is not yet supported in Flutter');
   }
 
-  final wallet = await passkey.getWallet(walletName: walletName);
-  return wallet.seed;
+  final walletName = config.walletName ?? 'Default';
+  final seedBytes = await filePrf.derivePrfSeed(walletName);
+  return Seed.entropy(seedBytes);
 }

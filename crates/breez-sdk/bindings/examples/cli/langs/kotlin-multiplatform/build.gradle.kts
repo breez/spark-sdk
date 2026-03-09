@@ -7,11 +7,14 @@ group = "technology.breez.spark.cli"
 version = "1.0-SNAPSHOT"
 
 repositories {
+    mavenLocal()
     mavenCentral()
     maven { url = uri("https://mvn.breez.technology/releases") }
 }
 
 dependencies {
+    // Uses local bindings by default (run `make setup` first).
+    // mavenLocal() is listed first so the locally published artifact takes precedence.
     implementation("technology.breez.spark:breez-sdk-spark-kmp-jvm:0.+")
     implementation("com.ionspin.kotlin:bignum:0.3.10")
     implementation("com.google.code.gson:gson:2.11.0")

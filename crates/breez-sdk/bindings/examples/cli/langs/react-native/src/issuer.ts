@@ -6,7 +6,7 @@
  *   burn-token, freeze-token, unfreeze-token
  */
 
-import type { TokenIssuer } from '@breeztech/breez-sdk-spark-react-native'
+import type { TokenIssuerInterface } from '@breeztech/breez-sdk-spark-react-native'
 import { formatValue } from './serialization'
 
 /** All issuer subcommand names for help and completion. */
@@ -43,12 +43,12 @@ function hasFlag(args: string[], flag: string): boolean {
  * Dispatch an issuer subcommand.
  *
  * @param args - The arguments after "issuer" (e.g., ["create-token", "--name", "MyToken", ...])
- * @param tokenIssuer - The TokenIssuer instance from the SDK
+ * @param tokenIssuer - The TokenIssuerInterface instance from the SDK
  * @returns A string result to display
  */
 export async function dispatchIssuerCommand(
   args: string[],
-  tokenIssuer: TokenIssuer
+  tokenIssuer: TokenIssuerInterface
 ): Promise<string> {
   if (args.length === 0 || args[0] === 'help') {
     return printIssuerHelp()
@@ -96,21 +96,21 @@ function printIssuerHelp(): string {
 
 // --- token-balance ---
 
-async function handleTokenBalance(tokenIssuer: TokenIssuer): Promise<string> {
+async function handleTokenBalance(tokenIssuer: TokenIssuerInterface): Promise<string> {
   const result = await tokenIssuer.getIssuerTokenBalance()
   return formatValue(result)
 }
 
 // --- token-metadata ---
 
-async function handleTokenMetadata(tokenIssuer: TokenIssuer): Promise<string> {
+async function handleTokenMetadata(tokenIssuer: TokenIssuerInterface): Promise<string> {
   const result = await tokenIssuer.getIssuerTokenMetadata()
   return formatValue(result)
 }
 
 // --- create-token ---
 
-async function handleCreateToken(tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleCreateToken(tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   // Support two forms:
   // 1. Positional: create-token <name> <ticker> <decimals> <max_supply> [-f]
   // 2. Named flags: create-token --name <name> --ticker <ticker> --decimals <decimals> --max-supply <supply> [--freezable]
@@ -157,7 +157,7 @@ async function handleCreateToken(tokenIssuer: TokenIssuer, args: string[]): Prom
 
 // --- mint-token ---
 
-async function handleMintToken(tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleMintToken(tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: issuer mint-token <amount>'
   }
@@ -169,7 +169,7 @@ async function handleMintToken(tokenIssuer: TokenIssuer, args: string[]): Promis
 
 // --- burn-token ---
 
-async function handleBurnToken(tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleBurnToken(tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: issuer burn-token <amount>'
   }
@@ -181,7 +181,7 @@ async function handleBurnToken(tokenIssuer: TokenIssuer, args: string[]): Promis
 
 // --- freeze-token ---
 
-async function handleFreezeToken(tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleFreezeToken(tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: issuer freeze-token <address>'
   }
@@ -192,7 +192,7 @@ async function handleFreezeToken(tokenIssuer: TokenIssuer, args: string[]): Prom
 
 // --- unfreeze-token ---
 
-async function handleUnfreezeToken(tokenIssuer: TokenIssuer, args: string[]): Promise<string> {
+async function handleUnfreezeToken(tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   if (args.length < 1) {
     return 'Usage: issuer unfreeze-token <address>'
   }

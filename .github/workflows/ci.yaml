@@ -168,9 +168,9 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
 
-      - name: CLI static analysis (dart)
+      - name: CLI static analysis (flutter)
         working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-dart
+        run: make check-flutter
 
   cli-python:
     name: CLI static analysis (python)
@@ -182,8 +182,8 @@ jobs:
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-python
 
-  cli-go:
-    name: CLI static analysis (go)
+  cli-golang:
+    name: CLI static analysis (golang)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -200,7 +200,7 @@ jobs:
 
       - name: Check Go CLI
         working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-go
+        run: make check-golang
 
   cli-swift:
     name: CLI static analysis (swift)
@@ -217,15 +217,15 @@ jobs:
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-swift
 
-  cli-typescript:
-    name: CLI static analysis (typescript)
+  cli-wasm:
+    name: CLI static analysis (wasm)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check TypeScript CLI
+      - name: Check WASM/TypeScript CLI
         working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-typescript
+        run: make check-wasm
 
   cli-csharp:
     name: CLI static analysis (csharp)
@@ -247,8 +247,8 @@ jobs:
         working-directory: crates/breez-sdk/bindings/examples/cli
         run: make check-csharp
 
-  cli-kotlin:
-    name: CLI static analysis (kotlin)
+  cli-kotlin-multiplatform:
+    name: CLI static analysis (kotlin-multiplatform)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -266,7 +266,7 @@ jobs:
 
       - name: Check Kotlin CLI
         working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-kotlin
+        run: make check-kotlin-multiplatform
 
   cli-react-native:
     name: CLI static analysis (react-native)
