@@ -57,6 +57,9 @@ pub use sdk::default_external_signer;
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;
 
+#[cfg(feature = "test-utils")]
+pub use spark_wallet::tree_store_tests;
+
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 

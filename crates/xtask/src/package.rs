@@ -186,6 +186,7 @@ fn package_wasm_target(
     if target == "nodejs" {
         copy_nodejs_storage_files(crate_dir, &out_path)?;
         copy_postgres_storage_files(crate_dir, &out_path)?;
+        copy_postgres_tree_store_files(crate_dir, &out_path)?;
     }
 
     if target == "web" || target == "bundler" {
@@ -334,6 +335,72 @@ fn copy_postgres_storage_files(crate_dir: &Path, out_path: &Path) -> Result<()> 
     Ok(())
 }
 
+fn copy_postgres_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_tree_store_src = crate_dir.join("js/postgres-tree-store");
+
+    if !js_tree_store_src.exists() {
+        println!(
+            "Warning: PostgreSQL tree store source directory not found at {:?}",
+            js_tree_store_src
+        );
+        return Ok(());
+    }
+
+    let tree_store_dest = out_path.join("postgres-tree-store");
+
+    // Create tree store directory in output
+    std::fs::create_dir_all(&tree_store_dest)?;
+
+    // Copy the CommonJS tree store implementation files (keeping .cjs extensions)
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+
+    for file_name in files_to_copy {
+        let src_file = js_tree_store_src.join(file_name);
+        let dest_file = tree_store_dest.join(file_name);
+
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied PostgreSQL tree store file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "PostgreSQL tree store file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    // Create a CommonJS package.json for the postgres tree store module
+    let tree_store_package_json = serde_json::json!({
+        "name": "@breez-sdk/postgres-tree-store",
+        "version": "1.0.0",
+        "description": "Node.js PostgreSQL tree store implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "pg": "^8.18.0"
+        }
+    });
+
+    let dest_package_json = tree_store_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&tree_store_package_json)
+        .with_context(|| "Failed to serialize postgres tree store package.json")?;
+
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write postgres tree store package.json".to_string())?;
+    println!("Created PostgreSQL tree store package.json");
+
+    println!(
+        "Successfully copied PostgreSQL tree store files to {}",
+        tree_store_dest.display()
+    );
+    Ok(())
+}
+
 fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
@@ -358,6 +425,16 @@ try {
 } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load PostgreSQL storage:', error.message);
+    }
+}
+
+// Automatically import and set up the PostgreSQL tree store for Node.js
+try {
+    const { createPostgresTreeStore } = require('./postgres-tree-store/index.cjs');
+    global.createPostgresTreeStore = createPostgresTreeStore;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load PostgreSQL tree store:', error.message);
     }
 }
 
@@ -412,6 +489,9 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
         if let Some(files_array) = files.as_array_mut() {
             files_array.push(serde_json::Value::String("storage/".to_string()));
             files_array.push(serde_json::Value::String("postgres-storage/".to_string()));
+            files_array.push(serde_json::Value::String(
+                "postgres-tree-store/".to_string(),
+            ));
             files_array.push(serde_json::Value::String("index.js".to_string()));
         }
     } else {
@@ -421,6 +501,7 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             "breez_sdk_spark_wasm.d.ts",
             "storage/",
             "postgres-storage/",
+            "postgres-tree-store/",
             "index.js"
         ]);
     }
