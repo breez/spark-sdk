@@ -2,6 +2,13 @@ GRADLE := ./gradlew
 BINDINGS_DIR := ../../../..
 KMP_DIR := $(BINDINGS_DIR)/langs/kotlin-multiplatform
 
+UNAME := $(shell uname)
+ifeq ($(UNAME), Darwin)
+	LIB_EXT := dylib
+else
+	LIB_EXT := so
+endif
+
 .PHONY: help setup build run run-mainnet clean
 
 help: ## Show available targets
@@ -14,7 +21,7 @@ setup: ## Build local Kotlin bindings from Rust source and publish to mavenLocal
 		-o langs/kotlin-multiplatform/breez-sdk-spark-kmp/src \
 		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
-		../../../target/release/libbreez_sdk_spark_bindings.dylib
+		../../../target/release/libbreez_sdk_spark_bindings.$(LIB_EXT)
 	cd $(KMP_DIR) && ./gradlew :breez-sdk-spark-kmp:compileKotlinJvm :breez-sdk-spark-kmp:publishJvmPublicationToMavenLocal
 	@echo "Local bindings published to mavenLocal. Run 'make build' to compile the CLI."
 
