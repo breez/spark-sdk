@@ -1088,6 +1088,18 @@ impl SparkWallet {
             .await?)
     }
 
+    /// Delete a wallet webhook from the SSP
+    pub async fn delete_wallet_webhook(&self, webhook_id: &str) -> Result<bool, SparkWalletError> {
+        Ok(self.ssp_client.delete_wallet_webhook(webhook_id).await?)
+    }
+
+    /// List all wallet webhooks registered with the SSP
+    pub async fn list_wallet_webhooks(
+        &self,
+    ) -> Result<Vec<spark::ssp::WebhookEntry>, SparkWalletError> {
+        Ok(self.ssp_client.list_wallet_webhooks().await?)
+    }
+
     /// Signs a message with the identity key using ECDSA and returns the signature.
     ///
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.

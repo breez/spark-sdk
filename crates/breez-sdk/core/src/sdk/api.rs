@@ -4,9 +4,10 @@ use tracing::{error, info};
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
-    UpdateUserSettingsRequest, UserSettings,
+    DeleteWebhookRequest, DeleteWebhookResponse, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    ListWebhooksResponse, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UpdateUserSettingsRequest, UserSettings,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -279,6 +280,43 @@ impl BreezSdk {
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.spark_wallet.get_leaf_optimization_progress().into()
+    }
+
+    /// Registers a webhook with the SSP to receive notifications for wallet events.
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> Result<RegisterWebhookResponse, SdkError> {
+        let event_types = request.event_types.into_iter().map(Into::into).collect();
+        let webhook_id = self
+            .spark_wallet
+            .register_wallet_webhook(&request.url, &request.secret, event_types)
+            .await?;
+        Ok(RegisterWebhookResponse { webhook_id })
+    }
+
+    /// Deletes a previously registered webhook.
+    pub async fn delete_webhook(
+        &self,
+        request: DeleteWebhookRequest,
+    ) -> Result<DeleteWebhookResponse, SdkError> {
+        let success = self
+            .spark_wallet
+            .delete_wallet_webhook(&request.webhook_id)
+            .await?;
+        Ok(DeleteWebhookResponse { success })
+    }
+
+    /// Lists all registered webhooks.
+    pub async fn list_webhooks(&self) -> Result<ListWebhooksResponse, SdkError> {
+        let webhooks = self
+            .spark_wallet
+            .list_wallet_webhooks()
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        Ok(ListWebhooksResponse { webhooks })
     }
 
     /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).

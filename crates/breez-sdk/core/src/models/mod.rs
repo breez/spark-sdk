@@ -1583,3 +1583,102 @@ pub struct ListContactsRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub limit: Option<u32>,
 }
+
+/// The type of event that triggers a webhook.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WebhookEventType {
+    LightningReceiveFinished,
+    LightningSendFinished,
+    CoopExitFinished,
+    StaticDepositFinished,
+}
+
+impl From<WebhookEventType> for spark_wallet::SparkWalletWebhookEventType {
+    fn from(value: WebhookEventType) -> Self {
+        match value {
+            WebhookEventType::LightningReceiveFinished => {
+                spark_wallet::SparkWalletWebhookEventType::SparkLightningReceiveFinished
+            }
+            WebhookEventType::LightningSendFinished => {
+                spark_wallet::SparkWalletWebhookEventType::SparkLightningSendFinished
+            }
+            WebhookEventType::CoopExitFinished => {
+                spark_wallet::SparkWalletWebhookEventType::SparkCoopExitFinished
+            }
+            WebhookEventType::StaticDepositFinished => {
+                spark_wallet::SparkWalletWebhookEventType::SparkStaticDepositFinished
+            }
+        }
+    }
+}
+
+impl From<spark_wallet::SparkWalletWebhookEventType> for WebhookEventType {
+    fn from(value: spark_wallet::SparkWalletWebhookEventType) -> Self {
+        match value {
+            spark_wallet::SparkWalletWebhookEventType::SparkLightningReceiveFinished => {
+                WebhookEventType::LightningReceiveFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkLightningSendFinished => {
+                WebhookEventType::LightningSendFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkCoopExitFinished => {
+                WebhookEventType::CoopExitFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkStaticDepositFinished
+            | spark_wallet::SparkWalletWebhookEventType::Unknown => {
+                WebhookEventType::StaticDepositFinished
+            }
+        }
+    }
+}
+
+/// Request to register a webhook.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RegisterWebhookRequest {
+    pub url: String,
+    pub secret: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+/// Response from registering a webhook.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RegisterWebhookResponse {
+    pub webhook_id: String,
+}
+
+/// Request to delete a webhook.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeleteWebhookRequest {
+    pub webhook_id: String,
+}
+
+/// Response from deleting a webhook.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeleteWebhookResponse {
+    pub success: bool,
+}
+
+/// A registered webhook.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Webhook {
+    pub id: String,
+    pub url: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+impl From<spark_wallet::WebhookEntry> for Webhook {
+    fn from(entry: spark_wallet::WebhookEntry) -> Self {
+        Webhook {
+            id: entry.webhook_id,
+            url: entry.url,
+            event_types: entry.event_types.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Response from listing webhooks.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListWebhooksResponse {
+    pub webhooks: Vec<Webhook>,
+}

@@ -1340,3 +1340,46 @@ pub struct ListContactsRequest {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
 }
+
+#[allow(clippy::enum_variant_names)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::WebhookEventType)]
+pub enum WebhookEventType {
+    LightningReceiveFinished,
+    LightningSendFinished,
+    CoopExitFinished,
+    StaticDepositFinished,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RegisterWebhookRequest)]
+pub struct RegisterWebhookRequest {
+    pub url: String,
+    pub secret: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RegisterWebhookResponse)]
+pub struct RegisterWebhookResponse {
+    pub webhook_id: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::DeleteWebhookRequest)]
+pub struct DeleteWebhookRequest {
+    pub webhook_id: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::DeleteWebhookResponse)]
+pub struct DeleteWebhookResponse {
+    pub success: bool,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Webhook)]
+pub struct Webhook {
+    pub id: String,
+    pub url: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListWebhooksResponse)]
+pub struct ListWebhooksResponse {
+    pub webhooks: Vec<Webhook>,
+}

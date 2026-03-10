@@ -372,4 +372,25 @@ impl BreezSdk {
             .map(Into::into)
             .collect())
     }
+
+    #[wasm_bindgen(js_name = "registerWebhook")]
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> WasmResult<RegisterWebhookResponse> {
+        Ok(self.sdk.register_webhook(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "deleteWebhook")]
+    pub async fn delete_webhook(
+        &self,
+        request: DeleteWebhookRequest,
+    ) -> WasmResult<DeleteWebhookResponse> {
+        Ok(self.sdk.delete_webhook(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "listWebhooks")]
+    pub async fn list_webhooks(&self) -> WasmResult<ListWebhooksResponse> {
+        Ok(self.sdk.list_webhooks().await?.into())
+    }
 }

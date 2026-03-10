@@ -278,4 +278,22 @@ impl BreezSdk {
     ) -> Result<Vec<Contact>, SdkError> {
         self.inner.list_contacts(request).await
     }
+
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> Result<RegisterWebhookResponse, SdkError> {
+        self.inner.register_webhook(request).await
+    }
+
+    pub async fn delete_webhook(
+        &self,
+        request: DeleteWebhookRequest,
+    ) -> Result<DeleteWebhookResponse, SdkError> {
+        self.inner.delete_webhook(request).await
+    }
+
+    pub async fn list_webhooks(&self) -> Result<ListWebhooksResponse, SdkError> {
+        self.inner.list_webhooks().await
+    }
 }
