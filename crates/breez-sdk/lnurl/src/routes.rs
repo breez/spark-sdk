@@ -1339,3 +1339,583 @@ fn sanitize_domain<DB>(
     warn!("domain not allowed: {}", domain);
     Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Extension, Router, routing::post};
+    use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+    use tower::ServiceExt;
+
+    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, NewlyPaid};
+    use crate::user::User;
+    use crate::zap::Zap;
+
+    // --- Minimal in-memory repository for testing ---
+
+    #[derive(Clone, Default)]
+    struct MockRepository {
+        invoices: std::sync::Arc<tokio::sync::Mutex<Vec<Invoice>>>,
+        newly_paid: std::sync::Arc<tokio::sync::Mutex<Vec<NewlyPaid>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::repository::LnurlRepository for MockRepository {
+        async fn delete_user(&self, _: &str, _: &str) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_user_by_name(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<User>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn get_user_by_pubkey(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<User>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn upsert_zap(&self, _: &Zap) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_zap_by_payment_hash(
+            &self,
+            _: &str,
+        ) -> Result<Option<Zap>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn is_zap_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
+            Ok(false)
+        }
+        async fn insert_lnurl_sender_comment(
+            &self,
+            _: &LnurlSenderComment,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_metadata_by_pubkey(
+            &self,
+            _: &str,
+            _: u32,
+            _: u32,
+            _: Option<i64>,
+        ) -> Result<Vec<lnurl_models::ListMetadataMetadata>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
+            let mut invoices = self.invoices.lock().await;
+            invoices.retain(|i| i.payment_hash != invoice.payment_hash);
+            invoices.push(invoice.clone());
+            Ok(())
+        }
+        async fn get_invoice_by_payment_hash(
+            &self,
+            payment_hash: &str,
+        ) -> Result<Option<Invoice>, LnurlRepositoryError> {
+            let invoices = self.invoices.lock().await;
+            Ok(invoices
+                .iter()
+                .find(|i| i.payment_hash == payment_hash)
+                .cloned())
+        }
+        async fn get_invoice_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn is_invoice_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
+            Ok(false)
+        }
+        async fn insert_newly_paid(&self, np: &NewlyPaid) -> Result<(), LnurlRepositoryError> {
+            self.newly_paid.lock().await.push(np.clone());
+            Ok(())
+        }
+        async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn update_newly_paid_retry(
+            &self,
+            _: &str,
+            _: i32,
+            _: i64,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn delete_newly_paid(&self, _: &str) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+    }
+
+    // --- Helper to build a minimal test State ---
+
+    async fn build_test_state(
+        repo: MockRepository,
+        webhook_hmac_secret: Option<&str>,
+    ) -> State<MockRepository> {
+        use spark::operator::rpc::DefaultConnectionManager;
+        use spark::session_manager::InMemorySessionManager;
+        use spark::ssp::ServiceProvider;
+        use spark::token::InMemoryTokenOutputStore;
+        use spark::tree::InMemoryTreeStore;
+        use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
+        use std::collections::HashSet;
+        use tokio::sync::{Mutex, watch};
+
+        let auth_seed: [u8; 32] = [1u8; 32];
+        let network = Network::Regtest;
+        let spark_config = SparkWalletConfig::default_config(network);
+        let signer = Arc::new(DefaultSigner::new(&auth_seed, network).unwrap());
+        let session_manager = Arc::new(InMemorySessionManager::default());
+        let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
+            Arc::new(DefaultConnectionManager::new());
+        let coordinator = spark_config.operator_pool.get_coordinator().clone();
+        let service_provider = Arc::new(ServiceProvider::new(
+            spark_config.service_provider_config.clone(),
+            signer.clone(),
+            session_manager.clone(),
+        ));
+
+        let wallet = Arc::new(
+            spark_wallet::SparkWallet::new(
+                spark_config,
+                signer.clone(),
+                session_manager.clone(),
+                Arc::new(InMemoryTreeStore::default()),
+                Arc::new(InMemoryTokenOutputStore::default()),
+                Arc::clone(&connection_manager),
+                None,
+                true,
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+
+        let (invoice_paid_trigger, _rx) = watch::channel(());
+
+        State {
+            db: repo,
+            wallet,
+            scheme: "http".to_string(),
+            min_sendable: 1000,
+            max_sendable: 1_000_000_000,
+            include_spark_address: false,
+            domains: HashSet::new(),
+            nostr_keys: None,
+            ca_cert: None,
+            connection_manager,
+            coordinator,
+            signer,
+            session_manager,
+            service_provider,
+            subscribed_keys: Arc::new(Mutex::new(HashSet::new())),
+            invoice_paid_trigger,
+            webhook_hmac_secret: webhook_hmac_secret.map(String::from),
+        }
+    }
+
+    fn build_webhook_router(state: State<MockRepository>) -> Router {
+        Router::new()
+            .route(
+                "/webhook/{pubkey}",
+                post(LnurlServer::<MockRepository>::webhook),
+            )
+            .layer(Extension(state))
+    }
+
+    fn compute_hmac(secret_hex: &str, body: &[u8]) -> String {
+        let secret_bytes = hex::decode(secret_hex).unwrap();
+        let mut engine = HmacEngine::<sha256::Hash>::new(&secret_bytes);
+        engine.input(body);
+        let hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+        hex::encode(hmac.to_byte_array())
+    }
+
+    // --- Tests ---
+
+    #[test]
+    fn test_derive_webhook_secret_deterministic() {
+        let s1 = derive_webhook_secret("my-secret", "abc123");
+        let s2 = derive_webhook_secret("my-secret", "abc123");
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn test_derive_webhook_secret_changes_with_pubkey() {
+        let s1 = derive_webhook_secret("my-secret", "pubkey1");
+        let s2 = derive_webhook_secret("my-secret", "pubkey2");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_derive_webhook_secret_changes_with_secret() {
+        let s1 = derive_webhook_secret("secret-a", "pubkey");
+        let s2 = derive_webhook_secret("secret-b", "pubkey");
+        assert_ne!(s1, s2);
+    }
+
+    #[test]
+    fn test_derive_webhook_secret_is_valid_hex() {
+        let s = derive_webhook_secret("test", "key");
+        assert_eq!(s.len(), 64); // SHA256 = 32 bytes = 64 hex chars
+        assert!(hex::decode(&s).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_derive_webhook_info_none_when_no_secret() {
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, None).await;
+        let (url, secret) = derive_webhook_info(&state, "example.com", "abc123");
+        assert!(url.is_none());
+        assert!(secret.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_derive_webhook_info_returns_values_when_configured() {
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some("my-secret")).await;
+        let (url, secret) = derive_webhook_info(&state, "example.com", "abc123");
+        assert_eq!(url, Some("http://example.com/webhook/abc123".to_string()));
+        assert_eq!(secret, Some(derive_webhook_secret("my-secret", "abc123")));
+    }
+
+    #[tokio::test]
+    async fn test_webhook_returns_404_when_not_configured() {
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, None).await;
+        let app = build_webhook_router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/webhook/somepubkey")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_rejects_missing_signature() {
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some("test-secret")).await;
+        let app = build_webhook_router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/webhook/somepubkey")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_rejects_invalid_signature() {
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some("test-secret")).await;
+        let app = build_webhook_router(state);
+
+        let body = r#"{"type":"SPARK_LIGHTNING_RECEIVE_FINISHED","payment_preimage":"aa","receiver_identity_public_key":"somepubkey"}"#;
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/webhook/somepubkey")
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", "deadbeef")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_ignores_unknown_event_type() {
+        let pubkey = "aabbccdd";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, pubkey);
+
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let body = r#"{"type":"SPARK_LIGHTNING_SEND_FINISHED"}"#;
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_rejects_missing_preimage() {
+        let pubkey = "aabbccdd";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, pubkey);
+
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let body = serde_json::json!({
+            "type": "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            "receiver_identity_public_key": pubkey
+        })
+        .to_string();
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_ignores_pubkey_mismatch() {
+        let url_pubkey = "aabbccdd";
+        let payload_pubkey = "11223344";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, url_pubkey);
+
+        let preimage = "aa".repeat(32);
+        let body = serde_json::json!({
+            "type": "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            "payment_preimage": preimage,
+            "receiver_identity_public_key": payload_pubkey
+        })
+        .to_string();
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{url_pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should return OK (silently ignore mismatch)
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_processes_valid_payment() {
+        let pubkey = "aabbccdd";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, pubkey);
+
+        // Create a known preimage and compute its payment hash
+        let preimage_bytes = [0x42u8; 32];
+        let preimage_hex = hex::encode(preimage_bytes);
+        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+        let repo = MockRepository::default();
+
+        // Seed the repository with an invoice matching this payment hash
+        let invoice = Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: pubkey.to_string(),
+            invoice: "lnbc1test".to_string(),
+            preimage: None,
+            invoice_expiry: 9_999_999_999,
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        repo.upsert_invoice(&invoice).await.unwrap();
+
+        let state = build_test_state(repo.clone(), Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let body = serde_json::json!({
+            "type": "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            "payment_preimage": preimage_hex,
+            "receiver_identity_public_key": pubkey
+        })
+        .to_string();
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the invoice now has the preimage stored
+        let updated = repo
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.preimage.as_deref(), Some(preimage_hex.as_str()));
+
+        // Verify a newly_paid entry was queued for background processing
+        let queued = repo.newly_paid.lock().await;
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].payment_hash, payment_hash);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_ok_when_invoice_not_found() {
+        let pubkey = "aabbccdd";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, pubkey);
+
+        let preimage_bytes = [0x42u8; 32];
+        let preimage_hex = hex::encode(preimage_bytes);
+
+        let repo = MockRepository::default();
+        let state = build_test_state(repo, Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let body = serde_json::json!({
+            "type": "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            "payment_preimage": preimage_hex,
+            "receiver_identity_public_key": pubkey
+        })
+        .to_string();
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // No invoice found — returns OK gracefully
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_ok_when_invoice_belongs_to_different_user() {
+        let pubkey = "aabbccdd";
+        let hmac_secret = "test-secret";
+        let derived = derive_webhook_secret(hmac_secret, pubkey);
+
+        let preimage_bytes = [0x42u8; 32];
+        let preimage_hex = hex::encode(preimage_bytes);
+        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+        let repo = MockRepository::default();
+        // Invoice belongs to a different user
+        let invoice = Invoice {
+            payment_hash: payment_hash.clone(),
+            user_pubkey: "other_user_pubkey".to_string(),
+            invoice: "lnbc1test".to_string(),
+            preimage: None,
+            invoice_expiry: 9_999_999_999,
+            created_at: 1000,
+            updated_at: 1000,
+        };
+        repo.upsert_invoice(&invoice).await.unwrap();
+
+        let state = build_test_state(repo.clone(), Some(hmac_secret)).await;
+        let app = build_webhook_router(state);
+
+        let body = serde_json::json!({
+            "type": "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            "payment_preimage": preimage_hex,
+            "receiver_identity_public_key": pubkey
+        })
+        .to_string();
+        let sig = compute_hmac(&derived, body.as_bytes());
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("content-type", "application/json")
+                    .header("X-Spark-Signature", sig)
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Mismatch ignored — returns OK
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Invoice should NOT have been updated
+        let unchanged = repo
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(unchanged.preimage.is_none());
+    }
+}
