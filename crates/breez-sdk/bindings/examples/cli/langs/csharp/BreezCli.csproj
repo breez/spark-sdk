@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>BreezCli</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Uses local bindings by default (run `make setup` first).
+         To use the published SDK instead, replace with:
+         <PackageReference Include="Breez.Sdk.Spark" Version="*-*" /> -->
+    <ProjectReference Include="../../../../langs/csharp/src/Breez.Sdk.Spark.csproj" />
+    <PackageReference Include="NBitcoin" Version="7.*" />
+    <PackageReference Include="ReadLine" Version="2.*" />
+  </ItemGroup>
+</Project>

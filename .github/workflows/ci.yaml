@@ -168,54 +168,14 @@ jobs:
       - name: Check git status
         uses: ./.github/actions/check-git-status
 
-      - name: CLI static analysis (dart)
+      - name: CLI static analysis (flutter)
         working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-dart
+        run: make check-flutter
 
-  cli-python:
-    name: CLI static analysis (python)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check Python CLI
-        working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-python
-
-  cli-go:
-    name: CLI static analysis (go)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.19'
-
-      - name: Check Go CLI
-        working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-go
-
-  cli-swift:
-    name: CLI static analysis (swift)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup build environment
-        uses: ./.github/actions/setup-build
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check Swift CLI
-        working-directory: crates/breez-sdk/bindings/examples/cli
-        run: make check-swift
+  cli:
+    name: CLI
+    uses: ./.github/workflows/cli-ci.yml
+    secrets: inherit
 
   docs:
     name: Docs

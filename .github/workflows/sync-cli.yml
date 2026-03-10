@@ -1,4 +1,4 @@
-# Syncs language CLIs (Dart, Go, Python, Swift) with the Rust CLI.
+# Syncs language CLIs (Flutter, Go, Python, Swift, WASM, C#, Kotlin Multiplatform, React Native) with the Rust CLI.
 #
 # Uses a matrix strategy to run all languages in parallel.  Each language's
 # prompt is assembled at runtime from:
@@ -21,7 +21,7 @@ on:
       languages:
         description: 'Languages to sync (remove what you do not want)'
         required: false
-        default: '["dart", "go", "python", "swift"]'
+        default: '["csharp", "flutter", "golang", "kotlin-multiplatform", "python", "react-native", "swift", "wasm"]'
         type: string
       base-sha:
         description: 'Base commit SHA to diff against (leave empty for full comparison)'
@@ -51,10 +51,14 @@ jobs:
           REQUESTED: ${{ inputs.languages }}
         run: |
           ALL='[
-            {"lang":"dart","runner":"ubuntu-latest","timeout":30},
-            {"lang":"go","runner":"ubuntu-latest","timeout":30},
+            {"lang":"csharp","runner":"ubuntu-latest","timeout":30},
+            {"lang":"flutter","runner":"ubuntu-latest","timeout":30},
+            {"lang":"golang","runner":"ubuntu-latest","timeout":30},
+            {"lang":"kotlin-multiplatform","runner":"ubuntu-latest","timeout":45},
             {"lang":"python","runner":"ubuntu-latest","timeout":30},
-            {"lang":"swift","runner":"macos-latest","timeout":45}
+            {"lang":"react-native","runner":"ubuntu-latest","timeout":30},
+            {"lang":"swift","runner":"macos-latest","timeout":45},
+            {"lang":"wasm","runner":"ubuntu-latest","timeout":30}
           ]'
           if [ -z "$REQUESTED" ]; then
             echo "matrix={\"include\":$(echo "$ALL" | jq -c '.')}" >> "$GITHUB_OUTPUT"
@@ -62,7 +66,7 @@ jobs:
             FILTERED=$(echo "$ALL" | jq -c --argjson langs "$REQUESTED" \
               '[.[] | select(.lang as $l | $langs | index($l))]')
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No valid languages in: $REQUESTED (available: dart, go, python, swift)"
+              echo "::error::No valid languages in: $REQUESTED (available: csharp, flutter, golang, kotlin-multiplatform, python, react-native, swift, wasm)"
               exit 1
             fi
             echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
@@ -252,23 +256,42 @@ jobs:
 
       # ── Language-specific setup ─────────────────────────────────────
       - name: Set up Flutter
-        if: matrix.lang == 'dart' && inputs.approve-run == ''
+        if: matrix.lang == 'flutter' && inputs.approve-run == ''
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: 3.41.3
 
       - name: Set up build environment
-        if: (matrix.lang == 'swift' || matrix.lang == 'go') && inputs.approve-run == ''
+        if: (matrix.lang == 'swift' || matrix.lang == 'golang' || matrix.lang == 'csharp' || matrix.lang == 'kotlin-multiplatform') && inputs.approve-run == ''
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
 
       - name: Set up Go
-        if: matrix.lang == 'go' && inputs.approve-run == ''
+        if: matrix.lang == 'golang' && inputs.approve-run == ''
         uses: actions/setup-go@v5
         with:
           go-version: '1.19'
+
+      - name: Set up Node.js
+        if: (matrix.lang == 'wasm' || matrix.lang == 'react-native') && inputs.approve-run == ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up .NET
+        if: matrix.lang == 'csharp' && inputs.approve-run == ''
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set up JDK
+        if: matrix.lang == 'kotlin-multiplatform' && inputs.approve-run == ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
       # ── Generate prompt and run Claude ───────────────────────────────
       - name: Generate sync prompt

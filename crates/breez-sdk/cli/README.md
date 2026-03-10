@@ -74,9 +74,14 @@ This Rust CLI is the source of truth. Automated ports are maintained in [`bindin
 
 | Language | Path |
 |----------|------|
+| [C#](../bindings/examples/cli/langs/csharp/) | `bindings/examples/cli/langs/csharp/` |
+| [Flutter](../bindings/examples/cli/langs/flutter/) | `bindings/examples/cli/langs/flutter/` |
+| [Go](../bindings/examples/cli/langs/golang/) | `bindings/examples/cli/langs/golang/` |
+| [Kotlin Multiplatform](../bindings/examples/cli/langs/kotlin-multiplatform/) | `bindings/examples/cli/langs/kotlin-multiplatform/` |
 | [Python](../bindings/examples/cli/langs/python/) | `bindings/examples/cli/langs/python/` |
-| [Go](../bindings/examples/cli/langs/go/) | `bindings/examples/cli/langs/go/` |
-| [Dart](../bindings/examples/cli/langs/dart/) | `bindings/examples/cli/langs/dart/` |
+| [React Native](../bindings/examples/cli/langs/react-native/) | `bindings/examples/cli/langs/react-native/` |
+| [Swift](../bindings/examples/cli/langs/swift/) | `bindings/examples/cli/langs/swift/` |
+| [WASM/TypeScript](../bindings/examples/cli/langs/wasm/) | `bindings/examples/cli/langs/wasm/` |
 
 Changes to this CLI trigger a [sync workflow](../../../.github/workflows/sync-cli-langs.yml) that automatically opens PRs to update each language port.
 

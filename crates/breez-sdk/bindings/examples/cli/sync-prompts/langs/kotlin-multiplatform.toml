@@ -1,0 +1,117 @@
+# Kotlin CLI sync prompt configuration
+#
+# This file defines Kotlin-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "Kotlin"
+lang_id   = "kotlin-multiplatform"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/"
+snippet_dir = "docs/breez-sdk/snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/"
+package_registry = "Maven Central (https://central.sonatype.com)"
+
+# File layout
+serialization_file = "Serialization.kt"
+issuer_file = "Issuer.kt"
+subgroup_path_pattern = "src/main/kotlin/<Name>.kt"
+cli_binary = "./gradlew run --args"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'println("Not yet supported") and return'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "Gradle build and run commands (`./gradlew run --args='...'` instead of `cargo run --`)"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "Gradle setup, JDK requirements, or Kotlin-specific notes"
+
+# Build check command (builds with local bindings)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-kotlin-multiplatform"
+
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-kotlin-multiplatform:*)"""
+
+[file_mapping]
+content = """
+| Rust source | Kotlin target |
+|-------------|---------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Main.kt` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Commands.kt` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Issuer.kt` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/src/main/kotlin/Persistence.kt` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → Kotlin kebab-case command names in registry
+- New commands need: `handleXxx` function, `buildCommandRegistry()` entry, `commandNames` list entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `FlagParser.get("x", "long-name")` (custom flag parser)
+- `Option<T>` → nullable Kotlin type (`String?`, `ULong?`, `BigInteger?`)
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `fp.has("name")` (boolean flag check)
+- `Vec<T>` → `List<String>` via `fp.getAll("name")`
+- Positional args → `fp.positional[0]`, `fp.positional[1]`, etc.
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `sdk.methodName(MethodRequest(field1 = val, field2 = val))`
+- Method names are camelCase: `get_info` → `getInfo`, `prepare_send_payment` → `prepareSendPayment`
+- Free functions: `get_spark_status()` → `getSparkStatus()`
+- Config: `default_config(Network::Mainnet)` → `defaultConfig(Network.MAINNET)`
+- Connect: `connect(req)` → `connect(ConnectRequest(config, seed, storageDir))`
+- Postgres: `default_postgres_storage_config(str)` → `defaultPostgresStorageConfig(str)`
+
+**Enums:**
+- `EnumType::Variant { field }` → `EnumType.Variant(field = value)` (sealed class constructor)
+- `EnumType::Variant` (unit) → `EnumType.Variant` (object)
+- Pattern match → `when (val) { is EnumType.Variant -> ... }`
+- Simple enums: `Network::Mainnet` → `Network.MAINNET` (SCREAMING_CASE)
+- `FeePolicy::FeesIncluded` → `FeePolicy.FEES_INCLUDED`
+- `ReceivePaymentMethod` → `ReceivePaymentMethod.SparkAddress`, `ReceivePaymentMethod.Bolt11Invoice(description, amountSats, ...)`
+- `SendPaymentOptions` → `SendPaymentOptions.BitcoinAddress(confirmationSpeed = OnchainConfirmationSpeed.FAST)`
+- `InputType` → `is InputType.LnurlPay -> { val data = input.payRequest; ... }`
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `readlinePrompt(prompt)` or `readlineWithDefault(prompt, default)`
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)` (Gson-based JSON serialization)
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `println("Error: msg"); return@runBlocking` or `throw Exception("msg")`
+
+**SDK version:**
+The Kotlin CLI uses the breez-sdk-spark-kmp bindings (built locally via `make setup`). All SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers. Reference the Kotlin snippets in `docs/breez-sdk/snippets/kotlin_mpp_lib/` for exact API patterns.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- Kotlin: main REPL checks `cmdName == "group"` and calls `dispatchGroupCommand(args, ...)`
+- Each group has its own file with `commandNames`, `buildRegistry()`, dispatch function, handlers
+
+**Kotlin-specific UniFFI quirks:**
+- All SDK methods are `suspend fun` — the CLI main wraps everything in `runBlocking { }`
+- `u128` maps to `com.ionspin.kotlin.bignum.integer.BigInteger` — use `BigInteger.parseString("...")` to parse user input
+- `u64` maps to `ULong` — use `.toULong()` to convert, `ULong?` for optional
+- Simple enums use SCREAMING_SNAKE_CASE: `Network.MAINNET`, `OnchainConfirmationSpeed.FAST`
+- Sealed class enum variants: `is SdkEvent.Synced`, `is InputType.LnurlPay`
+- Sealed class fields accessed directly: `(input as InputType.LnurlPay).payRequest`
+- SdkBuilder: `SdkBuilder(config, seed)` → `.withDefaultStorage(dir)` → `.build()`
+- `.withDefaultStorage()`, `.withPostgresStorage()`, `.withKeySet()` consume the builder — capture return value
+- Token issuer: `sdk.getTokenIssuer()` → `tokenIssuer.getIssuerTokenBalance()`
+- `Seed` → `Seed.Mnemonic(mnemonic, null)`
+- EventListener is an interface with `suspend fun onEvent(e: SdkEvent)`
+
+**Serialization:**
+- UniFFI types are not data classes — use Gson with reflection for JSON serialization
+- Handle BigInteger serialization specially (convert to string)
+"""

@@ -1,0 +1,68 @@
+name: CLI static analysis
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    name: ${{ matrix.lang }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lang: csharp
+            runner: ubuntu-latest
+            dotnet-version: "8.0.x"
+          - lang: golang
+            runner: ubuntu-latest
+            go-version: "1.19"
+          - lang: kotlin-multiplatform
+            runner: ubuntu-latest
+            java-version: "17"
+          - lang: python
+            runner: ubuntu-latest
+          - lang: react-native
+            runner: ubuntu-latest
+            node-version: "22"
+          - lang: swift
+            runner: macos-latest
+          - lang: wasm
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        if: matrix.lang != 'python' && matrix.lang != 'wasm' && matrix.lang != 'react-native'
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Go
+        if: matrix.go-version
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Setup .NET
+        if: matrix.dotnet-version
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet-version }}
+
+      - name: Setup Java
+        if: matrix.java-version
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: ${{ matrix.java-version }}
+
+      - name: Setup Node.js
+        if: matrix.node-version
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Check CLI
+        working-directory: crates/breez-sdk/bindings/examples/cli
+        run: make check-${{ matrix.lang }}

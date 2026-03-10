@@ -1,0 +1,114 @@
+# C# CLI sync prompt configuration
+#
+# This file defines C#-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "C#"
+lang_id   = "csharp"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/csharp/"
+snippet_dir = "docs/breez-sdk/snippets/csharp/"
+package_registry = "NuGet (https://www.nuget.org)"
+
+# File layout
+serialization_file = "Serialization.cs"
+issuer_file = "Issuer.cs"
+subgroup_path_pattern = "<Name>.cs"
+cli_binary = "dotnet run --"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'print "Not yet supported" and return'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler methods."
+
+# Documentation: build instructions wording
+doc_build_instructions = "dotnet build/run commands (`dotnet run --` instead of `cargo run --`)"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = ".NET SDK setup, NuGet configuration, or C#-specific notes"
+
+# Build check command (builds with local bindings)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-csharp"
+
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-csharp:*)"""
+
+[file_mapping]
+content = """
+| Rust source | C# target |
+|-------------|-----------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/csharp/Program.cs` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/csharp/Commands.cs` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/csharp/Issuer.cs` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/csharp/Persistence.cs` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/csharp/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → C# kebab-case command names in registry
+- New commands need: `HandleXxx` method, `BuildCommandRegistry()` entry, `CommandNames` list entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `FlagParser.Get("x", "long-name")` (custom flag parser)
+- `Option<T>` → nullable C# type (`string?`, `ulong?`)
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `fp.Has("name")` (boolean flag check)
+- `Vec<T>` → `string[]` or `List<string>`
+- Positional args → `fp.Positional[0]`, `fp.Positional[1]`, etc.
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `await sdk.MethodName(request: new MethodRequest(field1: val, field2: val))`
+- Method names are PascalCase: `get_info` → `GetInfo`, `prepare_send_payment` → `PrepareSendPayment`
+- Free/static functions: `get_spark_status()` → `await BreezSdkSparkMethods.GetSparkStatus()`
+- Config: `default_config(Network::Mainnet)` → `BreezSdkSparkMethods.DefaultConfig(Network.Mainnet)`
+- Connect: `connect(req)` → `await BreezSdkSparkMethods.Connect(request: req)`
+- Postgres: `default_postgres_storage_config(str)` → `BreezSdkSparkMethods.DefaultPostgresStorageConfig(str)`
+
+**Enums:**
+- `EnumType::Variant { field }` → `new EnumType.Variant(field: value)`
+- `EnumType::Variant` (unit) → `new EnumType.Variant()` or enum constant
+- Pattern match → `switch (val) { case EnumType.Variant v: ... }` or `if (val is EnumType.Variant v)`
+- Simple enums: `Network::Mainnet` → `Network.Mainnet`, `FeePolicy::FeesIncluded` → `FeePolicy.FeesIncluded`
+- `ReceivePaymentMethod` → `new ReceivePaymentMethod.SparkAddress()`, `new ReceivePaymentMethod.Bolt11Invoice(description: ..., amountSats: ...)`
+- `SendPaymentOptions` → `new SendPaymentOptions.BitcoinAddress(confirmationSpeed: OnchainConfirmationSpeed.Fast)`
+- `InputType` → `case InputType.LnurlPay lp:` with fields on `lp`
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `ReadlinePrompt(prompt)` or `ReadlineWithDefault(prompt, defaultValue)`
+
+**Output:**
+- `print_value(&v)?` → `PrintValue(v)` (reflection-based JSON serialization)
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `Console.Error.WriteLine("msg"); return;`
+
+**SDK version:**
+The C# CLI uses the Breez.Sdk.Spark NuGet package (built locally via `make setup`). All SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers. Reference the C# snippets in `docs/breez-sdk/snippets/csharp/` for exact API patterns.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- C#: main REPL checks `cmdName == "group"` and calls `DispatchGroupCommand(args, ...)`
+- Each group has its own file with `CommandNames`, `BuildRegistry()`, dispatch method, handlers
+
+**C#-specific UniFFI quirks:**
+- PascalCase everywhere: method names, property names, enum variants
+- Static methods are on `BreezSdkSparkMethods` class (e.g., `BreezSdkSparkMethods.DefaultConfig()`)
+- Config uses record `with` syntax for immutable copies: `config with { apiKey = "..." }`
+- `u64` → `ulong`, `u32` → `uint`, `u128` → `ulong` (check actual binding type)
+- `Option<u64>` → `ulong?` (nullable)
+- SdkBuilder: `new SdkBuilder(config: config, seed: seed)` → `.WithDefaultStorage()` → `.Build()`
+- Async: all SDK methods are `async Task<T>`, use `await`
+- Enum associated values are accessed as properties on the variant class
+- `Seed` → `new Seed.Mnemonic(mnemonic: str, passphrase: null)`
+
+**Serialization:**
+- UniFFI types may not have System.Text.Json attributes — use reflection-based serializer
+- Handle null values, enum types, and nested objects via PropertyInfo reflection
+"""

@@ -1,0 +1,116 @@
+# React Native CLI sync prompt configuration
+#
+# This file defines React Native-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+#
+# NOTE: React Native requires a mobile runtime. This "CLI" is implemented as
+# a sample RN app with a terminal/REPL-like screen, not a standalone binary.
+# CI only validates TypeScript compilation, not runtime behavior.
+
+[meta]
+lang_name = "React Native"
+lang_id   = "react-native"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/react-native/"
+snippet_dir = "docs/breez-sdk/snippets/react-native/"
+package_registry = "npm (https://www.npmjs.com)"
+
+# File layout
+serialization_file = "serialization.ts"
+issuer_file = "issuer.ts"
+subgroup_path_pattern = "src/<name>.ts"
+cli_binary = "npx react-native run-ios"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'return "Not yet supported"'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "React Native setup, Xcode/Android Studio requirements, and run commands"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "React Native environment setup, pod install steps, or mobile-specific notes"
+
+# Build check command (TypeScript type checking only — no simulator needed)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-react-native"
+
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-react-native:*)"""
+
+[file_mapping]
+content = """
+| Rust source | React Native target |
+|-------------|---------------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/react-native/src/App.tsx` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/react-native/src/commands.ts` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/react-native/src/issuer.ts` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/react-native/src/persistence.ts` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/react-native/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → TypeScript kebab-case command names in registry
+- New commands need: `handleXxx` function, command registration in `buildCommandRegistry()`, `COMMAND_NAMES` entry
+
+**Arguments:**
+- Arguments are parsed from a string array (command is split by spaces in the terminal UI)
+- `Option<T>` → `undefined` default
+- Boolean flags → check for `--flag-name` in args array
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `await sdk.methodName({ field1: val, field2: val })`
+- Method names are camelCase: `get_info` → `getInfo`, `prepare_send_payment` → `prepareSendPayment`
+- Free functions: `get_spark_status()` → `getSparkStatus()`
+
+**Enums:**
+- React Native enums use tag-based pattern: `event.tag === SdkEvent_Tags.Synced`
+- `EnumType::Variant { field }` → constructor: `new EnumType.Variant({ field: value })`
+- Pattern match → `if (val.tag === EnumType_Tags.Variant)` with `val.inner.field`
+- `InputType` → `input.tag === InputType_Tags.LnurlPay`, data via `input.inner`
+- `ReceivePaymentMethod` → `new ReceivePaymentMethod.SparkAddress()`, `new ReceivePaymentMethod.Bolt11Invoice({ description, amountSats })`
+- `SendPaymentOptions` → `new SendPaymentOptions.BitcoinAddress({ confirmationSpeed: OnchainConfirmationSpeed.Fast })`
+- `Seed` → `new Seed.Mnemonic({ mnemonic, passphrase: undefined })`
+- Network → `Network.Mainnet`, `Network.Regtest`
+
+**Interactive prompts:**
+- Since this is a React Native app, "prompts" are handled differently — the terminal UI collects input via TextInput component. For commands requiring additional input (e.g., amount in lnurl-pay), the command handler returns a prompt request and the UI handles collecting the response.
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)` returns a formatted JSON string to display in the terminal UI
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `return "Error: msg"` (return error string to display)
+
+**SDK version:**
+The React Native CLI uses the `@breeztech/breez-sdk-spark-react-native` package. All SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers. Reference the React Native snippets in `docs/breez-sdk/snippets/react-native/` for exact API patterns.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- React Native: command handler checks `cmdName === "group"` and calls `dispatchGroupCommand(args, ...)`
+- Each group has its own file with `COMMAND_NAMES`, registry, dispatch function, handlers
+
+**React Native-specific UniFFI quirks:**
+- This is NOT a standalone CLI — it's a React Native app with a terminal-like screen
+- Import from `'@breeztech/breez-sdk-spark-react-native'` (not the WASM package)
+- Use `BreezSdkInterface` and `TokenIssuerInterface` types for parameters (not `BreezSdk`/`TokenIssuer` class types which include internal uniffi symbols)
+- Enum tags use `SdkEvent_Tags.Synced` pattern (not `event.type === 'synced'`)
+- Tagged union constructors: `new Seed.Mnemonic({...})`, `new ReceivePaymentMethod.SparkAddress()`
+- Tagged union instances for filters: `new MaxFee.Fixed({ amount })`, `new Fee.Rate({ satPerVbyte })`, `new PaymentDetailsFilter.Spark({...})`
+- Record factories: `ConversionOptions.create({ conversionType, maxSlippageBps, completionTimeoutSecs })`
+- Simple enums are numeric (not strings): `PaymentType.Send`, `PaymentStatus.Completed`, `FeePolicy.FeesIncluded`
+- `AssetFilter` is a tagged union: `new AssetFilter.Bitcoin()`, `new AssetFilter.Token({ tokenIdentifier })`
+- `Passkey`, `NostrRelayConfig`, and contacts API (`addContact`, `listContacts`, etc.) are NOT available in the React Native SDK — stub these features
+- Storage paths use `RNFS.DocumentDirectoryPath` from `react-native-fs`
+- AsyncStorage or react-native-fs for persistence (not Node.js `fs`)
+- CI can only validate TypeScript compilation (`npx tsc --noEmit`), not actual runtime
+- The `App.tsx` is the terminal UI — command logic lives in `commands.ts`
+- To avoid type narrowing issues: use `as Network` cast on `DEFAULT_NETWORK`, `as PasskeyConfig | undefined` on config constants
+"""

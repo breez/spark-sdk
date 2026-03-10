@@ -1,0 +1,9 @@
+node_modules/
+package-lock.json
+ios/
+android/
+.expo/
+.data/
+dist/
+Gemfile
+Gemfile.lock

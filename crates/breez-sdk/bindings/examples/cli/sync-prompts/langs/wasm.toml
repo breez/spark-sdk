@@ -1,0 +1,109 @@
+# TypeScript/Node.js CLI sync prompt configuration
+#
+# This file defines TypeScript-specific sections that are substituted into
+# the shared prompt template (prompt-template.md) to produce the
+# final sync prompt used by the GitHub Actions workflow.
+
+[meta]
+lang_name = "TypeScript"
+lang_id   = "wasm"
+target_dir = "crates/breez-sdk/bindings/examples/cli/langs/wasm/"
+snippet_dir = "docs/breez-sdk/snippets/wasm/"
+package_registry = "npm (https://www.npmjs.com)"
+
+# File layout
+serialization_file = "serialization.js"
+issuer_file = "issuer.js"
+subgroup_path_pattern = "src/<name>.js"
+cli_binary = "node src/main.js"
+
+# What to say when a feature can't be implemented
+unsupported_handler = 'print "Not yet supported" and return'
+
+# Extra components needed for subcommand groups in this language
+extra_subgroup_components = "and handler functions."
+
+# Documentation: build instructions wording
+doc_build_instructions = "npm install and run commands (`node src/main.js` instead of `cargo run --`)"
+
+# Documentation: what language-specific content to preserve
+doc_preserve_items = "npm install instructions, or Node.js/WASM-specific notes"
+
+# Build check command (syntax validation)
+build_check = "make -C crates/breez-sdk/bindings/examples/cli check-wasm"
+
+# Format instructions appended to the build check step (empty = no extra instructions)
+format_instructions = ""
+
+# Claude Code allowed tools (workflow YAML)
+allowed_tools = """Read,Write,Edit,Glob,Grep,
+Bash(git diff:*),
+Bash(make -C crates/breez-sdk/bindings/examples/cli check-wasm:*)"""
+
+[file_mapping]
+content = """
+| Rust source | TypeScript target |
+|-------------|-------------------|
+| `crates/breez-sdk/cli/src/main.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/main.js` |
+| `crates/breez-sdk/cli/src/command/mod.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/commands.js` |
+| `crates/breez-sdk/cli/src/command/issuer.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/issuer.js` |
+| `crates/breez-sdk/cli/src/persist.rs` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/src/persistence.js` |
+| `crates/breez-sdk/cli/README.md` | `crates/breez-sdk/bindings/examples/cli/langs/wasm/README.md` |"""
+
+[translation_rules]
+content = """
+**Commands:**
+- Rust `Command` enum PascalCase → TypeScript kebab-case command names in registry
+- New commands need: `handleXxx` function, command registration in `buildCommandRegistry()`, `COMMAND_NAMES` entry
+
+**Arguments:**
+- `#[arg(short = 'x', long)]` → `.addOption(new Option('-x, --long-name <value>', 'description'))`
+- `Option<T>` → `undefined` default
+- `#[arg(action = clap::ArgAction::SetTrue)]` → `.option('--name', 'description')` (boolean flag)
+- `Vec<T>` → `.option('--name <values...>', 'description')`
+- Numeric parsing: `.argParser(parseInt)` for integers, `.argParser(BigInt)` for u128
+
+**SDK calls:**
+- `sdk.method(Request { field1, field2 })` → `await sdk.methodName({ field1: val, field2: val })`
+- Method names are camelCase: `get_info` → `getInfo`, `prepare_send_payment` → `prepareSendPayment`
+- Free functions: `get_spark_status()` → `getSparkStatus()`
+
+**Enums:**
+- WASM enums use tagged object pattern: `{ type: 'variant', ...fields }`
+- `EnumType::Variant { field }` → `{ type: 'variant', field: value }`
+- `EnumType::Variant` (unit) → `{ type: 'variant' }` or just `'variant'` (depends on type)
+- Pattern match → `if (val.type === 'variant')` or `switch (val.type) { case 'variant': ... }`
+- Simple string enums: `FeePolicy` → `'feesIncluded'` or `'feesExcluded'`
+- `ReceivePaymentMethod` → `{ type: 'sparkAddress' }`, `{ type: 'bolt11Invoice', description, amountSats }`, etc.
+- `SendPaymentOptions` → `{ type: 'bitcoinAddress', confirmationSpeed: 'fast' }`, etc.
+- `ConversionType` → `{ type: 'fromBitcoin' }` or `{ type: 'toBitcoin', fromTokenIdentifier: '...' }`
+- `MaxFee` → `{ type: 'fixed', amount }`, `{ type: 'rate', satPerVbyte }`, `{ type: 'networkRecommended', leewaySatPerVbyte }`
+- `InputType` → check `input.type === 'lnurlPay'`, fields are directly on the object
+
+**Interactive prompts:**
+- `rl.readline(prompt)` → `await question(prompt)` (uses Node.js readline)
+
+**Output:**
+- `print_value(&v)?` → `printValue(v)` (JSON.stringify with BigInt support)
+
+**Errors:**
+- `return Err(anyhow!("msg"))` → `console.error("msg"); return`
+
+**SDK version:**
+The TypeScript CLI uses the `@breeztech/breez-sdk-spark` WASM package (Node.js entry point). Import via `require('@breeztech/breez-sdk-spark/nodejs')`. All SDK methods from the Rust CLI are available. All commands should be fully implemented — do not use stub handlers. Reference the WASM snippets in `docs/breez-sdk/snippets/wasm/` for exact API patterns.
+
+**Subcommand groups (like Issuer, Contacts):**
+- Rust `Command::GroupName(SubCommand)` dispatches to `group::handle_command()`
+- TypeScript: main REPL checks `cmdName === 'group'` and calls `dispatchGroupCommand(args, ...)`
+- Each group has its own file with `COMMAND_NAMES`, command registry, dispatch function, handlers
+
+**TypeScript/WASM-specific quirks:**
+- Use CommonJS (`require`) not ESM (`import`) — the WASM Node.js bindings use CommonJS
+- `BigInt.prototype.toJSON = function() { return this.toString() }` is needed for JSON serialization of BigInt values
+- `u128` maps to native `BigInt` — parse with `BigInt(str)`, not `parseInt`
+- `SdkBuilder.new(config, seed)` returns a builder; `.withDefaultStorage()` and `.withPostgresStorage()` are chained
+- `Seed` is `{ type: 'mnemonic', mnemonic: str, passphrase: undefined }`
+- `defaultConfig('regtest')` takes a string, not an enum variant
+- Token issuer: `sdk.getTokenIssuer()` → `await tokenIssuer.methodName({...})`
+- WASM `parse()` returns objects with a `type` field (not `tag`), unlike React Native
+"""
