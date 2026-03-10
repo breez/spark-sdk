@@ -1716,3 +1716,73 @@ async fn test_11_lnurl_spark_address_payment(
     info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
     Ok(())
 }
+
+/// Test that when `support_lnurl_verify` is enabled and a Lightning address is
+/// registered, `list_webhooks` returns a webhook pointing to the LNURL server.
+#[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
+#[test_log::test(tokio::test)]
+async fn test_12_lnurl_webhook_registered(#[case] use_postgres: bool) -> Result<()> {
+    info!("=== Starting test_12_lnurl_webhook_registered ===");
+
+    let bob = setup_bob(use_postgres).await?;
+    let lnurl_fixture = bob
+        .lnurl_fixture
+        .as_ref()
+        .expect("Bob should have an LNURL fixture");
+    let lnurl_domain = lnurl_fixture.http_url().to_string();
+
+    // Bob registers a Lightning address (support_lnurl_verify is true in setup_bob)
+    bob.sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: "bobwebhook".to_string(),
+            description: Some("Bob's webhook test".to_string()),
+        })
+        .await?;
+
+    info!("Bob registered Lightning address, checking for LNURL webhook");
+
+    // list_webhooks should return a webhook pointing to the LNURL server
+    let webhooks = wait_for(
+        || {
+            let sdk = bob.sdk.clone();
+            async move {
+                let response = sdk.list_webhooks().await?;
+                if response.webhooks.is_empty() {
+                    anyhow::bail!("No webhooks registered yet");
+                }
+                Ok(response.webhooks)
+            }
+        },
+        30,
+    )
+    .await?;
+
+    info!("Found {} webhook(s)", webhooks.len());
+
+    let lnurl_webhook = webhooks
+        .iter()
+        .find(|w| w.url.starts_with(&lnurl_domain))
+        .expect("Expected a webhook URL pointing to the LNURL server");
+
+    info!(
+        "LNURL webhook: id={}, url={}",
+        lnurl_webhook.id, lnurl_webhook.url
+    );
+
+    assert!(
+        lnurl_webhook.url.contains("/webhook/"),
+        "Webhook URL should contain /webhook/ path, got: {}",
+        lnurl_webhook.url,
+    );
+    assert!(
+        lnurl_webhook
+            .event_types
+            .contains(&WebhookEventType::LightningReceiveFinished),
+        "Webhook should listen for LightningReceiveFinished events",
+    );
+
+    info!("=== Test test_12_lnurl_webhook_registered PASSED ===");
+    Ok(())
+}
