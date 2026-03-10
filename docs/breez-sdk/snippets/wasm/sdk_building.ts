@@ -68,9 +68,14 @@ const exampleWithPostgresStorage = async () => {
   pgConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
   pgConfig.recycleTimeoutSecs = 30 // Timeout for recycling an idle connection
 
-  // Build the SDK with PostgreSQL storage
+  // Configure PostgreSQL tree store
+  // Can use the same or a different PostgreSQL database
+  const treeStoreConfig = defaultPostgresStorageConfig('host=localhost user=postgres dbname=spark')
+
+  // Build the SDK with PostgreSQL storage and tree store
   let builder = SdkBuilder.new(config, seed)
   builder = builder.withPostgresStorage(pgConfig)
+  builder = builder.withPostgresTreeStore(treeStoreConfig)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-postgres
 }

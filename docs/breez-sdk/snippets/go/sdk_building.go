@@ -103,9 +103,14 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
-	// Build the SDK with PostgreSQL storage
+	// Configure PostgreSQL tree store
+	// Can use the same or a different PostgreSQL database
+	treeStoreConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+
+	// Build the SDK with PostgreSQL storage and tree store
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	builder.WithPostgresStorage(postgresConfig)
+	builder.WithPostgresTreeStore(treeStoreConfig)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err

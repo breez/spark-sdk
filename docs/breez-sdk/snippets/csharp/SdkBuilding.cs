@@ -107,9 +107,16 @@ namespace BreezSdkSnippets
                 waitTimeoutSecs = 30ul   // Timeout waiting for connection
             };
 
-            // Build the SDK with PostgreSQL storage
+            // Configure PostgreSQL tree store
+            // Can use the same or a different PostgreSQL database
+            var treeStoreConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
+                connectionString: "host=localhost user=postgres dbname=spark"
+            );
+
+            // Build the SDK with PostgreSQL storage and tree store
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithPostgresStorage(config: postgresConfig);
+            await builder.WithPostgresTreeStore(config: treeStoreConfig);
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }

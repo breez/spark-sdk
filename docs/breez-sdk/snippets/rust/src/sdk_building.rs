@@ -104,9 +104,15 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
 
-    // Build the SDK with PostgreSQL storage
+    // Configure PostgreSQL tree store
+    // Can use the same or a different PostgreSQL database
+    let tree_store_config =
+        default_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
+
+    // Build the SDK with PostgreSQL storage and tree store
     let sdk = SdkBuilder::new(config, seed)
         .with_postgres_storage(postgres_config)
+        .with_postgres_tree_store(tree_store_config)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres
