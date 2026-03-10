@@ -45,7 +45,7 @@ Sharing the same PostgreSQL database with multiple SDK instances is incompatible
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_tree_store">API docs</a>
 </h2>
 
-The SDK includes a PostgreSQL tree store implementation for persistent tree state. This is useful for server-side deployments where tree state needs to persist across restarts.
+The SDK includes a PostgreSQL tree store implementation for persistent tree state. This is required for server-side deployments with horizontal scaling, allowing multiple workers to share the same tree state.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
