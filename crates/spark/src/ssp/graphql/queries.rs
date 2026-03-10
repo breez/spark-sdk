@@ -1,7 +1,7 @@
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDepositRequestType, CurrencyUnit, ExitSpeed,
     LightningReceiveRequestStatus, LightningSendRequestStatus, SparkCoopExitRequestStatus,
-    SparkLeavesSwapRequestStatus,
+    SparkLeavesSwapRequestStatus, SparkWalletWebhookEventType,
 };
 use graphql_client::GraphQLQuery;
 
@@ -182,3 +182,32 @@ pub struct UserRequest;
     response_derives = "Debug,Clone,Serialize"
 )]
 pub struct VerifyChallenge;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/webhook_queries.graphql",
+    schema_path = "schema/webhook.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize",
+    extern_enums("SparkWalletWebhookEventType")
+)]
+pub struct RegisterWalletWebhook;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/webhook_queries.graphql",
+    schema_path = "schema/webhook.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize"
+)]
+pub struct DeleteWalletWebhook;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    query_path = "schema/webhook_queries.graphql",
+    schema_path = "schema/webhook.graphql",
+    variables_derives = "Clone",
+    response_derives = "Debug,Clone,Serialize",
+    extern_enums("SparkWalletWebhookEventType")
+)]
+pub struct WalletWebhooks;

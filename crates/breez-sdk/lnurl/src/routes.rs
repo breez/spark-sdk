@@ -1,12 +1,13 @@
 use axum::{
     Extension, Json,
+    body::Bytes,
     extract::{Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use axum_extra::extract::Host;
 use bitcoin::{
-    hashes::{Hash, sha256},
+    hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
 use lightning_invoice::Bolt11Invoice;
@@ -175,9 +176,14 @@ where
 
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
+
+        let (webhook_url, webhook_secret) = derive_webhook_info(&state, &host, &pubkey.to_string());
+
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
+            webhook_url,
+            webhook_secret,
         }))
     }
 
@@ -242,11 +248,17 @@ where
         match user {
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
+
+                let (webhook_url, webhook_secret) =
+                    derive_webhook_info(&state, &host, &pubkey.to_string());
+
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
+                    webhook_url,
+                    webhook_secret,
                 }))
             }
             None => Err((
@@ -827,6 +839,174 @@ where
         }))
     }
 
+    /// Webhook endpoint for SSP payment notifications.
+    /// Verifies HMAC-SHA256 signature and processes payment preimages.
+    #[allow(clippy::too_many_lines)]
+    pub async fn webhook(
+        Path(pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Result<(), (StatusCode, Json<Value>)> {
+        let Some(hmac_secret) = &state.webhook_hmac_secret else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(Value::String("webhooks not configured".into())),
+            ));
+        };
+
+        // Derive expected secret for this pubkey
+        let expected_secret = derive_webhook_secret(hmac_secret, &pubkey);
+
+        // Verify HMAC-SHA256 signature
+        let signature_header = headers
+            .get("X-Spark-Signature")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                trace!("missing X-Spark-Signature header");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(Value::String("missing signature".into())),
+                )
+            })?;
+
+        let signature_bytes = hex::decode(signature_header).map_err(|_| {
+            trace!("invalid signature hex encoding");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
+
+        let secret_bytes = hex::decode(&expected_secret).map_err(|_| {
+            error!("failed to decode derived webhook secret");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            )
+        })?;
+
+        let mut engine = HmacEngine::<sha256::Hash>::new(&secret_bytes);
+        engine.input(&body);
+        let expected_hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+
+        if expected_hmac.to_byte_array() != signature_bytes.as_slice() {
+            trace!("invalid webhook signature for pubkey {}", pubkey);
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(Value::String("invalid signature".into())),
+            ));
+        }
+
+        // Parse the body
+        let payload: WebhookPayload = serde_json::from_slice(&body).map_err(|e| {
+            trace!("invalid webhook payload: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid payload".into())),
+            )
+        })?;
+
+        // Only process lightning receive finished events
+        if payload.event_type != "SPARK_LIGHTNING_RECEIVE_FINISHED" {
+            debug!(
+                "ignoring webhook event type: {} for pubkey {}",
+                payload.event_type, pubkey
+            );
+            return Ok(());
+        }
+
+        let payment_preimage = payload.payment_preimage.ok_or_else(|| {
+            trace!("missing payment_preimage in webhook payload");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("missing payment_preimage".into())),
+            )
+        })?;
+
+        let receiver_pubkey = payload.receiver_identity_public_key.ok_or_else(|| {
+            trace!("missing receiver_identity_public_key in webhook payload");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("missing receiver_identity_public_key".into())),
+            )
+        })?;
+
+        // Verify URL pubkey matches payload's receiver pubkey
+        if pubkey != receiver_pubkey {
+            warn!(
+                "webhook pubkey mismatch: URL={}, payload={}",
+                pubkey, receiver_pubkey
+            );
+            return Ok(());
+        }
+
+        // Compute payment hash from preimage
+        let preimage_bytes = hex::decode(&payment_preimage).map_err(|e| {
+            trace!("invalid preimage hex: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid preimage".into())),
+            )
+        })?;
+        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+        // Look up invoice
+        let invoice = state
+            .db
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .map_err(|e| {
+                error!("failed to get invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        let Some(invoice) = invoice else {
+            debug!(
+                "no invoice found for payment hash {} from webhook",
+                payment_hash
+            );
+            return Ok(());
+        };
+
+        // Verify invoice belongs to this user
+        if invoice.user_pubkey != pubkey {
+            warn!(
+                "webhook invoice user mismatch: expected={}, got={}",
+                pubkey, invoice.user_pubkey
+            );
+            return Ok(());
+        }
+
+        // Handle the invoice paid event
+        if let Err(e) = handle_invoice_paid(
+            &state.db,
+            &payment_hash,
+            &payment_preimage,
+            &state.invoice_paid_trigger,
+        )
+        .await
+        {
+            error!(
+                "failed to handle webhook invoice paid for {}: {}",
+                payment_hash, e
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            ));
+        }
+
+        debug!(
+            "webhook processed: invoice {} paid for pubkey {}",
+            payment_hash, pubkey
+        );
+        Ok(())
+    }
+
     /// Invoice-paid notification endpoint.
     /// Client notifies server that an invoice was paid with the preimage.
     pub async fn invoice_paid(
@@ -903,6 +1083,37 @@ where
         );
         Ok(())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookPayload {
+    #[serde(rename = "type")]
+    event_type: String,
+    payment_preimage: Option<String>,
+    receiver_identity_public_key: Option<String>,
+}
+
+/// Derive webhook HMAC secret: `hex(SHA256(secret_bytes || pubkey_hex_bytes))`
+fn derive_webhook_secret(hmac_secret: &str, pubkey: &str) -> String {
+    let mut engine = sha256::Hash::engine();
+    engine.input(hmac_secret.as_bytes());
+    engine.input(pubkey.as_bytes());
+    sha256::Hash::from_engine(engine).to_string()
+}
+
+/// Derive webhook URL and secret if `webhook_hmac_secret` is configured.
+fn derive_webhook_info<DB>(
+    state: &State<DB>,
+    host: &str,
+    pubkey: &str,
+) -> (Option<String>, Option<String>) {
+    let Some(hmac_secret) = &state.webhook_hmac_secret else {
+        return (None, None);
+    };
+
+    let secret = derive_webhook_secret(hmac_secret, pubkey);
+    let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
+    (Some(url), Some(secret))
 }
 
 fn validate_nostr_zap_request(

@@ -13,14 +13,15 @@ use crate::session_manager::{Session, SessionManager};
 use crate::signer::Signer;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
-    self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote, get_challenge,
-    leaves_swap_fee_estimate, lightning_send_fee_estimate, request_coop_exit,
-    request_lightning_receive, request_lightning_send, request_swap, static_deposit_quote,
-    transfers, user_request, verify_challenge,
+    self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote, delete_wallet_webhook,
+    get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, register_wallet_webhook,
+    request_coop_exit, request_lightning_receive, request_lightning_send, request_swap,
+    static_deposit_quote, transfers, user_request, verify_challenge, wallet_webhooks,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
-    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, StaticDepositQuote,
+    LeavesSwapRequest, LightningReceiveRequest, LightningSendRequest, SparkWalletWebhookEventType,
+    StaticDepositQuote, WebhookEntry,
 };
 use crate::ssp::{
     ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLightningReceiveInput,
@@ -455,6 +456,61 @@ impl GraphQLClient {
             .await?;
 
         Ok(response.claim_static_deposit.into())
+    }
+
+    /// Register a wallet webhook with the SSP
+    pub async fn register_wallet_webhook(
+        &self,
+        url: &str,
+        secret: &str,
+        event_types: Vec<SparkWalletWebhookEventType>,
+    ) -> GraphQLResult<String> {
+        let vars = register_wallet_webhook::Variables {
+            input: register_wallet_webhook::RegisterSparkWalletWebhookInput {
+                url: url.to_string(),
+                secret: secret.to_string(),
+                event_types,
+            },
+        };
+
+        let response = self
+            .post_query::<queries::RegisterWalletWebhook, _>(vars)
+            .await?;
+
+        Ok(response.register_wallet_webhook.webhook_id)
+    }
+
+    /// Delete a wallet webhook from the SSP
+    pub async fn delete_wallet_webhook(&self, webhook_id: &str) -> GraphQLResult<bool> {
+        let vars = delete_wallet_webhook::Variables {
+            input: delete_wallet_webhook::DeleteSparkWalletWebhookInput {
+                webhook_id: webhook_id.to_string(),
+            },
+        };
+
+        let response = self
+            .post_query::<queries::DeleteWalletWebhook, _>(vars)
+            .await?;
+
+        Ok(response.delete_wallet_webhook.success)
+    }
+
+    /// List wallet webhooks from the SSP
+    pub async fn list_wallet_webhooks(&self) -> GraphQLResult<Vec<WebhookEntry>> {
+        let vars = wallet_webhooks::Variables {};
+
+        let response = self.post_query::<queries::WalletWebhooks, _>(vars).await?;
+
+        Ok(response
+            .wallet_webhooks
+            .webhooks
+            .into_iter()
+            .map(|w| WebhookEntry {
+                webhook_id: w.webhook_id,
+                url: w.url,
+                event_types: w.event_types,
+            })
+            .collect())
     }
 
     /// Get transfers by IDs

@@ -103,6 +103,11 @@ struct Args {
     /// If set, the server will use this certificate to validate api keys.
     #[arg(long)]
     pub ca_cert: Option<String>,
+
+    /// HMAC secret for webhook signature verification. When set, register/recover
+    /// responses include webhook URL and derived secret for SSP webhook integration.
+    #[arg(long)]
+    pub webhook_hmac_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -319,6 +324,7 @@ where
         service_provider,
         subscribed_keys,
         invoice_paid_trigger,
+        webhook_hmac_secret: args.webhook_hmac_secret,
     };
 
     let server_router = Router::new()
@@ -361,6 +367,7 @@ where
             get(LnurlServer::<DB>::handle_invoice),
         )
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
+        .route("/webhook/{pubkey}", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))
         .layer(Extension(state))
         .layer(

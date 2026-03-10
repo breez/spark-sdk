@@ -1075,6 +1075,19 @@ impl SparkWallet {
             .collect())
     }
 
+    /// Register a wallet webhook with the SSP
+    pub async fn register_wallet_webhook(
+        &self,
+        url: &str,
+        secret: &str,
+        event_types: Vec<spark::ssp::SparkWalletWebhookEventType>,
+    ) -> Result<String, SparkWalletError> {
+        Ok(self
+            .ssp_client
+            .register_wallet_webhook(url, secret, event_types)
+            .await?)
+    }
+
     /// Signs a message with the identity key using ECDSA and returns the signature.
     ///
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.

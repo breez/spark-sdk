@@ -1,4 +1,5 @@
 use lnurl_models::sanitize_username;
+use tracing::{debug, warn};
 
 use crate::{
     CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
@@ -82,6 +83,15 @@ impl BreezSdk {
         let resp = client.recover_lightning_address().await?;
 
         let result = if let Some(resp) = resp {
+            // Register webhook with SSP if available
+            if self.config.support_lnurl_verify {
+                self.try_register_webhook(
+                    resp.webhook_url.as_deref(),
+                    resp.webhook_secret.as_deref(),
+                )
+                .await;
+            }
+
             let address_info = resp.into();
             cache.save_lightning_address(&address_info).await?;
             Some(address_info)
@@ -91,6 +101,31 @@ impl BreezSdk {
         };
 
         Ok(result)
+    }
+
+    /// Attempt to register a webhook with the SSP. Logs warnings on failure
+    /// but does not propagate errors — webhook registration is best-effort.
+    async fn try_register_webhook(&self, webhook_url: Option<&str>, webhook_secret: Option<&str>) {
+        let (Some(url), Some(secret)) = (webhook_url, webhook_secret) else {
+            debug!("no webhook info in LNURL server response, skipping SSP webhook registration");
+            return;
+        };
+
+        let event_types =
+            vec![spark_wallet::SparkWalletWebhookEventType::SparkLightningReceiveFinished];
+
+        match self
+            .spark_wallet
+            .register_wallet_webhook(url, secret, event_types)
+            .await
+        {
+            Ok(webhook_id) => {
+                debug!("registered SSP webhook: {}", webhook_id);
+            }
+            Err(e) => {
+                warn!("failed to register SSP webhook: {}", e);
+            }
+        }
     }
 
     pub(super) async fn register_lightning_address_internal(
@@ -118,6 +153,16 @@ impl BreezSdk {
         };
 
         let response = client.register_lightning_address(&params).await?;
+
+        // Register webhook with SSP if available
+        if self.config.support_lnurl_verify {
+            self.try_register_webhook(
+                response.webhook_url.as_deref(),
+                response.webhook_secret.as_deref(),
+            )
+            .await;
+        }
+
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description,

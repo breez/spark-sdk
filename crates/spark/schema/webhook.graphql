@@ -1,0 +1,43 @@
+enum SparkWalletWebhookEventType {
+  SPARK_LIGHTNING_RECEIVE_FINISHED
+  SPARK_LIGHTNING_SEND_FINISHED
+  SPARK_COOP_EXIT_FINISHED
+  SPARK_STATIC_DEPOSIT_FINISHED
+}
+
+input RegisterSparkWalletWebhookInput {
+  url: String!
+  secret: String!
+  event_types: [SparkWalletWebhookEventType!]!
+}
+
+type RegisterSparkWalletWebhookOutput {
+  webhook_id: ID!
+}
+
+input DeleteSparkWalletWebhookInput {
+  webhook_id: ID!
+}
+
+type DeleteSparkWalletWebhookOutput {
+  success: Boolean!
+}
+
+type SparkWalletWebhookEntry {
+  webhook_id: ID!
+  url: String!
+  event_types: [SparkWalletWebhookEventType!]!
+}
+
+type ListSparkWalletWebhooksOutput {
+  webhooks: [SparkWalletWebhookEntry!]!
+}
+
+type Mutation {
+  register_wallet_webhook(input: RegisterSparkWalletWebhookInput!): RegisterSparkWalletWebhookOutput!
+  delete_wallet_webhook(input: DeleteSparkWalletWebhookInput!): DeleteSparkWalletWebhookOutput!
+}
+
+type Query {
+  wallet_webhooks: ListSparkWalletWebhooksOutput!
+}
