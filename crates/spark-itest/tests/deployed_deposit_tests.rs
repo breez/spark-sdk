@@ -90,7 +90,9 @@ async fn test_non_static_deposit_with_faucet() -> Result<()> {
     let bob_address = bob.get_spark_address()?;
     info!("Bob's Spark address: {:?}", bob_address);
 
-    let _transfer = wallet.transfer(deposit_amount, &bob_address, None).await?;
+    let _transfer = wallet
+        .transfer(deposit_amount, &bob_address, None, None)
+        .await?;
     info!("Transfer initiated from Alice to Bob");
 
     // Wait for TransferClaimed event on Bob
@@ -189,14 +191,22 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
 
     // Coop withdraw all of Alice's funds to Bob's on-chain address
     let withdrawal_address = bob_deposit_address.to_string();
-    let fee_quote = alice
-        .fetch_coop_exit_fee_quote(&withdrawal_address, None)
+    let (fee_quote, _) = alice
+        .fetch_coop_exit_fee_quote(&withdrawal_address, None, false)
         .await?;
     let fee_sats = fee_quote.fee_sats(&ExitSpeed::Slow);
     info!("Coop exit fee quote: {} sats (slow)", fee_sats);
 
     let _transfer = alice
-        .withdraw(&withdrawal_address, None, ExitSpeed::Slow, fee_quote, None)
+        .withdraw(
+            &withdrawal_address,
+            None,
+            ExitSpeed::Slow,
+            fee_quote,
+            None,
+            None,
+            false,
+        )
         .await?;
     info!("Withdrawal initiated");
 

@@ -83,7 +83,9 @@ pub async fn handle_command(
             amount_sat,
             receiver_address,
         } => {
-            let result = wallet.transfer(amount_sat, &receiver_address, None).await?;
+            let result = wallet
+                .transfer(amount_sat, &receiver_address, None, None)
+                .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

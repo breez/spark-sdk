@@ -95,8 +95,8 @@ pub async fn handle_command(
             withdrawal_address,
             amount_sats,
         } => {
-            let fee_quote = wallet
-                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats)
+            let (fee_quote, _) = wallet
+                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats, false)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&fee_quote)?);
         }
@@ -105,8 +105,8 @@ pub async fn handle_command(
             exit_speed,
             amount_sats,
         } => {
-            let fee_quote = wallet
-                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats)
+            let (fee_quote, _) = wallet
+                .fetch_coop_exit_fee_quote(&withdrawal_address, amount_sats, false)
                 .await?;
 
             let result = wallet
@@ -116,6 +116,8 @@ pub async fn handle_command(
                     exit_speed.into(),
                     fee_quote,
                     None,
+                    None,
+                    false,
                 )
                 .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);

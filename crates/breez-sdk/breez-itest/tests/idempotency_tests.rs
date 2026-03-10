@@ -61,6 +61,7 @@ async fn test_01_spark_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -229,6 +230,7 @@ async fn test_02_lightning_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -381,6 +383,7 @@ async fn test_03_bitcoin_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -525,6 +528,7 @@ async fn test_04_spark_htlc_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

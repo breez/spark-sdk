@@ -105,7 +105,7 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     let bob_address = bob.get_spark_address()?;
     info!("Transferring entire balance to Bob at {:?}", bob_address);
 
-    alice.transfer(100_000, &bob_address, None).await?;
+    alice.transfer(100_000, &bob_address, None, None).await?;
     info!("Transfer completed");
 
     // Wait for Alice to send the funds
@@ -166,7 +166,7 @@ async fn test_transfer_with_odd_leaf_greedy_succeeds(
     let bob_address = bob.get_spark_address()?;
     info!("Bob's Spark address: {:?}", bob_address);
 
-    alice.transfer(3072, &bob_address, None).await?;
+    alice.transfer(3072, &bob_address, None, None).await?;
     info!("Transfer completed");
 
     // Wait for Bob's balance to become the expected value
@@ -220,7 +220,7 @@ async fn test_transfer_duplicate_transfer_id_recovers(
 
     // First transfer with this transfer_id — should succeed normally
     let transfer1 = alice
-        .transfer(5000, &bob_address, Some(transfer_id.clone()))
+        .transfer(5000, &bob_address, Some(transfer_id.clone()), None)
         .await?;
     info!("First transfer succeeded: id={}", transfer1.id);
 
@@ -237,7 +237,7 @@ async fn test_transfer_duplicate_transfer_id_recovers(
     // first call. The SDK recovers the existing transfer rather than
     // propagating the error.
     let transfer2 = alice
-        .transfer(5000, &bob_address, Some(transfer_id.clone()))
+        .transfer(5000, &bob_address, Some(transfer_id.clone()), None)
         .await?;
     info!("Second transfer recovered: id={}", transfer2.id);
 

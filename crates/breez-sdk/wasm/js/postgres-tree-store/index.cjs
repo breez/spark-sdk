@@ -339,6 +339,9 @@ class PostgresTreeStore {
       return await this._withWriteTransaction(async (client) => {
         const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
 
+        // Clean up expired reservations so their leaves become available again.
+        await this._cleanupStaleReservations(client);
+
         // Get available leaves
         const availableResult = await client.query(`
           SELECT data
@@ -491,6 +494,43 @@ class PostgresTreeStore {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(
         `Failed to update reservation '${reservationId}': ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async getReservation(id) {
+    try {
+      const client = await this.pool.connect();
+      try {
+        // Check if reservation exists and hasn't expired
+        const res = await client.query(
+          `SELECT id FROM tree_reservations
+           WHERE id = $1
+             AND created_at >= NOW() - make_interval(secs => $2)`,
+          [id, RESERVATION_TIMEOUT_SECS]
+        );
+        if (res.rows.length === 0) {
+          throw new TreeStoreError(`Reservation ${id} not found or expired`);
+        }
+
+        // Get reserved leaves
+        const leavesResult = await client.query(
+          "SELECT data FROM tree_leaves WHERE reservation_id = $1",
+          [id]
+        );
+        const leaves = leavesResult.rows.map((r) =>
+          typeof r.data === "string" ? JSON.parse(r.data) : r.data
+        );
+
+        return { id, leaves };
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to get reservation '${id}': ${error.message}`,
         error
       );
     }

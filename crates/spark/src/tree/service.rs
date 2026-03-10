@@ -56,6 +56,22 @@ impl TreeService for SynchronousTreeService {
         self.state.finalize_reservation(&id, new_leaves).await
     }
 
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state.get_reservation(id).await
+    }
+
+    async fn swap_reservation(
+        &self,
+        reservation: LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.perform_swap_and_update_reservation(reservation, target_amounts)
+            .await
+    }
+
     async fn insert_leaves(
         &self,
         leaves: Vec<TreeNode>,

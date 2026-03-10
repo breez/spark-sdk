@@ -15,6 +15,7 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -47,6 +48,7 @@ async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -73,6 +75,7 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -97,6 +100,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -129,6 +133,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -221,6 +226,7 @@ async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            reserve_leaves: None,
         })
         .await?;
 

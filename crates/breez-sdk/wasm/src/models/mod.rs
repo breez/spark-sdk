@@ -852,6 +852,7 @@ pub struct PrepareSendPaymentRequest {
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
+    pub reserve_leaves: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -861,6 +862,12 @@ pub struct PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
     pub fee_policy: FeePolicy,
+    pub reservation_id: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CancelPrepareSendPaymentRequest)]
+pub struct CancelPrepareSendPaymentRequest {
+    pub reservation_id: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]

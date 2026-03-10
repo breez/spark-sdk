@@ -82,7 +82,8 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
     amount,
     tokenIdentifier,
     conversionOptions: undefined,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment
@@ -159,7 +160,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     amount,
     tokenIdentifier,
     conversionOptions,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to send the token payment

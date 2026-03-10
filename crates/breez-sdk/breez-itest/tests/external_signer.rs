@@ -41,6 +41,7 @@ async fn test_external_signer_send_receive(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

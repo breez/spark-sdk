@@ -64,6 +64,7 @@ async fn test_01_spark_transfer(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -308,6 +309,7 @@ async fn test_03_lightning_invoice_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -569,6 +571,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -664,6 +667,7 @@ async fn test_06_lightning_timeout_and_wait(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -774,6 +778,7 @@ async fn test_07_spark_invoice(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -938,6 +943,7 @@ async fn test_08_lightning_invoice_expiry_secs(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -1068,6 +1074,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
         match prepare.payment_method {
@@ -1170,6 +1177,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -1217,6 +1225,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            reserve_leaves: None,
         })
         .await?;
 

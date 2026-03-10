@@ -15,7 +15,7 @@ use spark::{
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
-    tree::{Leaves, LeavesReservation, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId},
+    tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
@@ -379,12 +379,13 @@ impl From<WalletSetting> for WalletSettings {
     }
 }
 
-pub(crate) struct WithdrawInnerParams<'a> {
+pub(crate) struct WithdrawInnerParams {
+    pub withdraw_leaves: Vec<TreeNode>,
+    pub fee_leaves: Option<Vec<TreeNode>>,
     pub address: Address,
+    pub withdraw_all: bool,
     pub exit_speed: ExitSpeed,
-    pub leaves_reservation: &'a LeavesReservation,
-    pub target_amounts: Option<&'a TargetAmounts>,
     pub fee_sats: u64,
-    pub fee_quote_id: String,
+    pub fee_quote_id: Option<String>,
     pub transfer_id: Option<TransferId>,
 }

@@ -240,6 +240,7 @@ async fn run_single_claim_benchmark(
                         token_identifier: None,
                         conversion_options: None,
                         fee_policy: None,
+                        reserve_leaves: None,
                     })
                     .await?;
 

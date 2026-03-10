@@ -175,6 +175,14 @@ impl BreezSdk {
         Ok(self.sdk.send_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "cancelPrepareSendPayment")]
+    pub async fn cancel_prepare_send_payment(
+        &self,
+        request: CancelPrepareSendPaymentRequest,
+    ) -> WasmResult<()> {
+        Ok(self.sdk.cancel_prepare_send_payment(request.into()).await?)
+    }
+
     #[wasm_bindgen(js_name = "syncWallet")]
     pub async fn sync_wallet(&self, request: SyncWalletRequest) -> WasmResult<SyncWalletResponse> {
         Ok(self.sdk.sync_wallet(request.into()).await?.into())

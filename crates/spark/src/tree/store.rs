@@ -21,6 +21,10 @@ pub const DEFAULT_MAX_CONCURRENT_RESERVATIONS: usize = 30;
 /// Default timeout for acquiring a reservation permit.
 pub const DEFAULT_RESERVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Default expiry duration for reservations (5 minutes).
+/// Matches PostgresTreeStore's `cleanup_stale_reservations` expiry.
+pub const DEFAULT_RESERVATION_EXPIRY: Duration = Duration::from_secs(300);
+
 /// A leaf bundled with the timestamp it was added/returned to the pool.
 #[derive(Clone)]
 struct StoredLeaf {
@@ -39,6 +43,8 @@ struct ReservationEntry {
     /// Expected change amount that will become available after swap completes.
     /// Used for calculating pending balance.
     pending_change_amount: u64,
+    /// Timestamp when this reservation was created, for expiry checking.
+    created_at: SystemTime,
 }
 
 #[derive(Default)]
@@ -110,6 +116,10 @@ enum StoreCommand {
         reservation_id: LeavesReservationId,
         reserved_leaves: Vec<TreeNode>,
         change_leaves: Vec<TreeNode>,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
+    GetReservation {
+        id: LeavesReservationId,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
 }
@@ -267,6 +277,10 @@ impl InMemoryTreeStore {
                     if result.is_ok() {
                         force_notify = true;
                     }
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::GetReservation { id, response_tx } => {
+                    let result = Self::process_get_reservation(&mut state, &id);
                     let _ = response_tx.send(result);
                 }
             }
@@ -463,6 +477,35 @@ impl InMemoryTreeStore {
         Ok(())
     }
 
+    /// Removes expired reservations, returning their leaves to the pool.
+    fn cleanup_expired_reservations(state: &mut LeavesState) {
+        let now = SystemTime::now();
+        let expired_ids: Vec<LeavesReservationId> = state
+            .leaves_reservations
+            .iter()
+            .filter(|(_, entry)| {
+                now.duration_since(entry.created_at).unwrap_or_default()
+                    > DEFAULT_RESERVATION_EXPIRY
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in expired_ids {
+            if let Some(entry) = state.leaves_reservations.remove(&id) {
+                warn!("Cleaning up expired reservation {id}");
+                for stored in entry.leaves {
+                    state.leaves.insert(
+                        stored.node.id.clone(),
+                        StoredLeaf {
+                            node: stored.node,
+                            added_at: now,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     /// Try to reserve - returns `WaitForPending` if should wait.
     /// Automatically tracks pending when reserved > needed.
     /// On success, the permit is stored in the reservation entry.
@@ -474,6 +517,7 @@ impl InMemoryTreeStore {
         purpose: ReservationPurpose,
         permit: OwnedSemaphorePermit,
     ) -> Result<ReserveResult, TreeServiceError> {
+        Self::cleanup_expired_reservations(state);
         let target_amount = target_amounts.map_or(0, |ta| ta.total_sats());
         let available = state.available_balance();
         let pending = state.pending_balance();
@@ -654,6 +698,7 @@ impl InMemoryTreeStore {
                 purpose,
                 _permit: permit,
                 pending_change_amount: 0,
+                created_at: SystemTime::now(),
             },
         );
 
@@ -669,6 +714,22 @@ impl InMemoryTreeStore {
             reserved_nodes,
             reservation_id.clone(),
         ))
+    }
+
+    /// Retrieves a reservation by ID. Returns an error if the reservation
+    /// does not exist or has expired. Expired reservations are cleaned up
+    /// (leaves returned to pool, permit released).
+    fn process_get_reservation(
+        state: &mut LeavesState,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        Self::cleanup_expired_reservations(state);
+
+        let entry = state.leaves_reservations.get(id).ok_or_else(|| {
+            TreeServiceError::Generic(format!("Reservation {id} not found or expired"))
+        })?;
+        let leaves = entry.leaves.iter().map(|s| s.node.clone()).collect();
+        Ok(LeavesReservation::new(leaves, id.clone()))
     }
 
     /// Internal helper to reserve leaves (moves them from main pool to reservations).
@@ -701,6 +762,7 @@ impl InMemoryTreeStore {
                 purpose,
                 _permit: permit,
                 pending_change_amount,
+                created_at: SystemTime::now(),
             },
         );
         trace!("New leaves reservation {}: {:?}", id, leaves);
@@ -843,6 +905,18 @@ impl TreeStore for InMemoryTreeStore {
             reservation_id,
             reserved_leaves,
             change_leaves,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let id = id.clone();
+        self.send_command(|tx| StoreCommand::GetReservation {
+            id,
             response_tx: tx,
         })
         .await

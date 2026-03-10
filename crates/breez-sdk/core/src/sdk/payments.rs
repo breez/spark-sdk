@@ -1,5 +1,5 @@
 use bitcoin::hashes::sha256;
-use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{ExitSpeed, SparkAddress, TargetAmounts, TransferId, TransferTokenOutput};
 use std::str::FromStr;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -155,6 +155,7 @@ impl BreezSdk {
 
         let fee_policy = request.fee_policy.unwrap_or_default();
         let token_identifier = request.token_identifier.clone();
+        let reserve_leaves = request.reserve_leaves.unwrap_or(false) && token_identifier.is_none();
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
@@ -182,6 +183,10 @@ impl BreezSdk {
                         .await?
                 };
 
+                let reservation_id = self
+                    .maybe_reserve_leaves(reserve_leaves, amount, 0, fee_policy)
+                    .await?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
                         address: spark_address_details.address.clone(),
@@ -192,6 +197,7 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::SparkInvoice(spark_invoice_details) => {
@@ -224,6 +230,10 @@ impl BreezSdk {
                         .await?
                 };
 
+                let reservation_id = self
+                    .maybe_reserve_leaves(reserve_leaves, amount, 0, fee_policy)
+                    .await?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
                         spark_invoice_details: spark_invoice_details.clone(),
@@ -234,6 +244,7 @@ impl BreezSdk {
                     token_identifier: effective_token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
@@ -296,6 +307,10 @@ impl BreezSdk {
                         .await?
                 };
 
+                let reservation_id = self
+                    .maybe_reserve_leaves(reserve_leaves, amount, lightning_fee_sats, fee_policy)
+                    .await?;
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
@@ -306,6 +321,7 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
@@ -324,14 +340,15 @@ impl BreezSdk {
                     )));
                 }
 
-                let fee_quote: SendOnchainFeeQuote = self
+                let (coop_fee_quote, reservation_id) = self
                     .spark_wallet
                     .fetch_coop_exit_fee_quote(
                         &withdrawal_address.address,
                         Some(amount.try_into()?),
+                        reserve_leaves,
                     )
-                    .await?
-                    .into();
+                    .await?;
+                let fee_quote: SendOnchainFeeQuote = coop_fee_quote.into();
 
                 // For FeesIncluded, validate the output after fees using the best case
                 // (slow/lowest fee). Only reject if even the cheapest option results in dust.
@@ -377,12 +394,28 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             _ => Err(SdkError::InvalidInput(
                 "Unsupported payment method".to_string(),
             )),
         }
+    }
+
+    /// Cancels a prepared send payment, releasing any reserved leaves.
+    ///
+    /// Call this when you no longer intend to call `send_payment` with a
+    /// `PrepareSendPaymentResponse` that has a `reservation_id`.
+    /// Idempotent: succeeds even if the reservation has already expired.
+    pub async fn cancel_prepare_send_payment(
+        &self,
+        request: crate::models::CancelPrepareSendPaymentRequest,
+    ) -> Result<(), SdkError> {
+        self.spark_wallet
+            .cancel_leaf_reservation(&request.reservation_id)
+            .await?;
+        Ok(())
     }
 
     pub async fn send_payment(
@@ -459,6 +492,33 @@ impl BreezSdk {
 
 // Private payment methods
 impl BreezSdk {
+    /// Reserves leaves for a payment if `reserve_leaves` is true.
+    ///
+    /// For `FeesIncluded`, only the `amount` is reserved (fee comes from it).
+    /// Otherwise, `amount + fee_sats` is reserved.
+    async fn maybe_reserve_leaves(
+        &self,
+        reserve_leaves: bool,
+        amount: u128,
+        fee_sats: u64,
+        fee_policy: FeePolicy,
+    ) -> Result<Option<String>, SdkError> {
+        if !reserve_leaves {
+            return Ok(None);
+        }
+        let reserve_amount: u64 = if fee_policy == FeePolicy::FeesIncluded {
+            amount.try_into()?
+        } else {
+            amount.saturating_add(u128::from(fee_sats)).try_into()?
+        };
+        let target = TargetAmounts::new_amount_and_fee(reserve_amount, None);
+        let reservation = self
+            .spark_wallet
+            .reserve_leaves_for_payment(&target)
+            .await?;
+        Ok(Some(reservation.id))
+    }
+
     async fn receive_bolt11_invoice(
         &self,
         description: String,
@@ -735,6 +795,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         let amount = request.prepare_response.amount;
         let token_identifier = request.prepare_response.token_identifier.clone();
+        let reservation_id = request.prepare_response.reservation_id.clone();
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
@@ -744,6 +805,7 @@ impl BreezSdk {
                     amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
+                    reservation_id,
                 )
                 .await
             }
@@ -751,8 +813,13 @@ impl BreezSdk {
                 spark_invoice_details,
                 ..
             } => {
-                self.send_spark_invoice(&spark_invoice_details.invoice, request, amount)
-                    .await
+                self.send_spark_invoice(
+                    &spark_invoice_details.invoice,
+                    request,
+                    amount,
+                    reservation_id,
+                )
+                .await
             }
             SendPaymentMethod::Bolt11Invoice {
                 invoice_details,
@@ -767,11 +834,13 @@ impl BreezSdk {
                     request,
                     amount_override,
                     amount,
+                    reservation_id,
                 ))
                 .await
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-                self.send_bitcoin_address(address, fee_quote, request).await
+                self.send_bitcoin_address(address, fee_quote, request, reservation_id)
+                    .await
             }
         }
     }
@@ -783,6 +852,7 @@ impl BreezSdk {
         amount: u128,
         options: Option<&SendPaymentOptions>,
         idempotency_key: Option<String>,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         let spark_address = address
             .parse::<SparkAddress>()
@@ -818,7 +888,12 @@ impl BreezSdk {
                 .transpose()?;
             let transfer = self
                 .spark_wallet
-                .transfer(amount.try_into()?, &spark_address, transfer_id)
+                .transfer(
+                    amount.try_into()?,
+                    &spark_address,
+                    transfer_id,
+                    reservation_id,
+                )
                 .await?;
             transfer.try_into()?
         };
@@ -898,6 +973,7 @@ impl BreezSdk {
         invoice: &str,
         request: &SendPaymentRequest,
         amount: u128,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         let transfer_id = request
             .idempotency_key
@@ -907,7 +983,7 @@ impl BreezSdk {
 
         let payment = match self
             .spark_wallet
-            .fulfill_spark_invoice(invoice, Some(amount), transfer_id)
+            .fulfill_spark_invoice(invoice, Some(amount), transfer_id, reservation_id)
             .await?
         {
             spark_wallet::FulfillSparkInvoiceResult::Transfer(wallet_transfer) => {
@@ -981,6 +1057,7 @@ impl BreezSdk {
         Ok(receiver_amount.saturating_add(overpayment))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send_bolt11_invoice(
         &self,
         invoice_details: &Bolt11InvoiceDetails,
@@ -989,6 +1066,7 @@ impl BreezSdk {
         request: &SendPaymentRequest,
         amount_override: Option<u64>,
         amount: u128,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Handle FeesIncluded for amountless Bolt11 invoices
         let amount_to_send = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded
@@ -1041,6 +1119,7 @@ impl BreezSdk {
                 Some(fee_sats),
                 prefer_spark,
                 transfer_id,
+                reservation_id,
             ),
         )
         .await?;
@@ -1096,6 +1175,7 @@ impl BreezSdk {
         address: &BitcoinAddressDetails,
         fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Extract confirmation speed from options
         let confirmation_speed = match &request.options {
@@ -1140,6 +1220,7 @@ impl BreezSdk {
             .as_ref()
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
+        let fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
         let response = self
             .spark_wallet
             .withdraw(
@@ -1148,6 +1229,8 @@ impl BreezSdk {
                 exit_speed,
                 fee_quote.clone().into(),
                 transfer_id,
+                reservation_id,
+                fees_included,
             )
             .await?;
 

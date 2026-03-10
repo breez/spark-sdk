@@ -365,6 +365,9 @@ impl TreeStore for PostgresTreeStore {
         // Acquire advisory lock to prevent deadlocks with concurrent operations
         Self::acquire_write_lock(&tx).await?;
 
+        // Clean up expired reservations so their leaves become available again.
+        Self::cleanup_stale_reservations(&tx).await?;
+
         // Get available leaves (advisory lock provides serialization, no row locking needed)
         let rows = tx
             .query(
@@ -576,6 +579,46 @@ impl TreeStore for PostgresTreeStore {
             reserved_leaves.to_vec(),
             reservation_id.clone(),
         ))
+    }
+
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+
+        // Check if reservation exists and hasn't expired
+        let reservation = client
+            .query_opt(
+                r"SELECT id FROM tree_reservations
+                  WHERE id = $1
+                    AND created_at >= NOW() - make_interval(secs => $2)",
+                &[id, &RESERVATION_TIMEOUT_SECS],
+            )
+            .await
+            .map_err(map_err)?;
+
+        if reservation.is_none() {
+            return Err(TreeServiceError::Generic(format!(
+                "Reservation {id} not found or expired"
+            )));
+        }
+
+        // Get reserved leaves
+        let rows = client
+            .query(
+                "SELECT data FROM tree_leaves WHERE reservation_id = $1",
+                &[id],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let leaves: Vec<TreeNode> = rows
+            .iter()
+            .map(|r| Self::deserialize_node(r.get("data")))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(LeavesReservation::new(leaves, id.clone()))
     }
 }
 

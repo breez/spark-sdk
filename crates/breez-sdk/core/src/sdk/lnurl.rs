@@ -67,6 +67,7 @@ impl BreezSdk {
                 token_identifier: None,
                 conversion_options: request.conversion_options.clone(),
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -168,6 +169,7 @@ impl BreezSdk {
                     token_identifier: None,
                     conversion_estimate: request.prepare_response.conversion_estimate,
                     fee_policy: FeePolicy::FeesExcluded, // Always FeesExcluded for internal handling
+                    reservation_id: None,
                 },
                 options: None,
                 idempotency_key: request.idempotency_key,

@@ -19,7 +19,8 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -45,7 +46,8 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // Review the fee quote for each confirmation speed
@@ -72,7 +74,8 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -94,7 +97,8 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -124,7 +128,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
     amount: undefined,
     tokenIdentifier: undefined,
     conversionOptions,
-    feePolicy: undefined
+    feePolicy: undefined,
+    reserveLeaves: undefined
   })
 
   // If the fees are acceptable, continue to create the Send Payment
@@ -205,7 +210,8 @@ const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
-    feePolicy: FeePolicy.FeesIncluded
+    feePolicy: FeePolicy.FeesIncluded,
+    reserveLeaves: undefined
   })
 
   // The response shows the fee policy used

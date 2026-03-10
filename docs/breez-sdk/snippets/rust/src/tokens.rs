@@ -93,6 +93,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
             token_identifier,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -191,6 +192,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
             token_identifier,
             conversion_options,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

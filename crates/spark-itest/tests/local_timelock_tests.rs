@@ -52,7 +52,7 @@ async fn test_renew_timelocks(#[future] wallets: WalletsFixture) -> Result<()> {
 
         // Send entire balance
         let _transfer = from_wallet
-            .transfer(sender_balance, &spark_address, None)
+            .transfer(sender_balance, &spark_address, None, None)
             .await?;
 
         // Wait for TransferClaimed event on the receiver

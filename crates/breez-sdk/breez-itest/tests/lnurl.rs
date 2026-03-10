@@ -618,6 +618,7 @@ async fn test_06_client_side_zap_receipt(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -1111,6 +1112,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -1486,6 +1488,7 @@ async fn test_10_lud21_verify(
             conversion_options: None,
             amount: None,
             fee_policy: None,
+            reserve_leaves: None,
             token_identifier: None,
         })
         .await?;

@@ -276,6 +276,7 @@ mod tests {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         }
     }
 
@@ -286,6 +287,7 @@ mod tests {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         }
     }
 
@@ -299,6 +301,7 @@ mod tests {
             token_identifier: Some(token_identifier.to_string()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         }
     }
 
@@ -309,6 +312,7 @@ mod tests {
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            reserve_leaves: None,
         }
     }
 

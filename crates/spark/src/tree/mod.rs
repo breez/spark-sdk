@@ -677,6 +677,25 @@ pub trait TreeStore: Send + Sync {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError>;
+
+    /// Retrieves a previously created leaf reservation by its ID.
+    ///
+    /// Returns the reservation if it still exists and hasn't expired.
+    /// This is used when leaves were reserved during prepare and need to be
+    /// retrieved during send to use the same leaves.
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The unique reservation ID
+    ///
+    /// # Returns
+    ///
+    /// * `Result<LeavesReservation, TreeServiceError>` - The reservation if found,
+    ///   or an error if it doesn't exist or has expired
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError>;
 }
 
 #[macros::async_trait]
@@ -931,4 +950,24 @@ pub trait TreeService: Send + Sync {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
+
+    /// Retrieves a previously created leaf reservation by its ID.
+    ///
+    /// Returns the reservation if it still exists and hasn't expired.
+    /// Fails if the reservation doesn't exist or has expired.
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    /// Performs a swap on the leaves of an existing reservation to match target amounts,
+    /// then updates the reservation with the resulting leaves.
+    ///
+    /// This is useful when a reservation's leaves don't have the right denominations
+    /// for the desired split (e.g., splitting into amount + fee subsets).
+    async fn swap_reservation(
+        &self,
+        reservation: LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> Result<LeavesReservation, TreeServiceError>;
 }

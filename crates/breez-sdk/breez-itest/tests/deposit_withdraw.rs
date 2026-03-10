@@ -83,6 +83,7 @@ async fn test_onchain_withdraw_to_static_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -277,6 +278,7 @@ async fn test_send_all_to_bitcoin_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            reserve_leaves: None,
         })
         .await?;
 
@@ -466,6 +468,7 @@ async fn test_deposit_low_amount_refund_fee_rate(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

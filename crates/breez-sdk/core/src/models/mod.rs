@@ -1132,6 +1132,14 @@ pub struct PrepareSendPaymentRequest {
     /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
+    /// If true, leaves will be reserved during prepare and held until `send_payment`
+    /// or `cancel_prepare_send_payment` is called. This ensures the same leaves are used
+    /// for both prepare and send, preventing fee quote mismatches for Bitcoin address
+    /// payments and leaf availability issues for concurrent payments.
+    /// Reservations expire after 5 minutes — calling `send_payment` after expiry will fail.
+    /// Ignored for token payments. Defaults to false.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub reserve_leaves: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1148,6 +1156,17 @@ pub struct PrepareSendPaymentResponse {
     pub conversion_estimate: Option<ConversionEstimate>,
     /// How fees are handled for this payment.
     pub fee_policy: FeePolicy,
+    /// The reservation ID for the reserved leaves. Present when `reserve_leaves` was set
+    /// to true in the request. Must be consumed by `send_payment` or released by
+    /// `cancel_prepare_send_payment`.
+    pub reservation_id: Option<String>,
+}
+
+/// Request to cancel a prepared payment, releasing any reserved leaves.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CancelPrepareSendPaymentRequest {
+    /// The reservation ID from a `PrepareSendPaymentResponse`.
+    pub reservation_id: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]

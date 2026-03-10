@@ -433,6 +433,7 @@ impl FlashnetClient {
                     })?,
                     &receiver_address,
                     transfer_id,
+                    None,
                 )
                 .await?
                 .id
