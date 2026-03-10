@@ -12,9 +12,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@breeztech/breez-sdk-spark-react-native": ["../../../../../../../packages/react-native/src/index"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
