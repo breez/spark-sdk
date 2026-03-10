@@ -75,6 +75,35 @@ const exampleWithPostgresStorage = async () => {
   // ANCHOR_END: init-sdk-postgres
 }
 
+const exampleWithPostgresTreeStore = async () => {
+  // ANCHOR: init-sdk-postgres-tree-store
+  // Construct the seed using a mnemonic, entropy or passkey
+  const mnemonic = '<mnemonic words>'
+  const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+  // Create the default config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Configure PostgreSQL storage
+  const pgConfig = defaultPostgresStorageConfig('host=localhost user=postgres dbname=spark')
+
+  // Configure PostgreSQL tree store
+  // Can use the same or a different PostgreSQL database
+  const treeStoreConfig = defaultPostgresStorageConfig('host=localhost user=postgres dbname=spark')
+  // Optionally pool settings can be adjusted. Some examples:
+  treeStoreConfig.maxPoolSize = 8 // Max connections in pool
+  treeStoreConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
+  treeStoreConfig.recycleTimeoutSecs = 30 // Timeout for recycling an idle connection
+
+  // Build the SDK with PostgreSQL storage and tree store
+  let builder = SdkBuilder.new(config, seed)
+  builder = builder.withPostgresStorage(pgConfig)
+  builder = builder.withPostgresTreeStore(treeStoreConfig)
+  const sdk = await builder.build()
+  // ANCHOR_END: init-sdk-postgres-tree-store
+}
+
 const exampleWithRestChainService = async (builder: SdkBuilder) => {
   // ANCHOR: with-rest-chain-service
   const url = '<your REST chain service URL>'

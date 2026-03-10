@@ -116,3 +116,40 @@ async def init_sdk_postgres():
         logging.error(error)
         raise
 # ANCHOR_END: init-sdk-postgres
+
+
+# ANCHOR: init-sdk-postgres-tree-store
+async def init_sdk_postgres_tree_store():
+    # Construct the seed using a mnemonic, entropy or passkey
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Configure PostgreSQL storage
+    postgres_config = default_postgres_storage_config(
+        connection_string="host=localhost user=postgres dbname=spark"
+    )
+
+    # Configure PostgreSQL tree store
+    # Can use the same or a different PostgreSQL database
+    tree_store_config = default_postgres_storage_config(
+        connection_string="host=localhost user=postgres dbname=spark"
+    )
+    # Optionally pool settings can be adjusted. Some examples:
+    tree_store_config.max_pool_size = 8  # Max connections in pool
+    tree_store_config.wait_timeout_secs = 30  # Timeout waiting for connection
+
+    try:
+        # Build the SDK with PostgreSQL storage and tree store
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_postgres_storage(config=postgres_config)
+        await builder.with_postgres_tree_store(config=tree_store_config)
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+# ANCHOR_END: init-sdk-postgres-tree-store

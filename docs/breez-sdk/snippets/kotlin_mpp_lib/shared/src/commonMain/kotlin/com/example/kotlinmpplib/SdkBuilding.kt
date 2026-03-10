@@ -104,4 +104,36 @@ class SdkBuilding {
         }
         // ANCHOR_END: init-sdk-postgres
     }
+
+    suspend fun initSdkPostgresTreeStore() {
+        // ANCHOR: init-sdk-postgres-tree-store
+        // Construct the seed using a mnemonic, entropy or passkey
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // Create the default config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Configure PostgreSQL storage
+        val postgresConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+
+        // Configure PostgreSQL tree store
+        // Can use the same or a different PostgreSQL database
+        val treeStoreConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+        // Optionally pool settings can be adjusted. Some examples:
+        treeStoreConfig.maxPoolSize = 8u // Max connections in pool
+        treeStoreConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
+
+        try {
+            // Build the SDK with PostgreSQL storage and tree store
+            val builder = SdkBuilder(config, seed)
+            builder.withPostgresStorage(postgresConfig)
+            builder.withPostgresTreeStore(treeStoreConfig)
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-postgres-tree-store
+    }
 }
