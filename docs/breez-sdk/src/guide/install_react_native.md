@@ -46,4 +46,9 @@ To enable [Passkey](passkey.md#ios-apple-app-site-association) support, set `ena
 }
 ```
 
-**Note:** This package contains native code and requires a custom development build. It will not work with Expo Go.
+<div class="warning">
+<h4>Developer note</h4>
+
+This package contains native code and requires a custom development build. It will not work with Expo Go.
+
+</div>
