@@ -689,7 +689,7 @@ async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
   const prepareResponse = await sdk.prepareLnurlPay({
     amountSats,
-    payRequest: payRequest as Parameters<typeof sdk.prepareLnurlPay>[0]['payRequest'],
+    payRequest: payRequest as any,
     comment,
     validateSuccessActionUrl: validateSuccessUrl,
     conversionOptions,
