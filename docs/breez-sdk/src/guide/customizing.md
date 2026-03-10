@@ -4,7 +4,6 @@ Using the SDK Builder gives you more control over the initialization and modular
 
 - [Storage](#with-storage) to manage stored data
 - [PostgreSQL Storage](#with-postgres-storage) as an alternative storage backend
-- [PostgreSQL Tree Store](#with-postgres-tree-store) for persistent tree state
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
 - [LNURL Client](#with-lnurl-client) to make REST requests
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
@@ -27,7 +26,7 @@ When using the SDK Builder, you either have to provide a Storage implementation 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_storage">API docs</a>
 </h2>
 
-The SDK includes a PostgreSQL storage implementation as an alternative. This is useful for environments where file-based storage may not be suitable.
+The SDK includes a PostgreSQL storage implementation as an alternative. This is useful for environments where file-based storage may not be suitable. The example below also shows how to configure the [PostgreSQL Tree Store](https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_tree_store), which is required for server-side deployments with horizontal scaling, allowing multiple workers to share the same tree state.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -37,22 +36,6 @@ The SDK includes a PostgreSQL storage implementation as an alternative. This is 
 <h4>Developer note</h4>
 
 Sharing the same PostgreSQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
-
-</div>
-
-<h2 id="with-postgres-tree-store">
-    <a class="header" href="#with-postgres-tree-store">With PostgreSQL Tree Store</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_tree_store">API docs</a>
-</h2>
-
-The SDK includes a PostgreSQL tree store implementation for persistent tree state. This is required for server-side deployments with horizontal scaling, allowing multiple workers to share the same tree state.
-
-**Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
-
-{{#tabs sdk_building:init-sdk-postgres-tree-store}}
-
-<div class="warning">
-<h4>Developer note</h4>
 
 The PostgreSQL tree store can use the same or a separate PostgreSQL database as the PostgreSQL storage. The tree store uses its own set of tables prefixed with `tree_`.
 

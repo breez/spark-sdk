@@ -103,42 +103,9 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
-	// Build the SDK with PostgreSQL storage
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithPostgresStorage(postgresConfig)
-	sdk, err := builder.Build()
-	if err != nil {
-		return nil, err
-	}
-	// ANCHOR_END: init-sdk-postgres
-
-	return sdk, nil
-}
-
-func InitSdkPostgresTreeStore() (*breez_sdk_spark.BreezSdk, error) {
-	// ANCHOR: init-sdk-postgres-tree-store
-	// Construct the seed using a mnemonic, entropy or passkey
-	mnemonic := "<mnemonic words>"
-	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
-		Mnemonic:   mnemonic,
-		Passphrase: nil,
-	}
-
-	// Create the default config
-	apiKey := "<breez api key>"
-	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
-	config.ApiKey = &apiKey
-
-	// Configure PostgreSQL storage
-	postgresConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
-
 	// Configure PostgreSQL tree store
 	// Can use the same or a different PostgreSQL database
 	treeStoreConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
-	// Optionally pool settings can be adjusted. Some examples:
-	treeStoreConfig.MaxPoolSize = 8 // Max connections in pool
-	waitTimeoutSecs := uint64(30)
-	treeStoreConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
 	// Build the SDK with PostgreSQL storage and tree store
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
@@ -148,7 +115,7 @@ func InitSdkPostgresTreeStore() (*breez_sdk_spark.BreezSdk, error) {
 	if err != nil {
 		return nil, err
 	}
-	// ANCHOR_END: init-sdk-postgres-tree-store
+	// ANCHOR_END: init-sdk-postgres
 
 	return sdk, nil
 }

@@ -107,51 +107,18 @@ namespace BreezSdkSnippets
                 waitTimeoutSecs = 30ul   // Timeout waiting for connection
             };
 
-            // Build the SDK with PostgreSQL storage
-            var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithPostgresStorage(config: postgresConfig);
-            var sdk = await builder.Build();
-            // ANCHOR_END: init-sdk-postgres
-        }
-
-        async Task InitSdkPostgresTreeStore()
-        {
-            // ANCHOR: init-sdk-postgres-tree-store
-            // Construct the seed using a mnemonic, entropy or passkey
-            var mnemonic = "<mnemonic words>";
-            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
-
-            // Create the default config
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
-            {
-                apiKey = "<breez api key>"
-            };
-
-            // Configure PostgreSQL storage
-            // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
-            // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-            var postgresConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
-                connectionString: "host=localhost user=postgres dbname=spark"
-            );
-            // Optionally pool settings can be adjusted. Some examples:
-            postgresConfig = postgresConfig with
-            {
-                maxPoolSize = 8u,        // Max connections in pool
-                waitTimeoutSecs = 30ul   // Timeout waiting for connection
-            };
-
             // Configure PostgreSQL tree store
             // Can use the same or a different PostgreSQL database
             var treeStoreConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(
                 connectionString: "host=localhost user=postgres dbname=spark"
             );
 
-            // Build the SDK with both PostgreSQL storage and tree store
+            // Build the SDK with PostgreSQL storage and tree store
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithPostgresStorage(config: postgresConfig);
             await builder.WithPostgresTreeStore(config: treeStoreConfig);
             var sdk = await builder.Build();
-            // ANCHOR_END: init-sdk-postgres-tree-store
+            // ANCHOR_END: init-sdk-postgres
         }
     }
 }

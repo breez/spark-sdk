@@ -104,40 +104,10 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
 
-    // Build the SDK with PostgreSQL storage
-    let sdk = SdkBuilder::new(config, seed)
-        .with_postgres_storage(postgres_config)
-        .build()
-        .await?;
-    // ANCHOR_END: init-sdk-postgres
-
-    Ok(sdk)
-}
-
-pub(crate) async fn init_sdk_postgres_tree_store() -> Result<BreezSdk> {
-    // ANCHOR: init-sdk-postgres-tree-store
-    // Construct the seed using a mnemonic, entropy or passkey
-    let mnemonic = "<mnemonic words>".to_string();
-    let seed = Seed::Mnemonic {
-        mnemonic,
-        passphrase: None,
-    };
-
-    // Create the default config
-    let mut config = default_config(Network::Mainnet);
-    config.api_key = Some("<breez api key>".to_string());
-
-    // Configure PostgreSQL storage
-    let postgres_config =
-        default_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
-
     // Configure PostgreSQL tree store
     // Can use the same or a different PostgreSQL database
-    let mut tree_store_config =
+    let tree_store_config =
         default_postgres_storage_config("host=localhost user=postgres dbname=spark".to_string());
-    // Optionally pool settings can be adjusted. Some examples:
-    tree_store_config.max_pool_size = 8; // Max connections in pool
-    tree_store_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
 
     // Build the SDK with PostgreSQL storage and tree store
     let sdk = SdkBuilder::new(config, seed)
@@ -145,7 +115,7 @@ pub(crate) async fn init_sdk_postgres_tree_store() -> Result<BreezSdk> {
         .with_postgres_tree_store(tree_store_config)
         .build()
         .await?;
-    // ANCHOR_END: init-sdk-postgres-tree-store
+    // ANCHOR_END: init-sdk-postgres
 
     Ok(sdk)
 }

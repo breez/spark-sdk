@@ -92,45 +92,18 @@ func initSdkPostgres() async throws -> BreezSdk {
     postgresConfig.maxPoolSize = UInt32(8) // Max connections in pool
     postgresConfig.waitTimeoutSecs = UInt64(30) // Timeout waiting for connection
 
-    // Build the SDK with PostgreSQL storage
-    let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withPostgresStorage(config: postgresConfig)
-    let sdk = try await builder.build()
-    // ANCHOR_END: init-sdk-postgres
-
-    return sdk
-}
-
-func initSdkPostgresTreeStore() async throws -> BreezSdk {
-    // ANCHOR: init-sdk-postgres-tree-store
-    // Construct the seed using a mnemonic, entropy or passkey
-    let mnemonic = "<mnemonic words>"
-    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
-
-    // Create the default config
-    var config = defaultConfig(network: Network.mainnet)
-    config.apiKey = "<breez api key>"
-
-    // Configure PostgreSQL storage
-    let postgresConfig = defaultPostgresStorageConfig(
-        connectionString: "host=localhost user=postgres dbname=spark"
-    )
-
     // Configure PostgreSQL tree store
     // Can use the same or a different PostgreSQL database
-    var treeStoreConfig = defaultPostgresStorageConfig(
+    let treeStoreConfig = defaultPostgresStorageConfig(
         connectionString: "host=localhost user=postgres dbname=spark"
     )
-    // Optionally pool settings can be adjusted. Some examples:
-    treeStoreConfig.maxPoolSize = UInt32(8) // Max connections in pool
-    treeStoreConfig.waitTimeoutSecs = UInt64(30) // Timeout waiting for connection
 
     // Build the SDK with PostgreSQL storage and tree store
     let builder = SdkBuilder(config: config, seed: seed)
     await builder.withPostgresStorage(config: postgresConfig)
     await builder.withPostgresTreeStore(config: treeStoreConfig)
     let sdk = try await builder.build()
-    // ANCHOR_END: init-sdk-postgres-tree-store
+    // ANCHOR_END: init-sdk-postgres
 
     return sdk
 }
