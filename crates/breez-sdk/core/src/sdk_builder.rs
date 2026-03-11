@@ -561,17 +561,12 @@ impl SdkBuilder {
             shutdown_sender.subscribe(),
         ));
 
-        // Register TokenConversionMiddleware to suppress conversion child events
-        // before they reach external listeners
-        event_emitter
-            .add_middleware(Box::new(TokenConversionMiddleware))
-            .await;
-
         // Create sync coordinator early so StableBalance can trigger syncs after conversions
         let sync_coordinator = SyncCoordinator::new();
 
-        // Create StableBalance if configured. It spawns it's own background tasks
-        // and registers itself as event middleware
+        // Create StableBalance if configured. It spawns its own background tasks
+        // and registers itself as event middleware (must be before TokenConversionMiddleware
+        // so it can see conversion child payment events for deferred task resolution)
         let stable_balance = if let Some(config) = &self.config.stable_balance_config {
             Some(Arc::new(
                 StableBalance::new(
@@ -589,6 +584,12 @@ impl SdkBuilder {
         } else {
             None
         };
+
+        // Register TokenConversionMiddleware to suppress conversion child events
+        // before they reach external listeners (after StableBalance middleware)
+        event_emitter
+            .add_middleware(Box::new(TokenConversionMiddleware))
+            .await;
 
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {

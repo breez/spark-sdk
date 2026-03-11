@@ -4,21 +4,24 @@
 //! converting received BTC to a configured stable token when thresholds are exceeded.
 //! The active token can be changed at runtime via [`crate::models::UpdateUserSettingsRequest`].
 
-mod auto_conversion;
-mod receive_conversion;
+mod conversions;
+mod queue;
 
 use std::sync::Arc;
 
-use spark_wallet::SparkWallet;
-use tokio::sync::{Notify, RwLock, mpsc, watch};
-use tokio_with_wasm::alias as tokio;
+use spark_wallet::{SparkWallet, TransferId};
+use tokio::sync::{Notify, RwLock, watch};
 use tracing::{debug, info, warn};
+
+use self::queue::ConversionQueue;
+pub(crate) use self::queue::PendingConversion;
 
 use breez_sdk_common::sync::SigningClient;
 
 use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
 use crate::models::{
-    ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
+    ConversionDetails, ConversionStatus, Payment, PaymentDetails, PaymentMethod, PaymentType,
+    StableBalanceToken,
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::realtime_sync::sync_lock::{LockCounter, SyncLockGuard};
@@ -39,6 +42,12 @@ pub(super) const PAYMENT_LOCK_NAME: &str = "payments_conversion";
 pub(super) const AUTO_CONVERT_LOCK_NAME: &str = "auto_conversion";
 /// TTL for cached effective values (1 hour)
 pub(super) const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
+
+/// Deterministic transfer ID for a per-receive conversion.
+/// Used for idempotency across instances.
+pub(super) fn per_receive_transfer_id(payment_id: &str) -> TransferId {
+    TransferId::from_name(&format!("receive_conversion:{payment_id}"))
+}
 
 /// Cached effective threshold and reserved values for auto-conversion.
 #[derive(Clone)]
@@ -76,23 +85,15 @@ pub(crate) struct StableBalance {
     /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
     pub(super) effective_values: Arc<ExpiringCell<EffectiveValues>>,
 
-    /// Tracks the number of in-flight payment conversions.
+    /// Tracks the number of in-flight payment conversions (send-with-conversion).
     /// Auto-convert is skipped while any payments are ongoing.
     pub(super) ongoing_payments: Arc<LockCounter>,
 
-    /// Tracks the number of queued-but-not-yet-completed per-receive conversions.
-    /// Incremented when queuing, decremented when processing finishes.
-    /// Auto-convert checks this to avoid racing with per-receive conversions.
-    pub(super) pending_receives: Arc<LockCounter>,
+    /// Unified conversion queue for per-receive and auto-convert tasks.
+    pub(super) queue: Arc<ConversionQueue>,
 
-    /// Notify to trigger auto-conversion
-    pub(super) auto_convert_trigger: Arc<Notify>,
-
-    /// Notify to signal first sync completion (for receive conversion startup safety)
+    /// Notify to signal first sync completion (startup gate for the conversion worker).
     pub(super) synced_notify: Arc<Notify>,
-
-    /// Sender for per-receive conversion tasks (payment IDs)
-    pub(super) per_receive_tx: mpsc::UnboundedSender<String>,
 
     /// Optional signing client for coordinating across SDK instances.
     /// `None` when real-time sync is not configured.
@@ -119,9 +120,8 @@ impl StableBalance {
     ) -> Self {
         let initial_active_token = Self::resolve_initial_token(&config, &storage).await;
 
-        let auto_convert_trigger = Arc::new(Notify::new());
+        let queue = Arc::new(ConversionQueue::new(storage.clone()));
         let synced_notify = Arc::new(Notify::new());
-        let (per_receive_tx, per_receive_rx) = mpsc::unbounded_channel();
 
         if let Some(token) = &initial_active_token {
             info!(
@@ -140,10 +140,8 @@ impl StableBalance {
             storage,
             effective_values: Arc::new(ExpiringCell::new()),
             ongoing_payments: Arc::new(LockCounter::new()),
-            pending_receives: Arc::new(LockCounter::new()),
-            auto_convert_trigger,
+            queue,
             synced_notify,
-            per_receive_tx,
             signing_client,
             sync_coordinator,
         };
@@ -153,9 +151,8 @@ impl StableBalance {
             .add_middleware(Box::new(stable_balance.clone()))
             .await;
 
-        // Spawn the background tasks
-        stable_balance.spawn_auto_convert_task(shutdown_receiver.clone());
-        stable_balance.spawn_receive_convert_task(per_receive_rx, shutdown_receiver);
+        // Spawn the unified conversion worker
+        stable_balance.spawn_conversion_worker(shutdown_receiver);
 
         stable_balance
     }
@@ -212,10 +209,15 @@ impl StableBalance {
             info!("Stable balance deactivated");
         }
 
-        *self.active_token.write().await = new_active;
+        *self.active_token.write().await = new_active.clone();
 
         // Clear cached effective values since limits may differ per token
         self.effective_values.clear().await;
+
+        // If enabling stable balance, trigger auto-convert for any existing excess
+        if new_active.is_some() {
+            self.queue.push_auto_convert().await;
+        }
 
         Ok(())
     }
@@ -392,12 +394,22 @@ impl StableBalance {
             return false;
         }
 
+        // Skip conversion child payments (e.g. intermediate sats from send-with-conversion)
+        if matches!(
+            &payment.details,
+            Some(PaymentDetails::Spark {
+                conversion_info: Some(_),
+                ..
+            })
+        ) {
+            return false;
+        }
+
         let Some(token_id) = self.get_active_token_identifier().await else {
             return false;
         };
 
-        let Ok((_, _, min_from_amount)) = self.get_or_init_effective_values(&token_id).await
-        else {
+        let Ok((_, _, min_from_amount)) = self.get_or_init_effective_values(&token_id).await else {
             warn!("Failed to check effective values, skipping per-receive");
             return false;
         };
@@ -427,15 +439,46 @@ impl StableBalance {
 impl EventMiddleware for StableBalance {
     async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
         match event {
-            // Sync completed → notify synced_notify and trigger batch auto-convert
+            // Sync completed → wake the startup gate, sweep timed-out deferred tasks
             SdkEvent::Synced => {
                 self.synced_notify.notify_one();
-                self.trigger_auto_convert();
+
+                // Clean up deferred tasks that have exceeded the timeout
+                let expired_payment_ids = self.queue.clear_expired_tasks().await;
+                for expired_payment_id in expired_payment_ids {
+                    warn!("Per-receive conversion timed out for {expired_payment_id}");
+                    if let Err(e) = self
+                        .storage
+                        .insert_payment_metadata(
+                            expired_payment_id.clone(),
+                            PaymentMetadata {
+                                conversion_status: Some(ConversionStatus::Failed),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        warn!("Failed to persist Failed status for {expired_payment_id}: {e:?}");
+                    }
+                }
+
                 Some(SdkEvent::Synced)
             }
 
-            // Payment received → decorate with Pending conversion status and queue conversion
+            // Payment succeeded → check if it resolves a deferred conversion,
+            // then queue per-receive or auto-convert as needed
             SdkEvent::PaymentSucceeded { mut payment } => {
+                // Check if this payment is a conversion result from another instance
+                // that resolves a deferred per-receive task
+                if let Some(parent_id) = self.queue.resolve_by_conversion_payment(&payment.id).await
+                {
+                    info!(
+                        "Conversion payment {} resolved deferred task for {parent_id}",
+                        payment.id
+                    );
+                    return Some(SdkEvent::PaymentSucceeded { payment });
+                }
+
                 if self.should_trigger_per_receive(&payment).await {
                     debug!("Queueing per-receive conversion for payment {}", payment.id);
 
@@ -464,7 +507,11 @@ impl EventMiddleware for StableBalance {
                         );
                     }
 
-                    self.queue_per_receive_convert(&payment.id);
+                    self.queue.push_per_receive(payment.id.clone()).await;
+                } else {
+                    // Non-per-receive payment — queue auto-convert to handle accumulated balance
+                    debug!("Queueing auto-convert after payment {}", payment.id);
+                    self.queue.push_auto_convert().await;
                 }
                 Some(SdkEvent::PaymentSucceeded { payment })
             }
