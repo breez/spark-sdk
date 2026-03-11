@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bitcoin::secp256k1::PublicKey;
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{error, info, trace, warn};
 
 use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};

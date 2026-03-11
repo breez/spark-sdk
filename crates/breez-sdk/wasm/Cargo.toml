@@ -16,10 +16,10 @@ bitcoin.workspace = true
 breez-sdk-spark = { workspace = true, features = ["passkey"] }
 js-sys.workspace = true
 macros.workspace = true
+platform-utils.workspace = true
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
 spark-wallet.workspace = true
-tokio_with_wasm.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tsify-next = { workspace = true, default-features = false, features = ["js"] }

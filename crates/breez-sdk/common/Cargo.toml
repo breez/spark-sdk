@@ -40,7 +40,6 @@ spark.workspace = true
 web-time.workspace = true
 spark-wallet.workspace = true
 futures.workspace = true
-tokio_with_wasm.workspace = true
 url.workspace = true
 
 # Non-Wasm dependencies

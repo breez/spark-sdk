@@ -607,7 +607,7 @@ pub async fn test_balance_change_notification(store: &dyn TreeStore) {
 
     // Wait for notification with timeout
     let result =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), async {
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), async {
             rx.changed().await.ok();
         })
         .await;
@@ -698,7 +698,7 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
 
     // Consume the initial notification
     let _ =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     // Reserve it with target 100 - will reserve all 1000, pending=900
@@ -718,7 +718,7 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
 
     // Consume the reservation notification
     let _ =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     // Simulate a swap that returns exactly the target amount (100 sats)
@@ -730,7 +730,7 @@ pub async fn test_notification_after_swap_with_exact_amount(store: &dyn TreeStor
 
     // Verify that we still get a notification even though net balance is 0 -> 0
     let notification_result =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     assert!(
@@ -748,7 +748,7 @@ pub async fn test_notification_on_pending_balance_change(store: &dyn TreeStore) 
 
     // Consume initial notification
     let _ =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     // Reserve with target 100 - pending=900
@@ -763,7 +763,7 @@ pub async fn test_notification_on_pending_balance_change(store: &dyn TreeStore) 
 
     // Consume reservation notification
     let _ =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     let reservation_id = match r1 {
@@ -776,7 +776,7 @@ pub async fn test_notification_on_pending_balance_change(store: &dyn TreeStore) 
 
     // Should get notification because pending balance changed
     let notification_result =
-        tokio_with_wasm::alias::time::timeout(std::time::Duration::from_millis(100), rx.changed())
+        platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
     assert!(
@@ -887,7 +887,7 @@ pub async fn test_add_leaves_not_deleted_by_set_leaves(store: &dyn TreeStore) {
     let refresh_start = SystemTime::now();
 
     // Small delay to ensure the new leaf is added AFTER refresh_start
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // While refresh is in progress, a new leaf arrives
     let new_leaf = create_test_tree_node("node2", 200);
@@ -957,7 +957,7 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     let refresh_start = SystemTime::now();
 
     // Small delay
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Swap completes and adds change leaves
     let reserved_leaf = create_test_tree_node("swap_output", 500);
@@ -1001,7 +1001,7 @@ pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
     let refresh_start = SystemTime::now();
 
     // Small delay
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Payment completes and adds change via finalize_reservation
     let change_leaf = create_test_tree_node("change", 900);
@@ -1094,7 +1094,7 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
     // Simulate refresh starting while swap is in progress
     let refresh_start = SystemTime::now();
 
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Try to set new leaves (should be skipped due to active swap)
     let new_leaves = vec![create_test_tree_node("node3", 300)];
@@ -1131,7 +1131,7 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
     let refresh_start = SystemTime::now();
 
     // Small delay to ensure swap completes AFTER refresh started
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Swap completes at T1
     let new_leaves_from_swap = vec![create_test_tree_node("swap_result", 500)];
@@ -1187,7 +1187,7 @@ pub async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later(store
         .unwrap();
 
     // Small delay to ensure refresh starts AFTER swap completed
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Refresh starts AFTER swap completed
     let refresh_start = future_refresh_start();

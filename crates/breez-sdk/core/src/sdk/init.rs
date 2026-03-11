@@ -1,7 +1,7 @@
 use flashnet::{FlashnetConfig, IntegratorConfig};
+use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, error, info};
 
 use crate::{

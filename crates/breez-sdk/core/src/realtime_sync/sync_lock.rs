@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use breez_sdk_common::sync::{SetLockParams, SigningClient};
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{Instrument, debug, warn};
 
 /// Tracks the number of in-flight lock holders sharing a distributed lock.

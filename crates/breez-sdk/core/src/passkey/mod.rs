@@ -57,8 +57,8 @@ pub use passkey_prf_provider::PasskeyPrfProvider;
 
 use std::sync::Arc;
 
+use platform_utils::tokio;
 use tokio::sync::OnceCell;
-use tokio_with_wasm::alias as tokio;
 
 use crate::Seed;
 use derivation::derive_nostr_keypair;
