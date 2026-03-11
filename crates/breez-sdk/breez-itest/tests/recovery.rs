@@ -256,6 +256,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -288,6 +289,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -313,6 +315,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -353,6 +356,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -404,6 +408,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -444,6 +449,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -473,6 +479,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -498,6 +505,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -527,6 +535,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -552,6 +561,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 
@@ -592,6 +602,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

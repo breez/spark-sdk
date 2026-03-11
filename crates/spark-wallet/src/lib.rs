@@ -43,7 +43,7 @@ pub use spark::{
         transactions::is_ephemeral_anchor_output,
     },
 };
-pub use wallet::SparkWallet;
+pub use wallet::{SparkWallet, WithdrawWithReservationParams};
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]

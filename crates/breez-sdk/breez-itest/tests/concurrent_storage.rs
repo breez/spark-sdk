@@ -202,6 +202,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
             amount: Some(payment_amount.into()),
             token_identifier: None,
             fee_policy: None,
+            reserve_leaves: None,
             conversion_options: None,
         })
         .await?;
@@ -307,6 +308,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
             amount: Some(return_amount.into()),
             token_identifier: None,
             fee_policy: None,
+            reserve_leaves: None,
             conversion_options: None,
         })
         .await?;
@@ -403,6 +405,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await?;
 

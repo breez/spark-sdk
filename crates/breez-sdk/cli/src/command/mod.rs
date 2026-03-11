@@ -612,6 +612,7 @@ pub(crate) async fn execute_command(
                     token_identifier,
                     conversion_options,
                     fee_policy,
+                    reserve_leaves: None,
                 })
                 .await;
 

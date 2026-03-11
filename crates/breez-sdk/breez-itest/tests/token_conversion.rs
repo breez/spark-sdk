@@ -80,6 +80,7 @@ async fn test_token_conversion_success(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
     let conversion_estimate = prepare_btc_to_token
@@ -240,6 +241,7 @@ async fn test_token_conversion_success(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -431,6 +433,7 @@ async fn test_token_conversion_failure(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await;
     assert!(
@@ -472,6 +475,7 @@ async fn test_token_conversion_failure(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

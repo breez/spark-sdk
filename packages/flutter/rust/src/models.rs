@@ -348,6 +348,7 @@ pub struct _PrepareSendPaymentRequest {
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
+    pub reserve_leaves: Option<bool>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
@@ -357,6 +358,12 @@ pub struct _PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
     pub fee_policy: FeePolicy,
+    pub reservation_id: Option<String>,
+}
+
+#[frb(mirror(CancelPrepareSendPaymentRequest))]
+pub struct _CancelPrepareSendPaymentRequest {
+    pub reservation_id: String,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]

@@ -40,8 +40,9 @@ use spark::{
         TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
-        InMemoryTreeStore, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        InMemoryTreeStore, LeavesReservationId, SelectLeavesOptions, SynchronousTreeService,
+        TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
+        select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -157,6 +158,17 @@ macro_rules! with_leafs_spent_retry {
             }
         }
     }};
+}
+
+pub struct WithdrawWithReservationParams<'a> {
+    pub withdrawal_address: &'a str,
+    pub amount_sats: u64,
+    pub fee_sats: u64,
+    pub exit_speed: ExitSpeed,
+    pub fee_quote: CoopExitFeeQuote,
+    pub reservation_id: LeavesReservationId,
+    pub fees_included: bool,
+    pub transfer_id: Option<TransferId>,
 }
 
 pub struct SparkWallet {
@@ -558,6 +570,23 @@ impl SparkWallet {
         withdrawal_address: &str,
         amount_sats: Option<u64>,
     ) -> Result<CoopExitFeeQuote, SparkWalletError> {
+        let (fee_quote, _) = self
+            .fetch_coop_exit_fee_quote_with_reservation(withdrawal_address, amount_sats, false)
+            .await?;
+        Ok(fee_quote)
+    }
+
+    /// Fetches a coop exit fee quote, optionally keeping the leaf reservation active.
+    ///
+    /// When `reserve` is true, the leaves used for the fee quote remain reserved
+    /// and their reservation ID is returned. The caller is responsible for either
+    /// finalizing or cancelling the reservation.
+    pub async fn fetch_coop_exit_fee_quote_with_reservation(
+        &self,
+        withdrawal_address: &str,
+        amount_sats: Option<u64>,
+        reserve: bool,
+    ) -> Result<(CoopExitFeeQuote, Option<LeavesReservationId>), SparkWalletError> {
         // Validate withdrawal address
         let withdrawal_address = withdrawal_address
             .parse::<Address<NetworkUnchecked>>()
@@ -576,14 +605,22 @@ impl SparkWallet {
             .select_leaves_with_retry(target_amounts.as_ref())
             .await?;
 
-        // Fetches fee quote for the coop exit then cancels the reservation.
+        let reservation_id = reservation.id.clone();
+
+        // Fetches fee quote for the coop exit.
         let fee_quote_res = self
             .coop_exit_service
             .fetch_coop_exit_fee_quote(reservation.leaves, withdrawal_address)
             .await;
-        self.tree_service.cancel_reservation(reservation.id).await?;
 
-        Ok(fee_quote_res?)
+        if reserve && fee_quote_res.is_ok() {
+            // Keep the reservation active - caller is responsible for cleanup
+            Ok((fee_quote_res?, Some(reservation_id)))
+        } else {
+            // Cancel reservation after getting quote (original behavior)
+            self.tree_service.cancel_reservation(reservation_id).await?;
+            Ok((fee_quote_res?, None))
+        }
     }
 
     pub async fn fetch_lightning_send_fee_estimate(
@@ -1213,6 +1250,201 @@ impl SparkWallet {
             .await?;
 
         Ok(transfer)
+    }
+
+    /// Reserves leaves for a payment of the given amount.
+    ///
+    /// The reserved leaves are locked and will not be used by other operations
+    /// until the reservation is cancelled or finalized. Returns the reservation ID.
+    pub async fn reserve_leaves_for_payment(
+        &self,
+        amount_sats: u64,
+    ) -> Result<LeavesReservationId, SparkWalletError> {
+        let target_amounts = TargetAmounts::new_amount_and_fee(amount_sats, None);
+        let reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
+        Ok(reservation.id)
+    }
+
+    /// Cancels a leaf reservation, returning the reserved leaves to the available pool.
+    pub async fn cancel_leaf_reservation(
+        &self,
+        reservation_id: &LeavesReservationId,
+    ) -> Result<(), SparkWalletError> {
+        self.tree_service
+            .cancel_reservation(reservation_id.clone())
+            .await?;
+        Ok(())
+    }
+
+    /// Performs a cooperative exit (on-chain withdrawal) using a pre-existing leaf reservation.
+    ///
+    /// The `reservation_id` should reference leaves reserved during `fetch_coop_exit_fee_quote_with_reservation`.
+    /// For `FeesIncluded`, the reserved leaves cover the full user-specified amount and are split
+    /// at send time into withdraw leaves and fee leaves. For `FeesExcluded`, additional fee leaves
+    /// are selected separately.
+    pub async fn withdraw_with_reservation(
+        &self,
+        params: WithdrawWithReservationParams<'_>,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        let WithdrawWithReservationParams {
+            withdrawal_address,
+            amount_sats,
+            fee_sats,
+            exit_speed,
+            fee_quote,
+            reservation_id,
+            fees_included,
+            transfer_id,
+        } = params;
+        // Validate withdrawal address
+        let withdrawal_address = withdrawal_address
+            .parse::<Address<NetworkUnchecked>>()
+            .map_err(|_| {
+                SparkWalletError::InvalidAddress(format!(
+                    "Invalid withdrawal address: {withdrawal_address}"
+                ))
+            })?
+            .require_network(self.config.network.into())
+            .map_err(|_| SparkWalletError::InvalidNetwork)?;
+
+        // Retrieve the reserved leaves
+        let reservation = self.tree_service.get_reservation(&reservation_id).await?;
+
+        let result = if fees_included {
+            // FeesIncluded: reserved leaves cover the full amount (amount_sats + fee_sats).
+            // Split them into withdraw leaves and fee leaves.
+            let target = TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats));
+            let target_leaves =
+                select_leaves_by_target_amounts(&reservation.leaves, Some(&target))?;
+
+            self.coop_exit_service
+                .coop_exit(CoopExitParams {
+                    leaves: target_leaves.amount_leaves,
+                    withdrawal_address: &withdrawal_address,
+                    withdraw_all: false,
+                    exit_speed,
+                    fee_quote_id: Some(fee_quote.id),
+                    fee_leaves: target_leaves.fee_leaves,
+                    transfer_id,
+                })
+                .await
+        } else {
+            // FeesExcluded: reserved leaves are the withdraw leaves.
+            // Select additional fee leaves separately.
+            let fee_target = TargetAmounts::new_amount_and_fee(fee_sats, None);
+            let fee_reservation = self.select_leaves_with_retry(Some(&fee_target)).await;
+
+            match fee_reservation {
+                Ok(fee_res) => {
+                    let result = self
+                        .coop_exit_service
+                        .coop_exit(CoopExitParams {
+                            leaves: reservation.leaves.clone(),
+                            withdrawal_address: &withdrawal_address,
+                            withdraw_all: false,
+                            exit_speed,
+                            fee_quote_id: Some(fee_quote.id),
+                            fee_leaves: Some(fee_res.leaves.clone()),
+                            transfer_id,
+                        })
+                        .await;
+
+                    // Clean up fee reservation
+                    if result.is_ok() {
+                        let _ = self
+                            .tree_service
+                            .finalize_reservation(fee_res.id, None)
+                            .await;
+                    } else {
+                        let _ = self.tree_service.cancel_reservation(fee_res.id).await;
+                    }
+
+                    result
+                }
+                Err(e) => {
+                    // Cancel the amount reservation on fee selection failure
+                    let _ = self
+                        .tree_service
+                        .cancel_reservation(reservation_id.clone())
+                        .await;
+                    return Err(e);
+                }
+            }
+        };
+
+        match &result {
+            Ok(_) => {
+                let _ = self
+                    .tree_service
+                    .finalize_reservation(reservation_id, None)
+                    .await;
+            }
+            Err(_) => {
+                let _ = self.tree_service.cancel_reservation(reservation_id).await;
+            }
+        }
+
+        let transfer = result?;
+
+        self.maybe_start_optimization();
+
+        create_transfer(
+            transfer,
+            &self.ssp_client,
+            &self.htlc_service,
+            self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
+        )
+        .await
+    }
+
+    /// Performs a transfer using pre-reserved leaves.
+    ///
+    /// The `reservation_id` should reference leaves previously reserved via
+    /// `reserve_leaves_for_payment`.
+    pub async fn transfer_with_reservation(
+        &self,
+        receiver: &SparkAddress,
+        reservation_id: LeavesReservationId,
+        transfer_id: Option<TransferId>,
+    ) -> Result<WalletTransfer, SparkWalletError> {
+        // Retrieve the reserved leaves
+        let reservation = self.tree_service.get_reservation(&reservation_id).await?;
+
+        let result = self
+            .transfer_service
+            .transfer_leaves_to(
+                reservation.leaves,
+                &receiver.identity_public_key,
+                transfer_id,
+                None,
+                None,
+            )
+            .await;
+
+        match &result {
+            Ok(_) => {
+                let _ = self
+                    .tree_service
+                    .finalize_reservation(reservation_id, None)
+                    .await;
+            }
+            Err(_) => {
+                let _ = self.tree_service.cancel_reservation(reservation_id).await;
+            }
+        }
+
+        let transfer = result?;
+
+        self.maybe_start_optimization();
+
+        Ok(WalletTransfer::from_transfer(
+            transfer,
+            None,
+            None,
+            self.identity_public_key,
+            self.config.service_provider_config.identity_public_key,
+        ))
     }
 
     /// Prepares a package of unilaterial exit PSBTs for each leaf

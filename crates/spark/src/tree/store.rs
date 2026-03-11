@@ -112,6 +112,10 @@ enum StoreCommand {
         change_leaves: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
     },
+    GetReservation {
+        id: LeavesReservationId,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
 }
 
 /// Queue-based in-memory tree store.
@@ -267,6 +271,10 @@ impl InMemoryTreeStore {
                     if result.is_ok() {
                         force_notify = true;
                     }
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::GetReservation { id, response_tx } => {
+                    let result = Self::process_get_reservation(&state, &id);
                     let _ = response_tx.send(result);
                 }
             }
@@ -555,6 +563,22 @@ impl InMemoryTreeStore {
 
     /// Cancel a reservation and return leaves to the pool.
     /// The permit is automatically released when the ReservationEntry is dropped.
+    fn process_get_reservation(
+        state: &LeavesState,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        state
+            .leaves_reservations
+            .get(id)
+            .map(|entry| {
+                LeavesReservation::new(
+                    entry.leaves.iter().map(|sl| sl.node.clone()).collect(),
+                    id.clone(),
+                )
+            })
+            .ok_or_else(|| TreeServiceError::Generic(format!("Reservation not found: {id}")))
+    }
+
     fn process_cancel_reservation(state: &mut LeavesState, id: &LeavesReservationId) {
         // Return leaves to pool - permit and pending change are dropped with the entry
         if let Some(entry) = state.leaves_reservations.remove(id) {
@@ -757,6 +781,18 @@ impl TreeStore for InMemoryTreeStore {
             leaves,
             missing_operators_leaves,
             refresh_started_at,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let id = id.clone();
+        self.send_command(|tx| StoreCommand::GetReservation {
+            id,
             response_tx: tx,
         })
         .await

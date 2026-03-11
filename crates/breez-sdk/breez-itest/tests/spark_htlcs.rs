@@ -30,6 +30,7 @@ async fn send_htlc_alice_to_bob(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

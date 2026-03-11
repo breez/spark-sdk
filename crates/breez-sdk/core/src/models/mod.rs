@@ -1132,6 +1132,12 @@ pub struct PrepareSendPaymentRequest {
     /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
+    /// If set to true, leaves will be reserved during prepare and used during send.
+    /// This ensures the same leaves used for fee quotes are used for the actual payment.
+    /// Use [`cancel_prepare_send_payment`](crate::BreezSdk::cancel_prepare_send_payment) to release reserved leaves
+    /// if you don't intend to proceed with the payment.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub reserve_leaves: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1148,6 +1154,12 @@ pub struct PrepareSendPaymentResponse {
     pub conversion_estimate: Option<ConversionEstimate>,
     /// How fees are handled for this payment.
     pub fee_policy: FeePolicy,
+    /// If set, leaves have been reserved for this payment.
+    /// Pass the full `PrepareSendPaymentResponse` to `send_payment`
+    /// to use the reserved leaves, or call
+    /// `cancel_prepare_send_payment`
+    /// to release them.
+    pub reservation_id: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1190,6 +1202,14 @@ pub struct SendPaymentRequest {
     /// The idempotency key must be a valid UUID.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CancelPrepareSendPaymentRequest {
+    /// The reservation ID returned from `prepare_send_payment`
+    /// when `reserve_leaves` was set to true.
+    pub reservation_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

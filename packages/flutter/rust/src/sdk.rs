@@ -106,6 +106,13 @@ impl BreezSdk {
         self.inner.prepare_send_payment(request).await
     }
 
+    pub async fn cancel_prepare_send_payment(
+        &self,
+        request: CancelPrepareSendPaymentRequest,
+    ) -> Result<(), SdkError> {
+        self.inner.cancel_prepare_send_payment(request).await
+    }
+
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,

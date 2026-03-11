@@ -652,6 +652,24 @@ pub trait TreeStore: Send + Sync {
     /// The value sent is not meaningful - only the notification matters.
     fn subscribe_balance_changes(&self) -> watch::Receiver<()>;
 
+    /// Retrieves a reservation by ID, returning the reserved leaves.
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The unique reservation ID
+    ///
+    /// # Returns
+    ///
+    /// * `Result<LeavesReservation, TreeServiceError>` - The reservation if found
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if the reservation does not exist.
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
     /// Updates a reservation after a swap operation.
     ///
     /// This method is used when a swap has been performed and we need to
@@ -889,6 +907,20 @@ pub trait TreeService: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
+    /// Retrieves a reservation by ID, returning the reserved leaves.
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The unique reservation ID
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TreeServiceError` if the reservation does not exist.
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
     async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
 
     /// Finalizes a leaf reservation, marking the reserved leaves as consumed and optionally adding new leaves to the main pool.

@@ -8,12 +8,12 @@ use tracing::{Instrument, error, info, warn};
 use web_time::Duration;
 
 use crate::{
-    BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
-    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
-    SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
-    WaitForPaymentIdentifier,
+    BitcoinAddressDetails, Bolt11InvoiceDetails, CancelPrepareSendPaymentRequest,
+    ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, ConversionEstimate, ConversionOptions,
+    ConversionPurpose, ConversionType, FeePolicy, FetchConversionLimitsRequest,
+    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, InputType,
+    OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote, SendPaymentMethod,
+    SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -155,6 +155,7 @@ impl BreezSdk {
 
         let fee_policy = request.fee_policy.unwrap_or_default();
         let token_identifier = request.token_identifier.clone();
+        let reserve_leaves = request.reserve_leaves.unwrap_or(false) && token_identifier.is_none(); // Token payments don't support reservation
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
@@ -182,6 +183,17 @@ impl BreezSdk {
                         .await?
                 };
 
+                let reservation_id = if reserve_leaves {
+                    let amount_sats: u64 = amount.try_into()?;
+                    Some(
+                        self.spark_wallet
+                            .reserve_leaves_for_payment(amount_sats)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
                         address: spark_address_details.address.clone(),
@@ -192,6 +204,7 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::SparkInvoice(spark_invoice_details) => {
@@ -224,6 +237,18 @@ impl BreezSdk {
                         .await?
                 };
 
+                // Don't reserve for token invoices
+                let reservation_id = if reserve_leaves && effective_token_identifier.is_none() {
+                    let amount_sats: u64 = amount.try_into()?;
+                    Some(
+                        self.spark_wallet
+                            .reserve_leaves_for_payment(amount_sats)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
                         spark_invoice_details: spark_invoice_details.clone(),
@@ -234,6 +259,7 @@ impl BreezSdk {
                     token_identifier: effective_token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
@@ -296,6 +322,23 @@ impl BreezSdk {
                         .await?
                 };
 
+                // For lightning, reserve amount + fee since both are needed for the swap
+                let reservation_id = if reserve_leaves {
+                    let total_sats: u64 = if fee_policy == FeePolicy::FeesIncluded {
+                        amount.try_into()?
+                    } else {
+                        let amount_sats: u64 = amount.try_into()?;
+                        amount_sats.saturating_add(lightning_fee_sats)
+                    };
+                    Some(
+                        self.spark_wallet
+                            .reserve_leaves_for_payment(total_sats)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
                         invoice_details: detailed_bolt11_invoice.clone(),
@@ -306,6 +349,7 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
@@ -324,14 +368,27 @@ impl BreezSdk {
                     )));
                 }
 
-                let fee_quote: SendOnchainFeeQuote = self
-                    .spark_wallet
-                    .fetch_coop_exit_fee_quote(
-                        &withdrawal_address.address,
-                        Some(amount.try_into()?),
-                    )
-                    .await?
-                    .into();
+                let (fee_quote, reservation_id): (SendOnchainFeeQuote, Option<String>) =
+                    if reserve_leaves {
+                        let (quote, res_id) = self
+                            .spark_wallet
+                            .fetch_coop_exit_fee_quote_with_reservation(
+                                &withdrawal_address.address,
+                                Some(amount.try_into()?),
+                                true,
+                            )
+                            .await?;
+                        (quote.into(), res_id)
+                    } else {
+                        let quote = self
+                            .spark_wallet
+                            .fetch_coop_exit_fee_quote(
+                                &withdrawal_address.address,
+                                Some(amount.try_into()?),
+                            )
+                            .await?;
+                        (quote.into(), None)
+                    };
 
                 // For FeesIncluded, validate the output after fees using the best case
                 // (slow/lowest fee). Only reject if even the cheapest option results in dust.
@@ -339,6 +396,10 @@ impl BreezSdk {
                     let min_fee_sats = fee_quote.speed_slow.total_fee_sat();
                     let output_amount_sats = amount_u64.saturating_sub(min_fee_sats);
                     if output_amount_sats < dust_limit_sats {
+                        // Cancel reservation if we're going to reject
+                        if let Some(ref res_id) = reservation_id {
+                            let _ = self.spark_wallet.cancel_leaf_reservation(res_id).await;
+                        }
                         return Err(SdkError::InvalidInput(format!(
                             "Amount is below the minimum of {dust_limit_sats} sats required for this address after lowest fees of {min_fee_sats} sats"
                         )));
@@ -377,12 +438,27 @@ impl BreezSdk {
                     token_identifier,
                     conversion_estimate,
                     fee_policy,
+                    reservation_id,
                 })
             }
             _ => Err(SdkError::InvalidInput(
                 "Unsupported payment method".to_string(),
             )),
         }
+    }
+
+    /// Cancels a prepared payment, releasing any reserved leaves.
+    ///
+    /// This should be called when you no longer intend to proceed with a payment
+    /// that was prepared with `reserve_leaves: true`.
+    pub async fn cancel_prepare_send_payment(
+        &self,
+        request: CancelPrepareSendPaymentRequest,
+    ) -> Result<(), SdkError> {
+        self.spark_wallet
+            .cancel_leaf_reservation(&request.reservation_id)
+            .await?;
+        Ok(())
     }
 
     pub async fn send_payment(
@@ -735,6 +811,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         let amount = request.prepare_response.amount;
         let token_identifier = request.prepare_response.token_identifier.clone();
+        let reservation_id = request.prepare_response.reservation_id.clone();
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
@@ -744,6 +821,7 @@ impl BreezSdk {
                     amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
+                    reservation_id,
                 )
                 .await
             }
@@ -783,6 +861,7 @@ impl BreezSdk {
         amount: u128,
         options: Option<&SendPaymentOptions>,
         idempotency_key: Option<String>,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         let spark_address = address
             .parse::<SparkAddress>()
@@ -816,10 +895,15 @@ impl BreezSdk {
                 .as_ref()
                 .map(|key| TransferId::from_str(key))
                 .transpose()?;
-            let transfer = self
-                .spark_wallet
-                .transfer(amount.try_into()?, &spark_address, transfer_id)
-                .await?;
+            let transfer = if let Some(reservation_id) = reservation_id {
+                self.spark_wallet
+                    .transfer_with_reservation(&spark_address, reservation_id, transfer_id)
+                    .await?
+            } else {
+                self.spark_wallet
+                    .transfer(amount.try_into()?, &spark_address, transfer_id)
+                    .await?
+            };
             transfer.try_into()?
         };
 
@@ -1119,8 +1203,10 @@ impl BreezSdk {
             OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
         };
 
+        let fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
+
         // Compute amount - for FeesIncluded, receiver gets total minus fees
-        let amount_sats: u64 = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
+        let amount_sats: u64 = if fees_included {
             let total_sats: u64 = request.prepare_response.amount.try_into()?;
             total_sats.saturating_sub(fee_sats)
         } else {
@@ -1140,16 +1226,31 @@ impl BreezSdk {
             .as_ref()
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
-        let response = self
-            .spark_wallet
-            .withdraw(
-                &address.address,
-                Some(amount_sats),
-                exit_speed,
-                fee_quote.clone().into(),
-                transfer_id,
-            )
-            .await?;
+
+        let response = if let Some(reservation_id) = &request.prepare_response.reservation_id {
+            self.spark_wallet
+                .withdraw_with_reservation(spark_wallet::WithdrawWithReservationParams {
+                    withdrawal_address: &address.address,
+                    amount_sats,
+                    fee_sats,
+                    exit_speed,
+                    fee_quote: fee_quote.clone().into(),
+                    reservation_id: reservation_id.clone(),
+                    fees_included,
+                    transfer_id,
+                })
+                .await?
+        } else {
+            self.spark_wallet
+                .withdraw(
+                    &address.address,
+                    Some(amount_sats),
+                    exit_speed,
+                    fee_quote.clone().into(),
+                    transfer_id,
+                )
+                .await?
+        };
 
         let payment: Payment = response.try_into()?;
 

@@ -245,6 +245,41 @@ impl TreeStore for PostgresTreeStore {
         Ok(())
     }
 
+    async fn get_reservation(
+        &self,
+        id: &LeavesReservationId,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+
+        // Check that the reservation exists
+        let reservation = client
+            .query_opt("SELECT id FROM tree_reservations WHERE id = $1", &[id])
+            .await
+            .map_err(map_err)?;
+
+        if reservation.is_none() {
+            return Err(TreeServiceError::Generic(format!(
+                "Reservation not found: {id}"
+            )));
+        }
+
+        // Get the leaves belonging to this reservation
+        let rows = client
+            .query(
+                "SELECT data FROM tree_leaves WHERE reservation_id = $1",
+                &[id],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let leaves: Vec<TreeNode> = rows
+            .iter()
+            .map(|r| Self::deserialize_node(r.get("data")))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(LeavesReservation::new(leaves, id.clone()))
+    }
+
     async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;

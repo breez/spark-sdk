@@ -61,6 +61,7 @@ async fn test_stable_balance_auto_conversion(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -133,6 +134,7 @@ async fn test_stable_balance_auto_conversion(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -212,6 +214,7 @@ async fn test_stable_balance_auto_conversion(
             token_identifier: Some(REGTEST_TOKEN_ID.to_string()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -328,6 +331,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -374,6 +378,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -452,6 +457,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None, // No conversion - using reserved sats
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -543,6 +549,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
     info!(
@@ -637,6 +644,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -648,6 +656,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -660,6 +669,7 @@ async fn test_stable_balance_reserved_sats(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

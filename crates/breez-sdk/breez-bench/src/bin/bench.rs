@@ -313,6 +313,7 @@ async fn main() -> Result<()> {
                         token_identifier: None,
                         conversion_options: None,
                         fee_policy: None,
+                        reserve_leaves: None,
                     })
                     .await?;
 
@@ -462,6 +463,7 @@ async fn main() -> Result<()> {
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                reserve_leaves: None,
             })
             .await;
 
@@ -814,6 +816,7 @@ async fn return_funds_to_sender(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 

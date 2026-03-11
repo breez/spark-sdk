@@ -101,6 +101,7 @@ async fn test_01_token_transfer(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
     info!("Prepare response amount: {:?}", prepare.amount);
@@ -305,6 +306,7 @@ async fn test_02_token_invoice(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -586,6 +588,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -665,6 +668,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await;
 
@@ -725,6 +729,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -800,6 +805,7 @@ async fn test_05_invoice_expiry(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await?;
 
@@ -817,6 +823,7 @@ async fn test_05_invoice_expiry(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            reserve_leaves: None,
         })
         .await;
 
