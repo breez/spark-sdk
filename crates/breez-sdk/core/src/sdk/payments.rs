@@ -497,6 +497,16 @@ impl BreezSdk {
     }
 }
 
+struct SendBolt11InvoiceParams<'a> {
+    invoice_details: &'a Bolt11InvoiceDetails,
+    spark_transfer_fee_sats: Option<u64>,
+    lightning_fee_sats: u64,
+    request: &'a SendPaymentRequest,
+    amount_override: Option<u64>,
+    amount: u128,
+    reservation_id: Option<String>,
+}
+
 // Private payment methods
 impl BreezSdk {
     /// Reserves leaves for a payment if `reserve_leaves` is true.
@@ -835,15 +845,15 @@ impl BreezSdk {
                 lightning_fee_sats,
                 ..
             } => {
-                Box::pin(self.send_bolt11_invoice(
+                Box::pin(self.send_bolt11_invoice(SendBolt11InvoiceParams {
                     invoice_details,
-                    *spark_transfer_fee_sats,
-                    *lightning_fee_sats,
+                    spark_transfer_fee_sats: *spark_transfer_fee_sats,
+                    lightning_fee_sats: *lightning_fee_sats,
                     request,
                     amount_override,
                     amount,
                     reservation_id,
-                ))
+                }))
                 .await
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
@@ -1065,17 +1075,19 @@ impl BreezSdk {
         Ok(receiver_amount.saturating_add(overpayment))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn send_bolt11_invoice(
         &self,
-        invoice_details: &Bolt11InvoiceDetails,
-        spark_transfer_fee_sats: Option<u64>,
-        lightning_fee_sats: u64,
-        request: &SendPaymentRequest,
-        amount_override: Option<u64>,
-        amount: u128,
-        reservation_id: Option<String>,
+        params: SendBolt11InvoiceParams<'_>,
     ) -> Result<SendPaymentResponse, SdkError> {
+        let SendBolt11InvoiceParams {
+            invoice_details,
+            spark_transfer_fee_sats,
+            lightning_fee_sats,
+            request,
+            amount_override,
+            amount,
+            reservation_id,
+        } = params;
         // Handle FeesIncluded for amountless Bolt11 invoices
         let amount_to_send = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded
             && invoice_details.amount_msat.is_none()
@@ -1231,15 +1243,15 @@ impl BreezSdk {
         let fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
         let response = self
             .spark_wallet
-            .withdraw(
-                &address.address,
-                Some(amount_sats),
+            .withdraw(spark_wallet::WithdrawRequest {
+                withdrawal_address: address.address.clone(),
+                amount_sats: Some(amount_sats),
                 exit_speed,
-                fee_quote.clone().into(),
+                fee_quote: fee_quote.clone().into(),
                 transfer_id,
                 reservation_id,
                 fees_included,
-            )
+            })
             .await?;
 
         let payment: Payment = response.try_into()?;

@@ -9,18 +9,28 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        ExitSpeed, LightningSendPayment, OptimizationEvent, Preimage, PreimageRequestStatus,
-        PreimageRequestWithTransfer, TokenTransaction, Transfer, TransferId, TransferLeaf,
-        TransferStatus, TransferType,
+        CoopExitFeeQuote, ExitSpeed, LightningSendPayment, OptimizationEvent, Preimage,
+        PreimageRequestStatus, PreimageRequestWithTransfer, TokenTransaction, Transfer, TransferId,
+        TransferLeaf, TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
-    tree::{Leaves, SigningKeyshare, TreeNode, TreeNodeId},
+    tree::{Leaves, LeavesReservationId, SigningKeyshare, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::SparkWalletError;
+
+pub struct WithdrawRequest {
+    pub withdrawal_address: String,
+    pub amount_sats: Option<u64>,
+    pub exit_speed: ExitSpeed,
+    pub fee_quote: CoopExitFeeQuote,
+    pub transfer_id: Option<TransferId>,
+    pub reservation_id: Option<LeavesReservationId>,
+    pub fees_included: bool,
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

@@ -23,14 +23,14 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafOptimizer,
-        LeafTxCpfpPsbts, LightningReceivePayment, LightningSendPayment, LightningService,
-        OptimizationEvent, OptimizationEventHandler, OptimizationProgress, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
-        TokenService, TokenTransaction, Transfer, TransferId, TransferObserver, TransferService,
-        TransferStatus, TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, Fee,
+        FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafOptimizer, LeafTxCpfpPsbts,
+        LightningReceivePayment, LightningSendPayment, LightningService, OptimizationEvent,
+        OptimizationEventHandler, OptimizationProgress, Preimage, PreimageRequestStatus,
+        PreimageRequestWithTransfer, QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError,
+        StaticDepositQuote, Swap, TimelockManager, TokenService, TokenTransaction, Transfer,
+        TransferId, TransferObserver, TransferService, TransferStatus, TransferTokenOutput,
+        TransferType, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::Signer,
@@ -54,7 +54,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
     QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
-    WithdrawInnerParams,
+    WithdrawInnerParams, WithdrawRequest,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
 };
@@ -618,7 +618,10 @@ impl SparkWallet {
             }
             Err(e) => {
                 // Always cancel the reservation on failure
-                self.tree_service.cancel_reservation(reservation.id).await?;
+                if let Err(cancel_err) = self.tree_service.cancel_reservation(reservation.id).await
+                {
+                    error!("Failed to cancel reservation after fee quote error: {cancel_err:?}");
+                }
                 Err(e.into())
             }
         }
@@ -634,19 +637,13 @@ impl SparkWallet {
     }
 
     /// Cancels a leaf reservation, returning the leaves to the available pool.
-    /// Idempotent: succeeds even if the reservation is already expired or missing.
+    /// Idempotent: the underlying store implementations treat missing/expired
+    /// reservations as a no-op.
     pub async fn cancel_leaf_reservation(
         &self,
         id: &LeavesReservationId,
     ) -> Result<(), SparkWalletError> {
-        self.tree_service
-            .cancel_reservation(id.clone())
-            .await
-            .or_else(|e| {
-                // Treat missing/expired reservations as success (idempotent)
-                tracing::debug!("cancel_leaf_reservation ignored error: {e:?}");
-                Ok(())
-            })
+        Ok(self.tree_service.cancel_reservation(id.clone()).await?)
     }
 
     /// Retrieves a previously created leaf reservation by its ID.
@@ -1206,164 +1203,36 @@ impl SparkWallet {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn withdraw(
-        &self,
-        withdrawal_address: &str,
-        amount_sats: Option<u64>,
-        exit_speed: ExitSpeed,
-        fee_quote: CoopExitFeeQuote,
-        transfer_id: Option<TransferId>,
-        reservation_id: Option<LeavesReservationId>,
-        fees_included: bool,
-    ) -> Result<WalletTransfer, SparkWalletError> {
+    pub async fn withdraw(&self, req: WithdrawRequest) -> Result<WalletTransfer, SparkWalletError> {
         // Validate withdrawal address
-        let withdrawal_address = withdrawal_address
+        let withdrawal_address = req
+            .withdrawal_address
             .parse::<Address<NetworkUnchecked>>()
             .map_err(|_| {
                 SparkWalletError::InvalidAddress(format!(
-                    "Invalid withdrawal address: {withdrawal_address}"
+                    "Invalid withdrawal address: {}",
+                    req.withdrawal_address
                 ))
             })?
             .require_network(self.config.network.into())
             .map_err(|_| SparkWalletError::InvalidNetwork)?;
 
-        // Calculate the fee based on the exit speed
-        let fee_sats = fee_quote.fee_sats(&exit_speed);
-        trace!("Calculated fee for exit speed {exit_speed:?}: {fee_sats} sats",);
-
-        let withdraw_all = amount_sats.is_none();
-        let target_amounts = amount_sats
-            .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
-
-        let transfer = if let Some(res_id) = reservation_id {
-            let amount_reservation = self.tree_service.get_reservation(&res_id).await?;
-
-            // Resolve leaves based on the mode.
-            // fee_reservation tracks any separately-selected fee leaves for cleanup.
-            let (resolve_result, fee_reservation) = if withdraw_all {
-                // withdraw_all: all reserved leaves are the withdraw leaves, no fee leaves
-                (Ok((amount_reservation.leaves.clone(), None, None)), None)
-            } else if fees_included {
-                // Reservation covers total (amount + fee). Try splitting directly first;
-                // only swap if the denominations don't line up.
-                let res = match select_leaves_by_target_amounts(
-                    &amount_reservation.leaves,
-                    target_amounts.as_ref(),
-                ) {
-                    Ok(target_leaves) => Ok((
-                        target_leaves.amount_leaves,
-                        target_leaves.fee_leaves,
-                        Some(fee_quote.id.clone()),
-                    )),
-                    Err(_) => self
-                        .tree_service
-                        .swap_reservation(amount_reservation.clone(), target_amounts.as_ref())
-                        .await
-                        .and_then(|swapped| {
-                            let target_leaves = select_leaves_by_target_amounts(
-                                &swapped.leaves,
-                                target_amounts.as_ref(),
-                            )?;
-                            Ok((
-                                target_leaves.amount_leaves,
-                                target_leaves.fee_leaves,
-                                Some(fee_quote.id.clone()),
-                            ))
-                        })
-                        .map_err(SparkWalletError::from),
-                };
-                (res, None)
-            } else {
-                // Reservation covers amount only. Select fee leaves separately.
-                let fee_target = TargetAmounts::new_amount_and_fee(fee_sats, None);
-                match self.select_leaves_with_retry(Some(&fee_target)).await {
-                    Ok(fee_res) => {
-                        let leaves = fee_res.leaves.clone();
-                        (
-                            Ok((
-                                amount_reservation.leaves.clone(),
-                                Some(leaves),
-                                Some(fee_quote.id.clone()),
-                            )),
-                            Some(fee_res),
-                        )
-                    }
-                    Err(e) => (Err(e), None),
-                }
-            };
-
-            let (withdraw_leaves, fee_leaves, fee_quote_id) = match resolve_result {
-                Ok(resolved) => resolved,
-                Err(e) => {
-                    // Cancel reservations on failure
-                    if let Err(cancel_err) = self
-                        .tree_service
-                        .cancel_reservation(amount_reservation.id)
-                        .await
-                    {
-                        error!("Failed to cancel amount reservation: {cancel_err:?}");
-                    }
-                    if let Some(fee_res) = fee_reservation
-                        && let Err(cancel_err) =
-                            self.tree_service.cancel_reservation(fee_res.id).await
-                    {
-                        error!("Failed to cancel fee reservation: {cancel_err:?}");
-                    }
-                    return Err(e);
-                }
-            };
-
-            let result = self
-                .withdraw_inner(WithdrawInnerParams {
-                    withdraw_leaves,
-                    fee_leaves,
-                    address: withdrawal_address.clone(),
-                    withdraw_all,
-                    exit_speed,
-                    fee_sats,
-                    fee_quote_id,
-                    transfer_id: transfer_id.clone(),
-                })
-                .await;
-
-            // Finalize or cancel reservations based on the result.
-            match &result {
-                Ok(_) => {
-                    if let Err(e) = self
-                        .tree_service
-                        .finalize_reservation(amount_reservation.id, None)
-                        .await
-                    {
-                        error!("Failed to finalize amount reservation: {e:?}");
-                    }
-                    if let Some(fee_res) = fee_reservation
-                        && let Err(e) = self
-                            .tree_service
-                            .finalize_reservation(fee_res.id, None)
-                            .await
-                    {
-                        error!("Failed to finalize fee reservation: {e:?}");
-                    }
-                }
-                Err(_) => {
-                    if let Err(e) = self
-                        .tree_service
-                        .cancel_reservation(amount_reservation.id)
-                        .await
-                    {
-                        error!("Failed to cancel amount reservation: {e:?}");
-                    }
-                    if let Some(fee_res) = fee_reservation
-                        && let Err(e) = self.tree_service.cancel_reservation(fee_res.id).await
-                    {
-                        error!("Failed to cancel fee reservation: {e:?}");
-                    }
-                }
-            }
-
-            result?
+        let transfer = if req.reservation_id.is_some() {
+            self.withdraw_with_reservation(&req, &withdrawal_address)
+                .await?
         } else {
+            // Calculate the fee based on the exit speed
+            let fee_sats = req.fee_quote.fee_sats(&req.exit_speed);
+            trace!(
+                "Calculated fee for exit speed {:?}: {fee_sats} sats",
+                req.exit_speed
+            );
+
+            let withdraw_all = req.amount_sats.is_none();
+            let target_amounts = req
+                .amount_sats
+                .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
+
             // No reservation — use the macro retry path
             with_leafs_spent_retry!(
                 self,
@@ -1377,17 +1246,17 @@ impl SparkWallet {
                     let fee_quote_id = if withdraw_all {
                         None
                     } else {
-                        Some(fee_quote.id.clone())
+                        Some(req.fee_quote.id.clone())
                     };
                     self.withdraw_inner(WithdrawInnerParams {
                         withdraw_leaves: target_leaves.amount_leaves,
                         fee_leaves: target_leaves.fee_leaves,
                         address: withdrawal_address.clone(),
                         withdraw_all,
-                        exit_speed,
+                        exit_speed: req.exit_speed,
                         fee_sats,
                         fee_quote_id,
-                        transfer_id: transfer_id.clone(),
+                        transfer_id: req.transfer_id.clone(),
                     })
                 }
             )?
@@ -1403,6 +1272,150 @@ impl SparkWallet {
             self.config.service_provider_config.identity_public_key,
         )
         .await
+    }
+
+    async fn withdraw_with_reservation(
+        &self,
+        req: &WithdrawRequest,
+        withdrawal_address: &Address,
+    ) -> Result<Transfer, SparkWalletError> {
+        let reservation_id = req
+            .reservation_id
+            .as_ref()
+            .ok_or_else(|| SparkWalletError::Generic("reservation_id required".to_string()))?;
+
+        // Calculate the fee based on the exit speed
+        let fee_sats = req.fee_quote.fee_sats(&req.exit_speed);
+        let withdraw_all = req.amount_sats.is_none();
+        let target_amounts = req
+            .amount_sats
+            .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
+
+        let amount_reservation = self.tree_service.get_reservation(reservation_id).await?;
+
+        // Resolve leaves based on the mode.
+        // fee_reservation tracks any separately-selected fee leaves for cleanup.
+        let (resolve_result, fee_reservation) = if withdraw_all {
+            // withdraw_all: all reserved leaves are the withdraw leaves, no fee leaves
+            (Ok((amount_reservation.leaves.clone(), None, None)), None)
+        } else if req.fees_included {
+            // Reservation covers total (amount + fee). Try splitting directly first;
+            // only swap if the denominations don't line up.
+            let res = match select_leaves_by_target_amounts(
+                &amount_reservation.leaves,
+                target_amounts.as_ref(),
+            ) {
+                Ok(target_leaves) => Ok((
+                    target_leaves.amount_leaves,
+                    target_leaves.fee_leaves,
+                    Some(req.fee_quote.id.clone()),
+                )),
+                Err(_) => self
+                    .tree_service
+                    .swap_reservation(amount_reservation.clone(), target_amounts.as_ref())
+                    .await
+                    .and_then(|swapped| {
+                        let target_leaves = select_leaves_by_target_amounts(
+                            &swapped.leaves,
+                            target_amounts.as_ref(),
+                        )?;
+                        Ok((
+                            target_leaves.amount_leaves,
+                            target_leaves.fee_leaves,
+                            Some(req.fee_quote.id.clone()),
+                        ))
+                    })
+                    .map_err(SparkWalletError::from),
+            };
+            (res, None)
+        } else {
+            // Reservation covers amount only. Select fee leaves separately.
+            let fee_target = TargetAmounts::new_amount_and_fee(fee_sats, None);
+            match self.select_leaves_with_retry(Some(&fee_target)).await {
+                Ok(fee_res) => {
+                    let leaves = fee_res.leaves.clone();
+                    (
+                        Ok((
+                            amount_reservation.leaves.clone(),
+                            Some(leaves),
+                            Some(req.fee_quote.id.clone()),
+                        )),
+                        Some(fee_res),
+                    )
+                }
+                Err(e) => (Err(e), None),
+            }
+        };
+
+        let (withdraw_leaves, fee_leaves, fee_quote_id) = match resolve_result {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                // Cancel reservations on failure
+                if let Err(cancel_err) = self
+                    .tree_service
+                    .cancel_reservation(amount_reservation.id)
+                    .await
+                {
+                    error!("Failed to cancel amount reservation: {cancel_err:?}");
+                }
+                if let Some(fee_res) = fee_reservation
+                    && let Err(cancel_err) = self.tree_service.cancel_reservation(fee_res.id).await
+                {
+                    error!("Failed to cancel fee reservation: {cancel_err:?}");
+                }
+                return Err(e);
+            }
+        };
+
+        let result = self
+            .withdraw_inner(WithdrawInnerParams {
+                withdraw_leaves,
+                fee_leaves,
+                address: withdrawal_address.clone(),
+                withdraw_all,
+                exit_speed: req.exit_speed,
+                fee_sats,
+                fee_quote_id,
+                transfer_id: req.transfer_id.clone(),
+            })
+            .await;
+
+        // Finalize or cancel reservations based on the result.
+        match &result {
+            Ok(_) => {
+                if let Err(e) = self
+                    .tree_service
+                    .finalize_reservation(amount_reservation.id, None)
+                    .await
+                {
+                    error!("Failed to finalize amount reservation: {e:?}");
+                }
+                if let Some(fee_res) = fee_reservation
+                    && let Err(e) = self
+                        .tree_service
+                        .finalize_reservation(fee_res.id, None)
+                        .await
+                {
+                    error!("Failed to finalize fee reservation: {e:?}");
+                }
+            }
+            Err(_) => {
+                if let Err(e) = self
+                    .tree_service
+                    .cancel_reservation(amount_reservation.id)
+                    .await
+                {
+                    error!("Failed to cancel amount reservation: {e:?}");
+                }
+                if let Some(fee_res) = fee_reservation
+                    && let Err(e) = self.tree_service.cancel_reservation(fee_res.id).await
+                {
+                    error!("Failed to cancel fee reservation: {e:?}");
+                }
+            }
+        }
+
+        Ok(result?)
     }
 
     async fn withdraw_inner(&self, params: WithdrawInnerParams) -> Result<Transfer, ServiceError> {

@@ -198,15 +198,15 @@ async fn test_non_static_deposit_then_coop_withdraw() -> Result<()> {
     info!("Coop exit fee quote: {} sats (slow)", fee_sats);
 
     let _transfer = alice
-        .withdraw(
-            &withdrawal_address,
-            None,
-            ExitSpeed::Slow,
+        .withdraw(spark_wallet::WithdrawRequest {
+            withdrawal_address: withdrawal_address.clone(),
+            amount_sats: None,
+            exit_speed: ExitSpeed::Slow,
             fee_quote,
-            None,
-            None,
-            false,
-        )
+            transfer_id: None,
+            reservation_id: None,
+            fees_included: false,
+        })
         .await?;
     info!("Withdrawal initiated");
 

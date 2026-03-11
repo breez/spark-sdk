@@ -110,15 +110,15 @@ pub async fn handle_command(
                 .await?;
 
             let result = wallet
-                .withdraw(
-                    &withdrawal_address,
+                .withdraw(spark_wallet::WithdrawRequest {
+                    withdrawal_address: withdrawal_address.clone(),
                     amount_sats,
-                    exit_speed.into(),
+                    exit_speed: exit_speed.into(),
                     fee_quote,
-                    None,
-                    None,
-                    false,
-                )
+                    transfer_id: None,
+                    reservation_id: None,
+                    fees_included: false,
+                })
                 .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
