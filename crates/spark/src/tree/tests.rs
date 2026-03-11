@@ -883,8 +883,8 @@ pub async fn test_add_leaves_not_deleted_by_set_leaves(store: &dyn TreeStore) {
     let initial = vec![create_test_tree_node("node1", 100)];
     store.add_leaves(&initial).await.unwrap();
 
-    // Refresh starts at T1
-    let refresh_start = SystemTime::now();
+    // Refresh starts at T1 (use store.now() to match the clock used for added_at)
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure the new leaf is added AFTER refresh_start
     tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
@@ -953,8 +953,8 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     .await
     .unwrap();
 
-    // Refresh starts
-    let refresh_start = SystemTime::now();
+    // Refresh starts (use store.now() to match the clock used for added_at)
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay
     tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
@@ -997,8 +997,8 @@ pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
     .await
     .unwrap();
 
-    // Refresh starts
-    let refresh_start = SystemTime::now();
+    // Refresh starts (use store.now() to match the clock used for added_at)
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay
     tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
@@ -1092,7 +1092,8 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
     .unwrap();
 
     // Simulate refresh starting while swap is in progress
-    let refresh_start = SystemTime::now();
+    // (use store.now() to match the clock used for added_at)
+    let refresh_start = store.now().await.unwrap();
 
     tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
 
@@ -1127,8 +1128,8 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
     .await
     .unwrap();
 
-    // Refresh starts at T0
-    let refresh_start = SystemTime::now();
+    // Refresh starts at T0 (use store.now() to match the clock used for added_at)
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure swap completes AFTER refresh started
     tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
