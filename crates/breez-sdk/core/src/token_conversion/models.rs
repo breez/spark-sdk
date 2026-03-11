@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use flashnet::{BTC_ASSET_ADDRESS, Pool};
 use serde::{Deserialize, Serialize};
 
@@ -68,13 +71,44 @@ pub(crate) enum ConversionAmount {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionStatus {
+    /// Conversion is in-flight (queued or started, not yet completed)
+    Pending,
     /// The conversion was successful
     Completed,
+    /// The conversion failed (e.g., the initial send payment failed)
+    Failed,
     /// The conversion failed and no refund was made yet, which requires action by the SDK to
     /// perform the refund. This can happen if there was a failure during the conversion process.
     RefundNeeded,
     /// The conversion failed and a refund was made
     Refunded,
+}
+
+impl fmt::Display for ConversionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionStatus::Pending => write!(f, "pending"),
+            ConversionStatus::Completed => write!(f, "completed"),
+            ConversionStatus::Failed => write!(f, "failed"),
+            ConversionStatus::RefundNeeded => write!(f, "refund_needed"),
+            ConversionStatus::Refunded => write!(f, "refunded"),
+        }
+    }
+}
+
+impl FromStr for ConversionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(ConversionStatus::Pending),
+            "completed" => Ok(ConversionStatus::Completed),
+            "failed" => Ok(ConversionStatus::Failed),
+            "refund_needed" => Ok(ConversionStatus::RefundNeeded),
+            "refunded" => Ok(ConversionStatus::Refunded),
+            _ => Err(format!("Invalid conversion status '{s}'")),
+        }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

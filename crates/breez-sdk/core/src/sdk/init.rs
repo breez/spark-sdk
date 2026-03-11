@@ -5,7 +5,7 @@ use tracing::{Instrument, error, info};
 
 use crate::{Network, error::SdkError, persist::ObjectCacheRepository};
 
-use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
+use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -20,7 +20,6 @@ impl BreezSdk {
         }
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
         let external_input_parsers = params.config.get_all_external_input_parsers();
-        let sync_coordinator = SyncCoordinator::new();
 
         let sdk = Self {
             config: params.config,
@@ -33,7 +32,7 @@ impl BreezSdk {
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
-            sync_coordinator,
+            sync_coordinator: params.sync_coordinator,
             lnurl_preimage_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,

@@ -110,6 +110,7 @@ pub(crate) struct BreezSdkParams {
     pub buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
+    pub sync_coordinator: SyncCoordinator,
 }
 
 pub async fn parse_input(

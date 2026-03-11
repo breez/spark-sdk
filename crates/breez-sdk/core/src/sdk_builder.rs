@@ -30,12 +30,13 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
-    sdk::{BreezSdk, BreezSdkParams},
+    sdk::{BreezSdk, BreezSdkParams, SyncCoordinator},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
     },
     stable_balance::StableBalance,
+    token_conversion::TokenConversionMiddleware,
     token_conversion::{
         DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
         TokenConverter,
@@ -519,6 +520,7 @@ impl SdkBuilder {
         let event_emitter = Arc::new(EventEmitter::new(
             self.config.real_time_sync_server_url.is_some(),
         ));
+
         let (storage, sync_signing_client) =
             if let Some(server_url) = &self.config.real_time_sync_server_url {
                 let result = init_and_start_real_time_sync(RealTimeSyncParams {
@@ -559,7 +561,17 @@ impl SdkBuilder {
             shutdown_sender.subscribe(),
         ));
 
-        // Create StableBalance if configured (spawns its own background tasks)
+        // Register TokenConversionMiddleware to suppress conversion child events
+        // before they reach external listeners
+        event_emitter
+            .add_middleware(Box::new(TokenConversionMiddleware))
+            .await;
+
+        // Create sync coordinator early so StableBalance can trigger syncs after conversions
+        let sync_coordinator = SyncCoordinator::new();
+
+        // Create StableBalance if configured. It spawns it's own background tasks
+        // and registers itself as event middleware
         let stable_balance = if let Some(config) = &self.config.stable_balance_config {
             Some(Arc::new(
                 StableBalance::new(
@@ -569,7 +581,8 @@ impl SdkBuilder {
                     Arc::clone(&storage),
                     shutdown_sender.subscribe(),
                     sync_signing_client.clone(),
-                    &event_emitter,
+                    Arc::clone(&event_emitter),
+                    sync_coordinator.clone(),
                 )
                 .await,
             ))
@@ -592,6 +605,7 @@ impl SdkBuilder {
             buy_bitcoin_provider,
             token_converter,
             stable_balance,
+            sync_coordinator,
         })?;
         debug!("Initialized and started breez sdk.");
 

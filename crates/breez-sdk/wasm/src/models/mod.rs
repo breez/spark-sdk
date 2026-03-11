@@ -453,7 +453,8 @@ pub struct Payment {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionDetails)]
 pub struct ConversionDetails {
-    pub from: ConversionStep,
+    pub status: ConversionStatus,
+    pub from: Option<ConversionStep>,
     pub to: Option<ConversionStep>,
 }
 
@@ -1002,6 +1003,7 @@ pub struct PaymentMetadata {
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
     pub conversion_info: Option<ConversionInfo>,
+    pub conversion_status: Option<ConversionStatus>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1261,7 +1263,9 @@ pub enum ConversionPurpose {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStatus)]
 pub enum ConversionStatus {
+    Pending,
     Completed,
+    Failed,
     RefundNeeded,
     Refunded,
 }

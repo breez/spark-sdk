@@ -564,7 +564,8 @@ pub struct _Payment {
 
 #[frb(mirror(ConversionDetails))]
 pub struct _ConversionDetails {
-    pub from: ConversionStep,
+    pub status: ConversionStatus,
+    pub from: Option<ConversionStep>,
     pub to: Option<ConversionStep>,
 }
 
@@ -1107,7 +1108,9 @@ pub enum _ConversionPurpose {
 
 #[frb(mirror(ConversionStatus))]
 pub enum _ConversionStatus {
+    Pending,
     Completed,
+    Failed,
     RefundNeeded,
     Refunded,
 }

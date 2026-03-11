@@ -6,6 +6,7 @@ use tokio::sync::watch;
 use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, info, warn};
 
+use crate::models::ConversionStatus;
 use crate::persist::PaymentMetadata;
 use crate::realtime_sync::sync_lock::SyncLockGuard;
 use crate::token_conversion::{
@@ -61,15 +62,16 @@ impl StableBalance {
             return Ok(false);
         };
 
-        // Check no payments are ongoing
+        // Check no payments are ongoing or queued
         let ongoing = self.ongoing_payments.get();
-        if ongoing > 0 {
-            debug!("Auto-conversion skipped: {ongoing} payment(s) in progress");
+        let pending = self.pending_receives.get();
+        if ongoing > 0 || pending > 0 {
+            debug!("Auto-conversion skipped: {ongoing} ongoing, {pending} pending receive(s)");
             return Ok(false);
         }
 
         // Check if balance exceeds the trigger amount
-        let (threshold, reserved) = self
+        let (threshold, reserved, _) = self
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
@@ -149,6 +151,20 @@ impl StableBalance {
             "Auto-conversion completed: converted {} sats (sent_payment_id={}, received_payment_id={})",
             amount_to_convert, response.sent_payment_id, response.received_payment_id
         );
+
+        // Persist Completed status for the received token payment
+        self.storage
+            .insert_payment_metadata(
+                response.received_payment_id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        // Trigger sync so conversion payments and balance are available to clients
+        self.trigger_sync().await;
 
         // _lock_guard drops here, releasing the distributed lock
 

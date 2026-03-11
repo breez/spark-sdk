@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    AssetFilter, Contact, ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo,
-    ListContactsRequest, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo,
-    PaymentDetailsFilter, PaymentStatus, PaymentType, SparkHtlcStatus, TokenBalance, TokenMetadata,
-    TokenTransactionType,
+    AssetFilter, Contact, ConversionInfo, ConversionStatus, DepositClaimError, DepositInfo,
+    LightningAddressInfo, ListContactsRequest, ListPaymentsRequest, LnurlPayInfo,
+    LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType, SparkHtlcStatus,
+    TokenBalance, TokenMetadata, TokenTransactionType,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -252,6 +252,8 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_info: Option<ConversionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversion_status: Option<ConversionStatus>,
 }
 
 /// Trait for persistent storage

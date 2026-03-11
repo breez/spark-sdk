@@ -12,7 +12,11 @@ use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    str::FromStr,
+};
 
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
@@ -226,36 +230,43 @@ pub struct Payment {
     pub conversion_details: Option<ConversionDetails>,
 }
 
-/// Outlines the steps involved in a conversion
+/// Outlines the steps involved in a conversion.
+///
+/// Built progressively: `status` is available immediately from payment metadata,
+/// while `from`/`to` steps are enriched later from child payments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionDetails {
-    /// First step is converting from the available asset
-    pub from: ConversionStep,
-    /// Second step is converting to the requested asset (None for auto-conversions)
+    /// Current status of the conversion
+    pub status: ConversionStatus,
+    /// The send step of the conversion (e.g., sats sent to Flashnet)
+    pub from: Option<ConversionStep>,
+    /// The receive step of the conversion (e.g., tokens received from Flashnet)
     pub to: Option<ConversionStep>,
 }
 
-/// Conversions have one send and one receive payment that are associated to the
-/// ongoing payment via the `parent_payment_id` in the payment metadata. These payments
-/// are queried from the storage by the SDK, then converted.
-impl TryFrom<&Vec<Payment>> for ConversionDetails {
-    type Error = SdkError;
-    fn try_from(payments: &Vec<Payment>) -> Result<Self, Self::Error> {
-        let from = payments
-            .iter()
-            .find(|p| p.payment_type == PaymentType::Send)
-            .ok_or(SdkError::Generic(
-                "From step of conversion not found".to_string(),
-            ))?;
-        let to = payments
-            .iter()
-            .find(|p| p.payment_type == PaymentType::Receive);
-        Ok(ConversionDetails {
-            from: from.try_into()?,
-            to: to.map(TryInto::try_into).transpose()?,
-        })
-    }
+/// Extracts conversion steps (from/to) from a conversion's child payments.
+///
+/// Each conversion produces a send payment (sats → Flashnet) and a receive payment
+/// (tokens ← Flashnet), linked to the parent payment via `parent_payment_id` in
+/// payment metadata. The SDK queries these children from storage and converts them
+/// into the `from` and `to` steps.
+///
+/// Returns `(None, None)` when no child payments exist yet (e.g. Pending or Failed).
+pub fn conversion_steps_from_payments(
+    payments: &[Payment],
+) -> Result<(Option<ConversionStep>, Option<ConversionStep>), SdkError> {
+    let from = payments
+        .iter()
+        .find(|p| p.payment_type == PaymentType::Send)
+        .map(TryInto::try_into)
+        .transpose()?;
+    let to = payments
+        .iter()
+        .find(|p| p.payment_type == PaymentType::Receive)
+        .map(TryInto::try_into)
+        .transpose()?;
+    Ok((from, to))
 }
 
 /// A single step in a conversion
@@ -698,18 +709,43 @@ impl Config {
                 ));
             }
 
-            let mut seen = std::collections::HashSet::new();
+            let mut seen_tickers = HashSet::new();
+            let mut seen_identifiers = HashSet::new();
             for token in &sb.tokens {
-                if !seen.insert(&token.ticker) {
+                if token.ticker.is_empty() {
+                    return Err(SdkError::InvalidInput(
+                        "token ticker must not be empty".to_string(),
+                    ));
+                }
+                if token.token_identifier.is_empty() {
+                    return Err(SdkError::InvalidInput(
+                        "token_identifier must not be empty".to_string(),
+                    ));
+                }
+                if !seen_tickers.insert(&token.ticker) {
                     return Err(SdkError::InvalidInput(format!(
                         "tokens contains duplicate ticker: {}",
                         token.ticker
                     )));
                 }
+                if !seen_identifiers.insert(&token.token_identifier) {
+                    return Err(SdkError::InvalidInput(format!(
+                        "tokens contains duplicate token_identifier: {}",
+                        token.token_identifier
+                    )));
+                }
+            }
+
+            if let Some(bps) = sb.max_slippage_bps {
+                if bps > 10000 {
+                    return Err(SdkError::InvalidInput(
+                        "max_slippage_bps must be <= 10000".to_string(),
+                    ));
+                }
             }
 
             if let Some(default_ticker) = &sb.default_active_ticker
-                && !sb.tokens.iter().any(|t| t.ticker == *default_ticker)
+                && !seen_tickers.contains(default_ticker)
             {
                 return Err(SdkError::InvalidInput(format!(
                     "default_active_ticker '{default_ticker}' not found in tokens list"

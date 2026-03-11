@@ -50,6 +50,7 @@ const SELECT_PAYMENT_SQL = `
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
+           pm.conversion_status,
            t.metadata AS token_metadata,
            t.tx_hash AS token_tx_hash,
            t.tx_type AS token_tx_type,
@@ -564,14 +565,15 @@ class PostgresStorage {
   async insertPaymentMetadata(paymentId, metadata) {
     try {
       await this.pool.query(
-        `INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT(payment_id) DO UPDATE SET
            parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
            lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
            lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
            lnurl_description = COALESCE(EXCLUDED.lnurl_description, payment_metadata.lnurl_description),
-           conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info)`,
+           conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info),
+           conversion_status = COALESCE(EXCLUDED.conversion_status, payment_metadata.conversion_status)`,
         [
           paymentId,
           metadata.parentPaymentId,
@@ -585,6 +587,7 @@ class PostgresStorage {
           metadata.conversionInfo
             ? JSON.stringify(metadata.conversionInfo)
             : null,
+          metadata.conversionStatus ?? null,
         ]
       );
     } catch (error) {
@@ -829,7 +832,9 @@ class PostgresStorage {
       timestamp: Number(row.timestamp),
       method,
       details,
-      conversionDetails: null,
+      conversionDetails: row.conversion_status
+        ? { status: row.conversion_status, from: null, to: null }
+        : null,
     };
   }
 

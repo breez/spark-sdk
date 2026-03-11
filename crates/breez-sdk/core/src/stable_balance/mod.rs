@@ -16,13 +16,16 @@ use tracing::{debug, info, warn};
 
 use breez_sdk_common::sync::SigningClient;
 
-use crate::events::{EventListener, SdkEvent};
-use crate::models::{Payment, PaymentMethod, PaymentType, StableBalanceToken};
-use crate::persist::{ObjectCacheRepository, Storage};
+use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
+use crate::models::{
+    ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
+};
+use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::realtime_sync::sync_lock::{LockCounter, SyncLockGuard};
 use crate::{
     SdkError,
     models::StableBalanceConfig,
+    sdk::SyncCoordinator,
     token_conversion::{
         ConversionError, ConversionOptions, ConversionType, FetchConversionLimitsRequest,
         TokenConverter,
@@ -42,6 +45,7 @@ pub(super) const EFFECTIVE_VALUES_TTL_MS: u128 = 3_600_000;
 pub(super) struct EffectiveValues {
     pub threshold: u64,
     pub reserved: u64,
+    pub min_from_amount: u64,
 }
 
 /// Manages stable balance auto-conversion behavior.
@@ -76,6 +80,11 @@ pub(crate) struct StableBalance {
     /// Auto-convert is skipped while any payments are ongoing.
     pub(super) ongoing_payments: Arc<LockCounter>,
 
+    /// Tracks the number of queued-but-not-yet-completed per-receive conversions.
+    /// Incremented when queuing, decremented when processing finishes.
+    /// Auto-convert checks this to avoid racing with per-receive conversions.
+    pub(super) pending_receives: Arc<LockCounter>,
+
     /// Notify to trigger auto-conversion
     pub(super) auto_convert_trigger: Arc<Notify>,
 
@@ -88,6 +97,9 @@ pub(crate) struct StableBalance {
     /// Optional signing client for coordinating across SDK instances.
     /// `None` when real-time sync is not configured.
     pub(super) signing_client: Option<SigningClient>,
+
+    /// Sync coordinator for triggering wallet syncs after conversions complete.
+    pub(super) sync_coordinator: SyncCoordinator,
 }
 
 impl StableBalance {
@@ -102,7 +114,8 @@ impl StableBalance {
         storage: Arc<dyn Storage>,
         shutdown_receiver: watch::Receiver<()>,
         signing_client: Option<SigningClient>,
-        event_emitter: &crate::events::EventEmitter,
+        event_emitter: Arc<EventEmitter>,
+        sync_coordinator: SyncCoordinator,
     ) -> Self {
         let initial_active_token = Self::resolve_initial_token(&config, &storage).await;
 
@@ -127,20 +140,22 @@ impl StableBalance {
             storage,
             effective_values: Arc::new(ExpiringCell::new()),
             ongoing_payments: Arc::new(LockCounter::new()),
+            pending_receives: Arc::new(LockCounter::new()),
             auto_convert_trigger,
             synced_notify,
             per_receive_tx,
             signing_client,
+            sync_coordinator,
         };
+
+        // Register as event middleware
+        event_emitter
+            .add_middleware(Box::new(stable_balance.clone()))
+            .await;
 
         // Spawn the background tasks
         stable_balance.spawn_auto_convert_task(shutdown_receiver.clone());
         stable_balance.spawn_receive_convert_task(per_receive_rx, shutdown_receiver);
-
-        // Register as event listener
-        event_emitter
-            .add_listener(Box::new(stable_balance.clone()))
-            .await;
 
         stable_balance
     }
@@ -251,10 +266,10 @@ impl StableBalance {
     pub(super) async fn get_or_init_effective_values(
         &self,
         active_token_identifier: &str,
-    ) -> Result<(u64, u64), ConversionError> {
+    ) -> Result<(u64, u64, u64), ConversionError> {
         // Return cached values if not expired
         if let Some(values) = self.effective_values.get().await {
-            return Ok((values.threshold, values.reserved));
+            return Ok((values.threshold, values.reserved, values.min_from_amount));
         }
 
         // Fetch limits and compute effective values
@@ -284,15 +299,16 @@ impl StableBalance {
                 EffectiveValues {
                     threshold,
                     reserved,
+                    min_from_amount,
                 },
                 EFFECTIVE_VALUES_TTL_MS,
             )
             .await;
         info!(
-            "Auto-conversion effective values initialized: threshold={threshold} sats, reserved={reserved} sats"
+            "Auto-conversion effective values initialized: threshold={threshold} sats, reserved={reserved} sats, min_from_amount={min_from_amount} sats"
         );
 
-        Ok((threshold, reserved))
+        Ok((threshold, reserved, min_from_amount))
     }
 
     /// Creates a lock guard that prevents auto-conversion while held.
@@ -337,7 +353,7 @@ impl StableBalance {
             return Ok(None);
         };
 
-        let (_, reserved) = self
+        let (_, reserved, _) = self
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
@@ -369,30 +385,91 @@ impl StableBalance {
     /// Returns true if:
     /// - Payment is a receive type
     /// - Payment is not a token payment (i.e., it's a sats payment)
-    fn should_trigger_per_receive(payment: &Payment) -> bool {
-        payment.payment_type == PaymentType::Receive && payment.method != PaymentMethod::Token
+    /// - Stable balance is active
+    /// - Payment amount meets the minimum conversion threshold
+    async fn should_trigger_per_receive(&self, payment: &Payment) -> bool {
+        if payment.payment_type != PaymentType::Receive || payment.method == PaymentMethod::Token {
+            return false;
+        }
+
+        let Some(token_id) = self.get_active_token_identifier().await else {
+            return false;
+        };
+
+        let Ok((_, _, min_from_amount)) = self.get_or_init_effective_values(&token_id).await
+        else {
+            warn!("Failed to check effective values, skipping per-receive");
+            return false;
+        };
+
+        let amount = u64::try_from(payment.amount).unwrap_or(u64::MAX);
+        if amount < min_from_amount {
+            debug!(
+                "Skipping per-receive: amount {} < min {}",
+                amount, min_from_amount
+            );
+            return false;
+        }
+
+        true
+    }
+
+    /// Triggers a full wallet sync so conversion payments and balance are updated.
+    pub(super) async fn trigger_sync(&self) {
+        use crate::sdk::SyncType;
+        self.sync_coordinator
+            .trigger_sync_no_wait(SyncType::Full, true)
+            .await;
     }
 }
 
 #[macros::async_trait]
-impl EventListener for StableBalance {
-    async fn on_event(&self, event: SdkEvent) {
+impl EventMiddleware for StableBalance {
+    async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
         match event {
             // Sync completed → notify synced_notify and trigger batch auto-convert
             SdkEvent::Synced => {
                 self.synced_notify.notify_one();
                 self.trigger_auto_convert();
+                Some(SdkEvent::Synced)
             }
 
-            // Payment received → queue per-receive conversion if eligible
-            SdkEvent::PaymentSucceeded { payment } => {
-                if Self::should_trigger_per_receive(&payment) {
+            // Payment received → decorate with Pending conversion status and queue conversion
+            SdkEvent::PaymentSucceeded { mut payment } => {
+                if self.should_trigger_per_receive(&payment).await {
                     debug!("Queueing per-receive conversion for payment {}", payment.id);
+
+                    // Set conversion_details with Pending status so clients know conversion is coming
+                    payment.conversion_details = Some(ConversionDetails {
+                        status: ConversionStatus::Pending,
+                        from: None,
+                        to: None,
+                    });
+
+                    // Persist the pending status so it survives restarts
+                    if let Err(e) = self
+                        .storage
+                        .insert_payment_metadata(
+                            payment.id.clone(),
+                            PaymentMetadata {
+                                conversion_status: Some(ConversionStatus::Pending),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to persist conversion_status for payment {}: {e:?}",
+                            payment.id
+                        );
+                    }
+
                     self.queue_per_receive_convert(&payment.id);
                 }
+                Some(SdkEvent::PaymentSucceeded { payment })
             }
 
-            _ => {}
+            _ => Some(event),
         }
     }
 }

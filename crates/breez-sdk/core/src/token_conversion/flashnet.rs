@@ -482,7 +482,7 @@ impl FlashnetTokenConverter {
                         conversion_id: conversion_id.clone(),
                         status: status.clone(),
                         fee: fee_split.sent,
-                        purpose: None,
+                        purpose: Some(purpose.clone()),
                     }),
                     ..Default::default()
                 },
@@ -621,9 +621,9 @@ impl TokenConverter for FlashnetTokenConverter {
 
         match response_res {
             Ok(response) => {
-                info!(
-                    "Conversion executed: accepted {}, error {:?}",
-                    response.accepted, response.error
+                debug!(
+                    "Conversion executed: accepted {}, error {:?}, fee_amount: {:?}",
+                    response.accepted, response.error, response.fee_amount,
                 );
                 // Fee from ExecuteSwapResponse is denominated in pool's asset_b.
                 // Route to sent payment if asset_in == asset_b, otherwise to received.

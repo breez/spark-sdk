@@ -1,9 +1,11 @@
 mod error;
 mod flashnet;
+mod middleware;
 mod models;
 
 pub use error::ConversionError;
 pub(crate) use flashnet::FlashnetTokenConverter;
+pub(crate) use middleware::TokenConversionMiddleware;
 pub use models::*;
 
 use spark_wallet::TransferId;

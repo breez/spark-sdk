@@ -31,7 +31,7 @@ impl BreezSdk {
     ///
     /// A unique identifier for the listener, which can be used to remove it later
     pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
-        self.event_emitter.add_listener(listener).await
+        self.event_emitter.add_external_listener(listener).await
     }
 
     /// Removes a previously registered event listener
@@ -44,7 +44,7 @@ impl BreezSdk {
     ///
     /// `true` if the listener was found and removed, `false` otherwise
     pub async fn remove_event_listener(&self, id: &str) -> bool {
-        self.event_emitter.remove_listener(id).await
+        self.event_emitter.remove_external_listener(id).await
     }
 
     /// Stops the SDK's background tasks
