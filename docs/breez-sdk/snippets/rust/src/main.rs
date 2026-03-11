@@ -16,6 +16,7 @@ mod optimize;
 mod parsing_inputs;
 mod receive_payment;
 mod refunding_payments;
+mod reserve_leaves;
 mod sdk_building;
 mod passkey;
 mod send_payment;
