@@ -47,7 +47,6 @@ struct ReservationEntry {
     created_at: SystemTime,
 }
 
-#[derive(Default)]
 struct LeavesState {
     leaves: HashMap<TreeNodeId, StoredLeaf>,
     missing_operators_leaves: HashMap<TreeNodeId, StoredLeaf>,
@@ -60,6 +59,21 @@ struct LeavesState {
     /// Used to detect if a refresh started before a swap finished,
     /// which would cause stale data to be applied.
     last_swap_completed_at: Option<SystemTime>,
+    /// Duration after which reservations are considered expired.
+    reservation_expiry: Duration,
+}
+
+impl Default for LeavesState {
+    fn default() -> Self {
+        Self {
+            leaves: HashMap::default(),
+            missing_operators_leaves: HashMap::default(),
+            leaves_reservations: HashMap::default(),
+            spent_leaf_ids: HashMap::default(),
+            last_swap_completed_at: None,
+            reservation_expiry: DEFAULT_RESERVATION_EXPIRY,
+        }
+    }
 }
 
 impl LeavesState {
@@ -157,11 +171,13 @@ pub struct InMemoryTreeStore {
 impl InMemoryTreeStore {
     /// Creates a new `InMemoryTreeStore` with default configuration.
     ///
-    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`] and [`DEFAULT_RESERVATION_TIMEOUT`].
+    /// Uses [`DEFAULT_MAX_CONCURRENT_RESERVATIONS`], [`DEFAULT_RESERVATION_TIMEOUT`],
+    /// and [`DEFAULT_RESERVATION_EXPIRY`].
     pub fn new() -> Self {
         Self::with_config(
             DEFAULT_MAX_CONCURRENT_RESERVATIONS,
             DEFAULT_RESERVATION_TIMEOUT,
+            DEFAULT_RESERVATION_EXPIRY,
         )
     }
 
@@ -173,14 +189,24 @@ impl InMemoryTreeStore {
     ///   Additional reservation attempts will wait up to `reservation_timeout`.
     /// * `reservation_timeout` - How long to wait for a reservation permit before
     ///   returning [`TreeServiceError::ResourceBusy`].
-    pub fn with_config(max_concurrent_reservations: usize, reservation_timeout: Duration) -> Self {
+    /// * `reservation_expiry` - Duration after which idle reservations are considered expired
+    ///   and cleaned up automatically.
+    pub fn with_config(
+        max_concurrent_reservations: usize,
+        reservation_timeout: Duration,
+        reservation_expiry: Duration,
+    ) -> Self {
         // Bounded channel provides backpressure under extreme load
         let (command_tx, command_rx) = mpsc::channel(1024);
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
         let reservation_semaphore = Arc::new(Semaphore::new(max_concurrent_reservations));
 
         // Spawn the processor task - it will exit when command_tx is dropped
-        tokio::spawn(Self::run_processor(command_rx, balance_changed_tx));
+        tokio::spawn(Self::run_processor(
+            command_rx,
+            balance_changed_tx,
+            reservation_expiry,
+        ));
 
         Self {
             command_tx,
@@ -195,8 +221,12 @@ impl InMemoryTreeStore {
     async fn run_processor(
         mut command_rx: mpsc::Receiver<StoreCommand>,
         balance_changed_tx: watch::Sender<()>,
+        reservation_expiry: Duration,
     ) {
-        let mut state = LeavesState::default();
+        let mut state = LeavesState {
+            reservation_expiry,
+            ..LeavesState::default()
+        };
 
         while let Some(command) = command_rx.recv().await {
             let balance_before = state.available_balance();
@@ -480,13 +510,11 @@ impl InMemoryTreeStore {
     /// Removes expired reservations, returning their leaves to the pool.
     fn cleanup_expired_reservations(state: &mut LeavesState) {
         let now = SystemTime::now();
+        let expiry = state.reservation_expiry;
         let expired_ids: Vec<LeavesReservationId> = state
             .leaves_reservations
             .iter()
-            .filter(|(_, entry)| {
-                now.duration_since(entry.created_at).unwrap_or_default()
-                    > DEFAULT_RESERVATION_EXPIRY
-            })
+            .filter(|(_, entry)| now.duration_since(entry.created_at).unwrap_or_default() > expiry)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -1199,5 +1227,96 @@ mod tests {
     #[async_test_all]
     async fn test_set_leaves_replaces_fully() {
         shared_tests::test_set_leaves_replaces_fully(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_reservation() {
+        shared_tests::test_get_reservation(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_reservation_nonexistent() {
+        shared_tests::test_get_reservation_nonexistent(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_reservation_after_cancel() {
+        shared_tests::test_get_reservation_after_cancel(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_reservation_after_finalize() {
+        shared_tests::test_get_reservation_after_finalize(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_get_reservation_idempotent() {
+        shared_tests::test_get_reservation_idempotent(&InMemoryTreeStore::new()).await;
+    }
+
+    // ==================== InMemory-Specific Expiry Tests ====================
+
+    #[async_test_all]
+    async fn test_get_reservation_expired() {
+        let store = InMemoryTreeStore::with_config(
+            DEFAULT_MAX_CONCURRENT_RESERVATIONS,
+            DEFAULT_RESERVATION_TIMEOUT,
+            Duration::from_millis(100),
+        );
+        let leaves = vec![shared_tests::create_test_tree_node("node1", 100)];
+        store.add_leaves(&leaves).await.unwrap();
+
+        let reservation = shared_tests::reserve_leaves(
+            &store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Wait for reservation to expire
+        tokio_with_wasm::alias::time::sleep(Duration::from_millis(200)).await;
+
+        // get_reservation should fail (cleaned up)
+        let result = store.get_reservation(&reservation.id).await;
+        assert!(result.is_err());
+    }
+
+    #[async_test_all]
+    async fn test_expired_reservation_returns_leaves() {
+        let store = InMemoryTreeStore::with_config(
+            DEFAULT_MAX_CONCURRENT_RESERVATIONS,
+            DEFAULT_RESERVATION_TIMEOUT,
+            Duration::from_millis(100),
+        );
+        let leaves = vec![shared_tests::create_test_tree_node("node1", 100)];
+        store.add_leaves(&leaves).await.unwrap();
+
+        let _reservation = shared_tests::reserve_leaves(
+            &store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Leaves should be reserved (not available)
+        let all = store.get_leaves().await.unwrap();
+        assert!(all.available.is_empty());
+        assert_eq!(all.reserved_for_payment.len(), 1);
+
+        // Wait for reservation to expire
+        tokio_with_wasm::alias::time::sleep(Duration::from_millis(200)).await;
+
+        // Trigger cleanup by trying to reserve (cleanup runs on reserve/get_reservation)
+        let _ = store.get_reservation(&"trigger-cleanup".to_string()).await;
+
+        // Leaves should be back in the available pool
+        let all = store.get_leaves().await.unwrap();
+        assert_eq!(all.available.len(), 1);
+        assert!(all.reserved_for_payment.is_empty());
+        assert_eq!(all.available_balance(), 100);
     }
 }

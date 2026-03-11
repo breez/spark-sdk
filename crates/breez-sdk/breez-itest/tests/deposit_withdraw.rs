@@ -42,16 +42,28 @@ async fn wait_for_unclaimed_event(
 
 /// Send on-chain from Alice to Bob's static deposit address and verify claim.
 #[rstest]
+#[case::no_reserve(false)]
+#[case::reserve_leaves(true)]
 #[test_log::test(tokio::test)]
 async fn test_onchain_withdraw_to_static_address(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
+    #[case] reserve_leaves: bool,
 ) -> Result<()> {
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
 
     // Ensure Alice has enough funds for withdraw amount + fees
     ensure_funded(&mut alice, 120_000).await?;
+
+    // Get Alice's balance before prepare
+    let alice_balance_before = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
 
     // Record Bob's initial balance
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
@@ -83,9 +95,35 @@ async fn test_onchain_withdraw_to_static_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
-            reserve_leaves: None,
+            reserve_leaves: Some(reserve_leaves),
         })
         .await?;
+
+    assert_eq!(
+        prepare.reservation_id.is_some(),
+        reserve_leaves,
+        "reservation_id presence should match reserve_leaves flag"
+    );
+
+    // When leaves are reserved, the balance should decrease by exactly the payment amount
+    if reserve_leaves {
+        let alice_balance_after_prepare = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+        info!(
+            "Alice balance after prepare (reserved): {} sats",
+            alice_balance_after_prepare
+        );
+        assert_eq!(
+            alice_balance_before - alice_balance_after_prepare,
+            prepare.amount as u64,
+            "Balance should decrease by exactly the payment amount when leaves are reserved"
+        );
+    }
 
     let send_resp = alice
         .sdk
@@ -226,10 +264,13 @@ async fn test_deposit_fee_manual_claim(
 
 /// Test sending full balance to Bitcoin address with speed selection
 #[rstest]
+#[case::no_reserve(false)]
+#[case::reserve_leaves(true)]
 #[test_log::test(tokio::test)]
 async fn test_send_all_to_bitcoin_address(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
+    #[case] reserve_leaves: bool,
 ) -> Result<()> {
     let mut alice = alice_sdk.await?;
     let bob = bob_sdk.await?;
@@ -278,9 +319,35 @@ async fn test_send_all_to_bitcoin_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
-            reserve_leaves: None,
+            reserve_leaves: Some(reserve_leaves),
         })
         .await?;
+
+    assert_eq!(
+        prepare.reservation_id.is_some(),
+        reserve_leaves,
+        "reservation_id presence should match reserve_leaves flag"
+    );
+
+    // When leaves are reserved with FeesIncluded, the full balance is reserved
+    if reserve_leaves {
+        let alice_balance_after_prepare = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+        info!(
+            "Alice balance after prepare (reserved, FeesIncluded): {} sats",
+            alice_balance_after_prepare
+        );
+        assert_eq!(
+            alice_balance - alice_balance_after_prepare,
+            prepare.amount as u64,
+            "Balance should decrease by exactly the payment amount when leaves are reserved"
+        );
+    }
 
     // Get fee quote from prepare response
     let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &prepare.payment_method else {

@@ -9,12 +9,15 @@ use tracing::{debug, info};
 
 /// Test 1: Send payment from Alice to Bob using Spark transfer
 #[rstest]
+#[case::no_reserve(false)]
+#[case::reserve_leaves(true)]
 #[test_log::test(tokio::test)]
 async fn test_01_spark_transfer(
     #[future] alice_sdk: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
+    #[case] reserve_leaves: bool,
 ) -> Result<()> {
-    info!("=== Starting test_01_spark_transfer ===");
+    info!("=== Starting test_01_spark_transfer (reserve_leaves={reserve_leaves}) ===");
 
     let mut alice = alice_sdk.await?;
     let mut bob = bob_sdk.await?;
@@ -64,9 +67,35 @@ async fn test_01_spark_transfer(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
-            reserve_leaves: None,
+            reserve_leaves: Some(reserve_leaves),
         })
         .await?;
+
+    assert_eq!(
+        prepare.reservation_id.is_some(),
+        reserve_leaves,
+        "reservation_id presence should match reserve_leaves flag"
+    );
+
+    // When leaves are reserved, the balance should decrease by exactly the reserved amount
+    if reserve_leaves {
+        let alice_balance_after_prepare = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+        info!(
+            "Alice balance after prepare (reserved): {} sats",
+            alice_balance_after_prepare
+        );
+        assert_eq!(
+            alice_balance - alice_balance_after_prepare,
+            prepare.amount as u64,
+            "Balance should decrease by exactly the payment amount when leaves are reserved"
+        );
+    }
 
     info!("Sending 5 sats from Alice to Bob via Spark...");
 
@@ -229,12 +258,14 @@ async fn test_02_deposit_claim(#[future] alice_sdk: Result<SdkInstance>) -> Resu
 /// Template for Lightning invoice payment tests with different invoice amounts
 #[template]
 #[rstest]
-#[case::fixed_amount(Some(10_000), None, "fixed-amount")]
-#[case::zero_amount(None, Some(10_000), "zero-amount")]
+#[case::fixed_amount(Some(10_000), None, "fixed-amount", false)]
+#[case::fixed_amount_reserve(Some(10_000), None, "fixed-amount-reserve", true)]
+#[case::zero_amount(None, Some(10_000), "zero-amount", false)]
 fn lightning_payment_cases(
     #[case] invoice_amount_sats: Option<u64>,
     #[case] sender_amount: Option<u64>,
     #[case] test_type: &str,
+    #[case] reserve_leaves: bool,
 ) {
 }
 
@@ -247,6 +278,7 @@ async fn test_03_lightning_invoice_payment(
     #[case] invoice_amount_sats: Option<u64>,
     #[case] sender_amount: Option<u64>,
     #[case] test_type: &str,
+    #[case] reserve_leaves: bool,
 ) -> Result<()> {
     info!(
         "=== Starting test_03_lightning_invoice_payment ({}) ===",
@@ -309,9 +341,43 @@ async fn test_03_lightning_invoice_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
-            reserve_leaves: None,
+            reserve_leaves: Some(reserve_leaves),
         })
         .await?;
+
+    assert_eq!(
+        prepare.reservation_id.is_some(),
+        reserve_leaves,
+        "reservation_id presence should match reserve_leaves flag"
+    );
+
+    // When leaves are reserved, the balance should decrease by exactly the reserved amount
+    if reserve_leaves {
+        let lightning_fee = match &prepare.payment_method {
+            SendPaymentMethod::Bolt11Invoice {
+                lightning_fee_sats, ..
+            } => *lightning_fee_sats,
+            _ => panic!("Expected Bolt11Invoice payment method"),
+        };
+        let expected_decrease = prepare.amount as u64 + lightning_fee;
+
+        let alice_balance_after_prepare = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+        info!(
+            "Alice balance after prepare (reserved): {} sats (expected decrease: {})",
+            alice_balance_after_prepare, expected_decrease
+        );
+        assert_eq!(
+            alice_initial_balance - alice_balance_after_prepare,
+            expected_decrease,
+            "Balance should decrease by exactly amount + fee when leaves are reserved"
+        );
+    }
 
     info!("Payment prepared - amount: {:?}", prepare.amount);
 
@@ -1310,5 +1376,118 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
         expected_fee1 - expected_fee2
     );
     info!("=== Test test_09_bolt11_send_all_with_fee_overpayment PASSED ===");
+    Ok(())
+}
+
+/// Test 10: Cancel a prepared send payment and verify balance is restored
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_10_cancel_prepare_send_payment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_10_cancel_prepare_send_payment ===");
+
+    let mut alice = alice_sdk.await?;
+    let bob = bob_sdk.await?;
+
+    ensure_funded(&mut alice, 100).await?;
+
+    let alice_balance_before = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice balance before: {} sats", alice_balance_before);
+
+    // Bob exposes a Spark address
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    // Alice prepares with reserve_leaves: true
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address.clone(),
+            amount: Some(5),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+            reserve_leaves: Some(true),
+        })
+        .await?;
+
+    assert!(
+        prepare.reservation_id.is_some(),
+        "reservation_id should be present when reserve_leaves is true"
+    );
+    let reservation_id = prepare.reservation_id.clone().unwrap();
+    info!("Reservation created: {}", reservation_id);
+
+    // Cancel the prepared payment
+    alice
+        .sdk
+        .cancel_prepare_send_payment(CancelPrepareSendPaymentRequest {
+            reservation_id: reservation_id.clone(),
+        })
+        .await?;
+    info!("Reservation cancelled");
+
+    // Verify balance is restored
+    let alice_balance_after = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .balance_sats;
+
+    info!("Alice balance after cancel: {} sats", alice_balance_after);
+    assert_eq!(
+        alice_balance_before, alice_balance_after,
+        "Balance should be fully restored after cancel"
+    );
+
+    // Now prepare again and send successfully to prove leaves are usable
+    let prepare2 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address,
+            amount: Some(5),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+            reserve_leaves: Some(true),
+        })
+        .await?;
+
+    assert!(prepare2.reservation_id.is_some());
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare2,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    assert!(
+        matches!(
+            send_resp.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Payment should succeed after cancel + re-prepare"
+    );
+
+    info!("=== Test test_10_cancel_prepare_send_payment PASSED ===");
     Ok(())
 }

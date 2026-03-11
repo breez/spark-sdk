@@ -1323,6 +1323,36 @@ mod tests {
         shared_tests::test_set_leaves_replaces_fully(&fixture.store).await;
     }
 
+    #[tokio::test]
+    async fn test_get_reservation() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_reservation(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_reservation_nonexistent() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_reservation_after_cancel() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_reservation_after_cancel(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_reservation_after_finalize() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_reservation_after_finalize(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_reservation_idempotent() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_get_reservation_idempotent(&fixture.store).await;
+    }
+
     // ==================== Postgres-Specific Tests ====================
 
     // ==================== Stale Reservation Cleanup ====================
@@ -1446,6 +1476,45 @@ mod tests {
             "Fresh reservation should NOT be cleaned up"
         );
         assert_eq!(all_leaves.available.len(), 1);
+    }
+
+    // ==================== Reservation Expiry ====================
+
+    #[tokio::test]
+    async fn test_get_reservation_expired() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        fixture.store.add_leaves(&leaves).await.unwrap();
+
+        // Create a reservation
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Manipulate created_at to simulate expiry
+        let client = fixture.store.pool.get().await.unwrap();
+        client
+            .execute(
+                "UPDATE tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                &[&reservation.id],
+            )
+            .await
+            .unwrap();
+
+        // get_reservation should fail (expired)
+        let result = fixture.store.get_reservation(&reservation.id).await;
+        assert!(
+            result.is_err(),
+            "Expired reservation should not be returned by get_reservation"
+        );
     }
 
     // ==================== Concurrency Stress Tests ====================

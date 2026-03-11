@@ -1646,3 +1646,92 @@ pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
     assert!(!available.iter().any(|l| l.id.to_string() == "node1"));
     assert!(!available.iter().any(|l| l.id.to_string() == "node2"));
 }
+
+pub async fn test_get_reservation(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    let fetched = store.get_reservation(&reservation.id).await.unwrap();
+    assert_eq!(fetched.id, reservation.id);
+    assert_eq!(fetched.leaves.len(), reservation.leaves.len());
+    assert_eq!(fetched.sum(), reservation.sum());
+}
+
+pub async fn test_get_reservation_nonexistent(store: &dyn TreeStore) {
+    let result = store.get_reservation(&"bogus-id".to_string()).await;
+    assert!(result.is_err());
+}
+
+pub async fn test_get_reservation_after_cancel(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    store.cancel_reservation(&reservation.id).await.unwrap();
+
+    let result = store.get_reservation(&reservation.id).await;
+    assert!(result.is_err());
+}
+
+pub async fn test_get_reservation_after_finalize(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    store
+        .finalize_reservation(&reservation.id, None)
+        .await
+        .unwrap();
+
+    let result = store.get_reservation(&reservation.id).await;
+    assert!(result.is_err());
+}
+
+pub async fn test_get_reservation_idempotent(store: &dyn TreeStore) {
+    let leaves = vec![create_test_tree_node("node1", 100)];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(100, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    // Multiple calls should all succeed with same data
+    for _ in 0..3 {
+        let fetched = store.get_reservation(&reservation.id).await.unwrap();
+        assert_eq!(fetched.id, reservation.id);
+        assert_eq!(fetched.sum(), reservation.sum());
+    }
+}

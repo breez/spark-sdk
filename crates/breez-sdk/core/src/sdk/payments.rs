@@ -38,7 +38,9 @@ use web_time::SystemTime;
 
 use super::{
     BreezSdk, SyncType,
-    helpers::{InternalEventListener, get_or_create_deposit_address, is_payment_match},
+    helpers::{
+        InternalEventListener, get_or_create_deposit_address, is_payment_match, update_balances,
+    },
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -350,6 +352,10 @@ impl BreezSdk {
                     .await?;
                 let fee_quote: SendOnchainFeeQuote = coop_fee_quote.into();
 
+                if reservation_id.is_some() {
+                    update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
+                }
+
                 // For FeesIncluded, validate the output after fees using the best case
                 // (slow/lowest fee). Only reject if even the cheapest option results in dust.
                 if fee_policy == FeePolicy::FeesIncluded {
@@ -415,6 +421,7 @@ impl BreezSdk {
         self.spark_wallet
             .cancel_leaf_reservation(&request.reservation_id)
             .await?;
+        update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
         Ok(())
     }
 
@@ -516,6 +523,7 @@ impl BreezSdk {
             .spark_wallet
             .reserve_leaves_for_payment(&target)
             .await?;
+        update_balances(self.spark_wallet.clone(), self.storage.clone()).await?;
         Ok(Some(reservation.id))
     }
 

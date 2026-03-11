@@ -344,3 +344,33 @@ async fn test_set_leaves_replaces_fully() {
     let store = create_test_tree_store("pg_tree_replaces_fully").await;
     breez_sdk_spark::tree_store_tests::test_set_leaves_replaces_fully(&store).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_get_reservation() {
+    let store = create_test_tree_store("pg_tree_get_res").await;
+    breez_sdk_spark::tree_store_tests::test_get_reservation(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_get_reservation_nonexistent() {
+    let store = create_test_tree_store("pg_tree_get_res_nonexist").await;
+    breez_sdk_spark::tree_store_tests::test_get_reservation_nonexistent(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_get_reservation_after_cancel() {
+    let store = create_test_tree_store("pg_tree_get_res_cancel").await;
+    breez_sdk_spark::tree_store_tests::test_get_reservation_after_cancel(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_get_reservation_after_finalize() {
+    let store = create_test_tree_store("pg_tree_get_res_finalize").await;
+    breez_sdk_spark::tree_store_tests::test_get_reservation_after_finalize(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_get_reservation_idempotent() {
+    let store = create_test_tree_store("pg_tree_get_res_idempotent").await;
+    breez_sdk_spark::tree_store_tests::test_get_reservation_idempotent(&store).await;
+}
