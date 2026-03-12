@@ -129,7 +129,7 @@ pub type DefaultHttpClient = BitreqHttpClient;
 pub type DefaultHttpClient = ReqwestHttpClient;
 
 /// Default request timeout in seconds.
-pub const REQUEST_TIMEOUT: u64 = 30;
+pub const REQUEST_TIMEOUT: u64 = 60;
 
 /// Response from an HTTP request.
 #[derive(Debug, Clone)]

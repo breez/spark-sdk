@@ -45,7 +45,7 @@ impl GrpcClient {
                 .tcp_keepalive(Some(Duration::from_secs(5)))
                 .keep_alive_timeout(Duration::from_secs(5))
                 .keep_alive_while_idle(true)
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(60))
                 .user_agent(user_agent.unwrap_or_else(default_user_agent))?,
         )
     }
