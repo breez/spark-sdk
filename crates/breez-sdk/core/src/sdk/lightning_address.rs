@@ -84,14 +84,23 @@ impl BreezSdk {
         let resp = client.recover_lightning_address().await?;
 
         let result = if let Some(resp) = resp {
-            // Register webhook with SSP if available
-            if self.config.support_lnurl_verify {
-                self.try_register_webhook(resp.webhook.as_ref()).await;
-            }
+            let has_webhook_secret = resp.webhook.as_ref().is_some_and(|w| w.secret.is_some());
 
-            let address_info = resp.into();
-            cache.save_lightning_address(&address_info).await?;
-            Some(address_info)
+            if self.config.support_lnurl_verify && !has_webhook_secret {
+                // Webhook secret not set on server (pre-upgrade registration).
+                // Re-register to generate and store a webhook secret.
+                debug!("recovered address has no webhook secret, re-registering");
+                let req = RegisterLightningAddressRequest {
+                    username: resp.username,
+                    description: Some(resp.description),
+                };
+                Some(self.register_lightning_address_internal(req).await?)
+            } else {
+                self.try_register_webhook(resp.webhook.as_ref()).await;
+                let address_info = resp.into();
+                cache.save_lightning_address(&address_info).await?;
+                Some(address_info)
+            }
         } else {
             cache.delete_lightning_address().await?;
             None
@@ -108,12 +117,17 @@ impl BreezSdk {
             return;
         };
 
+        let Some(secret) = &webhook.secret else {
+            debug!("webhook info has no secret, skipping SSP webhook registration");
+            return;
+        };
+
         let event_types =
             vec![spark_wallet::SparkWalletWebhookEventType::SparkLightningReceiveFinished];
 
         match self
             .spark_wallet
-            .register_wallet_webhook(&webhook.url, &webhook.secret, event_types)
+            .register_wallet_webhook(&webhook.url, secret, event_types)
             .await
         {
             Ok(webhook_id) => {

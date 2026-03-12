@@ -14,7 +14,8 @@ pub struct RecoverLnurlPayRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WebhookInfo {
     pub url: String,
-    pub secret: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

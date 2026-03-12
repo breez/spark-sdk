@@ -178,15 +178,15 @@ where
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
 
-        let webhook = payload.webhook_secret.map(|secret| {
-            let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
-            lnurl_models::WebhookInfo { url, secret }
-        });
+        let webhook = lnurl_models::WebhookInfo {
+            url: format!("{}://{}/webhook/{}", state.scheme, host, pubkey),
+            secret: payload.webhook_secret,
+        };
 
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
-            webhook,
+            webhook: Some(webhook),
         }))
     }
 
@@ -252,17 +252,17 @@ where
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
 
-                let webhook = user.webhook_secret.clone().map(|secret| {
-                    let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
-                    lnurl_models::WebhookInfo { url, secret }
-                });
+                let webhook = lnurl_models::WebhookInfo {
+                    url: format!("{}://{}/webhook/{}", state.scheme, host, pubkey),
+                    secret: user.webhook_secret.clone(),
+                };
 
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
-                    webhook,
+                    webhook: Some(webhook),
                 }))
             }
             None => Err((
