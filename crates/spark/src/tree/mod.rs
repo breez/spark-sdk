@@ -332,12 +332,20 @@ pub struct SelectLeavesOptions {
     ///
     /// Default: 60 seconds
     pub max_wait_for_pending: Duration,
+
+    /// If set, re-targets an existing reservation instead of creating a new one.
+    ///
+    /// When provided, `select_leaves` will look up the reservation and if the
+    /// leaves already match the requested target—return it as-is. Otherwise it
+    /// performs a swap to reshape the leaves.
+    pub reservation_id: Option<LeavesReservationId>,
 }
 
 impl Default for SelectLeavesOptions {
     fn default() -> Self {
         Self {
             max_wait_for_pending: DEFAULT_MAX_WAIT_FOR_PENDING,
+            reservation_id: None,
         }
     }
 }
@@ -347,6 +355,7 @@ impl SelectLeavesOptions {
     pub fn no_wait() -> Self {
         Self {
             max_wait_for_pending: Duration::ZERO,
+            reservation_id: None,
         }
     }
 }
@@ -958,16 +967,5 @@ pub trait TreeService: Send + Sync {
     async fn get_reservation(
         &self,
         id: &LeavesReservationId,
-    ) -> Result<LeavesReservation, TreeServiceError>;
-
-    /// Performs a swap on the leaves of an existing reservation to match target amounts,
-    /// then updates the reservation with the resulting leaves.
-    ///
-    /// This is useful when a reservation's leaves don't have the right denominations
-    /// for the desired split (e.g., splitting into amount + fee subsets).
-    async fn swap_reservation(
-        &self,
-        reservation: LeavesReservation,
-        target_amounts: Option<&TargetAmounts>,
     ) -> Result<LeavesReservation, TreeServiceError>;
 }

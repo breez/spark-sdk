@@ -63,15 +63,6 @@ impl TreeService for SynchronousTreeService {
         self.state.get_reservation(id).await
     }
 
-    async fn swap_reservation(
-        &self,
-        reservation: LeavesReservation,
-        target_amounts: Option<&TargetAmounts>,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        self.perform_swap_and_update_reservation(reservation, target_amounts)
-            .await
-    }
-
     async fn insert_leaves(
         &self,
         leaves: Vec<TreeNode>,
@@ -108,6 +99,17 @@ impl TreeService for SynchronousTreeService {
         trace!(
             "Selecting leaves for target amounts: {target_amounts:?}, purpose: {purpose:?}, options: {options:?}"
         );
+
+        // Re-target an existing reservation if one was provided.
+        if let Some(ref reservation_id) = options.reservation_id {
+            let reservation = self.state.get_reservation(reservation_id).await?;
+            if self.reservation_matches_target(&reservation, target_amounts) {
+                return Ok(reservation);
+            }
+            return self
+                .perform_swap_and_update_reservation(reservation, target_amounts)
+                .await;
+        }
 
         let max_wait = options.max_wait_for_pending;
 

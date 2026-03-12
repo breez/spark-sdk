@@ -40,9 +40,9 @@ use spark::{
         TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut,
     },
     tree::{
-        InMemoryTreeStore, LeavesReservation, LeavesReservationId, SelectLeavesOptions,
-        SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
-        select_leaves_by_target_amounts, with_reserved_leaves,
+        InMemoryTreeStore, LeavesReservation, LeavesReservationId, ReservationPurpose,
+        SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode, TreeNodeId,
+        TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -1299,34 +1299,31 @@ impl SparkWallet {
             // withdraw_all: all reserved leaves are the withdraw leaves, no fee leaves
             (Ok((amount_reservation.leaves.clone(), None, None)), None)
         } else if req.fees_included {
-            // Reservation covers total (amount + fee). Try splitting directly first;
-            // only swap if the denominations don't line up.
-            let res = match select_leaves_by_target_amounts(
-                &amount_reservation.leaves,
-                target_amounts.as_ref(),
-            ) {
-                Ok(target_leaves) => Ok((
-                    target_leaves.amount_leaves,
-                    target_leaves.fee_leaves,
-                    Some(req.fee_quote.id.clone()),
-                )),
-                Err(_) => self
-                    .tree_service
-                    .swap_reservation(amount_reservation.clone(), target_amounts.as_ref())
-                    .await
-                    .and_then(|swapped| {
-                        let target_leaves = select_leaves_by_target_amounts(
-                            &swapped.leaves,
-                            target_amounts.as_ref(),
-                        )?;
-                        Ok((
-                            target_leaves.amount_leaves,
-                            target_leaves.fee_leaves,
-                            Some(req.fee_quote.id.clone()),
-                        ))
-                    })
-                    .map_err(SparkWalletError::from),
+            // Reservation covers total (amount + fee). Re-target the existing
+            // reservation via select_leaves so it swaps if the denominations
+            // don't line up.
+            let options = SelectLeavesOptions {
+                reservation_id: Some(reservation_id.clone()),
+                ..Default::default()
             };
+            let res = self
+                .tree_service
+                .select_leaves(
+                    target_amounts.as_ref(),
+                    ReservationPurpose::Payment,
+                    options,
+                )
+                .await
+                .and_then(|swapped| {
+                    let target_leaves =
+                        select_leaves_by_target_amounts(&swapped.leaves, target_amounts.as_ref())?;
+                    Ok((
+                        target_leaves.amount_leaves,
+                        target_leaves.fee_leaves,
+                        Some(req.fee_quote.id.clone()),
+                    ))
+                })
+                .map_err(SparkWalletError::from);
             (res, None)
         } else {
             // Reservation covers amount only. Select fee leaves separately.
