@@ -29,7 +29,6 @@ async fn test_01_webhook_register_list_delete(
 
     // Register a webhook
     let webhook_url = "https://example.com/webhook";
-    let webhook_secret = "test-secret";
     let event_types = vec![
         WebhookEventType::LightningReceiveFinished,
         WebhookEventType::LightningSendFinished,
@@ -39,7 +38,6 @@ async fn test_01_webhook_register_list_delete(
         .sdk
         .register_webhook(RegisterWebhookRequest {
             url: webhook_url.to_string(),
-            secret: webhook_secret.to_string(),
             event_types: event_types.clone(),
         })
         .await?;

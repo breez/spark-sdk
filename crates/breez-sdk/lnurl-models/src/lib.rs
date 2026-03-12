@@ -37,6 +37,9 @@ pub struct RegisterLnurlPayRequest {
     /// invoice payments for this user (LUD-21 and NIP-57 disabled).
     #[serde(default)]
     pub lnurl_private_mode_enabled: bool,
+    /// Client-generated webhook secret for HMAC verification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

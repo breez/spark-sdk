@@ -45,6 +45,7 @@ pub struct RegisterLightningAddressRequest {
     /// When true, the SDK operates in LNURL private mode: the LNURL server won't track
     /// invoice payments for this user (LUD-21 and NIP-57 disabled).
     pub lnurl_private_mode_enabled: bool,
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +248,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
             signature,
             timestamp: Some(timestamp),
             lnurl_private_mode_enabled: request.lnurl_private_mode_enabled,
+            webhook_secret: request.webhook_secret.clone(),
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);

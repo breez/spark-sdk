@@ -156,6 +156,7 @@ where
             name: username,
             description: payload.description,
             lnurl_private_mode_enabled: payload.lnurl_private_mode_enabled,
+            webhook_secret: payload.webhook_secret.clone(),
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {
@@ -177,7 +178,10 @@ where
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
 
-        let webhook = derive_webhook_info(&state, &host, &pubkey.to_string());
+        let webhook = payload.webhook_secret.map(|secret| {
+            let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
+            lnurl_models::WebhookInfo { url, secret }
+        });
 
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
@@ -248,7 +252,10 @@ where
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
 
-                let webhook = derive_webhook_info(&state, &host, &pubkey.to_string());
+                let webhook = user.webhook_secret.clone().map(|secret| {
+                    let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
+                    lnurl_models::WebhookInfo { url, secret }
+                });
 
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
@@ -840,20 +847,33 @@ where
     /// Verifies HMAC-SHA256 signature and processes payment preimages.
     #[allow(clippy::too_many_lines)]
     pub async fn webhook(
+        Host(host): Host,
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        let Some(hmac_secret) = &state.webhook_hmac_secret else {
-            return Err((
+        let domain = sanitize_domain(&state, &host)?;
+
+        let user = state
+            .db
+            .get_user_by_pubkey(&domain, &pubkey)
+            .await
+            .map_err(|e| {
+                error!("failed to look up user for webhook: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        let expected_secret = user.and_then(|u| u.webhook_secret).ok_or_else(|| {
+            trace!("no webhook secret for pubkey {}", pubkey);
+            (
                 StatusCode::NOT_FOUND,
                 Json(Value::String("webhooks not configured".into())),
-            ));
-        };
-
-        // Derive expected secret for this pubkey
-        let expected_secret = derive_webhook_secret(hmac_secret, &pubkey);
+            )
+        })?;
 
         // Verify HMAC-SHA256 signature
         let signature_header = headers
@@ -1088,27 +1108,6 @@ struct WebhookPayload {
     event_type: String,
     payment_preimage: Option<String>,
     receiver_identity_public_key: Option<String>,
-}
-
-/// Derive webhook HMAC secret: `hex(SHA256(secret_bytes || pubkey_hex_bytes))`
-fn derive_webhook_secret(hmac_secret: &str, pubkey: &str) -> String {
-    let mut engine = sha256::Hash::engine();
-    engine.input(hmac_secret.as_bytes());
-    engine.input(pubkey.as_bytes());
-    sha256::Hash::from_engine(engine).to_string()
-}
-
-/// Derive webhook URL and secret if `webhook_hmac_secret` is configured.
-fn derive_webhook_info<DB>(
-    state: &State<DB>,
-    host: &str,
-    pubkey: &str,
-) -> Option<lnurl_models::WebhookInfo> {
-    let hmac_secret = state.webhook_hmac_secret.as_ref()?;
-
-    let secret = derive_webhook_secret(hmac_secret, pubkey);
-    let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
-    Some(lnurl_models::WebhookInfo { url, secret })
 }
 
 fn validate_nostr_zap_request(
@@ -1350,6 +1349,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct MockRepository {
+        users: std::sync::Arc<tokio::sync::Mutex<Vec<User>>>,
         invoices: std::sync::Arc<tokio::sync::Mutex<Vec<Invoice>>>,
         newly_paid: std::sync::Arc<tokio::sync::Mutex<Vec<NewlyPaid>>>,
     }
@@ -1368,12 +1368,19 @@ mod tests {
         }
         async fn get_user_by_pubkey(
             &self,
-            _: &str,
-            _: &str,
+            domain: &str,
+            pubkey: &str,
         ) -> Result<Option<User>, LnurlRepositoryError> {
-            Ok(None)
+            let users = self.users.lock().await;
+            Ok(users
+                .iter()
+                .find(|u| u.domain == domain || u.pubkey == pubkey)
+                .cloned())
         }
-        async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+        async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
+            let mut users = self.users.lock().await;
+            users.retain(|u| !(u.domain == user.domain && u.pubkey == user.pubkey));
+            users.push(user.clone());
             Ok(())
         }
         async fn upsert_zap(&self, _: &Zap) -> Result<(), LnurlRepositoryError> {
@@ -1456,10 +1463,7 @@ mod tests {
 
     // --- Helper to build a minimal test State ---
 
-    async fn build_test_state(
-        repo: MockRepository,
-        webhook_hmac_secret: Option<&str>,
-    ) -> State<MockRepository> {
+    async fn build_test_state(repo: MockRepository) -> State<MockRepository> {
         use spark::operator::rpc::DefaultConnectionManager;
         use spark::session_manager::InMemorySessionManager;
         use spark::ssp::ServiceProvider;
@@ -1518,8 +1522,20 @@ mod tests {
             service_provider,
             subscribed_keys: Arc::new(Mutex::new(HashSet::new())),
             invoice_paid_trigger,
-            webhook_hmac_secret: webhook_hmac_secret.map(String::from),
         }
+    }
+
+    async fn seed_user_with_webhook_secret(repo: &MockRepository, pubkey: &str, secret: &str) {
+        repo.upsert_user(&User {
+            domain: String::new(),
+            pubkey: pubkey.to_string(),
+            name: "test".to_string(),
+            description: String::new(),
+            lnurl_private_mode_enabled: false,
+            webhook_secret: Some(secret.to_string()),
+        })
+        .await
+        .unwrap();
     }
 
     fn build_webhook_router(state: State<MockRepository>) -> Router {
@@ -1541,56 +1557,10 @@ mod tests {
 
     // --- Tests ---
 
-    #[test]
-    fn test_derive_webhook_secret_deterministic() {
-        let s1 = derive_webhook_secret("my-secret", "abc123");
-        let s2 = derive_webhook_secret("my-secret", "abc123");
-        assert_eq!(s1, s2);
-    }
-
-    #[test]
-    fn test_derive_webhook_secret_changes_with_pubkey() {
-        let s1 = derive_webhook_secret("my-secret", "pubkey1");
-        let s2 = derive_webhook_secret("my-secret", "pubkey2");
-        assert_ne!(s1, s2);
-    }
-
-    #[test]
-    fn test_derive_webhook_secret_changes_with_secret() {
-        let s1 = derive_webhook_secret("secret-a", "pubkey");
-        let s2 = derive_webhook_secret("secret-b", "pubkey");
-        assert_ne!(s1, s2);
-    }
-
-    #[test]
-    fn test_derive_webhook_secret_is_valid_hex() {
-        let s = derive_webhook_secret("test", "key");
-        assert_eq!(s.len(), 64); // SHA256 = 32 bytes = 64 hex chars
-        assert!(hex::decode(&s).is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_derive_webhook_info_none_when_no_secret() {
-        let repo = MockRepository::default();
-        let state = build_test_state(repo, None).await;
-        let webhook = derive_webhook_info(&state, "example.com", "abc123");
-        assert!(webhook.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_derive_webhook_info_returns_values_when_configured() {
-        let repo = MockRepository::default();
-        let state = build_test_state(repo, Some("my-secret")).await;
-        let webhook = derive_webhook_info(&state, "example.com", "abc123");
-        let webhook = webhook.expect("webhook should be Some");
-        assert_eq!(webhook.url, "http://example.com/webhook/abc123");
-        assert_eq!(webhook.secret, derive_webhook_secret("my-secret", "abc123"));
-    }
-
     #[tokio::test]
     async fn test_webhook_returns_404_when_not_configured() {
         let repo = MockRepository::default();
-        let state = build_test_state(repo, None).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let response = app
@@ -1598,6 +1568,7 @@ mod tests {
                 axum::http::Request::builder()
                     .method("POST")
                     .uri("/webhook/somepubkey")
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from("{}"))
                     .unwrap(),
@@ -1610,15 +1581,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_rejects_missing_signature() {
+        let pubkey = "somepubkey";
+        let secret = "aa".repeat(32);
+
         let repo = MockRepository::default();
-        let state = build_test_state(repo, Some("test-secret")).await;
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/webhook/somepubkey")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .body(axum::body::Body::from("{}"))
                     .unwrap(),
@@ -1631,8 +1607,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_webhook_rejects_invalid_signature() {
+        let pubkey = "somepubkey";
+        let secret = "aa".repeat(32);
+
         let repo = MockRepository::default();
-        let state = build_test_state(repo, Some("test-secret")).await;
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let body = r#"{"type":"SPARK_LIGHTNING_RECEIVE_FINISHED","payment_preimage":"aa","receiver_identity_public_key":"somepubkey"}"#;
@@ -1641,7 +1621,8 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/webhook/somepubkey")
+                    .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", "deadbeef")
                     .body(axum::body::Body::from(body))
@@ -1656,21 +1637,22 @@ mod tests {
     #[tokio::test]
     async fn test_webhook_ignores_unknown_event_type() {
         let pubkey = "aabbccdd";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, pubkey);
+        let secret = "bb".repeat(32);
 
         let repo = MockRepository::default();
-        let state = build_test_state(repo, Some(hmac_secret)).await;
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let body = r#"{"type":"SPARK_LIGHTNING_SEND_FINISHED"}"#;
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))
@@ -1685,11 +1667,11 @@ mod tests {
     #[tokio::test]
     async fn test_webhook_rejects_missing_preimage() {
         let pubkey = "aabbccdd";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, pubkey);
+        let secret = "bb".repeat(32);
 
         let repo = MockRepository::default();
-        let state = build_test_state(repo, Some(hmac_secret)).await;
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let body = serde_json::json!({
@@ -1697,13 +1679,14 @@ mod tests {
             "receiver_identity_public_key": pubkey
         })
         .to_string();
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))
@@ -1719,8 +1702,10 @@ mod tests {
     async fn test_webhook_ignores_pubkey_mismatch() {
         let url_pubkey = "aabbccdd";
         let payload_pubkey = "11223344";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, url_pubkey);
+        let secret = "bb".repeat(32);
+
+        let repo = MockRepository::default();
+        seed_user_with_webhook_secret(&repo, url_pubkey, &secret).await;
 
         let preimage = "aa".repeat(32);
         let body = serde_json::json!({
@@ -1729,10 +1714,9 @@ mod tests {
             "receiver_identity_public_key": payload_pubkey
         })
         .to_string();
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
-        let repo = MockRepository::default();
-        let state = build_test_state(repo, Some(hmac_secret)).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let response = app
@@ -1740,6 +1724,7 @@ mod tests {
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{url_pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))
@@ -1755,8 +1740,7 @@ mod tests {
     #[tokio::test]
     async fn test_webhook_processes_valid_payment() {
         let pubkey = "aabbccdd";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, pubkey);
+        let secret = "bb".repeat(32);
 
         // Create a known preimage and compute its payment hash
         let preimage_bytes = [0x42u8; 32];
@@ -1764,6 +1748,7 @@ mod tests {
         let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
 
         let repo = MockRepository::default();
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
 
         // Seed the repository with an invoice matching this payment hash
         let invoice = Invoice {
@@ -1777,7 +1762,7 @@ mod tests {
         };
         repo.upsert_invoice(&invoice).await.unwrap();
 
-        let state = build_test_state(repo.clone(), Some(hmac_secret)).await;
+        let state = build_test_state(repo.clone()).await;
         let app = build_webhook_router(state);
 
         let body = serde_json::json!({
@@ -1786,13 +1771,14 @@ mod tests {
             "receiver_identity_public_key": pubkey
         })
         .to_string();
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))
@@ -1820,14 +1806,14 @@ mod tests {
     #[tokio::test]
     async fn test_webhook_ok_when_invoice_not_found() {
         let pubkey = "aabbccdd";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, pubkey);
+        let secret = "bb".repeat(32);
 
         let preimage_bytes = [0x42u8; 32];
         let preimage_hex = hex::encode(preimage_bytes);
 
         let repo = MockRepository::default();
-        let state = build_test_state(repo, Some(hmac_secret)).await;
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
+        let state = build_test_state(repo).await;
         let app = build_webhook_router(state);
 
         let body = serde_json::json!({
@@ -1836,13 +1822,14 @@ mod tests {
             "receiver_identity_public_key": pubkey
         })
         .to_string();
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))
@@ -1858,14 +1845,14 @@ mod tests {
     #[tokio::test]
     async fn test_webhook_ok_when_invoice_belongs_to_different_user() {
         let pubkey = "aabbccdd";
-        let hmac_secret = "test-secret";
-        let derived = derive_webhook_secret(hmac_secret, pubkey);
+        let secret = "bb".repeat(32);
 
         let preimage_bytes = [0x42u8; 32];
         let preimage_hex = hex::encode(preimage_bytes);
         let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
 
         let repo = MockRepository::default();
+        seed_user_with_webhook_secret(&repo, pubkey, &secret).await;
         // Invoice belongs to a different user
         let invoice = Invoice {
             payment_hash: payment_hash.clone(),
@@ -1878,7 +1865,7 @@ mod tests {
         };
         repo.upsert_invoice(&invoice).await.unwrap();
 
-        let state = build_test_state(repo.clone(), Some(hmac_secret)).await;
+        let state = build_test_state(repo.clone()).await;
         let app = build_webhook_router(state);
 
         let body = serde_json::json!({
@@ -1887,13 +1874,14 @@ mod tests {
             "receiver_identity_public_key": pubkey
         })
         .to_string();
-        let sig = compute_hmac(&derived, body.as_bytes());
+        let sig = compute_hmac(&secret, body.as_bytes());
 
         let response = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri(format!("/webhook/{pubkey}"))
+                    .header("host", "localhost")
                     .header("content-type", "application/json")
                     .header("X-Spark-Signature", sig)
                     .body(axum::body::Body::from(body))

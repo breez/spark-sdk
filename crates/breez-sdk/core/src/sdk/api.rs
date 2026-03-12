@@ -1,4 +1,8 @@
-use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+use bitcoin::secp256k1::{
+    PublicKey,
+    ecdsa::Signature,
+    rand::{self, RngCore},
+};
 use std::str::FromStr;
 use tracing::{error, info};
 
@@ -287,10 +291,14 @@ impl BreezSdk {
         &self,
         request: RegisterWebhookRequest,
     ) -> Result<RegisterWebhookResponse, SdkError> {
+        let mut secret_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut secret_bytes);
+        let secret = hex::encode(secret_bytes);
+
         let event_types = request.event_types.into_iter().map(Into::into).collect();
         let webhook_id = self
             .spark_wallet
-            .register_wallet_webhook(&request.url, &request.secret, event_types)
+            .register_wallet_webhook(&request.url, &secret, event_types)
             .await?;
         Ok(RegisterWebhookResponse { webhook_id })
     }

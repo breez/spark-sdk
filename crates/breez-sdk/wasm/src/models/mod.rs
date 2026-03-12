@@ -1353,7 +1353,6 @@ pub enum WebhookEventType {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RegisterWebhookRequest)]
 pub struct RegisterWebhookRequest {
     pub url: String,
-    pub secret: String,
     pub event_types: Vec<WebhookEventType>,
 }
 

@@ -1,3 +1,4 @@
+use bitcoin::secp256k1::rand::{self, RngCore};
 use lnurl_models::sanitize_username;
 use tracing::{debug, warn};
 
@@ -142,10 +143,19 @@ impl BreezSdk {
             None => format!("Pay to {}@{}", username, client.domain()),
         };
 
+        let webhook_secret = if self.config.support_lnurl_verify {
+            let mut bytes = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut bytes);
+            Some(hex::encode(bytes))
+        } else {
+            None
+        };
+
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
             lnurl_private_mode_enabled: !self.config.support_lnurl_verify,
+            webhook_secret,
         };
 
         let response = client.register_lightning_address(&params).await?;

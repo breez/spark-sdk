@@ -1196,7 +1196,6 @@ pub enum _WebhookEventType {
 #[frb(mirror(RegisterWebhookRequest))]
 pub struct _RegisterWebhookRequest {
     pub url: String,
-    pub secret: String,
     pub event_types: Vec<WebhookEventType>,
 }
 

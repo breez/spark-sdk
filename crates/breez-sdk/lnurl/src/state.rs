@@ -23,7 +23,6 @@ pub struct State<DB> {
     pub service_provider: Arc<ServiceProvider>,
     pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
     pub invoice_paid_trigger: watch::Sender<()>,
-    pub webhook_hmac_secret: Option<String>,
 }
 
 impl<DB> Clone for State<DB>
@@ -48,7 +47,6 @@ where
             service_provider: self.service_provider.clone(),
             subscribed_keys: Arc::clone(&self.subscribed_keys),
             invoice_paid_trigger: self.invoice_paid_trigger.clone(),
-            webhook_hmac_secret: self.webhook_hmac_secret.clone(),
         }
     }
 }

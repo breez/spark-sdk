@@ -1637,7 +1637,6 @@ impl From<spark_wallet::SparkWalletWebhookEventType> for WebhookEventType {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegisterWebhookRequest {
     pub url: String,
-    pub secret: String,
     pub event_types: Vec<WebhookEventType>,
 }
 
