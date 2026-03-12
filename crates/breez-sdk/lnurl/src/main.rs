@@ -107,6 +107,11 @@ struct Args {
     /// Domain for the webhook URL registered with the SSP.
     #[arg(long)]
     pub webhook_domain: Option<String>,
+
+    /// Hex-encoded 32-byte seed used for SSP authentication.
+    /// If not set, a random seed will be generated.
+    #[arg(long)]
+    pub ssp_auth_seed: Option<String>,
 }
 
 #[tokio::main]
@@ -181,7 +186,13 @@ async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let auth_seed: [u8; 32] = rand::random();
+    let auth_seed: [u8; 32] = match &args.ssp_auth_seed {
+        Some(seed_hex) => hex::decode(seed_hex)
+            .map_err(|e| anyhow!("invalid ssp_auth_seed hex: {e}"))?
+            .try_into()
+            .map_err(|v: Vec<u8>| anyhow!("ssp_auth_seed must be 32 bytes, got {}", v.len()))?,
+        None => rand::random(),
+    };
 
     let spark_config = SparkWalletConfig::default_config(args.network);
 
