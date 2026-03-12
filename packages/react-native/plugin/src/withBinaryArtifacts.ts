@@ -1,4 +1,4 @@
-import type { ConfigPlugin } from '@expo/config-plugins';
+import { type ConfigPlugin, withDangerousMod } from '@expo/config-plugins';
 import * as path from 'path';
 import * as fs from 'fs';
 import { execSync } from 'child_process';
@@ -8,20 +8,17 @@ import { execSync } from 'child_process';
  * This runs during expo prebuild to ensure binaries are available
  */
 export const withBinaryArtifacts: ConfigPlugin = (config) => {
-  return {
-    ...config,
-    async prebuildAsync(config: any) {
-      try {
-        await downloadBinaryArtifacts();
-      } catch (error) {
-        console.warn('Failed to download Breez SDK binary artifacts:', error);
-        console.warn(
-          'You may need to run the postinstall script manually or check your network connection.'
-        );
-      }
-      return config;
-    },
-  } as any;
+  return withDangerousMod(config, ['android', (config) => {
+    try {
+      downloadBinaryArtifacts();
+    } catch (error) {
+      console.warn('Failed to download Breez SDK binary artifacts:', error);
+      console.warn(
+        'You may need to run the postinstall script manually or check your network connection.'
+      );
+    }
+    return config;
+  }]);
 };
 
 async function downloadBinaryArtifacts(): Promise<void> {
