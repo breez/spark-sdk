@@ -85,11 +85,7 @@ impl BreezSdk {
         let result = if let Some(resp) = resp {
             // Register webhook with SSP if available
             if self.config.support_lnurl_verify {
-                self.try_register_webhook(
-                    resp.webhook_url.as_deref(),
-                    resp.webhook_secret.as_deref(),
-                )
-                .await;
+                self.try_register_webhook(resp.webhook.as_ref()).await;
             }
 
             let address_info = resp.into();
@@ -105,8 +101,8 @@ impl BreezSdk {
 
     /// Attempt to register a webhook with the SSP. Logs warnings on failure
     /// but does not propagate errors — webhook registration is best-effort.
-    async fn try_register_webhook(&self, webhook_url: Option<&str>, webhook_secret: Option<&str>) {
-        let (Some(url), Some(secret)) = (webhook_url, webhook_secret) else {
+    async fn try_register_webhook(&self, webhook: Option<&lnurl_models::WebhookInfo>) {
+        let Some(webhook) = webhook else {
             debug!("no webhook info in LNURL server response, skipping SSP webhook registration");
             return;
         };
@@ -116,7 +112,7 @@ impl BreezSdk {
 
         match self
             .spark_wallet
-            .register_wallet_webhook(url, secret, event_types)
+            .register_wallet_webhook(&webhook.url, &webhook.secret, event_types)
             .await
         {
             Ok(webhook_id) => {
@@ -156,11 +152,7 @@ impl BreezSdk {
 
         // Register webhook with SSP if available
         if self.config.support_lnurl_verify {
-            self.try_register_webhook(
-                response.webhook_url.as_deref(),
-                response.webhook_secret.as_deref(),
-            )
-            .await;
+            self.try_register_webhook(response.webhook.as_ref()).await;
         }
 
         let address_info = LightningAddressInfo {

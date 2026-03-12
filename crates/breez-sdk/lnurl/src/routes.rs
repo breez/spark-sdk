@@ -177,13 +177,12 @@ where
         debug!("registered user '{}' for pubkey {}", user.name, pubkey);
         let lnurl = format!("lnurlp://{}/lnurlp/{}", user.domain, user.name);
 
-        let (webhook_url, webhook_secret) = derive_webhook_info(&state, &host, &pubkey.to_string());
+        let webhook = derive_webhook_info(&state, &host, &pubkey.to_string());
 
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
-            webhook_url,
-            webhook_secret,
+            webhook,
         }))
     }
 
@@ -249,16 +248,14 @@ where
             Some(user) => {
                 let lnurl = format!("lnurlp://{}/lnurlp/{}", &user.domain, user.name);
 
-                let (webhook_url, webhook_secret) =
-                    derive_webhook_info(&state, &host, &pubkey.to_string());
+                let webhook = derive_webhook_info(&state, &host, &pubkey.to_string());
 
                 Ok(Json(RecoverLnurlPayResponse {
                     lnurl,
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
-                    webhook_url,
-                    webhook_secret,
+                    webhook,
                 }))
             }
             None => Err((
@@ -1106,14 +1103,12 @@ fn derive_webhook_info<DB>(
     state: &State<DB>,
     host: &str,
     pubkey: &str,
-) -> (Option<String>, Option<String>) {
-    let Some(hmac_secret) = &state.webhook_hmac_secret else {
-        return (None, None);
-    };
+) -> Option<lnurl_models::WebhookInfo> {
+    let hmac_secret = state.webhook_hmac_secret.as_ref()?;
 
     let secret = derive_webhook_secret(hmac_secret, pubkey);
     let url = format!("{}://{}/webhook/{}", state.scheme, host, pubkey);
-    (Some(url), Some(secret))
+    Some(lnurl_models::WebhookInfo { url, secret })
 }
 
 fn validate_nostr_zap_request(
@@ -1578,18 +1573,18 @@ mod tests {
     async fn test_derive_webhook_info_none_when_no_secret() {
         let repo = MockRepository::default();
         let state = build_test_state(repo, None).await;
-        let (url, secret) = derive_webhook_info(&state, "example.com", "abc123");
-        assert!(url.is_none());
-        assert!(secret.is_none());
+        let webhook = derive_webhook_info(&state, "example.com", "abc123");
+        assert!(webhook.is_none());
     }
 
     #[tokio::test]
     async fn test_derive_webhook_info_returns_values_when_configured() {
         let repo = MockRepository::default();
         let state = build_test_state(repo, Some("my-secret")).await;
-        let (url, secret) = derive_webhook_info(&state, "example.com", "abc123");
-        assert_eq!(url, Some("http://example.com/webhook/abc123".to_string()));
-        assert_eq!(secret, Some(derive_webhook_secret("my-secret", "abc123")));
+        let webhook = derive_webhook_info(&state, "example.com", "abc123");
+        let webhook = webhook.expect("webhook should be Some");
+        assert_eq!(webhook.url, "http://example.com/webhook/abc123");
+        assert_eq!(webhook.secret, derive_webhook_secret("my-secret", "abc123"));
     }
 
     #[tokio::test]

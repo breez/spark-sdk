@@ -12,15 +12,19 @@ pub struct RecoverLnurlPayRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct WebhookInfo {
+    pub url: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
     pub username: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_secret: Option<String>,
+    pub webhook: Option<WebhookInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,9 +51,7 @@ pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_secret: Option<String>,
+    pub webhook: Option<WebhookInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
