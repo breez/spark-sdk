@@ -2,7 +2,7 @@ use flashnet::{FlashnetConfig, IntegratorConfig};
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
 use tokio_with_wasm::alias as tokio;
-use tracing::{Instrument, error, info};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
     Network,
@@ -115,17 +115,28 @@ impl BreezSdk {
     }
 
     /// Refreshes the user's lightning address on the server on startup.
-    /// Skipped when real-time sync is enabled, as incoming sync handles it.
+    ///
+    /// When real-time sync is enabled, recovery is normally handled by incoming
+    /// sync updates. However, we still recover here if the webhook secret hasn't
+    /// been configured yet (e.g. registrations made before webhooks were introduced).
     fn try_recover_lightning_address(&self) {
-        if self.config.real_time_sync_server_url.is_some() {
-            return;
-        }
-
         let sdk = self.clone();
         let span = tracing::Span::current();
         tokio::spawn(async move {
             if sdk.config.lnurl_domain.is_none() {
                 return;
+            }
+
+            if sdk.config.real_time_sync_server_url.is_some() {
+                let cache = ObjectCacheRepository::new(sdk.storage.clone());
+                match cache.fetch_webhook_configured().await {
+                    Ok(true) => return,
+                    Ok(false) => debug!("webhook not configured, recovering lightning address despite real-time sync"),
+                    Err(e) => {
+                        warn!("failed to check webhook configured flag: {e:?}");
+                        return;
+                    }
+                }
             }
 
             match sdk.recover_lightning_address().await {

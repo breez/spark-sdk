@@ -32,6 +32,7 @@ const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
+const WEBHOOK_CONFIGURED_KEY: &str = "webhook_configured";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -666,6 +667,24 @@ impl ObjectCacheRepository {
         let value = self
             .storage
             .get_cached_item(SPARK_PRIVATE_MODE_INITIALIZED_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(value == "true"),
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn save_webhook_configured(&self) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(WEBHOOK_CONFIGURED_KEY.to_string(), "true".to_string())
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_webhook_configured(&self) -> Result<bool, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(WEBHOOK_CONFIGURED_KEY.to_string())
             .await?;
         match value {
             Some(value) => Ok(value == "true"),

@@ -132,6 +132,10 @@ impl BreezSdk {
         {
             Ok(webhook_id) => {
                 debug!("registered SSP webhook: {}", webhook_id);
+                let cache = ObjectCacheRepository::new(self.storage.clone());
+                if let Err(e) = cache.save_webhook_configured().await {
+                    warn!("failed to save webhook configured flag: {}", e);
+                }
             }
             Err(e) => {
                 warn!("failed to register SSP webhook: {}", e);
