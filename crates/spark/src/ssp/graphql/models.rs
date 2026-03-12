@@ -248,6 +248,26 @@ pub enum ClaimStaticDepositRequestType {
     MaxFee,
 }
 
+/// Webhook event type for SSP wallet webhooks
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SparkWalletWebhookEventType {
+    SparkLightningReceiveFinished,
+    SparkLightningSendFinished,
+    SparkCoopExitFinished,
+    SparkStaticDepositFinished,
+    #[serde(other, skip_serializing)]
+    Unknown,
+}
+
+/// Webhook entry from the SSP
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookEntry {
+    pub webhook_id: String,
+    pub url: String,
+    pub event_types: Vec<SparkWalletWebhookEventType>,
+}
+
 /// GetChallengeOutput response
 #[derive(Debug, Clone, Deserialize)]
 pub struct GetChallengeOutput {

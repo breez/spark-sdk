@@ -8,8 +8,8 @@ use crate::{
     ssp::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
         CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLightningReceiveInput,
-        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig, SspTransfer,
-        StaticDepositQuote,
+        RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig,
+        SparkWalletWebhookEventType, SspTransfer, StaticDepositQuote, WebhookEntry,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -178,5 +178,28 @@ impl ServiceProvider {
         transfer_spark_ids: Vec<String>,
     ) -> ServiceProviderResult<Vec<SspTransfer>> {
         Ok(self.gql_client.get_transfers(transfer_spark_ids).await?)
+    }
+
+    /// Register a wallet webhook with the SSP
+    pub async fn register_wallet_webhook(
+        &self,
+        url: &str,
+        secret: &str,
+        event_types: Vec<SparkWalletWebhookEventType>,
+    ) -> ServiceProviderResult<String> {
+        Ok(self
+            .gql_client
+            .register_wallet_webhook(url, secret, event_types)
+            .await?)
+    }
+
+    /// Delete a wallet webhook from the SSP
+    pub async fn delete_wallet_webhook(&self, webhook_id: &str) -> ServiceProviderResult<bool> {
+        Ok(self.gql_client.delete_wallet_webhook(webhook_id).await?)
+    }
+
+    /// List wallet webhooks from the SSP
+    pub async fn list_wallet_webhooks(&self) -> ServiceProviderResult<Vec<WebhookEntry>> {
+        Ok(self.gql_client.list_wallet_webhooks().await?)
     }
 }
