@@ -6,14 +6,14 @@ const DEFAULT_TIMEOUT_SECS: u32 = 30;
 
 /// A wallet derived from a passkey.
 ///
-/// Contains the derived seed and the wallet name used during derivation.
+/// Contains the derived seed and the label used during derivation.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Wallet {
     /// The derived seed.
     pub seed: Seed,
-    /// The wallet name used for derivation (either user-provided or the default).
-    pub name: String,
+    /// The label used for derivation (either user-provided or the default).
+    pub label: String,
 }
 
 /// Configuration for Nostr relay connections used in `Passkey`.

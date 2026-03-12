@@ -54,15 +54,15 @@ class FilePrfProvider {
 /// Configuration for passkey seed derivation.
 class PasskeyConfig {
   final String provider;
-  final String? walletName;
-  final bool listWalletNames;
-  final bool storeWalletName;
+  final String? label;
+  final bool listLabels;
+  final bool storeLabel;
 
   PasskeyConfig({
     required this.provider,
-    this.walletName,
-    this.listWalletNames = false,
-    this.storeWalletName = false,
+    this.label,
+    this.listLabels = false,
+    this.storeLabel = false,
   });
 }
 
@@ -70,7 +70,7 @@ class PasskeyConfig {
 ///
 /// Mirrors the Rust CLI's `resolve_passkey_seed` function.
 ///
-/// Note: Passkey/Nostr wallet name operations are not yet available in the
+/// Note: Passkey/Nostr label operations are not yet available in the
 /// Flutter SDK. This implementation derives a seed from the file-based PRF
 /// provider using the Entropy seed variant.
 Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? breezApiKey) async {
@@ -85,15 +85,15 @@ Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? br
 
   // Passkey and NostrRelayConfig are not yet available in the Flutter SDK.
   // For now, derive a seed directly from the PRF provider.
-  if (config.storeWalletName && config.walletName != null) {
-    print('Note: Wallet name publishing to Nostr is not yet supported in Flutter');
+  if (config.storeLabel && config.label != null) {
+    print('Note: Label publishing to Nostr is not yet supported in Flutter');
   }
 
-  if (config.listWalletNames) {
-    print('Note: Wallet name listing from Nostr is not yet supported in Flutter');
+  if (config.listLabels) {
+    print('Note: Label listing from Nostr is not yet supported in Flutter');
   }
 
-  final walletName = config.walletName ?? 'Default';
-  final seedBytes = await filePrf.derivePrfSeed(walletName);
+  final label = config.label ?? 'Default';
+  final seedBytes = await filePrf.derivePrfSeed(label);
   return Seed.entropy(seedBytes);
 }

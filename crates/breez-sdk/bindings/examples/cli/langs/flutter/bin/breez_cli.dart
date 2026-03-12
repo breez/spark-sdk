@@ -21,16 +21,16 @@ Future<void> main(List<String> arguments) async {
           help: 'Use passkey with PRF provider (file, yubikey, or fido2)',
           valueHelp: 'PROVIDER',
         )
-        ..addOption('wallet-name', help: 'Wallet name for seed derivation (requires --passkey)')
+        ..addOption('label', help: 'Label for seed derivation (requires --passkey)')
         ..addFlag(
-          'list-wallet-names',
+          'list-labels',
           negatable: false,
-          help: 'List and select wallet names from Nostr (requires --passkey)',
+          help: 'List and select labels from Nostr (requires --passkey)',
         )
         ..addFlag(
-          'store-wallet-name',
+          'store-label',
           negatable: false,
-          help: 'Publish wallet name to Nostr (requires --passkey and --wallet-name)',
+          help: 'Publish label to Nostr (requires --passkey and --label)',
         )
         ..addOption('rpid', help: 'Relying party ID for FIDO2 provider (requires --passkey)')
         ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
@@ -64,26 +64,26 @@ Future<void> main(List<String> arguments) async {
       stableBalanceThresholdStr != null ? BigInt.parse(stableBalanceThresholdStr) : null;
 
   final passkeyProvider = results.option('passkey');
-  final walletName = results.option('wallet-name');
-  final listWalletNames = results.flag('list-wallet-names');
-  final storeWalletName = results.flag('store-wallet-name');
+  final label = results.option('label');
+  final listLabels = results.flag('list-labels');
+  final storeLabel = results.flag('store-label');
 
   // Validate passkey-related flag constraints (mirroring Rust CLI's clap config)
   if (passkeyProvider == null) {
-    if (walletName != null || listWalletNames || storeWalletName || results.option('rpid') != null) {
+    if (label != null || listLabels || storeLabel || results.option('rpid') != null) {
       stderr.writeln(
-        'Error: --wallet-name, --list-wallet-names, --store-wallet-name, '
+        'Error: --label, --list-labels, --store-label, '
         'and --rpid require --passkey',
       );
       exit(1);
     }
   }
-  if (storeWalletName && walletName == null) {
-    stderr.writeln('Error: --store-wallet-name requires --wallet-name');
+  if (storeLabel && label == null) {
+    stderr.writeln('Error: --store-label requires --label');
     exit(1);
   }
-  if (listWalletNames && (walletName != null || storeWalletName)) {
-    stderr.writeln('Error: --list-wallet-names conflicts with --wallet-name and --store-wallet-name');
+  if (listLabels && (label != null || storeLabel)) {
+    stderr.writeln('Error: --list-labels conflicts with --label and --store-label');
     exit(1);
   }
 
@@ -91,9 +91,9 @@ Future<void> main(List<String> arguments) async {
   if (passkeyProvider != null) {
     passkeyConfig = PasskeyConfig(
       provider: passkeyProvider,
-      walletName: walletName,
-      listWalletNames: listWalletNames,
-      storeWalletName: storeWalletName,
+      label: label,
+      listLabels: listLabels,
+      storeLabel: storeLabel,
     );
   }
 

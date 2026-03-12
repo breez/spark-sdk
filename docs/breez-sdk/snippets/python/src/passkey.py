@@ -38,27 +38,27 @@ async def connect_with_passkey():
     return sdk
 
 
-async def list_wallet_names() -> list[str]:
-    # ANCHOR: list-wallet-names
+async def list_labels() -> list[str]:
+    # ANCHOR: list-labels
     prf_provider = ExamplePasskeyPrfProvider()
     relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
     passkey = Passkey(prf_provider, relay_config)
 
-    # Query Nostr for wallet names associated with this passkey
-    wallet_names = await passkey.list_wallet_names()
+    # Query Nostr for labels associated with this passkey
+    labels = await passkey.list_labels()
 
-    for wallet_name in wallet_names:
-        print(f"Found wallet: {wallet_name}")
-    # ANCHOR_END: list-wallet-names
-    return wallet_names
+    for label in labels:
+        print(f"Found label: {label}")
+    # ANCHOR_END: list-labels
+    return labels
 
 
-async def store_wallet_name():
-    # ANCHOR: store-wallet-name
+async def store_label():
+    # ANCHOR: store-label
     prf_provider = ExamplePasskeyPrfProvider()
     relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
     passkey = Passkey(prf_provider, relay_config)
 
-    # Publish the wallet name to Nostr for later discovery
-    await passkey.store_wallet_name(wallet_name="personal")
-    # ANCHOR_END: store-wallet-name
+    # Publish the label to Nostr for later discovery
+    await passkey.store_label(label="personal")
+    # ANCHOR_END: store-label

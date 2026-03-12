@@ -43,7 +43,7 @@ impl PasskeyPrfProvider for CallbackPrfProvider {
 
 /// Flutter wrapper for passkey-based wallet operations.
 ///
-/// Orchestrates wallet derivation and name management using
+/// Orchestrates wallet derivation and label management using
 /// passkey PRF callbacks and Nostr relays.
 #[derive(Clone)]
 #[frb(opaque)]
@@ -74,33 +74,33 @@ impl Passkey {
         }
     }
 
-    /// Derive a wallet for a given wallet name.
+    /// Derive a wallet for a given label.
     ///
-    /// Uses the passkey PRF to derive a wallet from the wallet name.
+    /// Uses the passkey PRF to derive a wallet from the label.
     /// This works for both creating a new wallet and restoring an existing one.
     ///
     /// # Arguments
-    /// * `wallet_name` - Optional wallet name string (defaults to "Default")
+    /// * `label` - Optional label string (defaults to "Default")
     pub async fn get_wallet(
         &self,
-        wallet_name: Option<String>,
+        label: Option<String>,
     ) -> Result<breez_sdk_spark::passkey::Wallet, PasskeyError> {
-        self.inner.get_wallet(wallet_name).await
+        self.inner.get_wallet(label).await
     }
 
-    /// List all wallet names published to Nostr for this passkey's identity.
+    /// List all labels published to Nostr for this passkey's identity.
     ///
     /// Requires 1 PRF call (for Nostr identity derivation).
-    pub async fn list_wallet_names(&self) -> Result<Vec<String>, PasskeyError> {
-        self.inner.list_wallet_names().await
+    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
+        self.inner.list_labels().await
     }
 
-    /// Publish a wallet name to Nostr relays for this passkey's identity.
+    /// Publish a label to Nostr relays for this passkey's identity.
     ///
-    /// Idempotent: if the wallet name already exists, it is not published again.
+    /// Idempotent: if the label already exists, it is not published again.
     /// Requires 1 PRF call.
-    pub async fn store_wallet_name(&self, wallet_name: String) -> Result<(), PasskeyError> {
-        self.inner.store_wallet_name(wallet_name).await
+    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
+        self.inner.store_label(label).await
     }
 
     /// Check if passkey PRF is available on this device.

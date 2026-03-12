@@ -12,9 +12,9 @@ struct CliOptions {
     var stableBalanceTokenIdentifier: String?
     var stableBalanceThreshold: UInt64?
     var passkey: String?
-    var walletName: String?
-    var listWalletNames: Bool = false
-    var storeWalletName: Bool = false
+    var label: String?
+    var listLabels: Bool = false
+    var storeLabel: Bool = false
     var rpid: String?
 }
 
@@ -45,13 +45,13 @@ func parseCliFlags() -> CliOptions {
         case "--passkey":
             i += 1
             if i < args.count { opts.passkey = args[i] }
-        case "--wallet-name":
+        case "--label":
             i += 1
-            if i < args.count { opts.walletName = args[i] }
-        case "--list-wallet-names":
-            opts.listWalletNames = true
-        case "--store-wallet-name":
-            opts.storeWalletName = true
+            if i < args.count { opts.label = args[i] }
+        case "--list-labels":
+            opts.listLabels = true
+        case "--store-label":
+            opts.storeLabel = true
         case "--rpid":
             i += 1
             if i < args.count { opts.rpid = args[i] }
@@ -224,9 +224,9 @@ if let passkeyStr = opts.passkey {
     seed = try await resolvePasskeySeed(
         provider: prfProvider,
         breezApiKey: breezApiKey,
-        walletName: opts.walletName,
-        listWalletNames: opts.listWalletNames,
-        storeWalletName: opts.storeWalletName
+        label: opts.label,
+        listLabels: opts.listLabels,
+        storeLabel: opts.storeLabel
     )
 } else {
     let mnemonic = try persistence.getOrCreateMnemonic()

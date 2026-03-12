@@ -43,8 +43,8 @@ async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     Ok(sdk)
 }
 
-async fn list_wallet_names() -> Result<Vec<String>> {
-    // ANCHOR: list-wallet-names
+async fn list_labels() -> Result<Vec<String>> {
+    // ANCHOR: list-labels
     let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
     let relay_config = NostrRelayConfig {
         breez_api_key: Some("<breez api key>".to_string()),
@@ -52,18 +52,18 @@ async fn list_wallet_names() -> Result<Vec<String>> {
     };
     let passkey = Passkey::new(prf_provider, Some(relay_config));
 
-    // Query Nostr for wallet names associated with this passkey
-    let wallet_names = passkey.list_wallet_names().await?;
+    // Query Nostr for labels associated with this passkey
+    let labels = passkey.list_labels().await?;
 
-    for wallet_name in &wallet_names {
-        println!("Found wallet: {}", wallet_name);
+    for label in &labels {
+        println!("Found label: {}", label);
     }
-    // ANCHOR_END: list-wallet-names
-    Ok(wallet_names)
+    // ANCHOR_END: list-labels
+    Ok(labels)
 }
 
-async fn store_wallet_name() -> Result<()> {
-    // ANCHOR: store-wallet-name
+async fn store_label() -> Result<()> {
+    // ANCHOR: store-label
     let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
     let relay_config = NostrRelayConfig {
         breez_api_key: Some("<breez api key>".to_string()),
@@ -71,8 +71,8 @@ async fn store_wallet_name() -> Result<()> {
     };
     let passkey = Passkey::new(prf_provider, Some(relay_config));
 
-    // Publish the wallet name to Nostr for later discovery
-    passkey.store_wallet_name("personal".to_string()).await?;
-    // ANCHOR_END: store-wallet-name
+    // Publish the label to Nostr for later discovery
+    passkey.store_label("personal".to_string()).await?;
+    // ANCHOR_END: store-label
     Ok(())
 }

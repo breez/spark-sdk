@@ -53,17 +53,17 @@ struct Cli {
     #[arg(long, value_name = "PROVIDER")]
     passkey: Option<PasskeyProvider>,
 
-    /// Wallet name for seed derivation (defaults to "Default" if omitted)
+    /// Label for seed derivation (defaults to "Default" if omitted)
     #[arg(long, requires = "passkey")]
-    wallet_name: Option<String>,
+    label: Option<String>,
 
-    /// List and select from wallet names published to Nostr
-    #[arg(long, requires = "passkey", conflicts_with_all = ["wallet_name", "store_wallet_name"])]
-    list_wallet_names: bool,
+    /// List and select from labels published to Nostr
+    #[arg(long, requires = "passkey", conflicts_with_all = ["label", "store_label"])]
+    list_labels: bool,
 
-    /// Publish the wallet name to Nostr (requires --wallet-name)
-    #[arg(long, requires_all = ["passkey", "wallet_name"], conflicts_with = "list_wallet_names")]
-    store_wallet_name: bool,
+    /// Publish the label to Nostr (requires --label)
+    #[arg(long, requires_all = ["passkey", "label"], conflicts_with = "list_labels")]
+    store_label: bool,
 
     /// Relying party ID for FIDO2 provider (default: keys.breez.technology)
     #[arg(long, requires = "passkey")]
@@ -154,9 +154,9 @@ async fn run_interactive_mode(
         passkey::resolve_passkey_seed(
             prf,
             breez_api_key,
-            config.wallet_name,
-            config.list_wallet_names,
-            config.store_wallet_name,
+            config.label,
+            config.list_labels,
+            config.store_label,
         )
         .await?
     } else {
@@ -273,9 +273,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let passkey_config = cli.passkey.map(|provider| PasskeyConfig {
         provider,
-        wallet_name: cli.wallet_name,
-        list_wallet_names: cli.list_wallet_names,
-        store_wallet_name: cli.store_wallet_name,
+        label: cli.label,
+        list_labels: cli.list_labels,
+        store_label: cli.store_label,
         rpid: cli.rpid,
     });
 

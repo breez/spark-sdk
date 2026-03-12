@@ -25,11 +25,11 @@ const (
 
 // PasskeyConfig holds passkey-related CLI options.
 type PasskeyConfig struct {
-	Provider         PasskeyProvider
-	WalletName       *string
-	ListWalletNames  bool
-	StoreWalletName  bool
-	RpID             *string
+	Provider    PasskeyProvider
+	Label       *string
+	ListLabels  bool
+	StoreLabel  bool
+	RpID        *string
 }
 
 // parsePasskeyProvider parses a provider name string into a PasskeyProvider.
@@ -127,54 +127,54 @@ func (p *notYetSupportedProvider) IsPrfAvailable() (bool, error) {
 func resolvePasskeySeed(
 	provider breez_sdk_spark.PasskeyPrfProvider,
 	breezAPIKey *string,
-	walletName *string,
-	listWalletNames bool,
-	storeWalletName bool,
+	label *string,
+	listLabels bool,
+	storeLabel bool,
 ) (breez_sdk_spark.Seed, error) {
 	relayConfig := &breez_sdk_spark.NostrRelayConfig{
 		BreezApiKey: breezAPIKey,
 	}
 	passkey := breez_sdk_spark.NewPasskey(provider, relayConfig)
 
-	// --store-wallet-name: publish to Nostr
-	if storeWalletName && walletName != nil {
-		fmt.Printf("Publishing wallet name '%s' to Nostr...\n", *walletName)
-		if err := liftError(passkey.StoreWalletName(*walletName)); err != nil {
-			return nil, fmt.Errorf("failed to store wallet name: %w", err)
+	// --store-label: publish to Nostr
+	if storeLabel && label != nil {
+		fmt.Printf("Publishing label '%s' to Nostr...\n", *label)
+		if err := liftError(passkey.StoreLabel(*label)); err != nil {
+			return nil, fmt.Errorf("failed to store label: %w", err)
 		}
-		fmt.Printf("Wallet name '%s' published successfully.\n", *walletName)
+		fmt.Printf("Label '%s' published successfully.\n", *label)
 	}
 
-	// --list-wallet-names: query Nostr and prompt user to select
-	resolvedName := walletName
-	if listWalletNames {
-		fmt.Println("Querying Nostr for available wallet names...")
-		walletNames, err := passkey.ListWalletNames()
+	// --list-labels: query Nostr and prompt user to select
+	resolvedName := label
+	if listLabels {
+		fmt.Println("Querying Nostr for available labels...")
+		labels, err := passkey.ListLabels()
 		if err = liftError(err); err != nil {
-			return nil, fmt.Errorf("failed to list wallet names: %w", err)
+			return nil, fmt.Errorf("failed to list labels: %w", err)
 		}
 
-		if len(walletNames) == 0 {
-			return nil, fmt.Errorf("no wallet names found on Nostr for this identity")
+		if len(labels) == 0 {
+			return nil, fmt.Errorf("no labels found on Nostr for this identity")
 		}
 
-		fmt.Println("Available wallet names:")
-		for i, name := range walletNames {
+		fmt.Println("Available labels:")
+		for i, name := range labels {
 			fmt.Printf("  %d: %s\n", i+1, name)
 		}
 
-		fmt.Printf("Select wallet name (1-%d): ", len(walletNames))
+		fmt.Printf("Select label (1-%d): ", len(labels))
 		reader := bufio.NewReader(os.Stdin)
 		input, _ := reader.ReadString('\n')
 		idx, err := strconv.Atoi(strings.TrimSpace(input))
 		if err != nil {
 			return nil, fmt.Errorf("invalid selection")
 		}
-		if idx < 1 || idx > len(walletNames) {
+		if idx < 1 || idx > len(labels) {
 			return nil, fmt.Errorf("selection out of range")
 		}
 
-		selected := walletNames[idx-1]
+		selected := labels[idx-1]
 		resolvedName = &selected
 	}
 

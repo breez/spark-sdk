@@ -36,8 +36,8 @@ const exampleConnectWithPasskey = async () => {
   return sdk
 }
 
-const exampleListWalletNames = async (): Promise<string[]> => {
-  // ANCHOR: list-wallet-names
+const exampleListLabels = async (): Promise<string[]> => {
+  // ANCHOR: list-labels
   const prfProvider = new ExamplePasskeyPrfProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
@@ -45,18 +45,18 @@ const exampleListWalletNames = async (): Promise<string[]> => {
   }
   const passkey = new Passkey(prfProvider, relayConfig)
 
-  // Query Nostr for wallet names associated with this passkey
-  const walletNames = await passkey.listWalletNames()
+  // Query Nostr for labels associated with this passkey
+  const labels = await passkey.listLabels()
 
-  for (const walletName of walletNames) {
-    console.log(`Found wallet: ${walletName}`)
+  for (const label of labels) {
+    console.log(`Found label: ${label}`)
   }
-  // ANCHOR_END: list-wallet-names
-  return walletNames
+  // ANCHOR_END: list-labels
+  return labels
 }
 
-const exampleStoreWalletName = async () => {
-  // ANCHOR: store-wallet-name
+const exampleStoreLabel = async () => {
+  // ANCHOR: store-label
   const prfProvider = new ExamplePasskeyPrfProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
@@ -64,7 +64,7 @@ const exampleStoreWalletName = async () => {
   }
   const passkey = new Passkey(prfProvider, relayConfig)
 
-  // Publish the wallet name to Nostr for later discovery
-  await passkey.storeWalletName('personal')
-  // ANCHOR_END: store-wallet-name
+  // Publish the label to Nostr for later discovery
+  await passkey.storeLabel('personal')
+  // ANCHOR_END: store-label
 }

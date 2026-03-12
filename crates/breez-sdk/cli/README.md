@@ -19,9 +19,9 @@ cargo run -- [OPTIONS]
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
-| `--wallet-name` | `Default` | Requires `--passkey`. The wallet name to use |
-| `--list-wallet-names` | false | Requires `--passkey`. Select wallet name from NOSTR |
-| `--store-wallet-name` | false | Requires `--passkey`. Publish wallet name to NOSTR |
+| `--label` | `Default` | Requires `--passkey`. The label to use |
+| `--list-labels` | false | Requires `--passkey`. Select label from NOSTR |
+| `--store-label` | false | Requires `--passkey`. Publish label to NOSTR |
 | `rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 
 ### Data Directory
@@ -89,22 +89,22 @@ Changes to this CLI trigger a [sync workflow](../../../.github/workflows/sync-cl
 
 Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a hardware key (YubiKey) or file-based secret is used to deterministically derive wallet seeds via HMAC challenge-response.
 
-Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+Labels are stored on Nostr relays, allowing discovery during restore. If no `--label` is specified, the default label ("Default") is used.
 
 ### How It Works
 
 1. **Account master derivation**: `PRF(key, magic_salt)` produces a 32-byte account master used to derive a Nostr identity at `m/44'/1237'/55'/0/0`.
-2. **Wallet name storage**: Wallet names are published as Nostr events, allowing discovery during restore.
+2. **Label storage**: Labels are published as Nostr events, allowing discovery during restore.
 3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes that are converted to a 24-word BIP39 mnemonic.
 
 The PRF function differs by provider:
-- **File**: `HMAC-SHA256(file_secret, wallet_name)`
-- **YubiKey**: `SHA256(HMAC-SHA1(slot2_secret, wallet_name))` - OTP challenge-response
-- **FIDO2**: `HMAC-SHA256(credential_key, SHA256("WebAuthn PRF" || 0x00 || wallet_name))` - WebAuthn PRF
+- **File**: `HMAC-SHA256(file_secret, label)`
+- **YubiKey**: `SHA256(HMAC-SHA1(slot2_secret, label))` - OTP challenge-response
+- **FIDO2**: `HMAC-SHA256(credential_key, SHA256("WebAuthn PRF" || 0x00 || label))` - WebAuthn PRF
 
 The FIDO2 provider applies the [WebAuthn PRF salt transformation](https://w3c.github.io/webauthn/#prf-extension) for browser compatibility.
 
-Each `derive_prf_seed` call requires a physical touch. The `--list-wallet-names` flow requires one derivation (for Nostr identity), and the seed derivation requires an additional derivation (for the seed).
+Each `derive_prf_seed` call requires a physical touch. The `--list-labels` flow requires one derivation (for Nostr identity), and the seed derivation requires an additional derivation (for the seed).
 
 ### PRF Providers
 
@@ -113,17 +113,17 @@ Each `derive_prf_seed` call requires a physical touch. The `--list-wallet-names`
 Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
 
 ```bash
-# Use passkey with the default wallet name
+# Use passkey with the default label
 cargo run -- --passkey file
 
-# Use passkey with a specific wallet name
-cargo run -- --passkey file --wallet-name personal
+# Use passkey with a specific label
+cargo run -- --passkey file --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-cargo run -- --passkey file --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+cargo run -- --passkey file --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-cargo run -- --passkey file --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+cargo run -- --passkey file --label personal --store-label
 ```
 
 #### YubiKey Provider
@@ -131,17 +131,17 @@ cargo run -- --passkey file --wallet-name personal --store-wallet-name
 Uses YubiKey HMAC-SHA1 challenge-response (Slot 2) as the PRF.
 
 ```bash
-# Use passkey with the default wallet name
+# Use passkey with the default label
 cargo run -- --passkey yubikey
 
-# Use passkey with a specific wallet name
-cargo run -- --passkey yubikey --wallet-name personal
+# Use passkey with a specific label
+cargo run -- --passkey yubikey --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-cargo run -- --passkey yubikey --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+cargo run -- --passkey yubikey --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-cargo run -- --passkey yubikey --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+cargo run -- --passkey yubikey --label personal --store-label
 ```
 
 > **Note**: This provider is **not compatible** with browser WebAuthn PRF. Use the FIDO2 provider for cross-platform compatibility.
@@ -153,20 +153,20 @@ Uses FIDO2/WebAuthn PRF via the CTAP2 hmac-secret extension. This is **compatibl
 > **Note**: The FIDO2 provider requires the `fido2` feature flag (uses `hidapi` which needs system HID libraries).
 
 ```bash
-# Use passkey with the default wallet name (uses default rpId: keys.breez.technology)
+# Use passkey with the default label (uses default rpId: keys.breez.technology)
 cargo run --features fido2 -- --passkey fido2
 
-# Use passkey with a specific wallet name
-cargo run --features fido2 -- --passkey fido2 --wallet-name personal
+# Use passkey with a specific label
+cargo run --features fido2 -- --passkey fido2 --label personal
 
 # Use custom rpId for compatibility with a specific web app
-cargo run --features fido2 -- --passkey fido2 --rpid localhost --wallet-name personal
+cargo run --features fido2 -- --passkey fido2 --rpid localhost --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-cargo run --features fido2 -- --passkey fido2 --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+cargo run --features fido2 -- --passkey fido2 --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-cargo run --features fido2 -- --passkey fido2 --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+cargo run --features fido2 -- --passkey fido2 --label personal --store-label
 ```
 
 **Requirements:**
@@ -183,10 +183,10 @@ The FIDO2 provider requires a PIN. You can provide it via:
 
 ```bash
 # Interactive (prompts for PIN)
-cargo run --features fido2 -- --passkey fido2 --wallet-name personal
+cargo run --features fido2 -- --passkey fido2 --label personal
 
 # Non-interactive via environment variable
-FIDO2_PIN=123456 cargo run --features fido2 -- --passkey fido2 --wallet-name personal
+FIDO2_PIN=123456 cargo run --features fido2 -- --passkey fido2 --label personal
 ```
 
 **Cross-platform compatibility:**
@@ -194,7 +194,7 @@ FIDO2_PIN=123456 cargo run --features fido2 -- --passkey fido2 --wallet-name per
 For the CLI and browser to derive the same seed:
 1. Use the same relying party ID (`--rpid` must match browser's `rpId`)
 2. Use the same credential (registered on the same authenticator)
-3. Use the same wallet name
+3. Use the same label
 
 ### Yubikey Setup
 
@@ -244,7 +244,7 @@ ykman otp chalresp -g -t 2
 
 > **Warning**: This overwrites whatever is currently in Slot 2. If Slot 2 is already programmed, make sure you no longer need its current configuration.
 
-> **Important**: The secret key programmed into the YubiKey is what makes your wallet derivation unique. If you reprogram Slot 2 with a different key, you will derive different wallets for the same wallet names. There is no way to recover the previous key.
+> **Important**: The secret key programmed into the YubiKey is what makes your wallet derivation unique. If you reprogram Slot 2 with a different key, you will derive different wallets for the same labels. There is no way to recover the previous key.
 
 ##### Verify the configuration
 

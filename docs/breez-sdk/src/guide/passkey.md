@@ -1,20 +1,20 @@
 # Connecting with a Passkey
 
-Using passkeys eliminates the need to backup mnemonic phrases. Seeds are instead derived deterministically from a passkey, using a default or user-chosen wallet name. Wallet names can be discovered and stored on Nostr relays using a passkey derived Nostr key.
+Using passkeys eliminates the need to backup mnemonic phrases. Seeds are instead derived deterministically from a passkey, using a default or user-chosen label. Labels can be discovered and stored on Nostr relays using a passkey derived Nostr key.
 
 ## Overview
 
 The passkey flow uses the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">WebAuthn PRF extension</a> (Pseudo-Random Function), which allows a passkey to deterministically derive secret bytes from a given salt. Two key derivations are used:
 
-1. **Nostr Identity**: `PRF(passkey, magic_salt)` derives a Nostr keypair used to publish and discover wallet names
-2. **Wallet Seed**: `PRF(passkey, wallet_name)` derives a 24-word BIP39 mnemonic
+1. **Nostr Identity**: `PRF(passkey, magic_salt)` derives a Nostr keypair used to publish and discover labels
+2. **Wallet Seed**: `PRF(passkey, label)` derives a 24-word BIP39 mnemonic
 
-Wallet names are published as Nostr kind-1 events, allowing users to discover their wallets on any device with access to their passkey.
+Labels are published as Nostr kind-1 events, allowing users to discover their wallets on any device with access to their passkey.
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐     ┌───────────────┐
 │ Application │────▶│ PRF Provider     │────▶│ SDK               │────▶│ Nostr Relays  │
-│             │     │ (platform-       │     │ Passkey           │     │ (wallet name  │
+│             │     │ (platform-       │     │ Passkey           │     │ (label        │
 │             │     │  specific)       │     │                   │     │  discovery)   │
 └─────────────┘     └──────────────────┘     └───────────────────┘     └───────────────┘
 ```
@@ -106,7 +106,7 @@ To register your iOS app, [contact us](mailto:contact@breez.technology?subject=P
 
 ### Nostr relay configuration
 
-The SDK uses Nostr relays to store and discover wallet names. A Breez API key is required for authenticated access to the Breez-managed relay via <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>. The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
+The SDK uses Nostr relays to store and discover labels. A Breez API key is required for authenticated access to the Breez-managed relay via <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>. The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
 ## Implementing the PRF provider
 
@@ -133,54 +133,54 @@ Your application must implement the PRF provider to interface with platform pass
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.get_wallet">API docs</a>
 </h2>
 
-To connect with a passkey, call {{#name Passkey.get_wallet}} to derive a wallet, then pass its seed to {{#name connect}}. The wallet name defaults to `"Default"` when omitted.
+To connect with a passkey, call {{#name Passkey.get_wallet}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to `"Default"` when omitted.
 
 {{#tabs passkey:connect-with-passkey}}
 
-<h2 id="listing-wallet-names">
-    <a class="header" href="#listing-wallet-names">Listing wallet names</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.list_wallet_names">API docs</a>
+<h2 id="listing-labels">
+    <a class="header" href="#listing-labels">Listing labels</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.list_labels">API docs</a>
 </h2>
 
-Discover wallet names associated to the passkey using Nostr.
+Discover labels associated to the passkey using Nostr.
 
-{{#tabs passkey:list-wallet-names}}
+{{#tabs passkey:list-labels}}
 
-<h2 id="storing-a-wallet-name">
-    <a class="header" href="#storing-a-wallet-name">Storing a wallet name</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.store_wallet_name">API docs</a>
+<h2 id="storing-a-label">
+    <a class="header" href="#storing-a-label">Storing a label</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.store_label">API docs</a>
 </h2>
 
-Publish a wallet name to Nostr so it can be discovered later.
+Publish a label to Nostr so it can be discovered later.
 
-{{#tabs passkey:store-wallet-name}}
+{{#tabs passkey:store-label}}
 
 ## Best practices
 
-### Cache the user-selected wallet name
+### Cache the user-selected label
 
-Store the wallet name locally (e.g., `localStorage` on web, `SharedPreferences` on Android, `UserDefaults` on iOS) if selected by the user. This allows the app to skip the wallet name selection step on subsequent launches and go straight to passkey authentication.
+Store the label locally (e.g., `localStorage` on web, `SharedPreferences` on Android, `UserDefaults` on iOS) if selected by the user. This allows the app to skip the label selection step on subsequent launches and go straight to passkey authentication.
 
 ### Never store the derived mnemonic
 
-The mnemonic should always be re-derived from the passkey and wallet name on each session. The passkey authentication (biometric, PIN, etc.) is the security boundary — storing the mnemonic would bypass it. On app restart, check for a cached wallet name and prompt the user for passkey authentication to derive the seed.
+The mnemonic should always be re-derived from the passkey and label on each session. The passkey authentication (biometric, PIN, etc.) is the security boundary — storing the mnemonic would bypass it. On app restart, check for a cached label and prompt the user for passkey authentication to derive the seed.
 
 ### Allow manual mnemonic backup
 
-Provide a way for users to reveal their derived 24-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via {{#name Passkey.get_wallet}} with the cached wallet name. This gives users a safety net if they lose access to their passkey.
+Provide a way for users to reveal their derived 24-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via {{#name Passkey.get_wallet}} with the cached label. This gives users a safety net if they lose access to their passkey.
 
 ### Offer a mnemonic fallback
 
 Not all devices support the PRF extension. Check {{#name Passkey.is_available}} at startup and present the appropriate flow — seedless for capable devices, traditional mnemonic backup/restore for others.
 
-### Handle wallet name discovery failures
+### Handle label discovery failures
 
-When discovering wallet names, {{#name Passkey.list_wallet_names}} may return an empty list if relays are unreachable or the wallet name events have been pruned. Always allow manual wallet name entry as a fallback alongside the Nostr-discovered list.
+When discovering labels, {{#name Passkey.list_labels}} may return an empty list if relays are unreachable or the label events have been pruned. Always allow manual label entry as a fallback alongside the Nostr-discovered list.
 
 ## Security considerations
 
 - **Passkey security**: The wallet's security depends on the passkey. Different passkeys produce different wallets.
-- **Wallet name visibility**: Wallet names are published publicly on Nostr. Security comes from the passkey secret, not the wallet name.
+- **Label visibility**: Labels are published publicly on Nostr. Security comes from the passkey secret, not the label.
 - **PRF availability**: Check {{#name Passkey.is_available}} to gracefully handle devices without PRF support.
 - **Discoverable credentials**: Use resident keys so no credential IDs need to be stored by your application. The authenticator discovers the credential by RP ID.
 - **User verification**: All passkey operations should require user verification (`userVerification: 'required'`) to ensure biometric or PIN confirmation.
@@ -198,6 +198,6 @@ For users who need to move between ecosystems, the manual mnemonic backup serves
 ## Supported specs
 
 - [Seedless Restore](https://github.com/breez/seedless-restore) Passkey-based wallet derivation and discovery
-- [Nostr](https://github.com/nostr-protocol/nostr) Relay-based event protocol for wallet name storage
+- [Nostr](https://github.com/nostr-protocol/nostr) Relay-based event protocol for label storage
 - [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) Authentication of clients to relays
 - [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) Relay List Metadata

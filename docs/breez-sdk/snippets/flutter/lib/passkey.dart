@@ -23,7 +23,7 @@ Future<BreezSdk> connectWithPasskey() async {
   );
 
   // Derive the wallet from the passkey (pass null for the default wallet)
-  final wallet = await passkey.getWallet(walletName: "personal");
+  final wallet = await passkey.getWallet(label: "personal");
 
   final config = defaultConfig(network: Network.mainnet);
   final sdk = await connect(
@@ -33,8 +33,8 @@ Future<BreezSdk> connectWithPasskey() async {
   return sdk;
 }
 
-Future<List<String>> listWalletNames() async {
-  // ANCHOR: list-wallet-names
+Future<List<String>> listLabels() async {
+  // ANCHOR: list-labels
   final relayConfig = NostrRelayConfig(
     breezApiKey: '<breez api key>',
   );
@@ -44,18 +44,18 @@ Future<List<String>> listWalletNames() async {
     relayConfig: relayConfig,
   );
 
-  // Query Nostr for wallet names associated with this passkey
-  final walletNames = await passkey.listWalletNames();
+  // Query Nostr for labels associated with this passkey
+  final labels = await passkey.listLabels();
 
-  for (final walletName in walletNames) {
-    print("Found wallet: $walletName");
+  for (final label in labels) {
+    print("Found label: $label");
   }
-  // ANCHOR_END: list-wallet-names
-  return walletNames;
+  // ANCHOR_END: list-labels
+  return labels;
 }
 
-Future<void> storeWalletName() async {
-  // ANCHOR: store-wallet-name
+Future<void> storeLabel() async {
+  // ANCHOR: store-label
   final relayConfig = NostrRelayConfig(
     breezApiKey: '<breez api key>',
   );
@@ -65,7 +65,7 @@ Future<void> storeWalletName() async {
     relayConfig: relayConfig,
   );
 
-  // Publish the wallet name to Nostr for later discovery
-  await passkey.storeWalletName(walletName: "personal");
-  // ANCHOR_END: store-wallet-name
+  // Publish the label to Nostr for later discovery
+  await passkey.storeLabel(label: "personal");
+  // ANCHOR_END: store-label
 }

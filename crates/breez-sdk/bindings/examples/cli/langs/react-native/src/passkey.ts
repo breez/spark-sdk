@@ -57,12 +57,12 @@ export function parsePasskeyProvider(s: string): PasskeyProvider {
 export interface PasskeyConfig {
   /** The PRF provider to use. */
   provider: PasskeyProvider
-  /** Optional wallet name for seed derivation. If omitted, the core uses the default name. */
-  walletName?: string
-  /** Whether to list and select from wallet names published to Nostr. */
-  listWalletNames: boolean
-  /** Whether to publish the wallet name to Nostr. */
-  storeWalletName: boolean
+  /** Optional label for seed derivation. If omitted, the core uses the default name. */
+  label?: string
+  /** Whether to list and select from labels published to Nostr. */
+  listLabels: boolean
+  /** Whether to publish the label to Nostr. */
+  storeLabel: boolean
   /** Optional relying party ID for FIDO2 provider (default: keys.breez.technology). */
   rpid?: string
 }
@@ -239,29 +239,29 @@ export async function buildPrfProvider(
 /**
  * Resolve a wallet seed using the given PRF provider.
  *
- * Note: Full passkey functionality (Nostr wallet name listing/storing) is not
+ * Note: Full passkey functionality (Nostr label listing/storing) is not
  * yet supported in the React Native SDK. This stub derives a seed from the
  * PRF provider and returns it as a Seed.Entropy variant.
  *
  * @param provider - The PRF provider to use
  * @param _breezApiKey - Optional Breez API key (unused - Nostr not yet supported)
- * @param walletName - Optional wallet name for seed derivation
- * @param _listWalletNames - Whether to list wallet names (not yet supported)
- * @param _storeWalletName - Whether to publish the wallet name (not yet supported)
- * @returns Object with { seed, walletNames? } - seed is the derived Seed,
- *          walletNames is populated when listWalletNames is true
+ * @param label - Optional label for seed derivation
+ * @param _listLabels - Whether to list labels (not yet supported)
+ * @param _storeLabel - Whether to publish the label (not yet supported)
+ * @returns Object with { seed, labels? } - seed is the derived Seed,
+ *          labels is populated when listLabels is true
  */
 export async function resolvePasskeySeed(
   provider: { derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> },
   _breezApiKey: string | undefined,
-  walletName: string | undefined,
-  _listWalletNames: boolean,
-  _storeWalletName: boolean,
-): Promise<{ seed: SeedType; walletNames?: string[] }> {
+  label: string | undefined,
+  _listLabels: boolean,
+  _storeLabel: boolean,
+): Promise<{ seed: SeedType; labels?: string[] }> {
   // Derive seed bytes from the PRF provider
-  const seedBytes = await provider.derivePrfSeed(walletName ?? 'Default')
+  const seedBytes = await provider.derivePrfSeed(label ?? 'Default')
 
-  // Note: Passkey wallet name listing/storing via Nostr is not yet supported
+  // Note: Passkey label listing/storing via Nostr is not yet supported
   // in React Native. Only basic seed derivation is available.
 
   // Use Entropy variant since we have raw bytes

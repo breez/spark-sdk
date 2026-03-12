@@ -82,9 +82,9 @@ func main() {
 	stableBalanceTokenIdentifier := flag.String("stable-balance-token-identifier", "", "Stable balance token identifier")
 	stableBalanceThreshold := flag.Uint64("stable-balance-threshold", 0, "Stable balance threshold in sats")
 	passkeyProviderStr := flag.String("passkey", "", "Use passkey with PRF provider (file, yubikey, or fido2)")
-	walletName := flag.String("wallet-name", "", "Wallet name for seed derivation (requires --passkey)")
-	listWalletNames := flag.Bool("list-wallet-names", false, "List and select from wallet names published to Nostr (requires --passkey)")
-	storeWalletName := flag.Bool("store-wallet-name", false, "Publish the wallet name to Nostr (requires --passkey and --wallet-name)")
+	label := flag.String("label", "", "Label for seed derivation (requires --passkey)")
+	listLabels := flag.Bool("list-labels", false, "List and select from labels published to Nostr (requires --passkey)")
+	storeLabel := flag.Bool("store-label", false, "Publish the label to Nostr (requires --passkey and --label)")
 	_ = flag.String("rpid", "", "Relying party ID for FIDO2 provider (requires --passkey)")
 	flag.Parse()
 
@@ -140,14 +140,14 @@ func main() {
 			log.Fatalf("PRF initialization failed: %v", err)
 		}
 		var wn *string
-		if *walletName != "" {
-			wn = walletName
+		if *label != "" {
+			wn = label
 		}
 		var apiKeyPtr *string
 		if apiKey != "" {
 			apiKeyPtr = &apiKey
 		}
-		seed, err = resolvePasskeySeed(prfProvider, apiKeyPtr, wn, *listWalletNames, *storeWalletName)
+		seed, err = resolvePasskeySeed(prfProvider, apiKeyPtr, wn, *listLabels, *storeLabel)
 		if err != nil {
 			log.Fatalf("Passkey seed resolution failed: %v", err)
 		}

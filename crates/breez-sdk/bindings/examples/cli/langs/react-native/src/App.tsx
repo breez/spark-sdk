@@ -62,9 +62,9 @@ const DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
  *
  *   const PASSKEY_CONFIG: PasskeyConfig = {
  *     provider: PasskeyProvider.File,
- *     walletName: 'personal',
- *     listWalletNames: false,
- *     storeWalletName: false,
+ *     label: 'personal',
+ *     listLabels: false,
+ *     storeLabel: false,
  *   }
  *
  * In a production app, these would come from a settings screen or launch config.
@@ -153,20 +153,20 @@ const App: React.FC = () => {
           const result = await resolvePasskeySeed(
             prfProvider,
             breezApiKey,
-            PASSKEY_CONFIG.walletName,
-            PASSKEY_CONFIG.listWalletNames,
-            PASSKEY_CONFIG.storeWalletName,
+            PASSKEY_CONFIG.label,
+            PASSKEY_CONFIG.listLabels,
+            PASSKEY_CONFIG.storeLabel,
           )
 
-          if (result.walletNames && result.walletNames.length > 0) {
-            appendLog('Available wallet names:')
-            for (let i = 0; i < result.walletNames.length; i++) {
-              appendLog(`  ${i + 1}: ${result.walletNames[i]}`)
+          if (result.labels && result.labels.length > 0) {
+            appendLog('Available labels:')
+            for (let i = 0; i < result.labels.length; i++) {
+              appendLog(`  ${i + 1}: ${result.labels[i]}`)
             }
           }
 
-          if (PASSKEY_CONFIG.storeWalletName && PASSKEY_CONFIG.walletName) {
-            appendLog(`Wallet name '${PASSKEY_CONFIG.walletName}' published to Nostr`)
+          if (PASSKEY_CONFIG.storeLabel && PASSKEY_CONFIG.label) {
+            appendLog(`Label '${PASSKEY_CONFIG.label}' published to Nostr`)
           }
 
           seed = result.seed
