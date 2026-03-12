@@ -1585,13 +1585,33 @@ pub struct ListContactsRequest {
 }
 
 /// The type of event that triggers a webhook.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum WebhookEventType {
     LightningReceiveFinished,
     LightningSendFinished,
     CoopExitFinished,
     StaticDepositFinished,
+}
+
+impl FromStr for WebhookEventType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "SPARK_LIGHTNING_RECEIVE_FINISHED" => WebhookEventType::LightningReceiveFinished,
+            "SPARK_LIGHTNING_SEND_FINISHED" => WebhookEventType::LightningSendFinished,
+            "SPARK_COOP_EXIT_FINISHED" => WebhookEventType::CoopExitFinished,
+            "SPARK_STATIC_DEPOSIT_FINISHED" => WebhookEventType::StaticDepositFinished,
+            _ => {
+                return Err(format!(
+                    "invalid webhook event type '{s}'. Valid values: \
+                     SPARK_LIGHTNING_RECEIVE_FINISHED, SPARK_LIGHTNING_SEND_FINISHED, \
+                     SPARK_COOP_EXIT_FINISHED, SPARK_STATIC_DEPOSIT_FINISHED"
+                ));
+            }
+        })
+    }
 }
 
 impl From<WebhookEventType> for spark_wallet::SparkWalletWebhookEventType {
@@ -1641,6 +1661,7 @@ pub struct RegisterWebhookRequest {
 }
 
 /// Response from registering a webhook.
+#[derive(Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegisterWebhookResponse {
     pub webhook_id: String,
@@ -1653,12 +1674,14 @@ pub struct DeleteWebhookRequest {
 }
 
 /// Response from deleting a webhook.
+#[derive(Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeleteWebhookResponse {
     pub success: bool,
 }
 
 /// A registered webhook.
+#[derive(Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Webhook {
     pub id: String,
@@ -1677,6 +1700,7 @@ impl From<spark_wallet::WebhookEntry> for Webhook {
 }
 
 /// Response from listing webhooks.
+#[derive(Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ListWebhooksResponse {
     pub webhooks: Vec<Webhook>,
