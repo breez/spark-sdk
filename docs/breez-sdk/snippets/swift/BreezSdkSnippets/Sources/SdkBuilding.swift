@@ -2,7 +2,7 @@ import BreezSdkSpark
 
 func initSdkAdvanced() async throws -> BreezSdk {
     // ANCHOR: init-sdk-advanced
-    // Construct the seed using a mnemonic, entropy or passkey
+    // Construct the seed using a mnemonic or entropy bytes
     let mnemonic = "<mnemonic words>"
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 
@@ -74,7 +74,7 @@ func withPaymentObserver(builder: SdkBuilder) async {
 
 func initSdkPostgres() async throws -> BreezSdk {
     // ANCHOR: init-sdk-postgres
-    // Construct the seed using a mnemonic, entropy or passkey
+    // Construct the seed using a mnemonic or entropy bytes
     let mnemonic = "<mnemonic words>"
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 
