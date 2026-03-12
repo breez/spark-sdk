@@ -21,7 +21,7 @@ export const withBinaryArtifacts: ConfigPlugin = (config) => {
   }]);
 };
 
-async function downloadBinaryArtifacts(): Promise<void> {
+function downloadBinaryArtifacts() {
   const packageRoot = findPackageRoot();
   if (!packageRoot) {
     throw new Error(
