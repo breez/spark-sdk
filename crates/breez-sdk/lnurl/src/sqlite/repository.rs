@@ -89,8 +89,14 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "REPLACE INTO users (domain, pubkey, name, description, lnurl_private_mode_enabled, webhook_secret, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO users (domain, pubkey, name, description, lnurl_private_mode_enabled, webhook_secret, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT(domain, pubkey) DO UPDATE
+            SET name = excluded.name
+            ,   description = excluded.description
+            ,   lnurl_private_mode_enabled = excluded.lnurl_private_mode_enabled
+            ,   webhook_secret = COALESCE(excluded.webhook_secret, users.webhook_secret)
+            ,   updated_at = excluded.updated_at",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)

@@ -95,7 +95,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              SET name = excluded.name
              ,   description = excluded.description
              ,   lnurl_private_mode_enabled = excluded.lnurl_private_mode_enabled
-             ,   webhook_secret = excluded.webhook_secret
+             ,   webhook_secret = COALESCE(excluded.webhook_secret, users.webhook_secret)
              ,   updated_at = excluded.updated_at",
         )
         .bind(&user.domain)
