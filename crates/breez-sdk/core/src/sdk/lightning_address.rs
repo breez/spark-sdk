@@ -87,7 +87,7 @@ impl BreezSdk {
             return Ok(None);
         };
 
-        let has_webhook_secret = resp.webhook.as_ref().is_some_and(|w| w.secret.is_some());
+        let has_webhook_secret = resp.webhook.secret.is_some();
         if self.config.support_lnurl_verify && !has_webhook_secret {
             // Webhook secret not set on server (pre-upgrade registration).
             // Re-register to generate and store a webhook secret.
@@ -100,7 +100,7 @@ impl BreezSdk {
         }
 
         if self.config.support_lnurl_verify {
-            self.try_register_webhook(resp.webhook.as_ref()).await;
+            self.try_register_webhook(&resp.webhook).await;
         }
 
         let address_info = resp.into();
@@ -110,12 +110,7 @@ impl BreezSdk {
 
     /// Attempt to register a webhook with the SSP. Logs warnings on failure
     /// but does not propagate errors — webhook registration is best-effort.
-    async fn try_register_webhook(&self, webhook: Option<&lnurl_models::WebhookInfo>) {
-        let Some(webhook) = webhook else {
-            debug!("no webhook info in LNURL server response, skipping SSP webhook registration");
-            return;
-        };
-
+    async fn try_register_webhook(&self, webhook: &lnurl_models::WebhookInfo) {
         let Some(secret) = &webhook.secret else {
             debug!("webhook info has no secret, skipping SSP webhook registration");
             return;
@@ -179,7 +174,7 @@ impl BreezSdk {
 
         // Register webhook with SSP if available
         if self.config.support_lnurl_verify {
-            self.try_register_webhook(response.webhook.as_ref()).await;
+            self.try_register_webhook(&response.webhook).await;
         }
 
         let address_info = LightningAddressInfo {

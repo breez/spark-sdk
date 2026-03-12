@@ -186,7 +186,7 @@ where
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
-            webhook: Some(webhook),
+            webhook,
         }))
     }
 
@@ -262,7 +262,7 @@ where
                     lightning_address: format!("{}@{}", user.name, &user.domain),
                     username: user.name,
                     description: user.description,
-                    webhook: Some(webhook),
+                    webhook,
                 }))
             }
             None => Err((

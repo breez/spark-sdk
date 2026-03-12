@@ -24,8 +24,7 @@ pub struct RecoverLnurlPayResponse {
     pub lightning_address: String,
     pub username: String,
     pub description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook: Option<WebhookInfo>,
+    pub webhook: WebhookInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,8 +53,7 @@ pub struct UnregisterLnurlPayRequest {
 pub struct RegisterLnurlPayResponse {
     pub lnurl: String,
     pub lightning_address: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook: Option<WebhookInfo>,
+    pub webhook: WebhookInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
