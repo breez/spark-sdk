@@ -58,12 +58,7 @@ class PasskeyConfig {
   final bool listLabels;
   final bool storeLabel;
 
-  PasskeyConfig({
-    required this.provider,
-    this.label,
-    this.listLabels = false,
-    this.storeLabel = false,
-  });
+  PasskeyConfig({required this.provider, this.label, this.listLabels = false, this.storeLabel = false});
 }
 
 /// Resolve the seed using a passkey PRF provider.
