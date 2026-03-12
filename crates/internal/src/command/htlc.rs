@@ -78,6 +78,7 @@ pub async fn handle_command(
                     &payment_hash,
                     expiry_duration,
                     None,
+                    None,
                 )
                 .await?;
             println!("Transfer: {}", serde_json::to_string_pretty(&transfer)?);

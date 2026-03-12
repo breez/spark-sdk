@@ -959,13 +959,4 @@ pub trait TreeService: Send + Sync {
         id: LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
-
-    /// Retrieves a previously created leaf reservation by its ID.
-    ///
-    /// Returns the reservation if it still exists and hasn't expired.
-    /// Fails if the reservation doesn't exist or has expired.
-    async fn get_reservation(
-        &self,
-        id: &LeavesReservationId,
-    ) -> Result<LeavesReservation, TreeServiceError>;
 }

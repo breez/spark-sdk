@@ -817,14 +817,14 @@ impl BreezSdk {
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
-                self.send_spark_address(
+                Box::pin(self.send_spark_address(
                     address,
                     token_identifier,
                     amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
                     reservation_id,
-                )
+                ))
                 .await
             }
             SendPaymentMethod::SparkInvoice {
@@ -892,6 +892,7 @@ impl BreezSdk {
                     amount.try_into()?,
                     htlc_options,
                     idempotency_key,
+                    reservation_id.clone(),
                 )
                 .await;
         }
@@ -928,6 +929,7 @@ impl BreezSdk {
         amount_sat: u64,
         htlc_options: &SparkHtlcOptions,
         idempotency_key: Option<String>,
+        reservation_id: Option<String>,
     ) -> Result<SendPaymentResponse, SdkError> {
         let payment_hash = sha256::Hash::from_str(&htlc_options.payment_hash)
             .map_err(|_| SdkError::InvalidInput("Invalid payment hash".to_string()))?;
@@ -951,6 +953,7 @@ impl BreezSdk {
                 &payment_hash,
                 expiry_duration,
                 transfer_id,
+                reservation_id,
             )
             .await?;
 

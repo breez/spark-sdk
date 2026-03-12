@@ -90,71 +90,117 @@ fn is_resource_exhausted_error(error: &OperatorRpcError) -> bool {
     matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::ResourceExhausted)
 }
 
-/// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
-/// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
-macro_rules! with_leafs_spent_retry {
+/// Macro to select leaves and execute an operation within a reservation.
+///
+/// Two forms:
+/// - 4-param: selects fresh leaves with retry on spent-leaf errors
+/// - 5-param: accepts `reservation_id: Option<&LeavesReservationId>` —
+///   `Some(id)` reuses an existing reservation (no retry),
+///   `None` falls back to fresh selection with retry
+macro_rules! with_leaves_selected {
+    // 4-param shorthand: no reservation_id (equivalent to passing None)
     (
         $self:expr,
         $target_amounts:expr,
         $operation_name:literal,
         |$leaves_reservation:ident| $operation:expr
+    ) => {
+        with_leaves_selected!(
+            $self,
+            $target_amounts,
+            $operation_name,
+            None::<&LeavesReservationId>,
+            |$leaves_reservation| $operation
+        )
+    };
+    // 5-param variant: accepts reservation_id
+    (
+        $self:expr,
+        $target_amounts:expr,
+        $operation_name:literal,
+        $reservation_id:expr,
+        |$leaves_reservation:ident| $operation:expr
     ) => {{
-        let mut attempt = 0;
-        let mut rate_limit_attempt: u32 = 0;
-        loop {
-            if attempt > 0 {
-                if attempt >= MAX_LEAF_SPENT_RETRIES {
-                    break Err(SparkWalletError::Generic(format!(
-                        "{} failed after {} retries due to leaf spending errors",
-                        $operation_name, MAX_LEAF_SPENT_RETRIES
-                    )));
-                }
-                info!(
-                    "{} failed with leaf spending error (attempt {}/{}), refreshing leaves and retrying",
-                    $operation_name,
-                    attempt,
-                    MAX_LEAF_SPENT_RETRIES
-                );
-                $self.tree_service.refresh_leaves().await?;
-            }
-            let $leaves_reservation = $self.select_leaves_with_retry($target_amounts).await?;
-
+        if let Some(res_id) = $reservation_id {
+            // Reuse existing reservation — single attempt, no retry loop
+            let options = SelectLeavesOptions {
+                reservation_id: Some(res_id.clone()),
+                ..Default::default()
+            };
+            let $leaves_reservation = $self
+                .tree_service
+                .select_leaves(
+                    $target_amounts,
+                    ReservationPurpose::Payment,
+                    options,
+                )
+                .await?;
             let result = with_reserved_leaves(
                 $self.tree_service.as_ref(),
                 $operation,
                 &$leaves_reservation,
             )
             .await;
-
-            match result {
-                Ok(v) => break Ok(v),
-                Err(ServiceError::ServiceConnectionError(e))
-                    if is_resource_exhausted_error(&e) =>
-                {
-                    rate_limit_attempt += 1;
-                    if rate_limit_attempt > MAX_RATE_LIMIT_RETRIES {
-                        break Err(ServiceError::ServiceConnectionError(e).into());
+            result.map_err(SparkWalletError::from)
+        } else {
+            // Fresh leaf selection with retry logic
+            let mut attempt = 0;
+            let mut rate_limit_attempt: u32 = 0;
+            loop {
+                if attempt > 0 {
+                    if attempt >= MAX_LEAF_SPENT_RETRIES {
+                        break Err(SparkWalletError::Generic(format!(
+                            "{} failed after {} retries due to leaf spending errors",
+                            $operation_name, MAX_LEAF_SPENT_RETRIES
+                        )));
                     }
-                    let delay_ms = (RATE_LIMIT_BASE_DELAY_MS
-                        * 2u64.pow(rate_limit_attempt - 1))
-                    .min(RATE_LIMIT_MAX_DELAY_MS);
                     info!(
-                        "{} rate limited (attempt {}/{}), backing off {}ms",
-                        $operation_name, rate_limit_attempt,
-                        MAX_RATE_LIMIT_RETRIES, delay_ms,
+                        "{} failed with leaf spending error (attempt {}/{}), refreshing leaves and retrying",
+                        $operation_name,
+                        attempt,
+                        MAX_LEAF_SPENT_RETRIES
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    continue;
+                    $self.tree_service.refresh_leaves().await?;
                 }
-                Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
-                    warn!(
-                        "{} got leaf spending error: {:?}",
-                        $operation_name, e
-                    );
-                    attempt += 1;
-                    continue;
+                let $leaves_reservation = $self.select_leaves_with_retry($target_amounts).await?;
+
+                let result = with_reserved_leaves(
+                    $self.tree_service.as_ref(),
+                    $operation,
+                    &$leaves_reservation,
+                )
+                .await;
+
+                match result {
+                    Ok(v) => break Ok(v),
+                    Err(ServiceError::ServiceConnectionError(e))
+                        if is_resource_exhausted_error(&e) =>
+                    {
+                        rate_limit_attempt += 1;
+                        if rate_limit_attempt > MAX_RATE_LIMIT_RETRIES {
+                            break Err(ServiceError::ServiceConnectionError(e).into());
+                        }
+                        let delay_ms = (RATE_LIMIT_BASE_DELAY_MS
+                            * 2u64.pow(rate_limit_attempt - 1))
+                        .min(RATE_LIMIT_MAX_DELAY_MS);
+                        info!(
+                            "{} rate limited (attempt {}/{}), backing off {}ms",
+                            $operation_name, rate_limit_attempt,
+                            MAX_RATE_LIMIT_RETRIES, delay_ms,
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        continue;
+                    }
+                    Err(ServiceError::ServiceConnectionError(e)) if is_leafs_spent_error(&e) => {
+                        warn!(
+                            "{} got leaf spending error: {:?}",
+                            $operation_name, e
+                        );
+                        attempt += 1;
+                        continue;
+                    }
+                    Err(e) => break Err(e.into()),
                 }
-                Err(e) => break Err(e.into()),
             }
         }
     }};
@@ -445,32 +491,18 @@ impl SparkWallet {
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
 
         // Start the lightning swap with the operator, with retry logic for concurrent leaf spending
-        let lightning_payment = if let Some(res_id) = reservation_id {
-            let leaves_reservation = self.tree_service.get_reservation(&res_id).await?;
-            with_reserved_leaves(
-                self.tree_service.as_ref(),
-                self.lightning_service.pay_lightning_invoice(
-                    invoice,
-                    amount_to_send,
-                    &leaves_reservation.leaves,
-                    transfer_id.clone(),
-                ),
-                &leaves_reservation,
+        let lightning_payment = with_leaves_selected!(
+            self,
+            Some(&target_amounts),
+            "Lightning payment",
+            reservation_id.as_ref(),
+            |leaves_reservation| self.lightning_service.pay_lightning_invoice(
+                invoice,
+                amount_to_send,
+                &leaves_reservation.leaves,
+                transfer_id.clone(),
             )
-            .await?
-        } else {
-            with_leafs_spent_retry!(
-                self,
-                Some(&target_amounts),
-                "Lightning payment",
-                |leaves_reservation| self.lightning_service.pay_lightning_invoice(
-                    invoice,
-                    amount_to_send,
-                    &leaves_reservation.leaves,
-                    transfer_id.clone(),
-                )
-            )?
-        };
+        )?;
 
         // Collect the wallet transfer information from the lightning send payment result. If
         // not present, we need to query for the SSP user request to get the transfer details.
@@ -644,15 +676,6 @@ impl SparkWallet {
         id: &LeavesReservationId,
     ) -> Result<(), SparkWalletError> {
         Ok(self.tree_service.cancel_reservation(id.clone()).await?)
-    }
-
-    /// Retrieves a previously created leaf reservation by its ID.
-    /// Fails if the reservation doesn't exist or has expired.
-    pub async fn get_leaf_reservation(
-        &self,
-        id: &LeavesReservationId,
-    ) -> Result<LeavesReservation, SparkWalletError> {
-        Ok(self.tree_service.get_reservation(id).await?)
     }
 
     pub async fn fetch_lightning_send_fee_estimate(
@@ -863,34 +886,19 @@ impl SparkWallet {
         // Transfer leaves with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
 
-        let transfer = if let Some(res_id) = reservation_id {
-            let leaves_reservation = self.tree_service.get_reservation(&res_id).await?;
-            with_reserved_leaves(
-                self.tree_service.as_ref(),
-                self.transfer_service.transfer_leaves_to(
-                    leaves_reservation.leaves.clone(),
-                    &receiver_address.identity_public_key,
-                    transfer_id.clone(),
-                    None,
-                    spark_invoice.clone(),
-                ),
-                &leaves_reservation,
+        let transfer = with_leaves_selected!(
+            self,
+            Some(&target_amounts),
+            "Transfer",
+            reservation_id.as_ref(),
+            |leaves_reservation| self.transfer_service.transfer_leaves_to(
+                leaves_reservation.leaves.clone(),
+                &receiver_address.identity_public_key,
+                transfer_id.clone(),
+                None,
+                spark_invoice.clone(),
             )
-            .await?
-        } else {
-            with_leafs_spent_retry!(
-                self,
-                Some(&target_amounts),
-                "Transfer",
-                |leaves_reservation| self.transfer_service.transfer_leaves_to(
-                    leaves_reservation.leaves.clone(),
-                    &receiver_address.identity_public_key,
-                    transfer_id.clone(),
-                    None,
-                    spark_invoice.clone(),
-                )
-            )?
-        };
+        )?;
 
         self.maybe_start_optimization();
 
@@ -934,6 +942,7 @@ impl SparkWallet {
         payment_hash: &Hash,
         expiry_duration: Duration,
         transfer_id: Option<TransferId>,
+        reservation_id: Option<LeavesReservationId>,
     ) -> Result<WalletTransfer, SparkWalletError> {
         // validate receiver address and get its pubkey
         if self.config.network != receiver_address.network {
@@ -949,10 +958,11 @@ impl SparkWallet {
         // Create HTLC with retry logic for concurrent leaf spending
         let target_amounts = TargetAmounts::new_amount_and_fee(amount_sat, None);
         let expiry_time = SystemTime::now() + expiry_duration;
-        let transfer = with_leafs_spent_retry!(
+        let transfer = with_leaves_selected!(
             self,
             Some(&target_amounts),
             "HTLC creation",
+            reservation_id.as_ref(),
             |leaves_reservation| self.htlc_service.create_htlc(
                 leaves_reservation.leaves.clone(),
                 &receiver_address.identity_public_key,
@@ -1234,7 +1244,7 @@ impl SparkWallet {
                 .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
 
             // No reservation — use the macro retry path
-            with_leafs_spent_retry!(
+            with_leaves_selected!(
                 self,
                 target_amounts.as_ref(),
                 "Withdrawal",
@@ -1291,7 +1301,17 @@ impl SparkWallet {
             .amount_sats
             .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
 
-        let amount_reservation = self.tree_service.get_reservation(reservation_id).await?;
+        let amount_reservation = self
+            .tree_service
+            .select_leaves(
+                None,
+                ReservationPurpose::Payment,
+                SelectLeavesOptions {
+                    reservation_id: Some(reservation_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await?;
 
         // Resolve leaves based on the mode.
         // fee_reservation tracks any separately-selected fee leaves for cleanup.

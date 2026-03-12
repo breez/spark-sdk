@@ -56,13 +56,6 @@ impl TreeService for SynchronousTreeService {
         self.state.finalize_reservation(&id, new_leaves).await
     }
 
-    async fn get_reservation(
-        &self,
-        id: &LeavesReservationId,
-    ) -> Result<LeavesReservation, TreeServiceError> {
-        self.state.get_reservation(id).await
-    }
-
     async fn insert_leaves(
         &self,
         leaves: Vec<TreeNode>,
