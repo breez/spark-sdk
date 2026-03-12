@@ -194,7 +194,8 @@ where
         None => rand::random(),
     };
 
-    let spark_config = SparkWalletConfig::default_config(args.network);
+    let mut spark_config = SparkWalletConfig::default_config(args.network);
+    spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
