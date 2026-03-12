@@ -16,7 +16,7 @@ import RNFS from 'react-native-fs'
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
-  // Construct the seed using a mnemonic, entropy or passkey
+  // Construct the seed using a mnemonic or entropy bytes
   const mnemonic = '<mnemonics words>'
   const seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
 

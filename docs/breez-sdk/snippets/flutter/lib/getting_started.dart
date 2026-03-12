@@ -8,7 +8,7 @@ Future<void> initSdk() async {
   // of the SDK across your Flutter app.
   await BreezSdkSparkLib.init();
 
-  // Construct the seed using a mnemonic, entropy or passkey
+  // Construct the seed using a mnemonic or entropy bytes
   String mnemonic = "<mnemonic words>";
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 

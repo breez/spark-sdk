@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         async Task InitSdk()
         {
             // ANCHOR: init-sdk
-            // Construct the seed using a mnemonic, entropy or passkey
+            // Construct the seed using a mnemonic or entropy bytes
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
             // Create the default config
