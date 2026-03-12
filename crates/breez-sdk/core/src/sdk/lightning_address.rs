@@ -81,32 +81,31 @@ impl BreezSdk {
                 "LNURL server is not configured".to_string(),
             ));
         };
-        let resp = client.recover_lightning_address().await?;
 
-        let result = if let Some(resp) = resp {
-            let has_webhook_secret = resp.webhook.as_ref().is_some_and(|w| w.secret.is_some());
-
-            if self.config.support_lnurl_verify && !has_webhook_secret {
-                // Webhook secret not set on server (pre-upgrade registration).
-                // Re-register to generate and store a webhook secret.
-                debug!("recovered address has no webhook secret, re-registering");
-                let req = RegisterLightningAddressRequest {
-                    username: resp.username,
-                    description: Some(resp.description),
-                };
-                Some(self.register_lightning_address_internal(req).await?)
-            } else {
-                self.try_register_webhook(resp.webhook.as_ref()).await;
-                let address_info = resp.into();
-                cache.save_lightning_address(&address_info).await?;
-                Some(address_info)
-            }
-        } else {
+        let Some(resp) = client.recover_lightning_address().await? else {
             cache.delete_lightning_address().await?;
-            None
+            return Ok(None);
         };
 
-        Ok(result)
+        let has_webhook_secret = resp.webhook.as_ref().is_some_and(|w| w.secret.is_some());
+        if self.config.support_lnurl_verify && !has_webhook_secret {
+            // Webhook secret not set on server (pre-upgrade registration).
+            // Re-register to generate and store a webhook secret.
+            debug!("recovered address has no webhook secret, re-registering");
+            let req = RegisterLightningAddressRequest {
+                username: resp.username,
+                description: Some(resp.description),
+            };
+            return Ok(Some(self.register_lightning_address_internal(req).await?));
+        }
+
+        if self.config.support_lnurl_verify {
+            self.try_register_webhook(resp.webhook.as_ref()).await;
+        }
+
+        let address_info = resp.into();
+        cache.save_lightning_address(&address_info).await?;
+        Ok(Some(address_info))
     }
 
     /// Attempt to register a webhook with the SSP. Logs warnings on failure
