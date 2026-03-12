@@ -122,6 +122,8 @@ domains = "yourdomain.com"   # Comma-separated list of allowed domains
 | `--network` | Spark network (mainnet, testnet, regtest) | `mainnet` |
 | `--min-sendable` | Minimum payment amount (millisatoshi) | `1000` |
 | `--max-sendable` | Maximum payment amount (millisatoshi) | `4000000000` |
+| `--webhook-domain` | Domain for the webhook URL registered with the SSP | (none) |
+| `--ssp-auth-seed` | Hex-encoded 32-byte seed for SSP authentication | (random) |
 
 For a complete list of options, run:
 ```shell
