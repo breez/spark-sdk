@@ -181,18 +181,27 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn parse_auth_seed(hex_str: Option<&str>) -> [u8; 32] {
+    let Some(hex_str) = hex_str else {
+        return rand::random();
+    };
+    let Ok(bytes) = hex::decode(hex_str) else {
+        error!("invalid ssp_auth_seed hex, using random seed");
+        return rand::random();
+    };
+    let Ok(seed) = bytes.try_into() else {
+        error!("ssp_auth_seed must be 32 bytes, using random seed");
+        return rand::random();
+    };
+    seed
+}
+
 #[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let auth_seed: [u8; 32] = match &args.ssp_auth_seed {
-        Some(seed_hex) => hex::decode(seed_hex)
-            .map_err(|e| anyhow!("invalid ssp_auth_seed hex: {e}"))?
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow!("ssp_auth_seed must be 32 bytes, got {}", v.len()))?,
-        None => rand::random(),
-    };
+    let auth_seed = parse_auth_seed(args.ssp_auth_seed.as_deref());
 
     let mut spark_config = SparkWalletConfig::default_config(args.network);
     spark_config.service_provider_config.schema_endpoint = Some("graphql/spark/rc".to_string());
