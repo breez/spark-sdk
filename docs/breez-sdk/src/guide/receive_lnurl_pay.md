@@ -97,4 +97,4 @@ If the payment was sent as a Nostr Zap (as defined in [NIP-57](https://github.co
 
 Payments received through your Lightning address support [LUD-21](https://github.com/lnurl/luds/blob/luds/21.md) invoice verification, allowing third parties to verify payment completion via a public verify URL.
 
-> **Note:** For LUD-21 the LNURL server needs to know whether invoices were paid. This can be disabled for privacy reasons. See [Invoice paid notifications](./config.md#invoice-paid-notifications).
+> **Note:** For LUD-21 the LNURL server needs to know whether invoices were paid. This is disabled by default for privacy reasons. See [LNURL Verify Support](./config.md#lnurl-verify-support).
