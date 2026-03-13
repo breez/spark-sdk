@@ -77,10 +77,12 @@ service SparkService {
     rpc initiate_preimage_swap_v3(InitiatePreimageSwapRequest) returns (InitiatePreimageSwapResponse) {}
     rpc start_leaf_swap_v2(StartTransferRequest) returns (StartTransferResponse) {}
     rpc start_transfer_v2(StartTransferRequest) returns (StartTransferResponse) {}
+    rpc start_transfer_v3(StartTransferV3Request) returns (StartTransferResponse) {}
 
     rpc claim_transfer(ClaimTransferRequest) returns (ClaimTransferResponse) {}
 
     rpc get_utxos_for_address(GetUtxosForAddressRequest) returns (GetUtxosForAddressResponse) {}
+    rpc get_utxos_for_addresses(GetUtxosForAddressesRequest) returns (GetUtxosForAddressesResponse) {}
 
     rpc query_spark_invoices(QuerySparkInvoicesRequest) returns (QuerySparkInvoicesResponse) {}
 
@@ -99,9 +101,11 @@ message SubscribeToEventsRequest {
 
 message SubscribeToEventsResponse {
     oneof event {
-        TransferEvent transfer = 1;
+        // Include json_name for backwards compatibility for those who are using json serialization.
+        TransferEvent receiver_transfer = 1 [json_name = "transfer"];
         DepositEvent deposit = 2;
         ConnectedEvent connected = 3;
+        TransferEvent sender_transfer = 4;
     }
 }
 
@@ -265,6 +269,12 @@ message UTXO {
     // Transaction Id string, produced from transaction hash by reversing the bytes,
     // converted to bytes. Required, but older code may not provide it.
     bytes txid = 4;
+}
+
+message AddressedUtxo {
+    string address = 1;
+    UTXO utxo = 2;
+    bool is_confirmed = 3;
 }
 
 /**
@@ -536,6 +546,12 @@ message FinalizeDepositTreeCreationRequest {
     UserSignedTxSigningJob root_tx_signing_job = 3;
     UserSignedTxSigningJob refund_tx_signing_job = 4;
     UserSignedTxSigningJob direct_from_cpfp_refund_tx_signing_job = 5;
+    // Additional on-chain UTXOs for non-static deposits with multiple UTXOs.
+    // All additional UTXOs must pay to the same deposit address as on_chain_utxo.
+    // For multi-UTXO deposits, all UTXOs (primary + additional) must be confirmed
+    // on-chain before finalization. The root_tx_signing_job.additional_inputs must
+    // contain one InputSigningData per additional UTXO, in the same order.
+    repeated UTXO additional_on_chain_utxos = 6;
 }
 
 /**
@@ -544,127 +560,6 @@ message FinalizeDepositTreeCreationRequest {
 message FinalizeDepositTreeCreationResponse {
     // the root node of the created tree
     TreeNode root_node = 1;
-}
-
-// This proto is constructed by the wallet to specify leaves it wants to spend as
-// part of the token transaction.
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenOutputToSpend {
-    bytes prev_token_transaction_hash = 1 [(validate.rules).bytes.len = 32];
-    uint32 prev_token_transaction_vout = 2;
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenTransferInput {
-    repeated TokenOutputToSpend outputs_to_spend = 1;
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenMintInput {
-    bytes issuer_public_key = 1 [(validate.rules).bytes.len = 33];
-    // Issuer provided timestamp of when the transaction was signed/constructed.
-    // Helps provide idempotency and ensures that each mint input signature is unique
-    // as long as multiple mint signatures are not happening at the same time. Also gives a
-    // potentially useful data point for when the issuer authorized from their
-    // perspective.  Note that we have no way of proving this is accurate.
-    // TODO: Consider whether implementing generic idempotency controls and/or a
-    // random nonce would be favorable to populating this field.
-    uint64 issuer_provided_timestamp = 2;
-    optional bytes token_identifier = 3 [(validate.rules).bytes.len = 32];
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenCreateInput {
-    bytes issuer_public_key = 1 [(validate.rules).bytes.len = 33];
-    string token_name = 2 [(validate.rules).string = {max_len: 20}]; // No minimum length because a single utf-8 character can be 3 bytes.
-    string token_ticker = 3 [(validate.rules).string = {max_len: 6}]; // No minimum length because a single utf-8 character can be 3 bytes.
-    uint32 decimals = 4 [(validate.rules).uint32.lte = 255];
-    bytes max_supply = 5 [(validate.rules).bytes.len = 16]; // Decoded uint128
-    bool is_freezable = 6;
-    optional bytes creation_entity_public_key = 7 [(validate.rules).bytes.len = 33];
-}
-
-// This proto is constructed by the wallet to specify outputs it wants to create
-// as part of a token transaction. Output id and revocation public key should remain unfilled
-// so that the SE can fill them as part of the StartTokenTransaction() call.
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenOutput {
-    optional string id = 1 [(validate.rules).string.uuid = true];
-    bytes owner_public_key = 2 [(validate.rules).bytes.len = 33];
-    optional bytes revocation_commitment = 3 [(validate.rules).bytes.len = 33];
-    optional uint64 withdraw_bond_sats = 4;
-    optional uint64 withdraw_relative_block_locktime = 5;
-    optional bytes token_public_key = 6 [(validate.rules).bytes = {len: 33}];
-    optional bytes token_identifier = 8 [(validate.rules).bytes.len = 32];
-    bytes token_amount = 7 [(validate.rules).bytes.len = 16];  // Decoded uint128
-}
-
-// This proto is constructed by the wallet and is the core transaction data structure.
-// This proto is deterministically hashed to generate the token_transaction_hash that
-// is cooperatively signed by the SO group to confirm a token transaction.
-// DEPRECATED: Use definitions in spark_token.proto instead
-message TokenTransaction {
-    oneof token_inputs {
-        TokenMintInput mint_input = 1;
-        TokenTransferInput transfer_input = 2;
-        TokenCreateInput create_input = 5;
-    }
-    repeated TokenOutput token_outputs = 3;
-    repeated bytes spark_operator_identity_public_keys = 4 [(validate.rules).repeated.items.bytes.len = 33];
-    Network network = 10 [(validate.rules).enum = {not_in: [0]}];
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message SignatureWithIndex {
-    // This is a Schnorr or ECDSA DER signature which can be between 64 and 73 bytes.
-    bytes signature = 1 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
-    // The index of the TTXO associated with this signature.
-    uint32 input_index = 2;
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message OperatorSpecificTokenTransactionSignablePayload {
-    bytes final_token_transaction_hash = 1 [(validate.rules).bytes.len = 32];
-    bytes operator_identity_public_key = 2 [(validate.rules).bytes.len = 33];
-}
-
-// This message allows the sender of a output being spent to provide final evidence
-// that it owns a output to an SO when requesting signing and release of the  revocation keyshare.
-// DEPRECATED: Use definitions in spark_token.proto instead
-message OperatorSpecificOwnerSignature {
-    SignatureWithIndex owner_signature = 1;
-    OperatorSpecificTokenTransactionSignablePayload payload = 2;
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message RevocationSecretWithIndex {
-    // The index of the input TTXO associated with this secret.
-    uint32 input_index = 1;
-    bytes revocation_secret = 2 [(validate.rules).bytes.len = 32];
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message FreezeTokensPayload {
-    bytes owner_public_key = 1 [(validate.rules).bytes.len = 33];
-    bytes token_public_key = 2 [(validate.rules).bytes.len = 33];
-    uint64 issuer_provided_timestamp = 3;
-    bytes operator_identity_public_key = 4 [(validate.rules).bytes.len = 33];
-    // Set to false when requesting a freeze.
-    bool should_unfreeze = 5;
-    optional bytes token_identifier = 6 [(validate.rules).bytes.len = 32];
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message FreezeTokensRequest {
-    FreezeTokensPayload freeze_tokens_payload = 1;
-    // This is a Schnorr or ECDSA DER signature which can be between 64 and 73 bytes.
-    bytes issuer_signature = 2 [(validate.rules).bytes.min_len = 64, (validate.rules).bytes.max_len = 73];
-}
-
-// DEPRECATED: Use definitions in spark_token.proto instead
-message FreezeTokensResponse {
-    repeated string impacted_output_ids = 1 [(validate.rules).repeated.items.string.uuid = true];
-    bytes impacted_token_amount = 2;  // Decoded uint128
 }
 
 /**
@@ -765,6 +660,20 @@ message UserSignedTxSigningJob {
     common.SigningCommitment signing_nonce_commitment = 4;
     bytes user_signature = 5;
     SigningCommitments signing_commitments = 6;
+    // Additional inputs for multi-UTXO root transactions. Each entry carries
+    // the signing data for one additional root tx input (inputs 1..N).
+    // Input 0 uses the fields above for backward compatibility.
+    repeated InputSigningData additional_inputs = 7;
+}
+
+// InputSigningData carries the per-input signing data for additional root tx
+// inputs in a multi-UTXO deposit.
+message InputSigningData {
+    // The user's nonce commitment for this input's FROST signing round.
+    common.SigningCommitment signing_nonce_commitment = 1;
+    bytes user_signature = 2;
+    // The SE (Signing Entity) operators' nonce commitments for this input, keyed by operator identifier.
+    SigningCommitments signing_commitments = 3;
 }
 
 message LeafRefundTxSigningResult {
@@ -807,6 +716,24 @@ message StartTransferRequest {
 message StartTransferResponse {
     Transfer transfer = 1;
     repeated LeafRefundTxSigningResult signing_results = 2;
+}
+
+message SenderTransferPackage {
+    bytes owner_identity_public_key = 1;
+    TransferPackage transfer_package = 2;
+    // The transfer package contains leaves that may be meant for multiple receivers.
+    // This maps leaf_id to receiver_identity_public_key for each leaf.
+    map<string, bytes> receiver_identity_public_keys = 3;
+}
+
+// Request to transfer leaves from multiple senders to multiple receivers
+// in a single atomic operation.
+message StartTransferV3Request {
+    string transfer_id = 1;
+    // One entry per sender. Leaf IDs must be disjoint across entries.
+    repeated SenderTransferPackage sender_packages = 2;
+    // Expiry time for the entire transfer
+    google.protobuf.Timestamp expiry_time = 3;
 }
 
 /**
@@ -893,6 +820,12 @@ enum Order {
     ASCENDING = 1;
 }
 
+// Per-receiver summary within a Transfer response.
+message TransferReceiver {
+    bytes identity_public_key = 1;
+    uint64 amount_sats = 2;
+}
+
 message Transfer {
     string id = 1;
     bytes sender_identity_public_key = 2;
@@ -906,6 +839,8 @@ message Transfer {
     TransferType type = 10;
     string spark_invoice = 11;
     Network network = 12;
+    // For V3 multi-receiver transfers. Empty for single-receiver (V2) transfers.
+    repeated TransferReceiver receivers = 13;
 }
 
 message TransferLeaf {
@@ -1428,10 +1363,17 @@ enum UtxoSwapRequestType {
   Instant = 3;
 }
 
+enum UtxoSwapStatus {
+    UTXO_SWAP_STATUS_UNSPECIFIED = 0;
+    UTXO_SWAP_STATUS_CREATED = 1;
+    UTXO_SWAP_STATUS_COMPLETED = 2;
+    UTXO_SWAP_STATUS_CANCELLED = 3;
+}
+
 // Which hash variant to use in cryptographic operations.
 enum HashVariant {
-  HASH_VARIANT_UNSPECIFIED = 0;  // Legacy
-  HASH_VARIANT_V2 = 1;           // Structured hashing
+  HASH_VARIANT_UNSPECIFIED = 0; // Legacy
+  HASH_VARIANT_V2 = 1; // Structured hashing
 }
 
 
@@ -1545,6 +1487,19 @@ message GetUtxosForAddressRequest {
 message GetUtxosForAddressResponse {
     repeated UTXO utxos = 1;
     uint64 offset = 2;
+}
+
+message GetUtxosForAddressesRequest {
+    repeated string addresses = 1;
+    Network network = 2 [(validate.rules).enum = {not_in: [0]}];
+    bool exclude_claimed = 3;
+    PageRequest page = 4;
+    bool include_pending = 5;
+}
+
+message GetUtxosForAddressesResponse {
+    repeated AddressedUtxo utxos = 1;
+    PageResponse page = 2;
 }
 
 message QuerySparkInvoicesRequest {
