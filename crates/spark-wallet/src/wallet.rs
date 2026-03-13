@@ -626,6 +626,17 @@ impl SparkWallet {
             .await?)
     }
 
+    pub async fn query_utxos_for_identity(
+        &self,
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<(Vec<Utxo>, Option<String>), SparkWalletError> {
+        Ok(self
+            .deposit_service
+            .query_utxos_for_identity(page_size, cursor)
+            .await?)
+    }
+
     pub async fn get_utxos_for_address(
         &self,
         address: &str,
@@ -711,6 +722,15 @@ impl SparkWallet {
             .generate_static_deposit_address(signing_public_key)
             .await?;
         Ok(address.address)
+    }
+
+    pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
+        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let new_address = self
+            .deposit_service
+            .rotate_static_deposit_address(signing_public_key)
+            .await?;
+        Ok(new_address.address)
     }
 
     pub async fn list_static_deposit_addresses(

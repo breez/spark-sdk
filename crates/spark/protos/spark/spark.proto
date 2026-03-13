@@ -83,6 +83,7 @@ service SparkService {
 
     rpc get_utxos_for_address(GetUtxosForAddressRequest) returns (GetUtxosForAddressResponse) {}
     rpc get_utxos_for_addresses(GetUtxosForAddressesRequest) returns (GetUtxosForAddressesResponse) {}
+    rpc query_utxos_for_identity(QueryUtxosForIdentityRequest) returns (QueryUtxosForIdentityResponse) {}
 
     rpc query_spark_invoices(QuerySparkInvoicesRequest) returns (QuerySparkInvoicesResponse) {}
 
@@ -1498,6 +1499,19 @@ message GetUtxosForAddressesRequest {
 }
 
 message GetUtxosForAddressesResponse {
+    repeated AddressedUtxo utxos = 1;
+    PageResponse page = 2;
+}
+
+message QueryUtxosForIdentityRequest {
+    bytes identity_public_key = 1;
+    Network network = 2 [(validate.rules).enum = {not_in: [0]}];
+    bool exclude_claimed = 3;
+    PageRequest page = 4;
+    bool include_pending = 5;
+}
+
+message QueryUtxosForIdentityResponse {
     repeated AddressedUtxo utxos = 1;
     PageResponse page = 2;
 }
