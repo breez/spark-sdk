@@ -1484,6 +1484,34 @@ mod tests {
             self.newly_paid.lock().unwrap().remove(payment_hash);
             Ok(())
         }
+        async fn filter_known_payment_hashes(
+            &self,
+            _payment_hashes: &[String],
+        ) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn upsert_invoices_paid(
+            &self,
+            invoices: &[Invoice],
+        ) -> Result<Vec<String>, LnurlRepositoryError> {
+            let mut store = self.invoices.lock().unwrap();
+            let mut updated = Vec::new();
+            for invoice in invoices {
+                store.insert(invoice.payment_hash.clone(), invoice.clone());
+                updated.push(invoice.payment_hash.clone());
+            }
+            Ok(updated)
+        }
+        async fn insert_newly_paid_batch(
+            &self,
+            newly_paid: &[NewlyPaid],
+        ) -> Result<(), LnurlRepositoryError> {
+            let mut store = self.newly_paid.lock().unwrap();
+            for np in newly_paid {
+                store.insert(np.payment_hash.clone(), np.clone());
+            }
+            Ok(())
+        }
     }
 
     // -- Test helpers ----------------------------------------------------------
@@ -1519,8 +1547,8 @@ mod tests {
             "status": "TRANSFER_COMPLETED",
             "type": event_type,
             "timestamp": "2025-03-09T12:00:06Z",
-            "invoice_amount": {"value": 50000, "unit": "SATOSHI"},
-            "htlc_amount": {"value": 50000, "unit": "SATOSHI"},
+            "invoice_amount": {"value": 50_000, "unit": "SATOSHI"},
+            "htlc_amount": {"value": 50_000, "unit": "SATOSHI"},
         });
         if let Some(p) = preimage {
             payload["payment_preimage"] = serde_json::Value::String(p.to_string());
@@ -1857,7 +1885,7 @@ mod tests {
             "encoded_invoice": "lnbc50u1p...",
             "fee": {"value": 100, "unit": "SATOSHI"},
             "idempotency_key": "user-defined-key-123",
-            "invoice_amount": {"value": 50000, "unit": "SATOSHI"}
+            "invoice_amount": {"value": 50_000, "unit": "SATOSHI"}
         });
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
@@ -1885,7 +1913,7 @@ mod tests {
             "exit_speed": "NORMAL",
             "coop_exit_txid": "a1b2c3d4...",
             "expires_at": "2025-03-10T12:00:00Z",
-            "total_amount": {"value": 49300, "unit": "SATOSHI"}
+            "total_amount": {"value": 49_300, "unit": "SATOSHI"}
         });
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
@@ -1907,8 +1935,8 @@ mod tests {
             "status": "TRANSFER_COMPLETED",
             "type": "SPARK_STATIC_DEPOSIT_FINISHED",
             "timestamp": "2025-03-09T12:00:06Z",
-            "deposit_amount": {"value": 100000, "unit": "SATOSHI"},
-            "credit_amount": {"value": 99500, "unit": "SATOSHI"},
+            "deposit_amount": {"value": 100_000, "unit": "SATOSHI"},
+            "credit_amount": {"value": 99_500, "unit": "SATOSHI"},
             "max_fee": {"value": 1000, "unit": "SATOSHI"},
             "transaction_id": "d4e5f6a7b8c9...",
             "output_index": 0,
