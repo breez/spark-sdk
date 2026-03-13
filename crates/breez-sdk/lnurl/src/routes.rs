@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::marker::PhantomData;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
@@ -567,11 +566,7 @@ where
             return Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))));
         };
 
-        // In LNURL private mode, omit nostr fields entirely
-        // Otherwise, always return server's nostrPubkey for zap receipt signing
-        let (allows_nostr, nostr_pubkey) = if let Some(nostr_keys) = state.nostr_keys.as_ref()
-            && !user.lnurl_private_mode_enabled
-        {
+        let (allows_nostr, nostr_pubkey) = if let Some(nostr_keys) = state.nostr_keys.as_ref() {
             let xonly_pubkey = nostr_keys.public_key.xonly().map_err(|e| {
                 error!(
                     "invalid nostr pubkey in server keys, could not parse: {:?}",
@@ -745,58 +740,27 @@ where
             }
         }
 
-        // Store all invoices for LUD-21 verify support (unless user opted out)
-        let verify_url = if user.lnurl_private_mode_enabled {
-            None
-        } else {
-            // Store invoice in invoices table
-            if let Err(e) = create_invoice(
-                &state.db,
-                &payment_hash,
-                &user.pubkey,
-                &res.invoice,
-                invoice_expiry,
-            )
-            .await
-            {
-                error!("Failed to create invoice record: {}", e);
-                return Err(lnurl_error("internal server error"));
-            }
-
-            crate::background::create_rpc_client_and_subscribe(
-                state.db.clone(),
-                pubkey,
-                &state.connection_manager,
-                &state.coordinator,
-                state.signer.clone(),
-                state.session_manager.clone(),
-                state.service_provider.clone(),
-                Arc::clone(&state.subscribed_keys),
-                state.invoice_paid_trigger.clone(),
-            )
-            .await
-            .map_err(|e| {
-                error!("failed to subscribe to user for invoice monitoring: {}", e);
-                lnurl_error("internal server error")
-            })?;
-
-            // Build verify URL
-            Some(format!(
-                "{}://{}/verify/{}",
-                state.scheme, domain, payment_hash
-            ))
-        };
-
-        let mut response = json!({
-            "pr": res.invoice,
-            "routes": Vec::<String>::new(),
-        });
-
-        if let Some(verify) = verify_url {
-            response["verify"] = json!(verify);
+        // Store invoice for LUD-21 verify support (webhook provides payment updates)
+        if let Err(e) = create_invoice(
+            &state.db,
+            &payment_hash,
+            &user.pubkey,
+            &res.invoice,
+            invoice_expiry,
+        )
+        .await
+        {
+            error!("Failed to create invoice record: {}", e);
+            return Err(lnurl_error("internal server error"));
         }
 
-        Ok(Json(response))
+        let verify_url = format!("{}://{}/verify/{}", state.scheme, domain, payment_hash);
+
+        Ok(Json(json!({
+            "pr": res.invoice,
+            "routes": Vec::<String>::new(),
+            "verify": verify_url,
+        })))
     }
 
     /// LUD-21 verify endpoint
