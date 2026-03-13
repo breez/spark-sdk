@@ -16,7 +16,7 @@ use crate::{
     utils::token::get_tokens_metadata_cached_or_query,
 };
 
-use super::{BreezSdk, parse_input};
+use super::{BreezSdk, helpers::get_or_create_deposit_address, parse_input};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -298,12 +298,8 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let address = self
-            .spark_wallet
-            .generate_deposit_address()
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to generate deposit address: {e}")))?
-            .to_string();
+        let address =
+            get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?;
 
         let url = self
             .buy_bitcoin_provider
