@@ -55,9 +55,9 @@ node src/main.js [OPTIONS]
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
-| `--wallet-name` | `Default` | Requires `--passkey`. The wallet name to use |
-| `--list-wallet-names` | false | Requires `--passkey`. Select wallet name from Nostr |
-| `--store-wallet-name` | false | Requires `--passkey`. Publish wallet name to Nostr |
+| `--label` | `Default` | Requires `--passkey`. The label to use |
+| `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
+| `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 
 ### Examples
@@ -97,7 +97,7 @@ Each command supports `--help` for detailed usage, e.g., `receive --help`.
 
 Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a file-based secret (or hardware key) is used to deterministically derive wallet seeds via HMAC challenge-response.
 
-Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+Labels are stored on Nostr relays, allowing discovery during restore. If no `--label` is specified, the default label ("Default") is used.
 
 ### PRF Providers
 
@@ -106,17 +106,17 @@ Wallet names are stored on Nostr relays, allowing discovery during restore. If n
 Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
 
 ```bash
-# Use passkey with the default wallet name
+# Use passkey with the default label
 node src/main.js --passkey file
 
-# Use passkey with a specific wallet name
-node src/main.js --passkey file --wallet-name personal
+# Use passkey with a specific label
+node src/main.js --passkey file --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-node src/main.js --passkey file --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+node src/main.js --passkey file --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-node src/main.js --passkey file --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+node src/main.js --passkey file --label personal --store-label
 ```
 
 #### YubiKey Provider

@@ -101,45 +101,45 @@ def create_provider(provider_name: str, data_dir: Path, rpid=None):
 async def resolve_passkey_seed(
     provider,
     breez_api_key,
-    wallet_name,
-    list_wallet_names,
-    store_wallet_name,
+    label,
+    list_labels,
+    store_label,
 ) -> Seed:
-    """Resolve a Seed from a passkey PRF provider, with optional Nostr wallet name operations."""
+    """Resolve a Seed from a passkey PRF provider, with optional Nostr label operations."""
     relay_config = NostrRelayConfig(breez_api_key=breez_api_key)
     passkey = Passkey(provider, relay_config)
 
-    # --store-wallet-name: publish the wallet name to Nostr
-    if store_wallet_name and wallet_name:
-        print(f"Publishing wallet name '{wallet_name}' to Nostr...")
-        await passkey.store_wallet_name(wallet_name=wallet_name)
-        print(f"Wallet name '{wallet_name}' published successfully.")
+    # --store-label: publish the label to Nostr
+    if store_label and label:
+        print(f"Publishing label '{label}' to Nostr...")
+        await passkey.store_label(label=label)
+        print(f"Label '{label}' published successfully.")
 
-    # --list-wallet-names: query Nostr and prompt user to select
-    if list_wallet_names:
-        print("Querying Nostr for available wallet names...")
-        wallet_names = await passkey.list_wallet_names()
+    # --list-labels: query Nostr and prompt user to select
+    if list_labels:
+        print("Querying Nostr for available labels...")
+        labels = await passkey.list_labels()
 
-        if not wallet_names:
-            print("No wallet names found on Nostr for this identity")
+        if not labels:
+            print("No labels found on Nostr for this identity")
             raise SystemExit(1)
 
-        print("Available wallet names:")
-        for i, name in enumerate(wallet_names, 1):
+        print("Available labels:")
+        for i, name in enumerate(labels, 1):
             print(f"  {i}: {name}")
 
-        selection = input(f"Select wallet name (1-{len(wallet_names)}): ").strip()
+        selection = input(f"Select label (1-{len(labels)}): ").strip()
         try:
             idx = int(selection)
         except ValueError:
             print("Invalid selection")
             raise SystemExit(1)
 
-        if idx < 1 or idx > len(wallet_names):
+        if idx < 1 or idx > len(labels):
             print("Selection out of range")
             raise SystemExit(1)
 
-        wallet_name = wallet_names[idx - 1]
+        label = labels[idx - 1]
 
-    wallet = await passkey.get_wallet(wallet_name)
+    wallet = await passkey.get_wallet(label)
     return wallet.seed

@@ -50,9 +50,9 @@ make run-mainnet
     --stable-balance-token-identifier   Stable balance token identifier
     --stable-balance-threshold          Stable balance threshold in sats
     --passkey                           Use passkey with PRF provider (file, yubikey, or fido2)
-    --wallet-name                       Wallet name for seed derivation (requires --passkey)
-    --list-wallet-names                 List and select wallet names from Nostr (requires --passkey)
-    --store-wallet-name                 Publish wallet name to Nostr (requires --passkey and --wallet-name)
+    --label                             Label for seed derivation (requires --passkey)
+    --list-labels                       List and select labels from Nostr (requires --passkey)
+    --store-label                       Publish label to Nostr (requires --passkey and --label)
     --rpid                              Relying party ID for FIDO2 provider (requires --passkey)
 -h, --help                              Show usage
 ```
@@ -95,24 +95,24 @@ Once the CLI is running, type `help` to see all available commands:
 
 Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a file-based secret is used to deterministically derive wallet seeds via HMAC challenge-response.
 
-Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+Labels are stored on Nostr relays, allowing discovery during restore. If no `--label` is specified, the default label ("Default") is used.
 
 ### File Provider
 
 Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
 
 ```bash
-# Use passkey with the default wallet name
+# Use passkey with the default label
 dart run bin/breez_cli.dart --passkey file
 
-# Use passkey with a specific wallet name
-dart run bin/breez_cli.dart --passkey file --wallet-name personal
+# Use passkey with a specific label
+dart run bin/breez_cli.dart --passkey file --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-dart run bin/breez_cli.dart --passkey file --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+dart run bin/breez_cli.dart --passkey file --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-dart run bin/breez_cli.dart --passkey file --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+dart run bin/breez_cli.dart --passkey file --label personal --store-label
 ```
 
 > **Note:** The `yubikey` and `fido2` providers are not yet available in the Dart CLI. Only the `file` provider is currently supported.

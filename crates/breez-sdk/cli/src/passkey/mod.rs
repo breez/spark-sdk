@@ -33,12 +33,12 @@ pub enum PasskeyProvider {
 pub struct PasskeyConfig {
     /// The PRF provider to use.
     pub provider: PasskeyProvider,
-    /// Optional wallet name for seed derivation. If omitted, the core uses the default name.
-    pub wallet_name: Option<String>,
-    /// Whether to list and select from wallet names published to Nostr.
-    pub list_wallet_names: bool,
-    /// Whether to publish the wallet name to Nostr.
-    pub store_wallet_name: bool,
+    /// Optional label for seed derivation. If omitted, the core uses the default label.
+    pub label: Option<String>,
+    /// Whether to list and select from labels published to Nostr.
+    pub list_labels: bool,
+    /// Whether to publish the label to Nostr.
+    pub store_label: bool,
     /// Optional relying party ID for FIDO2 provider (default: keys.breez.technology).
     pub rpid: Option<String>,
 }
@@ -84,9 +84,9 @@ impl PasskeyProvider {
 pub async fn resolve_passkey_seed(
     provider: Arc<dyn PasskeyPrfProvider>,
     breez_api_key: Option<String>,
-    wallet_name: Option<String>,
-    list_wallet_names: bool,
-    store_wallet_name: bool,
+    label: Option<String>,
+    list_labels: bool,
+    store_label: bool,
 ) -> Result<Seed> {
     let relay_config = NostrRelayConfig {
         breez_api_key,
@@ -94,34 +94,34 @@ pub async fn resolve_passkey_seed(
     };
     let passkey = Passkey::new(provider, Some(relay_config));
 
-    // --store-wallet-name: publish the wallet name to Nostr and exit
-    if store_wallet_name && let Some(wallet_name) = &wallet_name {
-        println!("Publishing wallet name '{wallet_name}' to Nostr...");
+    // --store-label: publish the label to Nostr and exit
+    if store_label && let Some(label) = &label {
+        println!("Publishing label '{label}' to Nostr...");
         passkey
-            .store_wallet_name(wallet_name.clone())
+            .store_label(label.clone())
             .await
-            .map_err(|e| anyhow!("Failed to store wallet name: {e}"))?;
-        println!("Wallet name '{wallet_name}' published successfully.");
+            .map_err(|e| anyhow!("Failed to store label: {e}"))?;
+        println!("Label '{label}' published successfully.");
     }
 
-    // --list-wallet-names: query Nostr and prompt user to select
-    let wallet_name = if list_wallet_names {
-        println!("Querying Nostr for available wallet names...");
-        let wallet_names = passkey
-            .list_wallet_names()
+    // --list-labels: query Nostr and prompt user to select
+    let label = if list_labels {
+        println!("Querying Nostr for available labels...");
+        let labels = passkey
+            .list_labels()
             .await
-            .map_err(|e| anyhow!("Failed to list wallet names: {e}"))?;
+            .map_err(|e| anyhow!("Failed to list labels: {e}"))?;
 
-        if wallet_names.is_empty() {
-            return Err(anyhow!("No wallet names found on Nostr for this identity"));
+        if labels.is_empty() {
+            return Err(anyhow!("No labels found on Nostr for this identity"));
         }
 
-        println!("Available wallet names:");
-        for (i, name) in wallet_names.iter().enumerate() {
+        println!("Available labels:");
+        for (i, name) in labels.iter().enumerate() {
             println!("  {}: {}", i + 1, name);
         }
 
-        print!("Select wallet name (1-{}): ", wallet_names.len());
+        print!("Select label (1-{}): ", labels.len());
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
@@ -130,17 +130,17 @@ pub async fn resolve_passkey_seed(
             .parse()
             .map_err(|_| anyhow!("Invalid selection"))?;
 
-        if idx < 1 || idx > wallet_names.len() {
+        if idx < 1 || idx > labels.len() {
             return Err(anyhow!("Selection out of range"));
         }
 
-        Some(wallet_names[idx - 1].clone())
+        Some(labels[idx - 1].clone())
     } else {
-        wallet_name
+        label
     };
 
     let wallet = passkey
-        .get_wallet(wallet_name)
+        .get_wallet(label)
         .await
         .map_err(|e| anyhow!("Failed to derive wallet: {e}"))?;
     Ok(wallet.seed)

@@ -1194,5 +1194,5 @@ pub struct _NostrRelayConfig {
 #[frb(mirror(Wallet))]
 pub struct _Wallet {
     pub seed: Seed,
-    pub name: String,
+    pub label: String,
 }

@@ -34,9 +34,9 @@ function parseCliArgs() {
     stableBalanceTokenIdentifier: undefined,
     stableBalanceThreshold: undefined,
     passkey: undefined,
-    walletName: undefined,
-    listWalletNames: false,
-    storeWalletName: false,
+    label: undefined,
+    listLabels: false,
+    storeLabel: false,
     rpid: undefined
   }
 
@@ -64,14 +64,14 @@ function parseCliArgs() {
       case '--passkey':
         opts.passkey = args[++i]
         break
-      case '--wallet-name':
-        opts.walletName = args[++i]
+      case '--label':
+        opts.label = args[++i]
         break
-      case '--list-wallet-names':
-        opts.listWalletNames = true
+      case '--list-labels':
+        opts.listLabels = true
         break
-      case '--store-wallet-name':
-        opts.storeWalletName = true
+      case '--store-label':
+        opts.storeLabel = true
         break
       case '--rpid':
         opts.rpid = args[++i]
@@ -88,9 +88,9 @@ function parseCliArgs() {
         console.log('  --stable-balance-token-identifier <string>   Stable balance token identifier')
         console.log('  --stable-balance-threshold <number>          Stable balance threshold in sats')
         console.log('  --passkey <provider>                         Use passkey with PRF provider (file, yubikey, or fido2)')
-        console.log('  --wallet-name <name>                         Wallet name for seed derivation (requires --passkey)')
-        console.log('  --list-wallet-names                          List and select from wallet names on Nostr (requires --passkey)')
-        console.log('  --store-wallet-name                          Publish the wallet name to Nostr (requires --passkey and --wallet-name)')
+        console.log('  --label <name>                               Label for seed derivation (requires --passkey)')
+        console.log('  --list-labels                                List and select from labels on Nostr (requires --passkey)')
+        console.log('  --store-label                                Publish the label to Nostr (requires --passkey and --label)')
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
         console.log('  -h, --help                                   Show this help message')
         process.exit(0)
@@ -103,16 +103,16 @@ function parseCliArgs() {
 
   // Validate passkey-related flag constraints
   if (!opts.passkey) {
-    if (opts.walletName) {
-      console.error('--wallet-name requires --passkey')
+    if (opts.label) {
+      console.error('--label requires --passkey')
       process.exit(1)
     }
-    if (opts.listWalletNames) {
-      console.error('--list-wallet-names requires --passkey')
+    if (opts.listLabels) {
+      console.error('--list-labels requires --passkey')
       process.exit(1)
     }
-    if (opts.storeWalletName) {
-      console.error('--store-wallet-name requires --passkey')
+    if (opts.storeLabel) {
+      console.error('--store-label requires --passkey')
       process.exit(1)
     }
     if (opts.rpid) {
@@ -121,13 +121,13 @@ function parseCliArgs() {
     }
   }
 
-  if (opts.storeWalletName && !opts.walletName) {
-    console.error('--store-wallet-name requires --wallet-name')
+  if (opts.storeLabel && !opts.label) {
+    console.error('--store-label requires --label')
     process.exit(1)
   }
 
-  if (opts.listWalletNames && (opts.walletName || opts.storeWalletName)) {
-    console.error('--list-wallet-names conflicts with --wallet-name and --store-wallet-name')
+  if (opts.listLabels && (opts.label || opts.storeLabel)) {
+    console.error('--list-labels conflicts with --label and --store-label')
     process.exit(1)
   }
 
@@ -229,9 +229,9 @@ async function main() {
     seed = await resolvePasskeySeed(
       prfProvider,
       breezApiKey,
-      opts.walletName,
-      opts.listWalletNames,
-      opts.storeWalletName
+      opts.label,
+      opts.listLabels,
+      opts.storeLabel
     )
   } else {
     const mnemonic = persistence.getOrCreateMnemonic()

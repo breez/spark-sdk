@@ -24,12 +24,12 @@ public class PasskeyConfig
 {
     /// <summary>The PRF provider to use.</summary>
     public PasskeyProvider Provider { get; init; }
-    /// <summary>Optional wallet name for seed derivation. If omitted, the core uses the default name.</summary>
-    public string? WalletName { get; init; }
-    /// <summary>Whether to list and select from wallet names published to Nostr.</summary>
-    public bool ListWalletNames { get; init; }
-    /// <summary>Whether to publish the wallet name to Nostr.</summary>
-    public bool StoreWalletName { get; init; }
+    /// <summary>Optional label for seed derivation. If omitted, the core uses the default name.</summary>
+    public string? Label { get; init; }
+    /// <summary>Whether to list and select from labels published to Nostr.</summary>
+    public bool ListLabels { get; init; }
+    /// <summary>Whether to publish the label to Nostr.</summary>
+    public bool StoreLabel { get; init; }
     /// <summary>Optional relying party ID for FIDO2 provider (default: keys.breez.technology).</summary>
     public string? RpId { get; init; }
 }
@@ -181,43 +181,43 @@ public static class PasskeyResolver
     public static async Task<Seed> ResolvePasskeySeed(
         PasskeyPrfProvider provider,
         string? breezApiKey,
-        string? walletName,
-        bool listWalletNames,
-        bool storeWalletName)
+        string? label,
+        bool listLabels,
+        bool storeLabel)
     {
         var relayConfig = new NostrRelayConfig(
             breezApiKey: breezApiKey
         );
         var passkey = new Passkey(provider, relayConfig);
 
-        // --store-wallet-name: publish to Nostr
-        if (storeWalletName && walletName != null)
+        // --store-label: publish to Nostr
+        if (storeLabel && label != null)
         {
-            Console.WriteLine($"Publishing wallet name '{walletName}' to Nostr...");
-            await passkey.StoreWalletName(walletName);
-            Console.WriteLine($"Wallet name '{walletName}' published successfully.");
+            Console.WriteLine($"Publishing label '{label}' to Nostr...");
+            await passkey.StoreLabel(label);
+            Console.WriteLine($"Label '{label}' published successfully.");
         }
 
-        // --list-wallet-names: query Nostr and prompt user to select
-        string? resolvedName = walletName;
-        if (listWalletNames)
+        // --list-labels: query Nostr and prompt user to select
+        string? resolvedName = label;
+        if (listLabels)
         {
-            Console.WriteLine("Querying Nostr for available wallet names...");
-            var walletNames = await passkey.ListWalletNames();
+            Console.WriteLine("Querying Nostr for available labels...");
+            var labels = await passkey.ListLabels();
 
-            if (walletNames.Count == 0)
+            if (labels.Count == 0)
             {
                 throw new InvalidOperationException(
-                    "No wallet names found on Nostr for this identity");
+                    "No labels found on Nostr for this identity");
             }
 
-            Console.WriteLine("Available wallet names:");
-            for (int i = 0; i < walletNames.Count; i++)
+            Console.WriteLine("Available labels:");
+            for (int i = 0; i < labels.Count; i++)
             {
-                Console.WriteLine($"  {i + 1}: {walletNames[i]}");
+                Console.WriteLine($"  {i + 1}: {labels[i]}");
             }
 
-            Console.Write($"Select wallet name (1-{walletNames.Count}): ");
+            Console.Write($"Select label (1-{labels.Count}): ");
             Console.Out.Flush();
             var input = Console.ReadLine();
             if (!int.TryParse(input?.Trim(), out int idx))
@@ -225,15 +225,15 @@ public static class PasskeyResolver
                 throw new InvalidOperationException("Invalid selection");
             }
 
-            if (idx < 1 || idx > walletNames.Count)
+            if (idx < 1 || idx > labels.Count)
             {
                 throw new InvalidOperationException("Selection out of range");
             }
 
-            resolvedName = walletNames[idx - 1];
+            resolvedName = labels[idx - 1];
         }
 
-        var wallet = await passkey.GetWallet(walletName: resolvedName);
+        var wallet = await passkey.GetWallet(label: resolvedName);
         return wallet.seed;
     }
 }

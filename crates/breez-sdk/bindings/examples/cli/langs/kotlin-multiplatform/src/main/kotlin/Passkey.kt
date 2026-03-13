@@ -30,12 +30,12 @@ enum class PasskeyProvider {
 data class PasskeyConfig(
     /** The PRF provider to use. */
     val provider: PasskeyProvider,
-    /** Optional wallet name for seed derivation. If omitted, the core uses the default name. */
-    val walletName: String?,
-    /** Whether to list and select from wallet names published to Nostr. */
-    val listWalletNames: Boolean,
-    /** Whether to publish the wallet name to Nostr. */
-    val storeWalletName: Boolean,
+    /** Optional label for seed derivation. If omitted, the core uses the default name. */
+    val label: String?,
+    /** Whether to list and select from labels published to Nostr. */
+    val listLabels: Boolean,
+    /** Whether to publish the label to Nostr. */
+    val storeLabel: Boolean,
     /** Optional relying party ID for FIDO2 provider (default: keys.breez.technology). */
     val rpId: String?,
 )
@@ -137,46 +137,46 @@ fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? =
 suspend fun resolvePasskeySeed(
     provider: PasskeyPrfProvider,
     breezApiKey: String?,
-    walletName: String?,
-    listWalletNames: Boolean,
-    storeWalletName: Boolean,
+    label: String?,
+    listLabels: Boolean,
+    storeLabel: Boolean,
 ): Seed {
     val relayConfig = NostrRelayConfig(breezApiKey = breezApiKey)
     val passkey = Passkey(provider, relayConfig)
 
-    // --store-wallet-name: publish the wallet name to Nostr
-    if (storeWalletName && walletName != null) {
-        println("Publishing wallet name '$walletName' to Nostr...")
-        passkey.storeWalletName(walletName)
-        println("Wallet name '$walletName' published successfully.")
+    // --store-label: publish the label to Nostr
+    if (storeLabel && label != null) {
+        println("Publishing label '$label' to Nostr...")
+        passkey.storeLabel(label)
+        println("Label '$label' published successfully.")
     }
 
-    // --list-wallet-names: query Nostr and prompt user to select
-    val resolvedName: String? = if (listWalletNames) {
-        println("Querying Nostr for available wallet names...")
-        val walletNames = passkey.listWalletNames()
+    // --list-labels: query Nostr and prompt user to select
+    val resolvedName: String? = if (listLabels) {
+        println("Querying Nostr for available labels...")
+        val labels = passkey.listLabels()
 
-        if (walletNames.isEmpty()) {
-            throw IllegalStateException("No wallet names found on Nostr for this identity")
+        if (labels.isEmpty()) {
+            throw IllegalStateException("No labels found on Nostr for this identity")
         }
 
-        println("Available wallet names:")
-        walletNames.forEachIndexed { i, name ->
+        println("Available labels:")
+        labels.forEachIndexed { i, name ->
             println("  ${i + 1}: $name")
         }
 
-        print("Select wallet name (1-${walletNames.size}): ")
+        print("Select label (1-${labels.size}): ")
         System.out.flush()
         val input = readlnOrNull()?.trim() ?: throw IllegalStateException("No input")
         val idx = input.toIntOrNull() ?: throw IllegalArgumentException("Invalid selection")
 
-        if (idx < 1 || idx > walletNames.size) {
+        if (idx < 1 || idx > labels.size) {
             throw IllegalArgumentException("Selection out of range")
         }
 
-        walletNames[idx - 1]
+        labels[idx - 1]
     } else {
-        walletName
+        label
     }
 
     val wallet = passkey.getWallet(resolvedName)

@@ -59,9 +59,9 @@ make clean            Remove build artifacts
 | `--stable-balance-token-identifier` | | Stable balance token identifier |
 | `--stable-balance-threshold` | | Stable balance threshold in sats |
 | `--passkey` | | Use passkey with PRF provider (`file`, `yubikey`, or `fido2`) |
-| `--wallet-name` | | Wallet name for seed derivation (requires `--passkey`) |
-| `--list-wallet-names` | | List and select from wallet names on Nostr (requires `--passkey`) |
-| `--store-wallet-name` | | Publish the wallet name to Nostr (requires `--passkey` + `--wallet-name`) |
+| `--label` | | Label for seed derivation (requires `--passkey`) |
+| `--list-labels` | | List and select from labels on Nostr (requires `--passkey`) |
+| `--store-label` | | Publish the label to Nostr (requires `--passkey` + `--label`) |
 | `--rpid` | | Relying party ID for FIDO2 provider (requires `--passkey`) |
 
 ## Environment Variables
@@ -84,14 +84,14 @@ The CLI supports passkey-based seed derivation using the `--passkey` flag. Three
 # Use file-based passkey (generates/reuses secret in data dir)
 ./gradlew run --console=plain --args="--passkey file"
 
-# Use passkey with a custom wallet name
-./gradlew run --console=plain --args="--passkey file --wallet-name personal"
+# Use passkey with a custom label
+./gradlew run --console=plain --args="--passkey file --label personal"
 
-# List wallet names from Nostr and select one
-./gradlew run --console=plain --args="--passkey file --list-wallet-names"
+# List labels from Nostr and select one
+./gradlew run --console=plain --args="--passkey file --list-labels"
 
-# Publish a wallet name to Nostr
-./gradlew run --console=plain --args="--passkey file --wallet-name personal --store-wallet-name"
+# Publish a label to Nostr
+./gradlew run --console=plain --args="--passkey file --label personal --store-label"
 ```
 
 ## Features

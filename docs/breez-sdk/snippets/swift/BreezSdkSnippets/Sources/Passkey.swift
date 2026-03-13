@@ -23,7 +23,7 @@ func connectWithPasskey() async throws -> BreezSdk {
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: nil)
 
     // Derive the wallet from the passkey (pass nil for the default wallet)
-    let wallet = try await passkey.getWallet(walletName: "personal")
+    let wallet = try await passkey.getWallet(label: "personal")
 
     let config = defaultConfig(network: .mainnet)
     let sdk = try await connect(
@@ -36,29 +36,29 @@ func connectWithPasskey() async throws -> BreezSdk {
     return sdk
 }
 
-func listWalletNames() async throws -> [String] {
-    // ANCHOR: list-wallet-names
+func listLabels() async throws -> [String] {
+    // ANCHOR: list-labels
     let prfProvider = ExamplePasskeyPrfProvider()
     let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
 
-    // Query Nostr for wallet names associated with this passkey
-    let walletNames = try await passkey.listWalletNames()
+    // Query Nostr for labels associated with this passkey
+    let labels = try await passkey.listLabels()
 
-    for walletName in walletNames {
-        print("Found wallet: \(walletName)")
+    for label in labels {
+        print("Found label: \(label)")
     }
-    // ANCHOR_END: list-wallet-names
-    return walletNames
+    // ANCHOR_END: list-labels
+    return labels
 }
 
-func storeWalletName() async throws {
-    // ANCHOR: store-wallet-name
+func storeLabel() async throws {
+    // ANCHOR: store-label
     let prfProvider = ExamplePasskeyPrfProvider()
     let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
 
-    // Publish the wallet name to Nostr for later discovery
-    try await passkey.storeWalletName(walletName: "personal")
-    // ANCHOR_END: store-wallet-name
+    // Publish the label to Nostr for later discovery
+    try await passkey.storeLabel(label: "personal")
+    // ANCHOR_END: store-label
 }
