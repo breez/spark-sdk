@@ -37,7 +37,7 @@ use crate::{
     user::{USERNAME_VALIDATION_REGEX, User},
 };
 
-const ACCEPTABLE_TIME_DIFF_SECS: u64 = 60;
+const ACCEPTABLE_TIME_DIFF_SECS: u64 = 600;
 const DEFAULT_METADATA_OFFSET: u32 = 0;
 const DEFAULT_METADATA_LIMIT: u32 = 100;
 
@@ -1037,8 +1037,13 @@ async fn validate<DB>(
     // compatibility, but log a warning if the timestamp is missing. Remove the old way after a
     // deprecation period.
     if let Some(timestamp) = timestamp {
-        if timestamp.abs_diff(now_u64()) > ACCEPTABLE_TIME_DIFF_SECS {
-            trace!("invalid timestamp, too far off: {}", timestamp);
+        let now = now_u64();
+        let diff = timestamp.abs_diff(now);
+        if diff > ACCEPTABLE_TIME_DIFF_SECS {
+            trace!(
+                "invalid timestamp, too far off: {}, now: {}, diff: {}",
+                timestamp, now, diff
+            );
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(Value::String("invalid timestamp".into())),
