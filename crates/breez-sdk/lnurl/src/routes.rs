@@ -11,10 +11,10 @@ use bitcoin::{
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, InvoicePaidRequest, ListMetadataRequest, ListMetadataResponse,
-    PublishZapReceiptRequest, PublishZapReceiptResponse, RecoverLnurlPayRequest,
-    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest, sanitize_username,
+    CheckUsernameAvailableResponse, InvoicePaidRequest, InvoicesPaidRequest, ListMetadataRequest,
+    ListMetadataResponse, PublishZapReceiptRequest, PublishZapReceiptResponse,
+    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
+    RegisterLnurlPayResponse, UnregisterLnurlPayRequest, sanitize_username,
 };
 use nostr::{Alphabet, Event, EventBuilder, JsonUtil, Kind, TagStandard, key::Keys};
 use regex::Regex;
@@ -26,7 +26,9 @@ use std::sync::Arc;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
-    invoice_paid::{HandleInvoicePaidError, create_invoice, handle_invoice_paid},
+    invoice_paid::{
+        HandleInvoicePaidError, create_invoice, handle_invoice_paid, handle_invoices_paid,
+    },
     repository::LnurlSenderComment,
     time::{now_millis, now_u64},
     zap::Zap,
@@ -827,8 +829,9 @@ where
         }))
     }
 
-    /// Invoice-paid notification endpoint.
-    /// Client notifies server that an invoice was paid with the preimage.
+    /// Invoice-paid notification endpoint (single invoice).
+    /// Deprecated: use `invoices_paid` instead, which supports batch notifications.
+    /// TODO: Remove this endpoint after all clients have migrated to `invoices_paid`.
     pub async fn invoice_paid(
         Path(pubkey): Path<String>,
         Extension(state): Extension<State<DB>>,
@@ -900,6 +903,69 @@ where
         debug!(
             "Invoice paid notification received for payment hash {}",
             payment_hash_hex
+        );
+        Ok(())
+    }
+
+    /// Batch invoices-paid notification endpoint.
+    /// Client notifies server that multiple invoices were paid with their preimages.
+    pub async fn invoices_paid(
+        Path(pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<InvoicesPaidRequest>,
+    ) -> Result<(), (StatusCode, Json<Value>)> {
+        const MAX_PREIMAGES: usize = 100;
+
+        if payload.invoices.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invoices must not be empty".into())),
+            ));
+        }
+
+        if payload.invoices.len() > MAX_PREIMAGES {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String(format!(
+                    "too many invoices, max is {MAX_PREIMAGES}"
+                ))),
+            ));
+        }
+
+        let pubkey = validate(
+            &pubkey,
+            &payload.signature,
+            &pubkey,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
+
+        handle_invoices_paid(
+            &state.db,
+            &payload.invoices,
+            &pubkey.to_string(),
+            &state.invoice_paid_trigger,
+        )
+        .await
+        .map_err(|e| match &e {
+            HandleInvoicePaidError::InvalidInvoice(msg)
+            | HandleInvoicePaidError::InvalidPreimage(msg) => {
+                trace!("Invalid input in invoices-paid: {}", msg);
+                (StatusCode::BAD_REQUEST, Json(Value::String(msg.clone())))
+            }
+            HandleInvoicePaidError::Repository(_) => {
+                error!("Failed to handle invoices paid: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            }
+        })?;
+
+        debug!(
+            "Invoices paid notification received for {} invoices",
+            payload.invoices.len()
         );
         Ok(())
     }

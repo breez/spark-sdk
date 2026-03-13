@@ -274,6 +274,38 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn filter_known_payment_hashes(
+        &self,
+        payment_hashes: &[String],
+    ) -> Result<Vec<String>, LnurlRepositoryError> {
+        if payment_hashes.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders: Vec<String> = (1..=payment_hashes.len())
+            .map(|i| format!("${i}"))
+            .collect();
+        let placeholders = placeholders.join(",");
+
+        let query = format!(
+            "SELECT payment_hash FROM invoices WHERE payment_hash IN ({placeholders})
+             UNION
+             SELECT payment_hash FROM zaps WHERE payment_hash IN ({placeholders})
+             UNION
+             SELECT payment_hash FROM sender_comments WHERE payment_hash IN ({placeholders})"
+        );
+
+        let mut q = sqlx::query_scalar::<_, String>(&query);
+        // Bind three times (once per subquery in the UNION)
+        for _ in 0..3 {
+            for hash in payment_hashes {
+                q = q.bind(hash);
+            }
+        }
+        let known = q.fetch_all(&self.pool).await?;
+        Ok(known)
+    }
+
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at)
@@ -295,6 +327,48 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn upsert_invoices_paid(
+        &self,
+        invoices: &[Invoice],
+    ) -> Result<Vec<String>, LnurlRepositoryError> {
+        if invoices.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        let mut affected = Vec::new();
+        for invoice in invoices {
+            let row: Option<(String,)> = sqlx::query_as(
+                "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT(payment_hash) DO UPDATE SET
+                    preimage = excluded.preimage,
+                    updated_at = excluded.updated_at
+                WHERE invoices.user_pubkey = excluded.user_pubkey AND invoices.preimage IS NULL
+                RETURNING payment_hash",
+            )
+            .bind(&invoice.payment_hash)
+            .bind(&invoice.user_pubkey)
+            .bind(&invoice.invoice)
+            .bind(&invoice.preimage)
+            .bind(invoice.invoice_expiry)
+            .bind(invoice.created_at)
+            .bind(invoice.updated_at)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((payment_hash,)) = row {
+                affected.push(payment_hash);
+            }
+        }
+        tx.commit()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        Ok(affected)
     }
 
     async fn get_invoice_by_payment_hash(
@@ -372,6 +446,37 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(newly_paid.next_retry_at)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn insert_newly_paid_batch(
+        &self,
+        newly_paid: &[NewlyPaid],
+    ) -> Result<(), LnurlRepositoryError> {
+        if newly_paid.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        for item in newly_paid {
+            sqlx::query(
+                "INSERT INTO newly_paid (payment_hash, created_at, retry_count, next_retry_at)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT(payment_hash) DO NOTHING",
+            )
+            .bind(&item.payment_hash)
+            .bind(item.created_at)
+            .bind(item.retry_count)
+            .bind(item.next_retry_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
         Ok(())
     }
 

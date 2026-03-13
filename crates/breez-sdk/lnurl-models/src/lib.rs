@@ -87,6 +87,19 @@ pub struct InvoicePaidRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct InvoicesPaidRequest {
+    pub signature: String,
+    pub timestamp: Option<u64>,
+    pub invoices: Vec<PaidInvoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaidInvoice {
+    pub preimage: String,
+    pub invoice: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PublishZapReceiptResponse {
     pub published: bool,
     pub zap_receipt: String,
