@@ -1839,4 +1839,85 @@ mod tests {
         };
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn webhook_lightning_send_finished_is_ignored() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = serde_json::json!({
+            "id": "018677b5-e419-99d1-0000-a7030393c9af",
+            "created_at": "2025-03-09T12:00:00Z",
+            "updated_at": "2025-03-09T12:00:05Z",
+            "network": "MAINNET",
+            "request_status": "COMPLETED",
+            "status": "PREIMAGE_PROVIDED",
+            "type": "SPARK_LIGHTNING_SEND_FINISHED",
+            "timestamp": "2025-03-09T12:00:06Z",
+            "encoded_invoice": "lnbc50u1p...",
+            "fee": {"value": 100, "unit": "SATOSHI"},
+            "idempotency_key": "user-defined-key-123",
+            "invoice_amount": {"value": 50000, "unit": "SATOSHI"}
+        });
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn webhook_coop_exit_finished_is_ignored() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = serde_json::json!({
+            "id": "018677b5-e419-99d1-0000-a7030393c9af",
+            "created_at": "2025-03-09T12:00:00Z",
+            "updated_at": "2025-03-09T12:00:05Z",
+            "network": "MAINNET",
+            "request_status": "COMPLETED",
+            "status": "SUCCEEDED",
+            "type": "SPARK_COOP_EXIT_FINISHED",
+            "timestamp": "2025-03-09T12:00:06Z",
+            "fee": {"value": 500, "unit": "SATOSHI"},
+            "withdrawal_address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "l1_broadcast_fee": {"value": 200, "unit": "SATOSHI"},
+            "exit_speed": "NORMAL",
+            "coop_exit_txid": "a1b2c3d4...",
+            "expires_at": "2025-03-10T12:00:00Z",
+            "total_amount": {"value": 49300, "unit": "SATOSHI"}
+        });
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn webhook_static_deposit_finished_is_ignored() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = serde_json::json!({
+            "id": "018677b5-e419-99d1-0000-a7030393c9af",
+            "created_at": "2025-03-09T12:00:00Z",
+            "updated_at": "2025-03-09T12:00:05Z",
+            "network": "MAINNET",
+            "request_status": "COMPLETED",
+            "status": "TRANSFER_COMPLETED",
+            "type": "SPARK_STATIC_DEPOSIT_FINISHED",
+            "timestamp": "2025-03-09T12:00:06Z",
+            "deposit_amount": {"value": 100000, "unit": "SATOSHI"},
+            "credit_amount": {"value": 99500, "unit": "SATOSHI"},
+            "max_fee": {"value": 1000, "unit": "SATOSHI"},
+            "transaction_id": "d4e5f6a7b8c9...",
+            "output_index": 0,
+            "bitcoin_network": "MAINNET",
+            "static_deposit_address": "bc1q..."
+        });
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+    }
 }
