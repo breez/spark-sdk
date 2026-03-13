@@ -9,6 +9,24 @@ use tracing::{info, warn};
 // Local helpers
 // ---------------------
 
+/// Compute the maximum leaf count allowed for a given quoted leaf count.
+/// Mirrors the tolerance formula in `spark-wallet/src/wallet.rs`.
+fn max_leaf_count_for_quote(quoted: u32) -> u32 {
+    if quoted == 0 {
+        return 0;
+    }
+    let q = f64::from(quoted);
+    (q * (1.2 + 1.0 / q.powf(0.6))).ceil() as u32
+}
+
+/// Extract `quoted_leaf_count` from a Bitcoin address prepare response.
+fn extract_quoted_leaf_count(prepare: &PrepareSendPaymentResponse) -> u32 {
+    match &prepare.payment_method {
+        SendPaymentMethod::BitcoinAddress { fee_quote, .. } => fee_quote.quoted_leaf_count,
+        other => panic!("Expected BitcoinAddress, got {other:?}"),
+    }
+}
+
 async fn wait_for_unclaimed_event(
     event_rx: &mut tokio::sync::mpsc::Receiver<SdkEvent>,
     timeout: u64,
@@ -514,6 +532,147 @@ async fn test_deposit_low_amount_refund_fee_rate(
     info!(
         "Low amount refund succeeded with fee rate, tx_id: {}",
         refund.tx_id
+    );
+
+    Ok(())
+}
+
+/// Verify that on-chain withdrawal succeeds even when leaves have fragmented
+/// beyond the original quote's tolerance, thanks to the consolidation swap.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_onchain_withdraw_with_leaf_count_tolerance(
+    #[future] alice_sdk_manual_opt: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let mut alice = alice_sdk_manual_opt.await?;
+    let bob = bob_sdk.await?;
+
+    // Fund Alice with enough for the withdrawal + fees
+    ensure_funded(&mut alice, 50_000).await?;
+
+    // Get Bob's static deposit address as the withdrawal target
+    let bob_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress,
+        })
+        .await?
+        .payment_request;
+    info!("Bob deposit address: {}", bob_address);
+
+    // Prepare 1: quote obtained with few leaves (pre-optimization)
+    let amount = 30_000u64;
+    let prepare_1 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_address.clone(),
+            amount: Some(amount as u128),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let quoted_leaf_count_1 = extract_quoted_leaf_count(&prepare_1);
+    info!(
+        "Prepare 1 quoted_leaf_count: {}, max tolerance: {}",
+        quoted_leaf_count_1,
+        max_leaf_count_for_quote(quoted_leaf_count_1)
+    );
+
+    // Trigger manual optimization (multiplicity=5 will fragment the single leaf)
+    alice.sdk.start_leaf_optimization();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timeout waiting for optimization to complete");
+        }
+        match tokio::time::timeout(remaining, alice.events.recv()).await {
+            Ok(Some(SdkEvent::Optimization {
+                optimization_event: OptimizationEvent::Completed,
+            })) => {
+                info!("Optimization completed");
+                break;
+            }
+            Ok(Some(SdkEvent::Optimization {
+                optimization_event: OptimizationEvent::Skipped,
+            })) => {
+                anyhow::bail!("Optimization was skipped — leaves already optimal (unexpected)");
+            }
+            Ok(Some(SdkEvent::Optimization {
+                optimization_event: OptimizationEvent::Failed { error },
+            })) => {
+                anyhow::bail!("Optimization failed: {}", error);
+            }
+            Ok(Some(SdkEvent::Optimization { optimization_event })) => {
+                info!("Optimization event: {:?}", optimization_event);
+                continue;
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => anyhow::bail!("Event channel closed"),
+            Err(_) => anyhow::bail!("Timeout waiting for optimization to complete"),
+        }
+    }
+
+    // Prepare 2: quote obtained with many leaves (post-optimization)
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let prepare_2 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_address.clone(),
+            amount: Some(amount as u128),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    let quoted_leaf_count_2 = extract_quoted_leaf_count(&prepare_2);
+    let max_allowed = max_leaf_count_for_quote(quoted_leaf_count_1);
+    info!(
+        "Prepare 2 quoted_leaf_count: {} (max allowed by prepare 1 tolerance: {})",
+        quoted_leaf_count_2, max_allowed
+    );
+
+    // The fragmented leaf count must exceed the first quote's tolerance,
+    // proving the consolidation path will be exercised at send time.
+    assert!(
+        quoted_leaf_count_2 > max_allowed,
+        "Post-optimization leaf count ({}) should exceed the tolerance ({}) of the original quote",
+        quoted_leaf_count_2,
+        max_allowed
+    );
+
+    // Send using prepare_1 — the SDK should perform a consolidation swap to
+    // bring the leaf count back within tolerance before submitting the withdrawal.
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare_1,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    info!(
+        "Withdrawal succeeded with status: {:?}",
+        send_resp.payment.status
+    );
+    assert!(matches!(send_resp.payment.method, PaymentMethod::Withdraw));
+
+    // Verify Alice's balance decreased
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_final = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice final balance: {} sats", alice_final);
+    assert!(
+        alice_final < 50_000 - amount,
+        "Alice should have less than 20k sats after sending 30k + fees (got {})",
+        alice_final
     );
 
     Ok(())

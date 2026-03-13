@@ -3,7 +3,7 @@ pub mod docker;
 pub mod lnurl;
 
 use anyhow::Result;
-use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, default_config};
+use breez_sdk_spark::{MaxFee, Network, OptimizationConfig, StableBalanceConfig, default_config};
 use rand::RngCore;
 use rstest::fixture;
 use tempdir::TempDir;
@@ -65,7 +65,23 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 
-/// Fixture: Alice's SDK with external signer  
+/// Fixture: Alice's SDK with manual optimization and high multiplicity
+#[fixture]
+pub async fn alice_sdk_manual_opt() -> Result<SdkInstance> {
+    let dir = TempDir::new("breez-sdk-alice-manual-opt")?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.optimization_config = OptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
+}
+
+/// Fixture: Alice's SDK with external signer
 #[fixture]
 pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
     let alice_dir = TempDir::new("breez-sdk-alice-ext-signer")?;

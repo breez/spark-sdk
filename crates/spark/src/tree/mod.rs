@@ -332,12 +332,20 @@ pub struct SelectLeavesOptions {
     ///
     /// Default: 60 seconds
     pub max_wait_for_pending: Duration,
+
+    /// If set, enforces a maximum number of amount leaves (excluding fee leaves)
+    /// that can be selected without triggering a consolidation swap.
+    ///
+    /// When the trial split produces more amount leaves than this limit,
+    /// `select_leaves` will force a swap to consolidate.
+    pub max_amount_leaf_count: Option<usize>,
 }
 
 impl Default for SelectLeavesOptions {
     fn default() -> Self {
         Self {
             max_wait_for_pending: DEFAULT_MAX_WAIT_FOR_PENDING,
+            max_amount_leaf_count: None,
         }
     }
 }
@@ -347,6 +355,7 @@ impl SelectLeavesOptions {
     pub fn no_wait() -> Self {
         Self {
             max_wait_for_pending: Duration::ZERO,
+            max_amount_leaf_count: None,
         }
     }
 }

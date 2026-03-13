@@ -12,8 +12,8 @@ use tracing::{debug, warn};
 use web_time::UNIX_EPOCH;
 
 use crate::{
-    Fee, Network, OnchainConfirmationSpeed, OptimizationProgress, Payment, PaymentDetails,
-    PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
+    Fee, Network, OnchainConfirmationSpeed, OptimizationEvent, OptimizationProgress, Payment,
+    PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
     SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
     TokenBalance, TokenMetadata,
 };
@@ -415,6 +415,7 @@ impl From<CoopExitFeeQuote> for SendOnchainFeeQuote {
             speed_fast: value.speed_fast.into(),
             speed_medium: value.speed_medium.into(),
             speed_slow: value.speed_slow.into(),
+            quoted_leaf_count: value.quoted_leaf_count,
         }
     }
 }
@@ -427,6 +428,7 @@ impl From<SendOnchainFeeQuote> for CoopExitFeeQuote {
             speed_fast: value.speed_fast.into(),
             speed_medium: value.speed_medium.into(),
             speed_slow: value.speed_slow.into(),
+            quoted_leaf_count: value.quoted_leaf_count,
         }
     }
 }
@@ -511,6 +513,27 @@ impl From<PreimageRequestStatus> for SparkHtlcStatus {
             PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
             PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
             PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
+        }
+    }
+}
+
+impl From<spark_wallet::OptimizationEvent> for OptimizationEvent {
+    fn from(value: spark_wallet::OptimizationEvent) -> Self {
+        match value {
+            spark_wallet::OptimizationEvent::Started { total_rounds } => {
+                Self::Started { total_rounds }
+            }
+            spark_wallet::OptimizationEvent::RoundCompleted {
+                current_round,
+                total_rounds,
+            } => Self::RoundCompleted {
+                current_round,
+                total_rounds,
+            },
+            spark_wallet::OptimizationEvent::Completed => Self::Completed,
+            spark_wallet::OptimizationEvent::Cancelled => Self::Cancelled,
+            spark_wallet::OptimizationEvent::Failed { error } => Self::Failed { error },
+            spark_wallet::OptimizationEvent::Skipped => Self::Skipped,
         }
     }
 }
