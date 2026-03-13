@@ -171,6 +171,11 @@ impl BreezSdk {
             }
             WalletEvent::Optimization(event) => {
                 info!("Optimization event: {:?}", event);
+                self.event_emitter
+                    .emit(&SdkEvent::Optimization {
+                        optimization_event: event.into(),
+                    })
+                    .await;
             }
         }
     }
