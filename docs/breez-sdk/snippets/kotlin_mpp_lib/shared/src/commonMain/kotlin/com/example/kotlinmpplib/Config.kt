@@ -48,7 +48,11 @@ class Config {
 
         // Enable stable balance with auto-conversion to a specific token
         config.stableBalanceConfig = StableBalanceConfig(
-            tokenIdentifier = "<token_identifier>",
+            tokens = listOf(StableBalanceToken(
+                ticker = "USDB",
+                tokenIdentifier = "<token_identifier>",
+            )),
+            defaultActiveTicker = "USDB",
             thresholdSats = 10_000u,
             maxSlippageBps = 100u,
         )

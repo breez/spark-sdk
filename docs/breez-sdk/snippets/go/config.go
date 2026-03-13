@@ -56,10 +56,14 @@ func ConfigureStableBalance() {
 	// Enable stable balance with auto-conversion to a specific token
 	thresholdSats := uint64(10_000)
 	maxSlippageBps := uint32(100)
+	defaultActiveTicker := "USDB"
 	stableBalanceConfig := breez_sdk_spark.StableBalanceConfig{
-		TokenIdentifier: "<token_identifier>",
-		ThresholdSats:   &thresholdSats,
-		MaxSlippageBps:  &maxSlippageBps,
+		Tokens: []breez_sdk_spark.StableBalanceToken{
+			{Ticker: "USDB", TokenIdentifier: "<token_identifier>"},
+		},
+		DefaultActiveTicker: &defaultActiveTicker,
+		ThresholdSats:       &thresholdSats,
+		MaxSlippageBps:      &maxSlippageBps,
 	}
 	config.StableBalanceConfig = &stableBalanceConfig
 	// ANCHOR_END: stable-balance-config

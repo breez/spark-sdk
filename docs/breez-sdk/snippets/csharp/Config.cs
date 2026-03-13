@@ -56,9 +56,15 @@ namespace BreezSdkSnippets
             {
                 // Enable stable balance with auto-conversion to a specific token
                 stableBalanceConfig = new StableBalanceConfig(
-                    tokenIdentifier: "<token_identifier>",
+                    tokens: new StableBalanceToken[] {
+                        new StableBalanceToken(
+                            ticker: "USDB",
+                            tokenIdentifier: "<token_identifier>"
+                        )
+                    },
+                    defaultActiveTicker: "USDB",
                     thresholdSats: 10000,
-                    maxSlippageBps: 100,
+                    maxSlippageBps: 100
                 )
             };
             // ANCHOR_END: stable-balance-config
