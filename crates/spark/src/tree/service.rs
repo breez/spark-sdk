@@ -139,15 +139,52 @@ impl TreeService for SynchronousTreeService {
             let reservation = self.renew_reservation_timelocks(reservation).await?;
 
             // Check if swap is needed
-            if self.reservation_matches_target(&reservation, target_amounts) {
+            let needs_swap = if self.reservation_matches_target(&reservation, target_amounts) {
+                // Even if the reservation matches, check the amount leaf count limit
+                if let Some(max_count) = options.max_amount_leaf_count {
+                    let amount_leaf_count = self.count_amount_leaves(&reservation, target_amounts);
+                    if amount_leaf_count > max_count {
+                        trace!(
+                            "Amount leaf count {amount_leaf_count} exceeds max {max_count}, forcing swap to consolidate"
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                true
+            };
+
+            if !needs_swap {
                 trace!("Selected leaves match requirements, no swap needed");
                 return Ok(reservation);
             }
 
             // Perform swap and update reservation
-            return self
+            let reservation = self
                 .perform_swap_and_update_reservation(reservation, target_amounts)
-                .await;
+                .await?;
+
+            // Validate that the swap respected the max amount leaf count
+            if let Some(max_count) = options.max_amount_leaf_count {
+                let amount_leaf_count = self.count_amount_leaves(&reservation, target_amounts);
+                if amount_leaf_count > max_count {
+                    error!(
+                        "Swap produced {amount_leaf_count} amount leaves, exceeding max {max_count}"
+                    );
+                    if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
+                        error!("Failed to cancel reservation after leaf count exceeded: {e:?}");
+                    }
+                    return Err(TreeServiceError::Generic(format!(
+                        "Swap produced {amount_leaf_count} amount leaves, exceeding max allowed {max_count}"
+                    )));
+                }
+            }
+
+            return Ok(reservation);
         }
     }
 
@@ -307,6 +344,19 @@ impl SynchronousTreeService {
             timelock_manager,
             signer,
             swap_service,
+        }
+    }
+
+    /// Counts the number of amount leaves (excluding fee leaves) in a reservation.
+    fn count_amount_leaves(
+        &self,
+        reservation: &LeavesReservation,
+        target_amounts: Option<&TargetAmounts>,
+    ) -> usize {
+        match select_helper::select_leaves_by_target_amounts(&reservation.leaves, target_amounts) {
+            Ok(target_leaves) => target_leaves.amount_leaves.len(),
+            // If we can't split, return the total leaf count as a conservative estimate
+            Err(_) => reservation.leaves.len(),
         }
     }
 

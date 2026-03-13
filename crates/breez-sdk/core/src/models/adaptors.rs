@@ -415,6 +415,7 @@ impl From<CoopExitFeeQuote> for SendOnchainFeeQuote {
             speed_fast: value.speed_fast.into(),
             speed_medium: value.speed_medium.into(),
             speed_slow: value.speed_slow.into(),
+            quoted_leaf_count: value.quoted_leaf_count,
         }
     }
 }
@@ -427,6 +428,7 @@ impl From<SendOnchainFeeQuote> for CoopExitFeeQuote {
             speed_fast: value.speed_fast.into(),
             speed_medium: value.speed_medium.into(),
             speed_slow: value.speed_slow.into(),
+            quoted_leaf_count: value.quoted_leaf_count,
         }
     }
 }

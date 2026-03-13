@@ -946,6 +946,9 @@ pub struct SendOnchainFeeQuote {
     pub speed_fast: SendOnchainSpeedFeeQuote,
     pub speed_medium: SendOnchainSpeedFeeQuote,
     pub speed_slow: SendOnchainSpeedFeeQuote,
+    /// The number of leaves used when this quote was fetched.
+    /// Used internally to enforce leaf count tolerance at send time.
+    pub quoted_leaf_count: u32,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

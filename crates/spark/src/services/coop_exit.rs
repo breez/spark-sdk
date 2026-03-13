@@ -49,6 +49,9 @@ pub struct CoopExitFeeQuote {
     pub speed_fast: CoopExitSpeedFeeQuote,
     pub speed_medium: CoopExitSpeedFeeQuote,
     pub speed_slow: CoopExitSpeedFeeQuote,
+    /// The number of leaves used when this quote was fetched.
+    /// Used to enforce leaf count tolerance at send time.
+    pub quoted_leaf_count: u32,
 }
 
 impl CoopExitFeeQuote {
@@ -61,12 +64,11 @@ impl CoopExitFeeQuote {
             ExitSpeed::Slow => self.speed_slow.l1_broadcast_fee_sat + self.speed_slow.user_fee_sat,
         }
     }
-}
 
-impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
-    type Error = ServiceError;
-
-    fn try_from(quote: crate::ssp::CoopExitFeeQuote) -> Result<Self, Self::Error> {
+    fn from_ssp_quote(
+        quote: crate::ssp::CoopExitFeeQuote,
+        quoted_leaf_count: u32,
+    ) -> Result<Self, ServiceError> {
         Ok(Self {
             id: quote.id,
             expires_at: quote
@@ -86,6 +88,7 @@ impl TryFrom<crate::ssp::CoopExitFeeQuote> for CoopExitFeeQuote {
                 user_fee_sat: quote.user_fee_slow.as_sats()?,
                 l1_broadcast_fee_sat: quote.l1_broadcast_fee_slow.as_sats()?,
             },
+            quoted_leaf_count,
         })
     }
 }
@@ -133,13 +136,18 @@ impl CoopExitService {
         leaves: Vec<TreeNode>,
         withdrawal_address: Address,
     ) -> Result<CoopExitFeeQuote, ServiceError> {
+        let leaf_count: u32 = leaves
+            .len()
+            .try_into()
+            .map_err(|_| ServiceError::Generic("Leaf count exceeds u32".to_string()))?;
         let leaf_external_ids: Vec<String> =
             leaves.iter().map(|leaf| leaf.id.to_string()).collect();
 
-        self.ssp_client
+        let ssp_quote = self
+            .ssp_client
             .get_coop_exit_fee_quote(leaf_external_ids, &withdrawal_address.to_string())
-            .await?
-            .try_into()
+            .await?;
+        CoopExitFeeQuote::from_ssp_quote(ssp_quote, leaf_count)
     }
 
     pub async fn coop_exit(&self, params: CoopExitParams<'_>) -> Result<Transfer, ServiceError> {
