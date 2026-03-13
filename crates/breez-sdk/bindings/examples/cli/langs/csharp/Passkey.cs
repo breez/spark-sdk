@@ -205,19 +205,19 @@ public static class PasskeyResolver
             Console.WriteLine("Querying Nostr for available labels...");
             var labels = await passkey.ListLabels();
 
-            if (labels.Count == 0)
+            if (labels.Length == 0)
             {
                 throw new InvalidOperationException(
                     "No labels found on Nostr for this identity");
             }
 
             Console.WriteLine("Available labels:");
-            for (int i = 0; i < labels.Count; i++)
+            for (int i = 0; i < labels.Length; i++)
             {
                 Console.WriteLine($"  {i + 1}: {labels[i]}");
             }
 
-            Console.Write($"Select label (1-{labels.Count}): ");
+            Console.Write($"Select label (1-{labels.Length}): ");
             Console.Out.Flush();
             var input = Console.ReadLine();
             if (!int.TryParse(input?.Trim(), out int idx))
@@ -225,7 +225,7 @@ public static class PasskeyResolver
                 throw new InvalidOperationException("Invalid selection");
             }
 
-            if (idx < 1 || idx > labels.Count)
+            if (idx < 1 || idx > labels.Length)
             {
                 throw new InvalidOperationException("Selection out of range");
             }

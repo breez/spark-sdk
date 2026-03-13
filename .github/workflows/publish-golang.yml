@@ -49,7 +49,7 @@ jobs:
       - name: Build Go language bindings
         working-directory: crates/breez-sdk/bindings
         run: |
-          cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --rev 8b8c58f78b2dc16a252f325da91ce409f409fe3c
+          cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
           uniffi-bindgen-go --library ../../../aarch64-linux-android/libbreez_sdk_spark_bindings.so -o ffi/golang -c ./uniffi.toml
 
       - name: Archive Go language bindings

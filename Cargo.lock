@@ -158,43 +158,44 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "askama"
-version = "0.12.1"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b79091df18a97caea757e28cd2d5fda49c6cd4bd01ddffd7ff01ace0c0ad2c28"
+checksum = "5d4744ed2eef2645831b441d8f5459689ade2ab27c854488fbab1fbe94fce1a7"
 dependencies = [
  "askama_derive",
- "askama_escape",
+ "itoa",
+ "percent-encoding",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "askama_derive"
-version = "0.12.5"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19fe8d6cb13c4714962c072ea496f3392015f0989b1a2847bb4b2d9effd71d83"
+checksum = "d661e0f57be36a5c14c48f78d09011e67e0cb618f269cca9f2fd8d15b68c46ac"
 dependencies = [
  "askama_parser",
  "basic-toml",
- "mime",
- "mime_guess",
+ "memchr",
  "proc-macro2",
  "quote 1.0.40",
+ "rustc-hash",
  "serde",
+ "serde_derive",
  "syn 2.0.105",
 ]
 
 [[package]]
-name = "askama_escape"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "619743e34b5ba4e9703bba34deac3427c72507c7159f5fd030aea8cac0cfe341"
-
-[[package]]
 name = "askama_parser"
-version = "0.2.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acb1161c6b64d1c3d83108213c2a2533a342ac225aabd0bda218278c2ddb00c0"
+checksum = "cf315ce6524c857bb129ff794935cf6d42c82a6cff60526fe2a63593de4d0d4f"
 dependencies = [
- "nom",
+ "memchr",
+ "serde",
+ "serde_derive",
+ "winnow",
 ]
 
 [[package]]
@@ -484,15 +485,6 @@ name = "bech32"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d965446196e3b7decd44aa7ee49e31d630118f90ef12f97900f262eb915c951d"
-
-[[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "bip39"
@@ -916,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "cargo_metadata"
-version = "0.15.4"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eee4243f1f26fc7a42710e7439c149e2b10b05472f88090acce52632f231a73a"
+checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
 dependencies = [
  "camino",
  "cargo-platform",
@@ -930,16 +922,16 @@ dependencies = [
 
 [[package]]
 name = "cargo_metadata"
-version = "0.18.1"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d886547e41f740c616ae73108f6eb70afe6d940c7bc697cb30f13daec073037"
+checksum = "dd5eb614ed4c27c5d706420e4320fbe3216ab31fa1c33cd8246ac36dae4479ba"
 dependencies = [
  "camino",
  "cargo-platform",
  "semver",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.14",
 ]
 
 [[package]]
@@ -1676,7 +1668,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1728,7 +1720,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2541,7 +2533,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3606,12 +3598,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3926,7 +3912,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools",
  "log",
  "multimap",
@@ -4398,6 +4384,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56f7d92ca342cea22a06f2121d944b4fd82af56988c270852495420f961d4ace"
 
 [[package]]
+name = "rustc-hash"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4425,7 +4417,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5325,7 +5317,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6124,46 +6116,50 @@ checksum = "4a1a07cc7db3810833284e8d372ccdc6da29741639ecc70c9ec107df0fa6154c"
 
 [[package]]
 name = "uniffi"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
  "camino",
- "cargo_metadata 0.15.4",
+ "cargo_metadata 0.19.2",
  "clap",
  "uniffi_bindgen",
  "uniffi_build",
  "uniffi_core",
  "uniffi_macros",
+ "uniffi_pipeline",
 ]
 
 [[package]]
 name = "uniffi_bindgen"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
  "askama",
  "camino",
- "cargo_metadata 0.15.4",
+ "cargo_metadata 0.19.2",
  "fs-err",
  "glob",
  "goblin",
  "heck 0.5.0",
+ "indexmap 2.10.0",
  "once_cell",
- "paste",
  "serde",
+ "tempfile",
  "textwrap",
  "toml",
+ "uniffi_internal_macros",
  "uniffi_meta",
+ "uniffi_pipeline",
  "uniffi_testing",
  "uniffi_udl",
 ]
 
 [[package]]
 name = "uniffi_build"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
  "camino",
@@ -6171,34 +6167,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "uniffi_checksum_derive"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+name = "uniffi_core"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
+ "anyhow",
+ "async-compat",
+ "bytes",
+ "once_cell",
+ "static_assertions",
+]
+
+[[package]]
+name = "uniffi_internal_macros"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+dependencies = [
+ "anyhow",
+ "indexmap 2.10.0",
+ "proc-macro2",
  "quote 1.0.40",
  "syn 2.0.105",
 ]
 
 [[package]]
-name = "uniffi_core"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
-dependencies = [
- "anyhow",
- "async-compat",
- "bytes",
- "log",
- "once_cell",
- "paste",
- "static_assertions",
-]
-
-[[package]]
 name = "uniffi_macros"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
- "bincode",
  "camino",
  "fs-err",
  "once_cell",
@@ -6212,36 +6208,47 @@ dependencies = [
 
 [[package]]
 name = "uniffi_meta"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
- "bytes",
  "siphasher 0.3.11",
- "uniffi_checksum_derive",
+ "uniffi_internal_macros",
+ "uniffi_pipeline",
+]
+
+[[package]]
+name = "uniffi_pipeline"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+dependencies = [
+ "anyhow",
+ "heck 0.5.0",
+ "indexmap 2.10.0",
+ "tempfile",
+ "uniffi_internal_macros",
 ]
 
 [[package]]
 name = "uniffi_testing"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
  "camino",
- "cargo_metadata 0.15.4",
+ "cargo_metadata 0.19.2",
  "fs-err",
  "once_cell",
 ]
 
 [[package]]
 name = "uniffi_udl"
-version = "0.28.3"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+version = "0.29.5"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "anyhow",
  "textwrap",
  "uniffi_meta",
- "uniffi_testing",
  "weedle2",
 ]
 
@@ -6556,7 +6563,7 @@ dependencies = [
 [[package]]
 name = "weedle2"
 version = "5.0.0"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol#aeb4aeff5fda878973cd673c95225f8301286ff1"
+source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
 dependencies = [
  "nom",
 ]
@@ -6594,7 +6601,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
