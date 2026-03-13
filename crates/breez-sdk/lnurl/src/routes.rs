@@ -973,140 +973,154 @@ where
 
     /// Webhook endpoint for SSP payment notifications.
     /// Verifies HMAC-SHA256 signature and processes payment preimages.
-    #[allow(clippy::too_many_lines)]
     pub async fn webhook(
         Extension(state): Extension<State<DB>>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Result<(), (StatusCode, Json<Value>)> {
-        // Verify HMAC-SHA256 signature
-        let signature_header = headers
-            .get("X-Spark-Signature")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                trace!("missing X-Spark-Signature header");
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(Value::String("missing signature".into())),
-                )
-            })?;
-
-        let signature_bytes = hex::decode(signature_header).map_err(|_| {
-            trace!("invalid signature hex encoding");
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(Value::String("invalid signature".into())),
-            )
-        })?;
-
-        let mut engine = HmacEngine::<sha256::Hash>::new(state.webhook_secret.as_bytes());
-        engine.input(&body);
-        let expected_hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
-
-        if expected_hmac.to_byte_array() != signature_bytes.as_slice() {
-            trace!("invalid webhook signature");
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(Value::String("invalid signature".into())),
-            ));
-        }
-
-        // Parse the body
-        let payload: WebhookPayload = serde_json::from_slice(&body).map_err(|e| {
-            trace!("invalid webhook payload: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid payload".into())),
-            )
-        })?;
-
-        // Only process lightning receive finished events
-        if payload.event_type != "SPARK_LIGHTNING_RECEIVE_FINISHED" {
-            debug!("ignoring webhook event type: {}", payload.event_type);
-            return Ok(());
-        }
-
-        let payment_preimage = payload.payment_preimage.ok_or_else(|| {
-            trace!("missing payment_preimage in webhook payload");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("missing payment_preimage".into())),
-            )
-        })?;
-
-        let receiver_pubkey = payload.receiver_identity_public_key.ok_or_else(|| {
-            trace!("missing receiver_identity_public_key in webhook payload");
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("missing receiver_identity_public_key".into())),
-            )
-        })?;
-
-        // Compute payment hash from preimage
-        let preimage_bytes = hex::decode(&payment_preimage).map_err(|e| {
-            trace!("invalid preimage hex: {}", e);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid preimage".into())),
-            )
-        })?;
-        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
-
-        // Look up invoice
-        let invoice = state
-            .db
-            .get_invoice_by_payment_hash(&payment_hash)
-            .await
-            .map_err(|e| {
-                error!("failed to get invoice: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(Value::String("internal server error".into())),
-                )
-            })?;
-
-        let Some(invoice) = invoice else {
-            debug!(
-                "no invoice found for payment hash {} from webhook",
-                payment_hash
-            );
-            return Ok(());
-        };
-
-        // Verify invoice belongs to the receiver
-        if invoice.user_pubkey != receiver_pubkey {
-            warn!(
-                "webhook invoice user mismatch: expected={}, got={}",
-                receiver_pubkey, invoice.user_pubkey
-            );
-            return Ok(());
-        }
-
-        // Handle the invoice paid event
-        if let Err(e) = handle_invoice_paid(
+        process_webhook(
             &state.db,
-            &payment_hash,
-            &payment_preimage,
+            &state.webhook_secret,
             &state.invoice_paid_trigger,
+            &headers,
+            &body,
         )
         .await
-        {
-            error!(
-                "failed to handle webhook invoice paid for {}: {}",
-                payment_hash, e
-            );
-            return Err((
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn process_webhook<DB>(
+    db: &DB,
+    webhook_secret: &str,
+    invoice_paid_trigger: &tokio::sync::watch::Sender<()>,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<(), (StatusCode, Json<Value>)>
+where
+    DB: LnurlRepository + Clone + Send + Sync + 'static,
+{
+    // Verify HMAC-SHA256 signature
+    let signature_header = headers
+        .get("X-Spark-Signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            trace!("missing X-Spark-Signature header");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(Value::String("missing signature".into())),
+            )
+        })?;
+
+    let signature_bytes = hex::decode(signature_header).map_err(|_| {
+        trace!("invalid signature hex encoding");
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+
+    let mut engine = HmacEngine::<sha256::Hash>::new(webhook_secret.as_bytes());
+    engine.input(body);
+    let expected_hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+
+    if expected_hmac.to_byte_array() != signature_bytes.as_slice() {
+        trace!("invalid webhook signature");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(Value::String("invalid signature".into())),
+        ));
+    }
+
+    // Parse the body
+    let payload: WebhookPayload = serde_json::from_slice(body).map_err(|e| {
+        trace!("invalid webhook payload: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid payload".into())),
+        )
+    })?;
+
+    // Only process lightning receive finished events
+    if payload.event_type != "SPARK_LIGHTNING_RECEIVE_FINISHED" {
+        debug!("ignoring webhook event type: {}", payload.event_type);
+        return Ok(());
+    }
+
+    let payment_preimage = payload.payment_preimage.ok_or_else(|| {
+        trace!("missing payment_preimage in webhook payload");
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("missing payment_preimage".into())),
+        )
+    })?;
+
+    let receiver_pubkey = payload.receiver_identity_public_key.ok_or_else(|| {
+        trace!("missing receiver_identity_public_key in webhook payload");
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("missing receiver_identity_public_key".into())),
+        )
+    })?;
+
+    // Compute payment hash from preimage
+    let preimage_bytes = hex::decode(&payment_preimage).map_err(|e| {
+        trace!("invalid preimage hex: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid preimage".into())),
+        )
+    })?;
+    let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+    // Look up invoice
+    let invoice = db
+        .get_invoice_by_payment_hash(&payment_hash)
+        .await
+        .map_err(|e| {
+            error!("failed to get invoice: {}", e);
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(Value::String("internal server error".into())),
-            ));
-        }
+            )
+        })?;
 
+    let Some(invoice) = invoice else {
         debug!(
-            "webhook processed: invoice {} paid for pubkey {}",
-            payment_hash, receiver_pubkey
+            "no invoice found for payment hash {} from webhook",
+            payment_hash
         );
-        Ok(())
+        return Ok(());
+    };
+
+    // Verify invoice belongs to the receiver
+    if invoice.user_pubkey != receiver_pubkey {
+        warn!(
+            "webhook invoice user mismatch: expected={}, got={}",
+            receiver_pubkey, invoice.user_pubkey
+        );
+        return Ok(());
     }
+
+    // Handle the invoice paid event
+    if let Err(e) =
+        handle_invoice_paid(db, &payment_hash, &payment_preimage, invoice_paid_trigger).await
+    {
+        error!(
+            "failed to handle webhook invoice paid for {}: {}",
+            payment_hash, e
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Value::String("internal server error".into())),
+        ));
+    }
+
+    debug!(
+        "webhook processed: invoice {} paid for pubkey {}",
+        payment_hash, receiver_pubkey
+    );
+    Ok(())
 }
 
 fn validate_nostr_zap_request(
@@ -1344,4 +1358,485 @@ fn sanitize_domain<DB>(
     }
     warn!("domain not allowed: {}", domain);
     Err((StatusCode::NOT_FOUND, Json(Value::String(String::new()))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, NewlyPaid};
+    use crate::user::User;
+    use crate::zap::Zap;
+    use axum::body::Bytes;
+    use axum::http::{HeaderMap, StatusCode};
+    use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
+    use lnurl_models::ListMetadataMetadata;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::watch;
+
+    // -- Mock repository -------------------------------------------------------
+
+    #[derive(Clone, Default)]
+    struct MockRepository {
+        invoices: std::sync::Arc<Mutex<HashMap<String, Invoice>>>,
+        newly_paid: std::sync::Arc<Mutex<HashMap<String, NewlyPaid>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LnurlRepository for MockRepository {
+        async fn delete_user(&self, _: &str, _: &str) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_user_by_name(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<User>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn get_user_by_pubkey(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<User>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn upsert_zap(&self, _: &Zap) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_zap_by_payment_hash(
+            &self,
+            _: &str,
+        ) -> Result<Option<Zap>, LnurlRepositoryError> {
+            Ok(None)
+        }
+        async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn is_zap_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
+            Ok(false)
+        }
+        async fn insert_lnurl_sender_comment(
+            &self,
+            _: &LnurlSenderComment,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn get_metadata_by_pubkey(
+            &self,
+            _: &str,
+            _: u32,
+            _: u32,
+            _: Option<i64>,
+        ) -> Result<Vec<ListMetadataMetadata>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_domains(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn add_domain(&self, _: &str) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
+            self.invoices
+                .lock()
+                .unwrap()
+                .insert(invoice.payment_hash.clone(), invoice.clone());
+            Ok(())
+        }
+        async fn get_invoice_by_payment_hash(
+            &self,
+            payment_hash: &str,
+        ) -> Result<Option<Invoice>, LnurlRepositoryError> {
+            Ok(self.invoices.lock().unwrap().get(payment_hash).cloned())
+        }
+        async fn get_invoice_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+        async fn is_invoice_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
+            Ok(false)
+        }
+        async fn insert_newly_paid(
+            &self,
+            newly_paid: &NewlyPaid,
+        ) -> Result<(), LnurlRepositoryError> {
+            self.newly_paid
+                .lock()
+                .unwrap()
+                .insert(newly_paid.payment_hash.clone(), newly_paid.clone());
+            Ok(())
+        }
+        async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+            Ok(self.newly_paid.lock().unwrap().values().cloned().collect())
+        }
+        async fn update_newly_paid_retry(
+            &self,
+            _: &str,
+            _: i32,
+            _: i64,
+        ) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError> {
+            self.newly_paid.lock().unwrap().remove(payment_hash);
+            Ok(())
+        }
+    }
+
+    // -- Test helpers ----------------------------------------------------------
+
+    const TEST_WEBHOOK_SECRET: &str = "test_webhook_secret_0123456789abcdef";
+    const TEST_PREIMAGE_HEX: &str =
+        "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    const TEST_RECEIVER_PUBKEY: &str = "02abc123";
+
+    fn compute_payment_hash(preimage_hex: &str) -> String {
+        let preimage_bytes = hex::decode(preimage_hex).unwrap();
+        sha256::Hash::hash(&preimage_bytes).to_string()
+    }
+
+    fn compute_hmac(secret: &str, body: &[u8]) -> String {
+        let mut engine = HmacEngine::<sha256::Hash>::new(secret.as_bytes());
+        engine.input(body);
+        let hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+        hex::encode(hmac.to_byte_array())
+    }
+
+    fn make_webhook_payload(
+        event_type: &str,
+        preimage: Option<&str>,
+        receiver_pubkey: Option<&str>,
+    ) -> serde_json::Value {
+        let mut payload = serde_json::json!({
+            "id": "018677b5-e419-99d1-0000-a7030393c9af",
+            "created_at": "2025-03-09T12:00:00Z",
+            "updated_at": "2025-03-09T12:00:05Z",
+            "network": "MAINNET",
+            "request_status": "COMPLETED",
+            "status": "TRANSFER_COMPLETED",
+            "type": event_type,
+            "timestamp": "2025-03-09T12:00:06Z",
+            "invoice_amount": {"value": 50000, "unit": "SATOSHI"},
+            "htlc_amount": {"value": 50000, "unit": "SATOSHI"},
+        });
+        if let Some(p) = preimage {
+            payload["payment_preimage"] = serde_json::Value::String(p.to_string());
+        }
+        if let Some(r) = receiver_pubkey {
+            payload["receiver_identity_public_key"] = serde_json::Value::String(r.to_string());
+        }
+        payload
+    }
+
+    fn signed_headers_and_body(secret: &str, payload: &serde_json::Value) -> (HeaderMap, Bytes) {
+        let body = serde_json::to_vec(payload).unwrap();
+        let sig = compute_hmac(secret, &body);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Spark-Signature", sig.parse().unwrap());
+        (headers, Bytes::from(body))
+    }
+
+    fn setup_repo_with_invoice(preimage_hex: &str, receiver_pubkey: &str) -> MockRepository {
+        let repo = MockRepository::default();
+        let payment_hash = compute_payment_hash(preimage_hex);
+        repo.invoices.lock().unwrap().insert(
+            payment_hash.clone(),
+            Invoice {
+                payment_hash,
+                user_pubkey: receiver_pubkey.to_string(),
+                invoice: "lnbc1...".to_string(),
+                preimage: None,
+                invoice_expiry: i64::MAX,
+                created_at: 0,
+                updated_at: 0,
+            },
+        );
+        repo
+    }
+
+    // -- Tests -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn webhook_valid_payment_marks_invoice_paid() {
+        let repo = setup_repo_with_invoice(TEST_PREIMAGE_HEX, TEST_RECEIVER_PUBKEY);
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+
+        let payment_hash = compute_payment_hash(TEST_PREIMAGE_HEX);
+        let invoice = repo
+            .invoices
+            .lock()
+            .unwrap()
+            .get(&payment_hash)
+            .cloned()
+            .unwrap();
+        assert_eq!(invoice.preimage.as_deref(), Some(TEST_PREIMAGE_HEX));
+
+        assert!(repo.newly_paid.lock().unwrap().contains_key(&payment_hash));
+    }
+
+    #[tokio::test]
+    async fn webhook_missing_signature_returns_unauthorized() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+        let headers = HeaderMap::new();
+        let body = Bytes::from(b"{}".to_vec());
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn webhook_invalid_signature_returns_unauthorized() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let body_bytes = serde_json::to_vec(&payload).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Spark-Signature", "deadbeef".repeat(8).parse().unwrap());
+        let body = Bytes::from(body_bytes);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn webhook_non_hex_signature_returns_unauthorized() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let body = Bytes::from(b"{}".to_vec());
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Spark-Signature", "not-valid-hex!".parse().unwrap());
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn webhook_invalid_json_returns_bad_request() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let body_bytes = b"not json";
+        let sig = compute_hmac(TEST_WEBHOOK_SECRET, body_bytes);
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Spark-Signature", sig.parse().unwrap());
+        let body = Bytes::from(body_bytes.to_vec());
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_non_receive_event_type_is_ignored() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload("SOME_OTHER_EVENT", None, None);
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn webhook_missing_preimage_returns_bad_request() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            None,
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_missing_receiver_pubkey_returns_bad_request() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            None,
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_invalid_preimage_hex_returns_bad_request() {
+        let repo = MockRepository::default();
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some("not-valid-hex"),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_no_matching_invoice_succeeds_silently() {
+        let repo = MockRepository::default(); // no invoices
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn webhook_pubkey_mismatch_succeeds_silently() {
+        let repo = setup_repo_with_invoice(TEST_PREIMAGE_HEX, "02different_pubkey");
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY), // doesn't match invoice's pubkey
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+
+        // Invoice should NOT have been updated
+        let payment_hash = compute_payment_hash(TEST_PREIMAGE_HEX);
+        let invoice = repo
+            .invoices
+            .lock()
+            .unwrap()
+            .get(&payment_hash)
+            .cloned()
+            .unwrap();
+        assert!(invoice.preimage.is_none());
+    }
+
+    #[tokio::test]
+    async fn webhook_already_paid_invoice_is_idempotent() {
+        let repo = MockRepository::default();
+        let payment_hash = compute_payment_hash(TEST_PREIMAGE_HEX);
+        repo.invoices.lock().unwrap().insert(
+            payment_hash.clone(),
+            Invoice {
+                payment_hash: payment_hash.clone(),
+                user_pubkey: TEST_RECEIVER_PUBKEY.to_string(),
+                invoice: "lnbc1...".to_string(),
+                preimage: Some(TEST_PREIMAGE_HEX.to_string()),
+                invoice_expiry: i64::MAX,
+                created_at: 0,
+                updated_at: 0,
+            },
+        );
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+
+        // No newly_paid entry should be created for an already-paid invoice
+        assert!(repo.newly_paid.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn webhook_triggers_invoice_paid_notification() {
+        let repo = setup_repo_with_invoice(TEST_PREIMAGE_HEX, TEST_RECEIVER_PUBKEY);
+        let (trigger, rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        assert!(result.is_ok());
+
+        // The watch channel should have been notified
+        assert!(rx.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn webhook_signature_uses_correct_secret() {
+        let repo = setup_repo_with_invoice(TEST_PREIMAGE_HEX, TEST_RECEIVER_PUBKEY);
+        let (trigger, _rx) = watch::channel(());
+
+        let payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        // Sign with a different secret than the server expects
+        let (headers, body) = signed_headers_and_body("wrong_secret", &payload);
+
+        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let Err((status, _)) = result else {
+            panic!("expected error");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 }
