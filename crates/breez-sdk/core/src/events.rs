@@ -6,7 +6,9 @@ use std::{
 
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
+use tracing::debug;
 use uuid::Uuid;
+use web_time::Instant;
 
 use crate::{DepositInfo, LightningAddressInfo, Payment};
 
@@ -154,12 +156,35 @@ pub trait EventListener: Send + Sync {
     async fn on_event(&self, event: SdkEvent);
 }
 
-/// Event publisher that manages event listeners
+/// Middleware that can intercept and transform events before they reach external listeners.
+///
+/// Middleware processes events in a chain. Each middleware receives the event from the
+/// previous one and can:
+/// - Pass it through unchanged: `Some(event)`
+/// - Transform it: `Some(modified_event)`
+/// - Suppress it: `None`
+#[macros::async_trait]
+pub trait EventMiddleware: Send + Sync {
+    /// Process an event. Return `Some` to forward (possibly modified), `None` to suppress.
+    async fn process(&self, event: SdkEvent) -> Option<SdkEvent>;
+}
+
+/// Event publisher that manages event listeners and middleware.
+///
+/// Events flow through three phases:
+/// 1. Internal listeners see raw events (SDK components like `wait_for_payment`)
+/// 2. Middleware chain can transform or suppress events
+/// 3. External listeners see processed events (client event handlers)
 pub struct EventEmitter {
     has_real_time_sync: bool,
     rtsync_failed: AtomicBool,
     listener_index: AtomicU64,
-    listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
+    /// Internal listeners see ALL events before middleware processing
+    internal_listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
+    /// Middleware chain that can transform/suppress events
+    middleware: RwLock<Vec<Box<dyn EventMiddleware>>>,
+    /// External listeners see events after middleware processing
+    external_listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
@@ -170,12 +195,14 @@ impl EventEmitter {
             has_real_time_sync,
             rtsync_failed: AtomicBool::new(false),
             listener_index: AtomicU64::new(0),
-            listeners: RwLock::new(BTreeMap::new()),
+            internal_listeners: RwLock::new(BTreeMap::new()),
+            middleware: RwLock::new(Vec::new()),
+            external_listeners: RwLock::new(BTreeMap::new()),
             synced_event_buffer: Mutex::new(Some(InternalSyncedEvent::default())),
         }
     }
 
-    /// Add a listener to receive events
+    /// Add an external listener to receive events
     ///
     /// # Arguments
     ///
@@ -184,15 +211,15 @@ impl EventEmitter {
     /// # Returns
     ///
     /// A unique identifier for the listener, which can be used to remove it later
-    pub async fn add_listener(&self, listener: Box<dyn EventListener>) -> String {
+    pub async fn add_external_listener(&self, listener: Box<dyn EventListener>) -> String {
         let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
         let id = format!("listener_{}-{}", index, Uuid::new_v4());
-        let mut listeners = self.listeners.write().await;
+        let mut listeners = self.external_listeners.write().await;
         listeners.insert(id.clone(), listener);
         id
     }
 
-    /// Remove a listener by its ID
+    /// Remove an external listener by its ID
     ///
     /// # Arguments
     ///
@@ -201,20 +228,72 @@ impl EventEmitter {
     /// # Returns
     ///
     /// `true` if the listener was found and removed, `false` otherwise
-    pub async fn remove_listener(&self, id: &str) -> bool {
-        let mut listeners = self.listeners.write().await;
+    pub async fn remove_external_listener(&self, id: &str) -> bool {
+        let mut listeners = self.external_listeners.write().await;
         listeners.remove(id).is_some()
     }
 
-    /// Emit an event to all registered listeners
-    pub async fn emit(&self, event: &SdkEvent) {
-        // Get a read lock on the listeners
-        let listeners = self.listeners.read().await;
+    /// Add an internal listener that sees all raw events before middleware processing.
+    ///
+    /// Used by SDK components (e.g., `wait_for_payment`) that need to observe events
+    /// that middleware may suppress.
+    pub async fn add_internal_listener(&self, listener: Box<dyn EventListener>) -> String {
+        let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
+        let id = format!("internal_{}-{}", index, Uuid::new_v4());
+        let mut listeners = self.internal_listeners.write().await;
+        listeners.insert(id.clone(), listener);
+        id
+    }
 
-        // Emit the event to each listener
-        for listener in listeners.values() {
+    /// Remove an internal listener by its ID
+    pub async fn remove_internal_listener(&self, id: &str) -> bool {
+        let mut listeners = self.internal_listeners.write().await;
+        listeners.remove(id).is_some()
+    }
+
+    /// Add middleware to the event processing chain.
+    ///
+    /// Middleware can transform or suppress events before they reach external listeners.
+    pub async fn add_middleware(&self, middleware: Box<dyn EventMiddleware>) {
+        let mut mw = self.middleware.write().await;
+        mw.push(middleware);
+    }
+
+    /// Emit an event through the three-phase pipeline:
+    /// 1. Internal listeners see the raw event
+    /// 2. Middleware chain can transform or suppress
+    /// 3. External listeners see the processed event
+    pub async fn emit(&self, event: &SdkEvent) {
+        let start = Instant::now();
+
+        // Phase 1: Internal listeners see raw event
+        let internal = self.internal_listeners.read().await;
+        for listener in internal.values() {
             listener.on_event(event.clone()).await;
         }
+        drop(internal);
+
+        // Phase 2: Middleware chain
+        let mut event = Some(event.clone());
+        let middleware = self.middleware.read().await;
+        for mw in middleware.iter() {
+            if let Some(e) = event {
+                event = mw.process(e).await;
+            } else {
+                break;
+            }
+        }
+        drop(middleware);
+
+        // Phase 3: External listeners see processed event
+        if let Some(ref event) = event {
+            let listeners = self.external_listeners.read().await;
+            for listener in listeners.values() {
+                listener.on_event(event.clone()).await;
+            }
+        }
+
+        debug!("emit() completed in {:?}", start.elapsed());
     }
 
     pub async fn emit_synced(&self, synced: &InternalSyncedEvent) {
@@ -312,7 +391,7 @@ mod tests {
             received: received.clone(),
         });
 
-        let _ = emitter.add_listener(listener).await;
+        let _ = emitter.add_external_listener(listener).await;
 
         let event = SdkEvent::Synced {};
 
@@ -339,11 +418,11 @@ mod tests {
             received: received2.clone(),
         });
 
-        let id1 = emitter.add_listener(listener1).await;
-        let id2 = emitter.add_listener(listener2).await;
+        let id1 = emitter.add_external_listener(listener1).await;
+        let id2 = emitter.add_external_listener(listener2).await;
 
         // Remove the first listener
-        assert!(emitter.remove_listener(&id1).await);
+        assert!(emitter.remove_external_listener(&id1).await);
 
         // Emit an event
         let event = SdkEvent::Synced {};
@@ -356,10 +435,10 @@ mod tests {
         assert!(received2.load(Ordering::Relaxed));
 
         // Remove the second listener
-        assert!(emitter.remove_listener(&id2).await);
+        assert!(emitter.remove_external_listener(&id2).await);
 
         // Try to remove a non-existent listener
-        assert!(!emitter.remove_listener("non-existent-id").await);
+        assert!(!emitter.remove_external_listener("non-existent-id").await);
     }
 
     #[async_test_all]
@@ -371,7 +450,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit synced event without wallet sync - should NOT emit Synced
         emitter
@@ -409,7 +488,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit synced event with storage
         emitter
@@ -448,7 +527,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit synced event with wallet sync
         emitter
@@ -486,7 +565,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Wallet synced but rtsync hasn't failed yet — should NOT emit
         emitter
@@ -516,7 +595,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // rtsync fails before wallet syncs — nothing to release yet
         emitter.notify_rtsync_failed().await;
@@ -546,7 +625,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit multiple partial syncs without wallet sync
         emitter
@@ -620,7 +699,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit synced event with wallet and other components - should emit Synced
         emitter
@@ -645,7 +724,7 @@ mod tests {
             received: received.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // Emit empty synced event - should NOT emit Synced
         emitter
@@ -685,7 +764,7 @@ mod tests {
             count: count.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // First sync with wallet - should emit
         emitter
@@ -776,6 +855,291 @@ mod tests {
         assert_eq!(count.load(Ordering::Relaxed), 6);
     }
 
+    // ── Helpers for middleware / internal listener tests ──
+
+    /// Listener that records all received events
+    struct RecordingListener {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingListener {
+        fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    events: events.clone(),
+                },
+                events,
+            )
+        }
+    }
+
+    #[macros::async_trait]
+    impl EventListener for RecordingListener {
+        async fn on_event(&self, event: SdkEvent) {
+            self.events.lock().await.push(format!("{event}"));
+        }
+    }
+
+    /// Middleware that suppresses all Synced events
+    struct SuppressSyncedMiddleware;
+
+    #[macros::async_trait]
+    impl EventMiddleware for SuppressSyncedMiddleware {
+        async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
+            match event {
+                SdkEvent::Synced => None,
+                other => Some(other),
+            }
+        }
+    }
+
+    /// Middleware that replaces `PaymentSucceeded` with `PaymentPending`
+    struct DowngradePaymentMiddleware;
+
+    #[macros::async_trait]
+    impl EventMiddleware for DowngradePaymentMiddleware {
+        async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
+            match event {
+                SdkEvent::PaymentSucceeded { payment } => {
+                    Some(SdkEvent::PaymentPending { payment })
+                }
+                other => Some(other),
+            }
+        }
+    }
+
+    /// Middleware that suppresses all events
+    struct SuppressAllMiddleware;
+
+    #[macros::async_trait]
+    impl EventMiddleware for SuppressAllMiddleware {
+        async fn process(&self, _event: SdkEvent) -> Option<SdkEvent> {
+            None
+        }
+    }
+
+    fn test_payment() -> Payment {
+        Payment {
+            id: "test-id".to_string(),
+            payment_type: crate::PaymentType::Receive,
+            status: crate::PaymentStatus::Completed,
+            amount: 1000,
+            fees: 10,
+            timestamp: 123_456,
+            method: crate::PaymentMethod::Spark,
+            details: None,
+            conversion_details: None,
+        }
+    }
+
+    // ── Internal listener tests ──
+
+    #[async_test_all]
+    async fn test_internal_listener_receives_events() {
+        let emitter = EventEmitter::new(false);
+        let (listener, events) = RecordingListener::new();
+
+        emitter.add_internal_listener(Box::new(listener)).await;
+
+        emitter.emit(&SdkEvent::Synced).await;
+
+        let log = events.lock().await;
+        assert_eq!(log.len(), 1);
+        assert!(log[0].contains("Synced"));
+    }
+
+    #[async_test_all]
+    async fn test_remove_internal_listener() {
+        let emitter = EventEmitter::new(false);
+        let (listener, events) = RecordingListener::new();
+
+        let id = emitter.add_internal_listener(Box::new(listener)).await;
+
+        assert!(emitter.remove_internal_listener(&id).await);
+        assert!(!emitter.remove_internal_listener(&id).await);
+
+        emitter.emit(&SdkEvent::Synced).await;
+
+        assert!(events.lock().await.is_empty());
+    }
+
+    // ── Middleware tests ──
+
+    #[async_test_all]
+    async fn test_middleware_suppresses_event_for_external() {
+        let emitter = EventEmitter::new(false);
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_external_listener(Box::new(ext)).await;
+        emitter
+            .add_middleware(Box::new(SuppressSyncedMiddleware))
+            .await;
+
+        emitter.emit(&SdkEvent::Synced).await;
+
+        // External should NOT see the suppressed event
+        assert!(ext_events.lock().await.is_empty());
+    }
+
+    #[async_test_all]
+    async fn test_middleware_transforms_event() {
+        let emitter = EventEmitter::new(false);
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_external_listener(Box::new(ext)).await;
+        emitter
+            .add_middleware(Box::new(DowngradePaymentMiddleware))
+            .await;
+
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        let log = ext_events.lock().await;
+        assert_eq!(log.len(), 1);
+        assert!(log[0].contains("PaymentPending"));
+    }
+
+    #[async_test_all]
+    async fn test_middleware_passthrough_unmatched_events() {
+        let emitter = EventEmitter::new(false);
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_external_listener(Box::new(ext)).await;
+        emitter
+            .add_middleware(Box::new(SuppressSyncedMiddleware))
+            .await;
+
+        // Synced is suppressed, PaymentSucceeded passes through
+        emitter.emit(&SdkEvent::Synced).await;
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        let log = ext_events.lock().await;
+        assert_eq!(log.len(), 1);
+        assert!(log[0].contains("PaymentSucceeded"));
+    }
+
+    #[async_test_all]
+    async fn test_middleware_chain_ordering() {
+        let emitter = EventEmitter::new(false);
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_external_listener(Box::new(ext)).await;
+
+        // First middleware transforms PaymentSucceeded → PaymentPending
+        emitter
+            .add_middleware(Box::new(DowngradePaymentMiddleware))
+            .await;
+        // Second middleware suppresses Synced (doesn't affect PaymentPending)
+        emitter
+            .add_middleware(Box::new(SuppressSyncedMiddleware))
+            .await;
+
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        let log = ext_events.lock().await;
+        assert_eq!(log.len(), 1);
+        assert!(log[0].contains("PaymentPending"));
+    }
+
+    #[async_test_all]
+    async fn test_suppress_all_middleware_stops_chain() {
+        let emitter = EventEmitter::new(false);
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_external_listener(Box::new(ext)).await;
+
+        // SuppressAll first — nothing should reach the next middleware or external
+        emitter
+            .add_middleware(Box::new(SuppressAllMiddleware))
+            .await;
+        emitter
+            .add_middleware(Box::new(DowngradePaymentMiddleware))
+            .await;
+
+        emitter.emit(&SdkEvent::Synced).await;
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        assert!(ext_events.lock().await.is_empty());
+    }
+
+    // ── Three-phase flow tests ──
+
+    #[async_test_all]
+    async fn test_three_phase_emit_flow() {
+        let emitter = EventEmitter::new(false);
+        let (int, int_events) = RecordingListener::new();
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_internal_listener(Box::new(int)).await;
+        emitter.add_external_listener(Box::new(ext)).await;
+        emitter
+            .add_middleware(Box::new(SuppressSyncedMiddleware))
+            .await;
+
+        // Synced: internal sees it, middleware suppresses it, external doesn't
+        emitter.emit(&SdkEvent::Synced).await;
+
+        assert_eq!(int_events.lock().await.len(), 1);
+        assert!(ext_events.lock().await.is_empty());
+
+        // PaymentSucceeded: both see it (middleware passes it through)
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        assert_eq!(int_events.lock().await.len(), 2);
+        assert_eq!(ext_events.lock().await.len(), 1);
+    }
+
+    #[async_test_all]
+    async fn test_internal_sees_raw_event_external_sees_transformed() {
+        let emitter = EventEmitter::new(false);
+        let (int, int_events) = RecordingListener::new();
+        let (ext, ext_events) = RecordingListener::new();
+
+        emitter.add_internal_listener(Box::new(int)).await;
+        emitter.add_external_listener(Box::new(ext)).await;
+        emitter
+            .add_middleware(Box::new(DowngradePaymentMiddleware))
+            .await;
+
+        let event = SdkEvent::PaymentSucceeded {
+            payment: test_payment(),
+        };
+        emitter.emit(&event).await;
+
+        let int_log = int_events.lock().await;
+        let ext_log = ext_events.lock().await;
+
+        // Internal sees the original PaymentSucceeded
+        assert_eq!(int_log.len(), 1);
+        assert!(int_log[0].contains("PaymentSucceeded"));
+
+        // External sees the transformed PaymentPending
+        assert_eq!(ext_log.len(), 1);
+        assert!(ext_log[0].contains("PaymentPending"));
+    }
+
+    #[async_test_all]
+    async fn test_no_listeners_no_middleware_does_not_panic() {
+        let emitter = EventEmitter::new(false);
+        emitter.emit(&SdkEvent::Synced).await;
+        // Should not panic
+    }
+
     #[async_test_all]
     async fn test_empty_event_does_not_emit_after_wallet_sync() {
         use std::sync::atomic::AtomicUsize;
@@ -800,7 +1164,7 @@ mod tests {
             count: count.clone(),
         });
 
-        emitter.add_listener(listener).await;
+        emitter.add_external_listener(listener).await;
 
         // First sync with wallet - should emit
         emitter

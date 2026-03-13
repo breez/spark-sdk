@@ -1,5 +1,6 @@
 mod contacts;
 mod issuer;
+mod stable_balance;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
@@ -27,6 +28,7 @@ use std::{
 
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
+use crate::command::stable_balance::StableBalanceCommand;
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -316,6 +318,10 @@ pub enum Command {
     /// Contacts related commands
     #[command(subcommand)]
     Contacts(ContactCommand),
+
+    /// Stable balance related commands
+    #[command(subcommand)]
+    StableBalance(StableBalanceCommand),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -872,6 +878,7 @@ pub(crate) async fn execute_command(
         } => {
             sdk.update_user_settings(UpdateUserSettingsRequest {
                 spark_private_mode_enabled,
+                stable_balance_active_ticker: None,
             })
             .await?;
             Ok(true)
@@ -885,6 +892,7 @@ pub(crate) async fn execute_command(
             issuer::handle_command(token_issuer, issuer_command).await
         }
         Command::Contacts(contact_command) => contacts::handle_command(sdk, contact_command).await,
+        Command::StableBalance(sb_command) => stable_balance::handle_command(sdk, sb_command).await,
     }
 }
 

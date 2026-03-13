@@ -15,6 +15,7 @@ pub(crate) async fn update_user_settings(sdk: &BreezSdk) -> Result<()> {
     let spark_private_mode_enabled = true;
     sdk.update_user_settings(UpdateUserSettingsRequest {
         spark_private_mode_enabled: Some(spark_private_mode_enabled),
+        stable_balance_active_ticker: None,
     })
     .await?;
     // ANCHOR_END: update-user-settings

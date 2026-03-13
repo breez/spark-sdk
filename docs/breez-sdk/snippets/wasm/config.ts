@@ -45,10 +45,13 @@ const exampleConfigureStableBalance = async () => {
 
   // Enable stable balance with auto-conversion to a specific token
   config.stableBalanceConfig = {
-    tokenIdentifier: '<token_identifier>',
+    tokens: [{
+      ticker: 'USDB',
+      tokenIdentifier: '<token_identifier>'
+    }],
+    defaultActiveTicker: 'USDB',
     thresholdSats: 10_000,
-    maxSlippageBps: 100,
-    reservedSats: 1_000
+    maxSlippageBps: 100
   }
   // ANCHOR_END: stable-balance-config
   console.log('Config:', config)

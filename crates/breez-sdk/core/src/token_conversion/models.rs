@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use flashnet::{BTC_ASSET_ADDRESS, Pool};
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +16,17 @@ pub const DEFAULT_INTEGRATOR_PUBKEY: &str =
 /// Default integrator fee BPS used when simulating/executing conversions
 pub const DEFAULT_INTEGRATOR_FEE_BPS: u32 = 5;
 
+/// Fee split between the sent and received sides of a conversion.
+/// The fee from the pool may be denominated in either asset, so each
+/// side carries its own optional fee amount.
+#[derive(Default)]
+pub(crate) struct FeeSplit {
+    /// Fee on the sent (outbound/`asset_in`) payment, if denominated in `asset_in`
+    pub sent: Option<u128>,
+    /// Fee on the received (inbound/`asset_out`) payment, if denominated in `asset_out`
+    pub received: Option<u128>,
+}
+
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +39,9 @@ pub struct ConversionEstimate {
     /// The fee estimated for the conversion
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
+    /// Whether the conversion amount was adjusted to meet the min conversion limit
+    /// or to avoid leaving token dust.
+    pub amount_adjusted: bool,
 }
 
 /// The purpose of the conversion, which is used to provide context for the conversion
@@ -57,13 +74,44 @@ pub(crate) enum ConversionAmount {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionStatus {
+    /// Conversion is in-flight (queued or started, not yet completed)
+    Pending,
     /// The conversion was successful
     Completed,
+    /// The conversion failed (e.g., the initial send payment failed)
+    Failed,
     /// The conversion failed and no refund was made yet, which requires action by the SDK to
     /// perform the refund. This can happen if there was a failure during the conversion process.
     RefundNeeded,
     /// The conversion failed and a refund was made
     Refunded,
+}
+
+impl fmt::Display for ConversionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionStatus::Pending => write!(f, "pending"),
+            ConversionStatus::Completed => write!(f, "completed"),
+            ConversionStatus::Failed => write!(f, "failed"),
+            ConversionStatus::RefundNeeded => write!(f, "refund_needed"),
+            ConversionStatus::Refunded => write!(f, "refunded"),
+        }
+    }
+}
+
+impl FromStr for ConversionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(ConversionStatus::Pending),
+            "completed" => Ok(ConversionStatus::Completed),
+            "failed" => Ok(ConversionStatus::Failed),
+            "refund_needed" => Ok(ConversionStatus::RefundNeeded),
+            "refunded" => Ok(ConversionStatus::Refunded),
+            _ => Err(format!("Invalid conversion status '{s}'")),
+        }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -80,6 +128,10 @@ pub struct ConversionInfo {
     pub fee: Option<u128>,
     /// The purpose of the conversion
     pub purpose: Option<ConversionPurpose>,
+    /// Whether the conversion amount was adjusted to meet the min conversion limit
+    /// or to avoid leaving token dust.
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 pub(crate) struct TokenConversionPool {

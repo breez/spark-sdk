@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::{EventEmitter, Payment, Storage, error::SdkError, events::SdkEvent};
+use crate::{
+    EventEmitter, Payment, Storage, error::SdkError, events::SdkEvent,
+    models::conversion_steps_from_payments,
+};
 
 /// Gets the payment from storage to include already stored metadata and conversion details.
 /// Emits the appropriate event based on its status. Falls back to the provided
@@ -25,23 +28,32 @@ pub(crate) async fn get_payment_and_emit_event(
 }
 
 /// Gets a payment from storage by ID to include already stored payment metadata
-/// and then enriches it with conversion details by looking up related payments.
+/// and then enriches it with conversion steps by looking up related child payments.
+///
+/// Only fetches child payments when `conversion_details` is already set (from persisted
+/// metadata), preserving the persisted status while merging in the from/to steps.
 pub async fn get_payment_with_conversion_details(
     id: String,
     storage: Arc<dyn Storage>,
 ) -> Result<Payment, SdkError> {
     let mut payment = storage.get_payment_by_id(id).await?;
 
-    // Load related payments (single ID batch)
-    let related_payments_map = storage
-        .get_payments_by_parent_ids(vec![payment.id.clone()])
-        .await?;
+    if payment.conversion_details.is_some() {
+        let related_payments_map = storage
+            .get_payments_by_parent_ids(vec![payment.id.clone()])
+            .await?;
 
-    if let Some(related_payments) = related_payments_map.get(&payment.id) {
-        match related_payments.try_into() {
-            Ok(conversion_details) => payment.conversion_details = Some(conversion_details),
-            Err(e) => {
-                warn!("Related payments not convertable to ConversionDetails: {e}");
+        if let Some(related_payments) = related_payments_map.get(&payment.id) {
+            match conversion_steps_from_payments(related_payments) {
+                Ok((from, to)) => {
+                    if let Some(ref mut cd) = payment.conversion_details {
+                        cd.from = from;
+                        cd.to = to;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to build conversion steps: {e}");
+                }
             }
         }
     }

@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    AssetFilter, Contact, ConversionInfo, DepositClaimError, DepositInfo, LightningAddressInfo,
-    ListContactsRequest, ListPaymentsRequest, LnurlPayInfo, LnurlWithdrawInfo,
-    PaymentDetailsFilter, PaymentStatus, PaymentType, SparkHtlcStatus, TokenBalance, TokenMetadata,
-    TokenTransactionType,
+    AssetFilter, Contact, ConversionInfo, ConversionStatus, DepositClaimError, DepositInfo,
+    LightningAddressInfo, ListContactsRequest, ListPaymentsRequest, LnurlPayInfo,
+    LnurlWithdrawInfo, PaymentDetailsFilter, PaymentStatus, PaymentType, SparkHtlcStatus,
+    TokenBalance, TokenMetadata, TokenTransactionType,
     models::Payment,
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -32,6 +32,8 @@ const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
+pub(crate) const STABLE_BALANCE_ACTIVE_TICKER_KEY: &str = "stable_balance_active_ticker";
+const PENDING_CONVERSIONS_KEY: &str = "pending_conversions";
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
@@ -251,6 +253,8 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_info: Option<ConversionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversion_status: Option<ConversionStatus>,
 }
 
 /// Trait for persistent storage
@@ -671,6 +675,64 @@ impl ObjectCacheRepository {
             Some(value) => Ok(value == "true"),
             None => Ok(false),
         }
+    }
+
+    pub(crate) async fn save_stable_balance_active_ticker(
+        &self,
+        ticker: &str,
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string(),
+                ticker.to_string(),
+            )
+            .await
+    }
+
+    pub(crate) async fn fetch_stable_balance_active_ticker(
+        &self,
+    ) -> Result<Option<String>, StorageError> {
+        self.storage
+            .get_cached_item(STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string())
+            .await
+    }
+
+    pub(crate) async fn delete_stable_balance_active_ticker(&self) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(STABLE_BALANCE_ACTIVE_TICKER_KEY.to_string())
+            .await
+    }
+
+    pub(crate) async fn save_pending_conversions(
+        &self,
+        pending: &[super::stable_balance::PendingConversion],
+    ) -> Result<(), StorageError> {
+        self.storage
+            .set_cached_item(
+                PENDING_CONVERSIONS_KEY.to_string(),
+                serde_json::to_string(pending)?,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_pending_conversions(
+        &self,
+    ) -> Result<Option<Vec<super::stable_balance::PendingConversion>>, StorageError> {
+        let value = self
+            .storage
+            .get_cached_item(PENDING_CONVERSIONS_KEY.to_string())
+            .await?;
+        match value {
+            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_pending_conversions(&self) -> Result<(), StorageError> {
+        self.storage
+            .delete_cached_item(PENDING_CONVERSIONS_KEY.to_string())
+            .await
     }
 
     pub(crate) async fn save_lnurl_metadata_updated_after(

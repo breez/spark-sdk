@@ -8,9 +8,9 @@ use rusqlite::{
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 
 use crate::{
-    AssetFilter, Contact, ConversionInfo, DepositInfo, ListContactsRequest, LnurlPayInfo,
-    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentMethod, SparkHtlcDetails,
-    SparkHtlcStatus, TokenTransactionType,
+    AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
+    ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
+    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
@@ -320,6 +320,7 @@ impl SqliteStorage {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );",
+            "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
         ]
     }
 }
@@ -695,14 +696,15 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
 
         connection.execute(
-            "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-             VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(payment_id) DO UPDATE SET
                 parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
                 lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
                 lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
                 lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
-                conversion_info = COALESCE(excluded.conversion_info, conversion_info)",
+                conversion_info = COALESCE(excluded.conversion_info, conversion_info),
+                conversion_status = COALESCE(excluded.conversion_status, conversion_status)",
             params![
                 payment_id,
                 metadata.parent_payment_id,
@@ -710,6 +712,7 @@ impl Storage for SqliteStorage {
                 metadata.lnurl_withdraw_info,
                 metadata.lnurl_description,
                 metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
+                metadata.conversion_status.as_ref().map(std::string::ToString::to_string),
             ],
         )?;
 
@@ -810,7 +813,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(30)?;
+            let parent_payment_id: String = row.get(31)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1355,7 +1358,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-29 are used by `map_payment`, index 30 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-30 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1387,6 +1390,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
+           pm.conversion_status,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -1495,6 +1499,14 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         }
         _ => None,
     };
+    // Read conversion_status from payment_metadata (column 30)
+    let conversion_status: Option<ConversionStatus> = row.get(30)?;
+    let conversion_details = conversion_status.map(|status| ConversionDetails {
+        status,
+        from: None,
+        to: None,
+    });
+
     Ok(Payment {
         id: row.get(0)?,
         payment_type: row.get::<_, String>(1)?.parse().map_err(|e: String| {
@@ -1508,7 +1520,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         timestamp: row.get(5)?,
         details,
         method: row.get(6)?,
-        conversion_details: None,
+        conversion_details,
     })
 }
 
@@ -1580,6 +1592,26 @@ impl FromSql for SparkHtlcStatus {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
                 let status: SparkHtlcStatus =
+                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                Ok(status)
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for ConversionStatus {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl FromSql for ConversionStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(i) => {
+                let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                let status: ConversionStatus =
                     s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
                 Ok(status)
             }

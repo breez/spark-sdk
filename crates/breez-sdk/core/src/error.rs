@@ -113,6 +113,9 @@ impl From<crate::token_conversion::ConversionError> for SdkError {
             ConversionError::ConversionFailed(msg)
             | ConversionError::ValidationFailed(msg)
             | ConversionError::RefundFailed(msg) => SdkError::Generic(msg),
+            ConversionError::DuplicateTransfer => {
+                SdkError::Generic("Duplicate transfer: conversion already handled".to_string())
+            }
             ConversionError::Sdk(e) => e,
             ConversionError::Storage(e) => SdkError::StorageError(e.to_string()),
             ConversionError::Wallet(e) => SdkError::SparkError(e.to_string()),

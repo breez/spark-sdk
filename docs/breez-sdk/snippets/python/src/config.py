@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     MaxFee,
     OptimizationConfig,
     StableBalanceConfig,
+    StableBalanceToken,
 )
 
 
@@ -50,10 +51,13 @@ async def configure_stable_balance():
 
     # Enable stable balance with auto-conversion to a specific token
     config.stable_balance_config = StableBalanceConfig(
-        token_identifier="<token_identifier>",
+        tokens=[StableBalanceToken(
+            ticker="USDB",
+            token_identifier="<token_identifier>",
+        )],
+        default_active_ticker="USDB",
         threshold_sats=10_000,
         max_slippage_bps=100,
-        reserved_sats=1_000
     )
     # ANCHOR_END: stable-balance-config
     logging.info(f"Config: {config}")
