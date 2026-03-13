@@ -1377,12 +1377,6 @@ mod tests {
         ) -> Result<Option<Zap>, LnurlRepositoryError> {
             Ok(None)
         }
-        async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-            Ok(vec![])
-        }
-        async fn is_zap_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
-            Ok(false)
-        }
         async fn insert_lnurl_sender_comment(
             &self,
             _: &LnurlSenderComment,
@@ -1416,12 +1410,6 @@ mod tests {
             payment_hash: &str,
         ) -> Result<Option<Invoice>, LnurlRepositoryError> {
             Ok(self.invoices.lock().unwrap().get(payment_hash).cloned())
-        }
-        async fn get_invoice_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-            Ok(vec![])
-        }
-        async fn is_invoice_monitored_user(&self, _: &str) -> Result<bool, LnurlRepositoryError> {
-            Ok(false)
         }
         async fn insert_newly_paid(
             &self,

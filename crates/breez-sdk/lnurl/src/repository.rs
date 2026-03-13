@@ -57,10 +57,6 @@ pub trait LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<Option<Zap>, LnurlRepositoryError>;
-    /// Get list of user pubkeys that have unexpired invoices that should be signed by the server
-    async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError>;
-    /// Check if a specific user has any unexpired invoices that should be signed by the server
-    async fn is_zap_monitored_user(&self, user_pubkey: &str) -> Result<bool, LnurlRepositoryError>;
     async fn insert_lnurl_sender_comment(
         &self,
         comment: &LnurlSenderComment,
@@ -102,15 +98,6 @@ pub trait LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<Option<Invoice>, LnurlRepositoryError>;
-
-    /// Get list of user pubkeys that have unexpired invoices without preimages
-    async fn get_invoice_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError>;
-
-    /// Check if a specific user has any unexpired invoices without preimages
-    async fn is_invoice_monitored_user(
-        &self,
-        user_pubkey: &str,
-    ) -> Result<bool, LnurlRepositoryError>;
 
     /// Insert a newly paid invoice into the queue
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError>;

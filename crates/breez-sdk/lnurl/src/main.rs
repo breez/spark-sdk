@@ -278,46 +278,6 @@ where
     // Start background processor for handling paid invoices.
     background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
 
-    // Subscribe to users with unexpired invoices for payment monitoring
-    for user in repository.get_invoice_monitored_users().await? {
-        let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
-            .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
-
-        background::create_rpc_client_and_subscribe(
-            repository.clone(),
-            user_pubkey,
-            &connection_manager,
-            &coordinator,
-            signer.clone(),
-            session_manager.clone(),
-            Arc::clone(&service_provider),
-            Arc::clone(&subscribed_keys),
-            invoice_paid_trigger.clone(),
-        )
-        .await?;
-    }
-
-    if let Some(nostr_keys) = &nostr_keys {
-        // Also subscribe for legacy zap monitoring (users with unexpired zaps)
-        for user in repository.get_zap_monitored_users().await? {
-            let user_pubkey = bitcoin::secp256k1::PublicKey::from_str(&user)
-                .map_err(|e| anyhow!("failed to parse user pubkey: {e:?}"))?;
-
-            zap::create_rpc_client_and_subscribe(
-                repository.clone(),
-                user_pubkey,
-                &connection_manager,
-                &coordinator,
-                signer.clone(),
-                session_manager.clone(),
-                Arc::clone(&service_provider),
-                nostr_keys.clone(),
-                Arc::clone(&subscribed_keys),
-            )
-            .await?;
-        }
-    }
-
     // Generate webhook secret and register with SSP
     let webhook_secret_bytes: [u8; 32] = rand::random();
     let webhook_secret = hex::encode(webhook_secret_bytes);
