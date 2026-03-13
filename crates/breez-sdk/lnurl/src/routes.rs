@@ -1,12 +1,13 @@
 use axum::{
     Extension, Json,
+    body::Bytes,
     extract::{Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use axum_extra::extract::Host;
 use bitcoin::{
-    hashes::{Hash, sha256},
+    hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
     secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
 use lightning_invoice::Bolt11Invoice;
@@ -969,6 +970,143 @@ where
         );
         Ok(())
     }
+
+    /// Webhook endpoint for SSP payment notifications.
+    /// Verifies HMAC-SHA256 signature and processes payment preimages.
+    #[allow(clippy::too_many_lines)]
+    pub async fn webhook(
+        Extension(state): Extension<State<DB>>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Result<(), (StatusCode, Json<Value>)> {
+        // Verify HMAC-SHA256 signature
+        let signature_header = headers
+            .get("X-Spark-Signature")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                trace!("missing X-Spark-Signature header");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(Value::String("missing signature".into())),
+                )
+            })?;
+
+        let signature_bytes = hex::decode(signature_header).map_err(|_| {
+            trace!("invalid signature hex encoding");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
+
+        let mut engine = HmacEngine::<sha256::Hash>::new(state.webhook_secret.as_bytes());
+        engine.input(&body);
+        let expected_hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
+
+        if expected_hmac.to_byte_array() != signature_bytes.as_slice() {
+            trace!("invalid webhook signature");
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(Value::String("invalid signature".into())),
+            ));
+        }
+
+        // Parse the body
+        let payload: WebhookPayload = serde_json::from_slice(&body).map_err(|e| {
+            trace!("invalid webhook payload: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid payload".into())),
+            )
+        })?;
+
+        // Only process lightning receive finished events
+        if payload.event_type != "SPARK_LIGHTNING_RECEIVE_FINISHED" {
+            debug!("ignoring webhook event type: {}", payload.event_type);
+            return Ok(());
+        }
+
+        let payment_preimage = payload.payment_preimage.ok_or_else(|| {
+            trace!("missing payment_preimage in webhook payload");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("missing payment_preimage".into())),
+            )
+        })?;
+
+        let receiver_pubkey = payload.receiver_identity_public_key.ok_or_else(|| {
+            trace!("missing receiver_identity_public_key in webhook payload");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("missing receiver_identity_public_key".into())),
+            )
+        })?;
+
+        // Compute payment hash from preimage
+        let preimage_bytes = hex::decode(&payment_preimage).map_err(|e| {
+            trace!("invalid preimage hex: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid preimage".into())),
+            )
+        })?;
+        let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
+
+        // Look up invoice
+        let invoice = state
+            .db
+            .get_invoice_by_payment_hash(&payment_hash)
+            .await
+            .map_err(|e| {
+                error!("failed to get invoice: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(Value::String("internal server error".into())),
+                )
+            })?;
+
+        let Some(invoice) = invoice else {
+            debug!(
+                "no invoice found for payment hash {} from webhook",
+                payment_hash
+            );
+            return Ok(());
+        };
+
+        // Verify invoice belongs to the receiver
+        if invoice.user_pubkey != receiver_pubkey {
+            warn!(
+                "webhook invoice user mismatch: expected={}, got={}",
+                receiver_pubkey, invoice.user_pubkey
+            );
+            return Ok(());
+        }
+
+        // Handle the invoice paid event
+        if let Err(e) = handle_invoice_paid(
+            &state.db,
+            &payment_hash,
+            &payment_preimage,
+            &state.invoice_paid_trigger,
+        )
+        .await
+        {
+            error!(
+                "failed to handle webhook invoice paid for {}: {}",
+                payment_hash, e
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Value::String("internal server error".into())),
+            ));
+        }
+
+        debug!(
+            "webhook processed: invoice {} paid for pubkey {}",
+            payment_hash, receiver_pubkey
+        );
+        Ok(())
+    }
 }
 
 fn validate_nostr_zap_request(
@@ -1185,6 +1323,14 @@ fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
             .collect(),
         )),
     )
+}
+
+#[derive(Debug, Deserialize)]
+struct WebhookPayload {
+    #[serde(rename = "type")]
+    event_type: String,
+    payment_preimage: Option<String>,
+    receiver_identity_public_key: Option<String>,
 }
 
 fn sanitize_domain<DB>(

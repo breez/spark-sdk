@@ -16,7 +16,7 @@ use figment::{
 use serde::{Deserialize, Serialize};
 use spark::operator::rpc::DefaultConnectionManager;
 use spark::session_manager::InMemorySessionManager;
-use spark::ssp::ServiceProvider;
+use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
 use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
@@ -103,6 +103,10 @@ struct Args {
     /// If set, the server will use this certificate to validate api keys.
     #[arg(long)]
     pub ca_cert: Option<String>,
+
+    /// Domain for the webhook URL registered with the SSP.
+    #[arg(long)]
+    pub webhook_domain: Option<String>,
 }
 
 #[tokio::main]
@@ -293,6 +297,19 @@ where
         }
     }
 
+    // Generate webhook secret and register with SSP
+    let webhook_secret_bytes: [u8; 32] = rand::random();
+    let webhook_secret = hex::encode(webhook_secret_bytes);
+
+    if let Some(webhook_domain) = &args.webhook_domain {
+        let webhook_url = format!("{}://{}/webhook", args.scheme, webhook_domain);
+        register_webhook(
+            Arc::clone(&service_provider),
+            webhook_url,
+            webhook_secret.clone(),
+        );
+    }
+
     let state = State {
         db: repository,
         wallet,
@@ -319,6 +336,7 @@ where
         service_provider,
         subscribed_keys,
         invoice_paid_trigger,
+        webhook_secret,
     };
 
     let server_router = Router::new()
@@ -365,6 +383,7 @@ where
             get(LnurlServer::<DB>::handle_invoice),
         )
         .route("/verify/{payment_hash}", get(LnurlServer::<DB>::verify))
+        .route("/webhook", post(LnurlServer::<DB>::webhook))
         .route("/health", get(|| async { StatusCode::OK }))
         .layer(Extension(state))
         .layer(
@@ -391,4 +410,35 @@ where
 
     info!("lnurl server stopped");
     Ok(())
+}
+
+fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String, secret: String) {
+    tokio::spawn(async move {
+        let mut delay = std::time::Duration::from_secs(1);
+        let max_delay = std::time::Duration::from_secs(60);
+        loop {
+            info!("registering webhook with SSP at {}", webhook_url);
+            match service_provider
+                .register_wallet_webhook(
+                    &webhook_url,
+                    &secret,
+                    vec![SparkWalletWebhookEventType::SparkLightningReceiveFinished],
+                )
+                .await
+            {
+                Ok(_) => {
+                    info!("webhook registered successfully");
+                    break;
+                }
+                Err(e) => {
+                    error!(
+                        "failed to register webhook with SSP: {:?}, retrying in {:?}",
+                        e, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = delay.saturating_mul(2).min(max_delay);
+                }
+            }
+        }
+    });
 }
