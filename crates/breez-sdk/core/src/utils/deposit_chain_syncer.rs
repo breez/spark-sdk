@@ -4,13 +4,15 @@ use std::{
 };
 
 use spark_wallet::SparkWallet;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     BitcoinChainService, SdkError,
     persist::Storage,
     utils::utxo_fetcher::{CachedUtxoFetcher, DetailedUtxo},
 };
+
+const UTXO_PAGE_SIZE: u32 = 100;
 
 pub struct DepositChainSyncer {
     storage: Arc<dyn Storage>,
@@ -40,48 +42,75 @@ impl DepositChainSyncer {
     }
 
     pub async fn sync(&self) -> Result<Vec<DetailedUtxo>, SdkError> {
-        let addresses = self
-            .spark_wallet
-            .list_static_deposit_addresses(None)
-            .await?;
+        let mut detailed_utxos = HashMap::new();
+        let mut cursor = None;
+        let mut hit_error = false;
 
-        // First add all existing deposits to the storage
-        let mut all_utxos = HashMap::new();
-        for address in addresses.items {
-            info!("Checking static deposit address: {}", address.to_string());
-
-            let utxos = self
+        // Process UTXOs page by page, fetching tx details sequentially.
+        // On fetch errors we stop processing but still reconcile what succeeded.
+        loop {
+            let (utxos, next_cursor) = self
                 .spark_wallet
-                .get_utxos_for_address(&address.to_string())
-                .await?
-                .iter()
-                .map(|utxo| (utxo.txid.to_string(), utxo.vout))
-                .collect::<Vec<(String, u32)>>();
+                .get_utxos_for_identity(UTXO_PAGE_SIZE, cursor)
+                .await?;
 
-            for utxo in utxos {
-                let detailed_utxo =
-                    match self.utxo_fetcher.fetch_detailed_utxo(&utxo.0, utxo.1).await {
-                        Ok(detailed_utxo) => detailed_utxo,
-                        Err(e) => {
-                            error!("Failed to convert utxo {}:{}: {e}", utxo.0, utxo.1);
-                            continue;
-                        }
-                    };
-                self.storage
-                    .add_deposit(
-                        detailed_utxo.txid.to_string(),
-                        detailed_utxo.vout,
-                        detailed_utxo.value,
-                    )
-                    .await?;
-                all_utxos.insert(
-                    format!("{}:{}", detailed_utxo.txid, detailed_utxo.vout),
-                    detailed_utxo,
-                );
+            for utxo in &utxos {
+                let txid_str = utxo.txid.to_string();
+                match self
+                    .utxo_fetcher
+                    .fetch_detailed_utxo(&txid_str, utxo.vout)
+                    .await
+                {
+                    Ok(detailed_utxo) => {
+                        self.storage
+                            .add_deposit(
+                                detailed_utxo.txid.to_string(),
+                                detailed_utxo.vout,
+                                detailed_utxo.value,
+                            )
+                            .await?;
+                        detailed_utxos.insert(
+                            format!("{}:{}", detailed_utxo.txid, detailed_utxo.vout),
+                            detailed_utxo,
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to fetch utxo details, processing {} fetched so far: {e}",
+                            detailed_utxos.len()
+                        );
+                        hit_error = true;
+                        break;
+                    }
+                }
             }
+
+            if hit_error || next_cursor.is_none() {
+                break;
+            }
+            cursor = next_cursor;
         }
 
-        // Now remove all deposits that are no longer claimable and not refunded
+        let refunded = self.reconcile_deposits(&detailed_utxos).await?;
+
+        Ok(detailed_utxos
+            .values()
+            .filter(|u| {
+                !refunded.contains(&TxOutput {
+                    txid: u.txid.to_string(),
+                    vout: u.vout,
+                })
+            })
+            .cloned()
+            .collect())
+    }
+
+    /// Removes stale deposits and checks refund confirmations.
+    /// Returns the set of refunded outputs.
+    async fn reconcile_deposits(
+        &self,
+        all_utxos: &HashMap<String, DetailedUtxo>,
+    ) -> Result<HashSet<TxOutput>, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         let mut refunded = HashSet::new();
         let mut refunded_deposits = HashMap::new();
@@ -135,15 +164,6 @@ impl DepositChainSyncer {
             }
         }
 
-        Ok(all_utxos
-            .values()
-            .filter(|u| {
-                !refunded.contains(&TxOutput {
-                    txid: u.txid.to_string(),
-                    vout: u.vout,
-                })
-            })
-            .cloned()
-            .collect())
+        Ok(refunded)
     }
 }

@@ -16,6 +16,8 @@ pub enum ServiceError {
     InvalidIdentifier,
     #[error("missing deposit address")]
     MissingDepositAddress,
+    #[error("missing utxo")]
+    MissingUtxo,
     #[error("missing deposit address proof")]
     MissingDepositAddressProof,
     #[error("missing signing keyshare")]

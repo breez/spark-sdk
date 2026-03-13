@@ -38,7 +38,7 @@ use web_time::SystemTime;
 
 use super::{
     BreezSdk, SyncType,
-    helpers::{InternalEventListener, get_or_create_deposit_address, is_payment_match},
+    helpers::{InternalEventListener, is_payment_match, new_deposit_address},
 };
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -89,8 +89,7 @@ impl BreezSdk {
                 })
             }
             ReceivePaymentMethod::BitcoinAddress => {
-                let address =
-                    get_or_create_deposit_address(&self.spark_wallet, self.storage.clone()).await?;
+                let address = new_deposit_address(&self.spark_wallet).await?;
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee: 0,
