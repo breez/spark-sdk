@@ -10,6 +10,8 @@ use crate::time::now_millis;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandleInvoicePaidError {
+    #[error("invalid invoice: {0}")]
+    InvalidInvoice(String),
     #[error("invalid preimage: {0}")]
     InvalidPreimage(String),
     #[error(transparent)]
@@ -109,7 +111,7 @@ where
         let payment_hash = sha256::Hash::hash(&preimage_bytes).to_string();
 
         let bolt11 = Bolt11Invoice::from_str(&item.invoice).map_err(|e| {
-            HandleInvoicePaidError::InvalidPreimage(format!("invalid bolt11 invoice: {e}"))
+            HandleInvoicePaidError::InvalidInvoice(format!("invalid bolt11 invoice: {e}"))
         })?;
 
         if bolt11.payment_hash().to_string() != payment_hash {

@@ -949,8 +949,9 @@ where
         )
         .await
         .map_err(|e| match &e {
-            HandleInvoicePaidError::InvalidPreimage(msg) => {
-                trace!("Invalid preimage in invoices-paid: {}", msg);
+            HandleInvoicePaidError::InvalidInvoice(msg)
+            | HandleInvoicePaidError::InvalidPreimage(msg) => {
+                trace!("Invalid input in invoices-paid: {}", msg);
                 (StatusCode::BAD_REQUEST, Json(Value::String(msg.clone())))
             }
             HandleInvoicePaidError::Repository(_) => {
