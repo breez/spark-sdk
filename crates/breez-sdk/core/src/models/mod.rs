@@ -284,6 +284,10 @@ pub struct ConversionStep {
     pub method: PaymentMethod,
     /// Token metadata if a token is used for payment
     pub token_metadata: Option<TokenMetadata>,
+    /// Whether the conversion amount was adjusted (e.g. floored to min limit or
+    /// increased to avoid stranded token dust).
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 /// Converts a Spark or Token payment into a `ConversionStep`.
@@ -317,6 +321,7 @@ impl TryFrom<&Payment> for ConversionStep {
                 .saturating_add(conversion_info.fee.unwrap_or(0)),
             method: payment.method,
             token_metadata,
+            amount_adjusted: conversion_info.amount_adjusted,
         })
     }
 }
@@ -672,13 +677,6 @@ pub struct StableBalanceConfig {
     /// Defaults to 50 bps (0.5%) if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_slippage_bps: Option<u32>,
-
-    /// Amount of sats to keep as Bitcoin and not convert to stable tokens.
-    ///
-    /// This reserve ensures you can send Bitcoin payments without hitting
-    /// the minimum conversion limit. Defaults to the conversion minimum if not set.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub reserved_sats: Option<u64>,
 }
 
 /// Specifies how to update the active stable balance token.
@@ -736,12 +734,12 @@ impl Config {
                 }
             }
 
-            if let Some(bps) = sb.max_slippage_bps {
-                if bps > 10000 {
-                    return Err(SdkError::InvalidInput(
-                        "max_slippage_bps must be <= 10000".to_string(),
-                    ));
-                }
+            if let Some(bps) = sb.max_slippage_bps
+                && bps > 10000
+            {
+                return Err(SdkError::InvalidInput(
+                    "max_slippage_bps must be <= 10000".to_string(),
+                ));
             }
 
             if let Some(default_ticker) = &sb.default_active_ticker

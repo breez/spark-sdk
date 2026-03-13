@@ -51,7 +51,6 @@ class Config {
             tokenIdentifier = "<token_identifier>",
             thresholdSats = 10_000u,
             maxSlippageBps = 100u,
-            reservedSats = 1_000u
         )
         // ANCHOR_END: stable-balance-config
         println("Config: $config")

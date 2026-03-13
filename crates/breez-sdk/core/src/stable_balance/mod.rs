@@ -49,11 +49,10 @@ pub(super) fn per_receive_transfer_id(payment_id: &str) -> TransferId {
     TransferId::from_name(&format!("receive_conversion:{payment_id}"))
 }
 
-/// Cached effective threshold and reserved values for auto-conversion.
+/// Cached effective threshold and min conversion limit for auto-conversion.
 #[derive(Clone)]
 pub(super) struct EffectiveValues {
     pub threshold: u64,
-    pub reserved: u64,
     pub min_from_amount: u64,
 }
 
@@ -108,6 +107,7 @@ impl StableBalance {
     ///
     /// Resolves the initial active token from the local cache and config,
     /// and registers itself as an event listener on the provided emitter.
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: StableBalanceConfig,
         token_converter: Arc<dyn TokenConverter>,
@@ -209,7 +209,7 @@ impl StableBalance {
             info!("Stable balance deactivated");
         }
 
-        *self.active_token.write().await = new_active.clone();
+        (*self.active_token.write().await).clone_from(&new_active);
 
         // Clear cached effective values since limits may differ per token
         self.effective_values.clear().await;
@@ -259,19 +259,18 @@ impl StableBalance {
         }
     }
 
-    /// Gets or initializes the effective threshold and reserved sats for auto-conversion.
+    /// Gets or initializes the effective threshold and min conversion limit for auto-conversion.
     ///
     /// Returns cached values if they exist and haven't expired. Otherwise, fetches
     /// conversion limits and computes:
     /// - Effective threshold: `max(user_threshold, min_from_amount)`
-    /// - Effective reserved: user value if set, otherwise `min_from_amount`
     pub(super) async fn get_or_init_effective_values(
         &self,
         active_token_identifier: &str,
-    ) -> Result<(u64, u64, u64), ConversionError> {
+    ) -> Result<(u64, u64), ConversionError> {
         // Return cached values if not expired
         if let Some(values) = self.effective_values.get().await {
-            return Ok((values.threshold, values.reserved, values.min_from_amount));
+            return Ok((values.threshold, values.min_from_amount));
         }
 
         // Fetch limits and compute effective values
@@ -292,25 +291,21 @@ impl StableBalance {
             Some(_) | None => min_from_amount,
         };
 
-        // Compute effective reserved: user value if set, otherwise min_from_amount
-        let reserved = self.config.reserved_sats.unwrap_or(min_from_amount);
-
         // Cache with TTL
         self.effective_values
             .set(
                 EffectiveValues {
                     threshold,
-                    reserved,
                     min_from_amount,
                 },
                 EFFECTIVE_VALUES_TTL_MS,
             )
             .await;
         info!(
-            "Auto-conversion effective values initialized: threshold={threshold} sats, reserved={reserved} sats, min_from_amount={min_from_amount} sats"
+            "Auto-conversion effective values initialized: threshold={threshold} sats, min_from_amount={min_from_amount} sats"
         );
 
-        Ok((threshold, reserved, min_from_amount))
+        Ok((threshold, min_from_amount))
     }
 
     /// Creates a lock guard that prevents auto-conversion while held.
@@ -355,23 +350,15 @@ impl StableBalance {
             return Ok(None);
         };
 
-        let (_, reserved, _) = self
-            .get_or_init_effective_values(&active_token_identifier)
-            .await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
-        let effective_balance = balance_sats.min(reserved);
 
-        // Only auto-populate if the effective sats balance (capped at reserve) is insufficient.
-        // Sats above the reserve are expected to be used for payments or eventually
-        // auto-converted to tokens, so they shouldn't be counted as available for
-        // direct sats payments.
-        if u128::from(effective_balance) >= payment_amount {
+        // Only auto-populate if the sats balance is insufficient for the payment.
+        if u128::from(balance_sats) >= payment_amount {
             return Ok(None);
         }
 
         info!(
-            "Auto-populating conversion options: effective balance {effective_balance} sats \
-             (balance={balance_sats}, reserve={reserved}) < payment amount {payment_amount} sats"
+            "Auto-populating conversion options: balance {balance_sats} sats < payment amount {payment_amount} sats"
         );
         Ok(Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
@@ -409,7 +396,7 @@ impl StableBalance {
             return false;
         };
 
-        let Ok((_, _, min_from_amount)) = self.get_or_init_effective_values(&token_id).await else {
+        let Ok((_, min_from_amount)) = self.get_or_init_effective_values(&token_id).await else {
             warn!("Failed to check effective values, skipping per-receive");
             return false;
         };

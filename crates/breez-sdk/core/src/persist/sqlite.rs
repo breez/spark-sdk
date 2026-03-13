@@ -712,7 +712,7 @@ impl Storage for SqliteStorage {
                 metadata.lnurl_withdraw_info,
                 metadata.lnurl_description,
                 metadata.conversion_info.as_ref().map(serde_json::to_string).transpose()?,
-                metadata.conversion_status.as_ref().map(|s| s.to_string()),
+                metadata.conversion_status.as_ref().map(std::string::ToString::to_string),
             ],
         )?;
 
@@ -1501,12 +1501,11 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     };
     // Read conversion_status from payment_metadata (column 30)
     let conversion_status: Option<ConversionStatus> = row.get(30)?;
-    let conversion_details = conversion_status
-        .map(|status| ConversionDetails {
-            status,
-            from: None,
-            to: None,
-        });
+    let conversion_details = conversion_status.map(|status| ConversionDetails {
+        status,
+        from: None,
+        to: None,
+    });
 
     Ok(Payment {
         id: row.get(0)?,

@@ -39,6 +39,9 @@ pub struct ConversionEstimate {
     /// The fee estimated for the conversion
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
+    /// Whether the conversion amount was adjusted to meet the min conversion limit
+    /// or to avoid leaving token dust.
+    pub amount_adjusted: bool,
 }
 
 /// The purpose of the conversion, which is used to provide context for the conversion
@@ -125,6 +128,10 @@ pub struct ConversionInfo {
     pub fee: Option<u128>,
     /// The purpose of the conversion
     pub purpose: Option<ConversionPurpose>,
+    /// Whether the conversion amount was adjusted to meet the min conversion limit
+    /// or to avoid leaving token dust.
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 pub(crate) struct TokenConversionPool {

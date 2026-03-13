@@ -287,7 +287,6 @@ async fn main() -> Result<(), anyhow::Error> {
             default_active_ticker: cli.stable_balance_default_active_ticker,
             threshold_sats: cli.stable_balance_threshold,
             max_slippage_bps: None,
-            reserved_sats: None,
         })
     };
 

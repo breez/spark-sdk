@@ -56,12 +56,10 @@ func ConfigureStableBalance() {
 	// Enable stable balance with auto-conversion to a specific token
 	thresholdSats := uint64(10_000)
 	maxSlippageBps := uint32(100)
-	reservedSats := uint64(1_000)
 	stableBalanceConfig := breez_sdk_spark.StableBalanceConfig{
 		TokenIdentifier: "<token_identifier>",
 		ThresholdSats:   &thresholdSats,
 		MaxSlippageBps:  &maxSlippageBps,
-		ReservedSats:    &reservedSats,
 	}
 	config.StableBalanceConfig = &stableBalanceConfig
 	// ANCHOR_END: stable-balance-config

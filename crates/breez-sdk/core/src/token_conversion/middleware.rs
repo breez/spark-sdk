@@ -16,13 +16,15 @@ impl TokenConversionMiddleware {
     fn has_conversion_info(payment: &Payment) -> bool {
         matches!(
             &payment.details,
-            Some(PaymentDetails::Spark {
-                conversion_info: Some(_),
-                ..
-            }) | Some(PaymentDetails::Token {
-                conversion_info: Some(_),
-                ..
-            })
+            Some(
+                PaymentDetails::Spark {
+                    conversion_info: Some(_),
+                    ..
+                } | PaymentDetails::Token {
+                    conversion_info: Some(_),
+                    ..
+                }
+            )
         )
     }
 }

@@ -112,17 +112,23 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let btc_to_token_conversion_details = send_btc_to_token.payment.conversion_details.unwrap();
     assert_eq!(
-        btc_to_token_conversion_details.from.method,
+        btc_to_token_conversion_details
+            .from
+            .as_ref()
+            .unwrap()
+            .method,
         PaymentMethod::Spark,
         "From step should be a spark payment"
     );
     assert!(
-        btc_to_token_conversion_details.from.fee > 0,
+        btc_to_token_conversion_details.from.as_ref().unwrap().fee > 0,
         "From step should have a fee"
     );
     assert!(
         btc_to_token_conversion_details
             .from
+            .as_ref()
+            .unwrap()
             .token_metadata
             .is_none(),
         "From step should have no token metadata"
@@ -273,17 +279,23 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let token_to_btc_conversion_details = send_token_to_btc.payment.conversion_details.unwrap();
     assert_eq!(
-        token_to_btc_conversion_details.from.method,
+        token_to_btc_conversion_details
+            .from
+            .as_ref()
+            .unwrap()
+            .method,
         PaymentMethod::Token,
         "From step should be a token payment"
     );
     assert!(
-        token_to_btc_conversion_details.from.fee > 0,
+        token_to_btc_conversion_details.from.as_ref().unwrap().fee > 0,
         "From step should have a fee"
     );
     assert!(
         token_to_btc_conversion_details
             .from
+            .as_ref()
+            .unwrap()
             .token_metadata
             .is_some(),
         "From step should have token metadata"

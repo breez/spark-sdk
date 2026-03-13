@@ -894,7 +894,7 @@ mod tests {
         }
     }
 
-    /// Middleware that replaces PaymentSucceeded with PaymentPending
+    /// Middleware that replaces `PaymentSucceeded` with `PaymentPending`
     struct DowngradePaymentMiddleware;
 
     #[macros::async_trait]
@@ -926,7 +926,7 @@ mod tests {
             status: crate::PaymentStatus::Completed,
             amount: 1000,
             fees: 10,
-            timestamp: 123456,
+            timestamp: 123_456,
             method: crate::PaymentMethod::Spark,
             details: None,
             conversion_details: None,

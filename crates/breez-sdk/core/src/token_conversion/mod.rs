@@ -36,20 +36,23 @@ pub(crate) trait TokenConverter: Send + Sync {
 
     /// Validate a conversion and return the estimated conversion.
     ///
-    /// Called during `prepare_send_payment` to calculate the conversion fee.
+    /// Called during `prepare_send_payment` to calculate the conversion fee,
+    /// and during auto-conversion to estimate the token output.
     ///
     /// # Arguments
     /// * `options` - The conversion options to validate
     /// * `token_identifier` - Optional token identifier for `FromBitcoin` conversions
-    /// * `amount_out` - The amount to receive from the conversion
+    /// * `amount` - Either the minimum output amount or exact input amount
     ///
     /// # Returns
     /// The estimated conversion including amount and fee, or None if options is None.
+    /// For `MinAmountOut`: `estimate.amount` is the required input amount.
+    /// For `AmountIn`: `estimate.amount` is the estimated output amount (slippage-adjusted).
     async fn validate(
         &self,
         options: Option<&ConversionOptions>,
         token_identifier: Option<&String>,
-        amount_out: u128,
+        amount: ConversionAmount,
     ) -> Result<Option<ConversionEstimate>, ConversionError>;
 
     /// Fetch conversion limits for a given conversion type.

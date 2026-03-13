@@ -641,6 +641,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Completed,
             fee: Some(21),
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -708,6 +709,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Refunded,
             fee: None,
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -737,6 +739,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::RefundNeeded,
             fee: None,
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -1882,6 +1885,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Refunded,
             fee: None,
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -1918,6 +1922,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Completed,
             fee: Some(100),
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -1944,6 +1949,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::RefundNeeded,
             fee: None,
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };
@@ -2664,6 +2670,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Completed,
             fee: Some(100),
             purpose: None,
+            amount_adjusted: false,
         }),
         ..Default::default()
     };

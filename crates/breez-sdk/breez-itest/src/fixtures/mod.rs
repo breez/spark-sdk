@@ -120,35 +120,6 @@ pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
         default_active_ticker: Some("SHELL".to_string()),
         threshold_sats: Some(1000),
         max_slippage_bps: Some(500),
-        reserved_sats: None,
-    });
-    build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
-}
-
-/// Fixture: Alice's SDK with stable balance config and explicit reserved sats
-#[fixture]
-pub async fn alice_sdk_stable_balance_with_reserve() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice-stable-balance-reserve")?;
-    let path = alice_dir.path().to_string_lossy().to_string();
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-
-    let mut cfg = default_config(Network::Regtest);
-    cfg.stable_balance_config = Some(StableBalanceConfig {
-        tokens: vec![
-            StableBalanceToken {
-                ticker: "SHELL".to_string(),
-                token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
-            },
-            StableBalanceToken {
-                ticker: "BEAN".to_string(),
-                token_identifier: BEAN_REGTEST_TOKEN_ID.to_string(),
-            },
-        ],
-        default_active_ticker: Some("SHELL".to_string()),
-        threshold_sats: Some(1000),
-        max_slippage_bps: Some(500),
-        reserved_sats: Some(2000),
     });
     build_sdk_with_custom_config(path, seed, cfg, Some(alice_dir), true).await
 }

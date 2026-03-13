@@ -629,7 +629,10 @@ impl Storage for PostgresStorage {
         let lnurl_pay_info_json = to_json_opt(metadata.lnurl_pay_info.as_ref())?;
         let lnurl_withdraw_info_json = to_json_opt(metadata.lnurl_withdraw_info.as_ref())?;
         let conversion_info_json = to_json_opt(metadata.conversion_info.as_ref())?;
-        let conversion_status_str = metadata.conversion_status.as_ref().map(|s| s.to_string());
+        let conversion_status_str = metadata
+            .conversion_status
+            .as_ref()
+            .map(std::string::ToString::to_string);
 
         client
             .execute(
@@ -1511,7 +1514,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                             from: None,
                             to: None,
                         })
-                        .map_err(|e| StorageError::Serialization(e))
+                        .map_err(StorageError::Serialization)
                 })
                 .transpose()?
         },

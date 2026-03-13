@@ -11,17 +11,17 @@ use crate::persist::PaymentMetadata;
 use crate::realtime_sync::sync_lock::SyncLockGuard;
 use crate::token_conversion::{
     ConversionAmount, ConversionError, ConversionOptions, ConversionPurpose, ConversionType,
+    FetchConversionLimitsRequest,
 };
 
-use super::{
-    AUTO_CONVERT_LOCK_NAME, PAYMENT_LOCK_NAME, StableBalance, per_receive_transfer_id,
-};
+use super::{AUTO_CONVERT_LOCK_NAME, PAYMENT_LOCK_NAME, StableBalance, per_receive_transfer_id};
 
 impl StableBalance {
     /// Converts a single received payment if it meets the minimum threshold.
     ///
     /// Returns `true` if conversion was performed, `false` if skipped.
     /// Acquires a payment lock guard to block auto-convert on other instances.
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn per_receive_convert(
         &self,
         parent_payment_id: &str,
@@ -77,7 +77,7 @@ impl StableBalance {
 
         // Check minimum threshold
         let amount_sats = payment.amount;
-        let (_, _, min_from_amount) = self
+        let (_, min_from_amount) = self
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         let amount_sats_u64 = u64::try_from(amount_sats).unwrap_or(u64::MAX);
@@ -178,16 +178,13 @@ impl StableBalance {
             return Ok(false);
         }
 
-        // Check if balance exceeds the trigger amount
-        let (threshold, reserved, _) = self
+        // Check if balance exceeds the threshold
+        let (threshold, _) = self
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         let balance_sats = self.spark_wallet.get_balance().await?;
-        let trigger_amount = reserved.saturating_add(threshold);
-        if balance_sats < trigger_amount {
-            debug!(
-                "Auto-conversion skipped: balance {balance_sats} < reserved {reserved} + threshold {threshold}"
-            );
+        if balance_sats < threshold {
+            debug!("Auto-conversion skipped: balance {balance_sats} < threshold {threshold}");
             return Ok(false);
         }
 
@@ -220,26 +217,32 @@ impl StableBalance {
             }
         };
 
-        // Convert the amount above the reserve
-        let amount_to_convert = balance_sats.saturating_sub(reserved);
-
-        info!(
-            "Auto-conversion triggered: converting {amount_to_convert} sats to {active_token_identifier} (keeping {reserved} sats reserved)",
-        );
-
-        let options = ConversionOptions {
+        let from_btc_options = ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: self.config.max_slippage_bps,
             completion_timeout_secs: None,
         };
 
+        // Check that converting wouldn't create token dust (balance below the ToBitcoin
+        // min conversion limit, making it impossible to convert back).
+        if self
+            .produces_token_dust(&active_token_identifier, &from_btc_options, balance_sats)
+            .await
+        {
+            return Ok(false);
+        }
+
+        info!(
+            "Auto-conversion triggered: converting {balance_sats} sats to {active_token_identifier}",
+        );
+
         let response = self
             .token_converter
             .convert(
-                &options,
+                &from_btc_options,
                 &ConversionPurpose::AutoConversion,
                 Some(&active_token_identifier),
-                ConversionAmount::AmountIn(u128::from(amount_to_convert)),
+                ConversionAmount::AmountIn(u128::from(balance_sats)),
                 None,
             )
             .await?;
@@ -257,7 +260,7 @@ impl StableBalance {
 
         info!(
             "Auto-conversion completed: converted {} sats (sent_payment_id={}, received_payment_id={})",
-            amount_to_convert, response.sent_payment_id, response.received_payment_id
+            balance_sats, response.sent_payment_id, response.received_payment_id
         );
 
         // Persist Completed status for the received token payment
@@ -274,5 +277,68 @@ impl StableBalance {
         // _lock_guard drops here, releasing the distributed lock
 
         Ok(true)
+    }
+
+    /// Checks whether auto-converting `balance_sats` would create token dust
+    /// (a balance below the `ToBitcoin` min conversion limit).
+    async fn produces_token_dust(
+        &self,
+        active_token_identifier: &str,
+        from_btc_options: &ConversionOptions,
+        balance_sats: u64,
+    ) -> bool {
+        let token_id = active_token_identifier.to_string();
+
+        // Fetch limits and token balances concurrently
+        let limits_request = FetchConversionLimitsRequest {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: token_id.clone(),
+            },
+            token_identifier: Some(token_id.clone()),
+        };
+        let (limits_res, balances_res) = tokio::join!(
+            self.token_converter.fetch_limits(&limits_request),
+            self.spark_wallet.get_token_balances(),
+        );
+
+        let Some(to_btc_min) = limits_res.ok().and_then(|l| l.min_from_amount) else {
+            return false;
+        };
+
+        let existing_tokens = balances_res
+            .unwrap_or_default()
+            .get(active_token_identifier)
+            .map_or(0, |b| b.balance);
+
+        if existing_tokens >= to_btc_min {
+            return false;
+        }
+
+        // Estimate how many tokens we'd get from converting balance_sats
+        let Ok(Some(est)) = self
+            .token_converter
+            .validate(
+                Some(from_btc_options),
+                Some(&token_id),
+                ConversionAmount::AmountIn(u128::from(balance_sats)),
+            )
+            .await
+        else {
+            return false;
+        };
+
+        // Would create token dust if projected balance is still below min conversion limit
+        let estimated_total = existing_tokens.saturating_add(est.amount);
+        if estimated_total < to_btc_min {
+            debug!(
+                "Auto-conversion skipped: {balance_sats} sats would produce \
+                 {} tokens, total {estimated_total} still below ToBitcoin min {to_btc_min} \
+                 (existing tokens: {existing_tokens})",
+                est.amount,
+            );
+            return true;
+        }
+
+        false
     }
 }

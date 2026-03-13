@@ -112,7 +112,6 @@ fn persistent_sdk_stable_balance() -> ReinitializableSdkInstance {
         default_active_ticker: Some("SHELL".to_string()),
         threshold_sats: Some(1000),
         max_slippage_bps: Some(500),
-        reserved_sats: None,
     });
     ReinitializableSdkInstance::new(
         cfg,

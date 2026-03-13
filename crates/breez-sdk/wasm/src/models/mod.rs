@@ -465,6 +465,8 @@ pub struct ConversionStep {
     pub fee: u128,
     pub method: PaymentMethod,
     pub token_metadata: Option<TokenMetadata>,
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
@@ -653,7 +655,6 @@ pub struct StableBalanceConfig {
     pub default_active_ticker: Option<String>,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
-    pub reserved_sats: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
@@ -1252,6 +1253,7 @@ pub struct ConversionEstimate {
     pub options: ConversionOptions,
     pub amount: u128,
     pub fee: u128,
+    pub amount_adjusted: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionPurpose)]
@@ -1279,6 +1281,8 @@ pub struct ConversionInfo {
     #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub purpose: Option<ConversionPurpose>,
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionOptions)]

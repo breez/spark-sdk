@@ -62,7 +62,6 @@ pub struct _StableBalanceConfig {
     pub default_active_ticker: Option<String>,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
-    pub reserved_sats: Option<u64>,
 }
 
 #[frb(mirror(ExternalInputParser))]
@@ -576,6 +575,7 @@ pub struct _ConversionStep {
     pub fee: u128,
     pub method: PaymentMethod,
     pub token_metadata: Option<TokenMetadata>,
+    pub amount_adjusted: bool,
 }
 
 #[frb(mirror(PaymentDetails))]
@@ -1097,6 +1097,7 @@ pub struct _ConversionEstimate {
     pub options: ConversionOptions,
     pub amount: u128,
     pub fee: u128,
+    pub amount_adjusted: bool,
 }
 
 #[frb(mirror(ConversionPurpose))]
@@ -1122,6 +1123,7 @@ pub struct _ConversionInfo {
     pub status: ConversionStatus,
     pub fee: Option<u128>,
     pub purpose: Option<ConversionPurpose>,
+    pub amount_adjusted: bool,
 }
 
 #[frb(mirror(ConversionOptions))]

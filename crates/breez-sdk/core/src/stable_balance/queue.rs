@@ -32,17 +32,13 @@ pub(crate) enum ConversionTask {
 }
 
 /// State of a pending per-receive conversion in the queue.
-///
-/// ```text
-/// Ready → (fails) → Deferred → (resolved by PaymentSucceeded or timeout)
-/// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) enum PendingState {
     /// Ready to be processed by the worker.
     #[default]
     Ready,
     /// Failed at least once. Skipped by the worker, waiting for either:
-    /// - A PaymentSucceeded event matching the deterministic transfer_id
+    /// - A `PaymentSucceeded` event matching the deterministic `transfer_id`
     ///   (another instance completed the conversion)
     /// - Timeout expiry (genuine failure)
     Deferred,
@@ -101,15 +97,11 @@ impl ConversionQueue {
         }
     }
 
-    /// Queue a per-receive conversion task. Deduplicates by payment_id.
+    /// Queue a per-receive conversion task. Deduplicates by `payment_id`.
     /// Persists the pending list for restart recovery.
     pub async fn push_per_receive(&self, payment_id: String) {
         let mut state = self.state.lock().await;
-        if !state
-            .per_receive
-            .iter()
-            .any(|p| p.payment_id == payment_id)
-        {
+        if !state.per_receive.iter().any(|p| p.payment_id == payment_id) {
             state.per_receive.push(PendingConversion {
                 payment_id,
                 state: PendingState::Ready,
@@ -179,26 +171,22 @@ impl ConversionQueue {
 
     /// Check if an incoming payment is the conversion result for a deferred task.
     ///
-    /// Computes the deterministic transfer_id for each deferred task and compares
+    /// Computes the deterministic `transfer_id` for each deferred task and compares
     /// it to the incoming payment ID. If a match is found, the task is removed
-    /// from the queue and its parent payment_id is returned.
-    pub async fn resolve_by_conversion_payment(
-        &self,
-        incoming_payment_id: &str,
-    ) -> Option<String> {
+    /// from the queue and its parent `payment_id` is returned.
+    pub async fn resolve_by_conversion_payment(&self, incoming_payment_id: &str) -> Option<String> {
         let mut state = self.state.lock().await;
         let idx = state.per_receive.iter().position(|p| {
             p.state == PendingState::Deferred
-                && per_receive_transfer_id(&p.payment_id).to_string()
-                    == incoming_payment_id
+                && per_receive_transfer_id(&p.payment_id).to_string() == incoming_payment_id
         })?;
         let resolved = state.per_receive.remove(idx);
         self.persist_pending(&state).await;
         Some(resolved.payment_id)
     }
 
-    /// Remove deferred tasks that have exceeded the timeout and return their payment_ids.
-    /// Called on Synced events to clean up tasks that were never resolved.
+    /// Remove deferred tasks that have exceeded the timeout and return their `payment_ids`.
+    /// Called on `Synced` events to clean up tasks that were never resolved.
     pub async fn clear_expired_tasks(&self) -> Vec<String> {
         let now = now_secs();
         let mut state = self.state.lock().await;
@@ -248,10 +236,10 @@ impl StableBalance {
         tokio::spawn(
             async move {
                 // Pre-warm effective values cache
-                if let Some(token_id) = stable_balance.get_active_token_identifier().await {
-                    if let Err(e) = stable_balance.get_or_init_effective_values(&token_id).await {
-                        warn!("Failed to pre-warm effective values: {e:?}");
-                    }
+                if let Some(token_id) = stable_balance.get_active_token_identifier().await
+                    && let Err(e) = stable_balance.get_or_init_effective_values(&token_id).await
+                {
+                    warn!("Failed to pre-warm effective values: {e:?}");
                 }
 
                 // Wait for initial sync before processing any tasks
@@ -342,8 +330,8 @@ impl StableBalance {
     async fn process_per_receive(&self, payment_id: String) -> PerReceiveResult {
         match self.per_receive_convert(&payment_id).await {
             Ok(converted) => {
-                if converted {
-                    if let Err(e) = self
+                if converted
+                    && let Err(e) = self
                         .storage
                         .insert_payment_metadata(
                             payment_id.clone(),
@@ -353,15 +341,16 @@ impl StableBalance {
                             },
                         )
                         .await
-                    {
-                        warn!("Failed to persist Completed status for {payment_id}: {e:?}");
-                    }
+                {
+                    warn!("Failed to persist Completed status for {payment_id}: {e:?}");
                 }
                 PerReceiveResult::Done { converted }
             }
             Err(e) => {
                 if e.is_duplicate_transfer() {
-                    info!("Per-receive conversion for {payment_id}: already handled by another instance");
+                    info!(
+                        "Per-receive conversion for {payment_id}: already handled by another instance"
+                    );
                     return PerReceiveResult::Done { converted: false };
                 }
 

@@ -178,7 +178,7 @@ impl BreezSdk {
                         .validate(
                             conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            amount,
+                            ConversionAmount::MinAmountOut(amount),
                         )
                         .await?
                 };
@@ -220,7 +220,7 @@ impl BreezSdk {
                         .validate(
                             conversion_options.as_ref(),
                             effective_token_identifier.as_ref(),
-                            amount,
+                            ConversionAmount::MinAmountOut(amount),
                         )
                         .await?
                 };
@@ -292,7 +292,7 @@ impl BreezSdk {
                         .validate(
                             conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            total_amount,
+                            ConversionAmount::MinAmountOut(total_amount),
                         )
                         .await?
                 };
@@ -364,7 +364,7 @@ impl BreezSdk {
                         .validate(
                             conversion_options.as_ref(),
                             token_identifier.as_ref(),
-                            total_amount,
+                            ConversionAmount::MinAmountOut(total_amount),
                         )
                         .await?
                 };
@@ -710,7 +710,7 @@ impl BreezSdk {
         }
     }
 
-    /// Links conversion child payments to their parent to hide them from list_payments.
+    /// Links conversion child payments to their parent to hide them from `list_payments`.
     ///
     /// Only self-transfers are linked immediately (parent is the conversion receive, known upfront).
     /// All other cases are deferred until after the actual send completes.

@@ -59,7 +59,6 @@ namespace BreezSdkSnippets
                     tokenIdentifier: "<token_identifier>",
                     thresholdSats: 10000,
                     maxSlippageBps: 100,
-                    reservedSats: 1000
                 )
             };
             // ANCHOR_END: stable-balance-config
