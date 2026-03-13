@@ -141,6 +141,7 @@ impl TryFrom<&SignedTx> for operator_rpc::spark::UserSignedTxSigningJob {
                 signing_commitments: to_proto_signing_commitments(&signed_tx.signing_commitments)?,
             }),
             user_signature: signed_tx.user_signature.serialize().to_vec(),
+            additional_inputs: vec![],
         })
     }
 }

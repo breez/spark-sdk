@@ -2059,9 +2059,10 @@ impl BackgroundProcessor {
                     debug!("Received event: {event}");
                     trace!("Received event: {event:?}");
                     let result = match event.clone() {
-                        SparkEvent::Transfer(transfer) => {
+                        SparkEvent::ReceiverTransfer(transfer) => {
                             self.process_transfer_event(*transfer).await
                         }
+                        SparkEvent::SenderTransfer(_) => Ok(()),
                         SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
                         SparkEvent::Connected => self.process_connected_event().await,
                         SparkEvent::Disconnected => self.process_disconnected_event().await,

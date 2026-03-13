@@ -159,9 +159,9 @@ pub fn subscribe_to_user_for_zaps<DB>(
                 };
 
                 let transfer_event = match event {
-                    Event::Transfer(transfer_event) => transfer_event,
-                    Event::Deposit(_) => {
-                        trace!("Received deposit event, skipping");
+                    Event::ReceiverTransfer(transfer_event) => transfer_event,
+                    Event::SenderTransfer(_) | Event::Deposit(_) => {
+                        trace!("Received non-receiver-transfer event, skipping");
                         continue;
                     }
                     Event::Connected(_) => {

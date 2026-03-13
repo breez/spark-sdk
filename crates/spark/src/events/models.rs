@@ -11,7 +11,8 @@ pub type EventStream = broadcast::Receiver<SparkEvent>;
 pub enum SparkEvent {
     Connected,
     Disconnected,
-    Transfer(Box<Transfer>),
+    ReceiverTransfer(Box<Transfer>),
+    SenderTransfer(Box<Transfer>),
     Deposit(Box<TreeNode>),
 }
 
@@ -20,7 +21,12 @@ impl Display for SparkEvent {
         match self {
             SparkEvent::Connected => write!(f, "Connected"),
             SparkEvent::Disconnected => write!(f, "Disconnected"),
-            SparkEvent::Transfer(transfer) => write!(f, "Transfer({})", transfer.id),
+            SparkEvent::ReceiverTransfer(transfer) => {
+                write!(f, "ReceiverTransfer({})", transfer.id)
+            }
+            SparkEvent::SenderTransfer(transfer) => {
+                write!(f, "SenderTransfer({})", transfer.id)
+            }
             SparkEvent::Deposit(deposit) => write!(f, "Deposit({})", deposit.id),
         }
     }
