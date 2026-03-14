@@ -40,7 +40,7 @@ spark.workspace = true
 web-time.workspace = true
 spark-wallet.workspace = true
 futures.workspace = true
-url.workspace = true
+bitreq.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

@@ -18,7 +18,7 @@ tracing.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-bitreq.workspace = true
+bitreq = { workspace = true, features = ["async", "async-https", "json-using-serde"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]

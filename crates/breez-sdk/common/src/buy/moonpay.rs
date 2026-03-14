@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::BuyBitcoinProviderApi;
 use crate::{breez_server::BreezServer, grpc::SignUrlRequest};
 use anyhow::Result;
-use url::Url;
+use bitreq::Url;
 
 #[derive(Clone)]
 struct MoonPayConfig {
@@ -35,6 +35,8 @@ fn create_moonpay_url(
 ) -> Result<Url> {
     let config = moonpay_config();
 
+    let mut url = Url::parse(&config.base_url)?;
+
     // Build query params in the order defined by MoonPay's docs:
     // https://dev.moonpay.com/docs/ramps-sdk-buy-params
     let mut params = vec![
@@ -56,7 +58,8 @@ fn create_moonpay_url(
     // redirectURL comes after the conditional lockAmount params
     params.push(("redirectURL", redirect_url.unwrap_or(config.redirect_url)));
 
-    let url = Url::parse_with_params(&config.base_url, params)?;
+    let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    url.append_query_params(params);
     Ok(url)
 }
 
@@ -116,8 +119,8 @@ pub(crate) mod tests {
 
         let url = create_moonpay_url(wallet_address.clone(), Some(quote_amount.clone()), None)?;
 
-        let query_pairs = url.query_pairs().into_owned().collect::<HashMap<_, _>>();
-        assert_eq!(url.host_str(), Some("buy.moonpay.io"));
+        let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(url.base_url(), "buy.moonpay.io");
         assert_eq!(url.path(), "/");
         assert_eq!(query_pairs.get("apiKey"), Some(&config.api_key));
         assert_eq!(query_pairs.get("currencyCode"), Some(&config.currency_code));
@@ -143,8 +146,8 @@ pub(crate) mod tests {
             Some(redirect_url.clone()),
         )?;
 
-        let query_pairs = url.query_pairs().into_owned().collect::<HashMap<_, _>>();
-        assert_eq!(url.host_str(), Some("buy.moonpay.io"));
+        let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(url.base_url(), "buy.moonpay.io");
         assert_eq!(url.path(), "/");
         assert_eq!(query_pairs.get("apiKey"), Some(&config.api_key));
         assert_eq!(query_pairs.get("currencyCode"), Some(&config.currency_code));
