@@ -143,7 +143,7 @@ async fn run_interactive_mode(
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
         .map(|var| var.into_string().expect("Expected valid API key string"));
     let mut config = default_config(network);
-    config.api_key = breez_api_key.clone();
+    config.api_key.clone_from(&breez_api_key);
     config.stable_balance_config = stable_balance_config;
 
     let seed = if let Some(config) = passkey_config {
