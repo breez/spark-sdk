@@ -1421,7 +1421,10 @@ mod tests {
                 .insert(newly_paid.payment_hash.clone(), newly_paid.clone());
             Ok(())
         }
-        async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+        async fn get_pending_newly_paid(
+            &self,
+            _instance_id: &str,
+        ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
             Ok(self.newly_paid.lock().unwrap().values().cloned().collect())
         }
         async fn update_newly_paid_retry(
@@ -1463,6 +1466,13 @@ mod tests {
                 store.insert(np.payment_hash.clone(), np.clone());
             }
             Ok(())
+        }
+        async fn get_or_create_setting(
+            &self,
+            _key: &str,
+            default_value: &str,
+        ) -> Result<String, LnurlRepositoryError> {
+            Ok(default_value.to_string())
         }
     }
 

@@ -409,15 +409,28 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+    async fn get_pending_newly_paid(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
         let now = now_millis();
+        let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let rows = sqlx::query(
-            "SELECT payment_hash, created_at, retry_count, next_retry_at
-             FROM newly_paid
-             WHERE next_retry_at <= $1
-             ORDER BY next_retry_at ASC",
+            "UPDATE newly_paid
+             SET claimed_by = $2, claimed_at = $3
+             WHERE payment_hash IN (
+                 SELECT payment_hash FROM newly_paid
+                 WHERE next_retry_at <= $1
+                   AND (claimed_by IS NULL OR claimed_by = $2 OR claimed_at < $4)
+                 ORDER BY next_retry_at ASC
+                 FOR UPDATE SKIP LOCKED
+             )
+             RETURNING payment_hash, created_at, retry_count, next_retry_at",
         )
         .bind(now)
+        .bind(instance_id)
+        .bind(now)
+        .bind(stale_threshold)
         .fetch_all(&self.pool)
         .await?;
         let newly_paid = rows
@@ -459,5 +472,26 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn get_or_create_setting(
+        &self,
+        key: &str,
+        default_value: &str,
+    ) -> Result<String, LnurlRepositoryError> {
+        sqlx::query(
+            "INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT(key) DO NOTHING",
+        )
+        .bind(key)
+        .bind(default_value)
+        .execute(&self.pool)
+        .await?;
+
+        let value: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = $1")
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(value)
     }
 }

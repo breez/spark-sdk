@@ -275,12 +275,25 @@ where
     // Create watch channel for triggering background processing
     let (invoice_paid_trigger, invoice_paid_rx) = watch::channel(());
 
-    // Start background processor for handling paid invoices.
-    background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
+    // Generate a unique instance ID for this server instance
+    let instance_id = hex::encode(rand::random::<[u8; 16]>());
+    info!("instance_id: {instance_id}");
 
-    // Generate webhook secret and register with SSP
-    let webhook_secret_bytes: [u8; 32] = rand::random();
-    let webhook_secret = hex::encode(webhook_secret_bytes);
+    // Start background processor for handling paid invoices.
+    background::start_background_processor(
+        repository.clone(),
+        nostr_keys.clone(),
+        instance_id,
+        invoice_paid_rx,
+    );
+
+    // Get or create a shared webhook secret persisted in the database.
+    // All instances share the same secret so webhooks verify correctly
+    // regardless of which instance receives them.
+    let default_secret = hex::encode(rand::random::<[u8; 32]>());
+    let webhook_secret = repository
+        .get_or_create_setting("webhook_secret", &default_secret)
+        .await?;
 
     if let Some(webhook_domain) = &args.webhook_domain {
         let webhook_url = format!("{}://{}/webhook", args.scheme, webhook_domain);

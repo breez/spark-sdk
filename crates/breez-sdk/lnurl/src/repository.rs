@@ -108,8 +108,13 @@ pub trait LnurlRepository {
         newly_paid: &[NewlyPaid],
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Get all newly paid invoices ready for processing (`next_retry_at` <= now)
-    async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
+    /// Get all newly paid invoices ready for processing (`next_retry_at` <= now),
+    /// atomically claiming them for the given instance. Items already claimed by
+    /// another instance within the last 5 minutes are skipped.
+    async fn get_pending_newly_paid(
+        &self,
+        instance_id: &str,
+    ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
 
     /// Update retry count and next retry time for a newly paid invoice
     async fn update_newly_paid_retry(
@@ -121,4 +126,12 @@ pub trait LnurlRepository {
 
     /// Delete a newly paid invoice from the queue
     async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Get or create a setting. If the key doesn't exist, insert the default value.
+    /// Returns the current value (either existing or newly inserted).
+    async fn get_or_create_setting(
+        &self,
+        key: &str,
+        default_value: &str,
+    ) -> Result<String, LnurlRepositoryError>;
 }

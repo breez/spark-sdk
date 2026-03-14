@@ -16,15 +16,16 @@ const MAX_RETRY_DURATION_MS: i64 = 14 * 24 * 60 * 60 * 1000; // 14 days
 pub fn start_background_processor<DB>(
     db: DB,
     nostr_keys: Option<nostr::Keys>,
+    instance_id: String,
     mut trigger_rx: watch::Receiver<()>,
 ) where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
-        debug!("Background processor started");
+        debug!("Background processor started (instance_id: {instance_id})");
 
         // Process any pending items on startup
-        process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
+        process_newly_paid_queue(&db, nostr_keys.as_ref(), &instance_id).await;
 
         // Wait for triggers
         loop {
@@ -41,17 +42,17 @@ pub fn start_background_processor<DB>(
                 }
             }
 
-            process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
+            process_newly_paid_queue(&db, nostr_keys.as_ref(), &instance_id).await;
         }
     });
 }
 
 /// Process all pending items in the `newly_paid` queue.
-async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
+async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>, instance_id: &str)
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let pending = match db.get_pending_newly_paid().await {
+    let pending = match db.get_pending_newly_paid(instance_id).await {
         Ok(pending) => pending,
         Err(e) => {
             error!("Failed to get pending newly paid: {}", e);
