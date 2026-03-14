@@ -1,4 +1,5 @@
 use bitcoin::{Address, address::NetworkUnchecked};
+use platform_utils::tokio;
 use platform_utils::{
     ContentType, HttpClient, HttpError, HttpResponse, add_basic_auth_header,
     add_content_type_header,
@@ -6,7 +7,6 @@ use platform_utils::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio_with_wasm::alias as tokio;
 use tracing::info;
 
 use crate::chain::RecommendedFees;

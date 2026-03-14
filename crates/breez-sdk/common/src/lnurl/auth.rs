@@ -1,8 +1,8 @@
 use bitcoin::bip32::ChildNumber;
 use bitcoin::secp256k1::PublicKey;
+use bitreq::Url;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
-use url::Url;
 
 use platform_utils::HttpClient;
 
@@ -73,33 +73,27 @@ pub async fn perform_lnurl_auth<C: HttpClient + ?Sized, S: LnurlAuthSigner>(
     let public_key = signer.derive_public_key(&derivation_path).await?;
 
     // <LNURL_hostname_and_path>?<LNURL_existing_query_parameters>&sig=<hex(sign(utf8ToBytes(k1), linkingPrivKey))>&key=<hex(linkingKey)>
-    let mut callback_url = Url::parse(&auth_request.url).map_err(|e| {
-        warn!("Lnurl auth callback URL is invalid: {:?}", e);
-        LnurlError::invalid_uri("invalid lnurl auth callback uri")
-    })?;
-    callback_url
-        .query_pairs_mut()
-        .append_pair("sig", &hex::encode(&sig));
-    callback_url
-        .query_pairs_mut()
-        .append_pair("key", &public_key.to_string());
+    let sig_hex = hex::encode(&sig);
+    let key_hex = public_key.to_string();
+
+    let mut callback_url =
+        bitreq::Url::parse(&auth_request.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
+    callback_url.append_query_params([("sig", sig_hex.as_str()), ("key", key_hex.as_str())]);
     let response = http_client.get(callback_url.to_string(), None).await?;
     Ok(response.json()?)
 }
 
-pub fn validate_request(url: &url::Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
-    let query_pairs = url.query_pairs();
-
-    let k1 = query_pairs
-        .into_iter()
+pub fn validate_request(url: &Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
+    let k1 = url
+        .query_pairs()
         .find(|(key, _)| key == "k1")
-        .map(|(_, v)| v.to_string())
+        .map(|(_, v)| v)
         .ok_or(LnurlError::MissingK1)?;
 
-    let maybe_action = query_pairs
-        .into_iter()
+    let maybe_action = url
+        .query_pairs()
         .find(|(key, _)| key == "action")
-        .map(|(_, v)| v.to_string());
+        .map(|(_, v)| v);
 
     let k1_bytes = hex::decode(&k1).map_err(|_| LnurlError::InvalidK1)?;
     if k1_bytes.len() != 32 {
@@ -112,10 +106,15 @@ pub fn validate_request(url: &url::Url) -> Result<LnurlAuthRequestDetails, Lnurl
         return Err(LnurlError::UnsupportedAction);
     }
 
+    let domain = url.base_url();
+    if domain.is_empty() {
+        return Err(LnurlError::MissingDomain);
+    }
+
     Ok(LnurlAuthRequestDetails {
         k1,
         action: maybe_action,
-        domain: url.domain().ok_or(LnurlError::MissingDomain)?.to_string(),
+        domain: domain.to_string(),
         url: url.to_string(),
     })
 }
@@ -124,9 +123,10 @@ pub async fn get_derivation_path<S: LnurlAuthSigner>(
     signer: &S,
     url: Url,
 ) -> LnurlResult<Vec<ChildNumber>> {
-    let domain = url
-        .domain()
-        .ok_or(LnurlError::invalid_uri("invalid lnurl auth uri"))?;
+    let domain = url.base_url();
+    if domain.is_empty() {
+        return Err(LnurlError::invalid_uri("Invalid lnurl auth uri"));
+    }
 
     let c138 = ChildNumber::from_hardened_idx(138)
         .map_err(|_| LnurlError::General("failed to derive child auth key".to_string()))?;

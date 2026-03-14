@@ -9,6 +9,7 @@ use bitcoin::{
 };
 
 use futures::stream::{self, StreamExt};
+use platform_utils::tokio;
 use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
@@ -46,7 +47,6 @@ use spark::{
     utils::paging::{PagingFilter, PagingResult},
 };
 use tokio::sync::{broadcast, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, error, info, trace, warn};
 use web_time::{SystemTime, UNIX_EPOCH};
 

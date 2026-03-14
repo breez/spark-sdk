@@ -6,6 +6,12 @@
 mod auth;
 pub mod http;
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use tokio;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use tokio_with_wasm::alias as tokio;
+
 pub use auth::{
     ContentType, add_basic_auth_header, add_content_type_header, make_basic_auth_header,
 };

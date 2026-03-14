@@ -1,7 +1,7 @@
+use platform_utils::tokio;
 use spark_wallet::WalletEvent;
 use std::sync::Arc;
 use tokio::sync::watch;
-use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, error, info, trace, warn};
 use web_time::{Duration, Instant, SystemTime};
 

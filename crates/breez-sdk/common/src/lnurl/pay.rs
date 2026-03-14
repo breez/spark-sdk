@@ -73,14 +73,14 @@ pub fn build_pay_callback_url(
     pay_request: &LnurlPayRequestDetails,
 ) -> LnurlResult<String> {
     let amount_msat = user_amount_msat.to_string();
-    let mut url = url::Url::parse(&pay_request.callback)
+    let mut url = bitreq::Url::parse(&pay_request.callback)
         .map_err(|_| LnurlError::invalid_uri("invalid callback uri"))?;
 
-    url.query_pairs_mut().append_pair("amount", &amount_msat);
+    let mut params = vec![("amount", amount_msat.as_str())];
     if let Some(comment) = user_comment {
-        url.query_pairs_mut().append_pair("comment", comment);
+        params.push(("comment", comment.as_str()));
     }
-
+    url.append_query_params(params);
     Ok(url.to_string())
 }
 
@@ -374,17 +374,23 @@ impl UrlSuccessActionData {
             )
         );
 
-        let req_url = url::Url::parse(&pay_request.callback)
+        let req_url = bitreq::Url::parse(&pay_request.callback)
             .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-        let req_domain = req_url
-            .domain()
-            .ok_or_else(|| LnurlError::InvalidUri("Could not determine callback domain".into()))?;
+        let req_domain = req_url.base_url();
+        if req_domain.is_empty() {
+            return Err(LnurlError::InvalidUri(
+                "Could not determine callback domain".into(),
+            ));
+        }
 
         let action_res_url =
-            url::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-        let action_res_domain = action_res_url.domain().ok_or_else(|| {
-            LnurlError::invalid_uri("Could not determine Success Action URL domain")
-        })?;
+            bitreq::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
+        let action_res_domain = action_res_url.base_url();
+        if action_res_domain.is_empty() {
+            return Err(LnurlError::invalid_uri(
+                "Could not determine Success Action URL domain",
+            ));
+        }
 
         if validate_url && req_domain != action_res_domain {
             return Err(LnurlError::general(

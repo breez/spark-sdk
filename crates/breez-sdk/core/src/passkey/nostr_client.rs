@@ -6,7 +6,7 @@ use std::time::Duration;
 use nostr::nips::nip65;
 use nostr::{Event, Filter, Kind, PublicKey, RelayUrl};
 use nostr_sdk::Client;
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;

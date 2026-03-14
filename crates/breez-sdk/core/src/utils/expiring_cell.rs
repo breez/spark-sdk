@@ -1,5 +1,5 @@
+use platform_utils::tokio;
 use tokio::sync::RwLock;
-use tokio_with_wasm::alias as tokio;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 /// A cell that holds a value with a time-to-live (TTL) expiration.
@@ -48,7 +48,7 @@ impl<T: Clone> ExpiringCell<T> {
 mod tests {
     use std::time::Duration;
 
-    use tokio_with_wasm::alias as tokio;
+    use platform_utils::tokio;
 
     use super::ExpiringCell;
 

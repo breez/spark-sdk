@@ -27,13 +27,9 @@ pub fn build_withdraw_callback_url(
     withdraw_request: &LnurlWithdrawRequestDetails,
     invoice: &str,
 ) -> LnurlResult<String> {
-    let mut url = url::Url::parse(&withdraw_request.callback)
+    let mut url = bitreq::Url::parse(&withdraw_request.callback)
         .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-
-    url.query_pairs_mut()
-        .append_pair("k1", &withdraw_request.k1);
-    url.query_pairs_mut().append_pair("pr", invoice);
-
+    url.append_query_params([("k1", withdraw_request.k1.as_str()), ("pr", invoice)]);
     Ok(url.to_string())
 }
 
