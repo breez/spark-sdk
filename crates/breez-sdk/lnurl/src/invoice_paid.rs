@@ -477,19 +477,19 @@ mod shared_tests {
         db.insert_newly_paid(&item).await.unwrap();
 
         // Instance A claims the item
-        let claimed = db.get_pending_newly_paid("instance_a").await.unwrap();
+        let claimed = db.get_pending_newly_paid("instance_a", 100).await.unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].payment_hash, "claim_test_hash");
 
         // Instance B cannot claim the same item (it was just claimed by A)
-        let claimed_b = db.get_pending_newly_paid("instance_b").await.unwrap();
+        let claimed_b = db.get_pending_newly_paid("instance_b", 100).await.unwrap();
         assert!(
             claimed_b.is_empty(),
             "instance B should not be able to claim items already claimed by instance A"
         );
 
         // Instance A can re-claim its own items
-        let reclaimed = db.get_pending_newly_paid("instance_a").await.unwrap();
+        let reclaimed = db.get_pending_newly_paid("instance_a", 100).await.unwrap();
         assert_eq!(
             reclaimed.len(),
             1,
@@ -509,10 +509,39 @@ mod shared_tests {
         };
         db.insert_newly_paid(&future_item).await.unwrap();
 
-        let claimed = db.get_pending_newly_paid("instance_a").await.unwrap();
+        let claimed = db.get_pending_newly_paid("instance_a", 100).await.unwrap();
         assert!(
             claimed.is_empty(),
             "items with future next_retry_at should not be claimed"
+        );
+    }
+
+    pub async fn get_pending_newly_paid_respects_limit<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let now = now_millis();
+
+        for i in 0..5 {
+            let item = NewlyPaid {
+                payment_hash: format!("limit_test_{i}"),
+                created_at: now,
+                retry_count: 0,
+                next_retry_at: now,
+            };
+            db.insert_newly_paid(&item).await.unwrap();
+        }
+
+        // Request at most 2
+        let claimed = db.get_pending_newly_paid("instance_a", 2).await.unwrap();
+        assert_eq!(claimed.len(), 2, "should only return up to the limit");
+
+        // Next call picks up more (still claimed by instance_a, so re-claimable)
+        let claimed2 = db.get_pending_newly_paid("instance_a", 10).await.unwrap();
+        assert_eq!(
+            claimed2.len(),
+            5,
+            "instance should be able to claim remaining items"
         );
     }
 }
@@ -576,6 +605,12 @@ mod sqlite_tests {
     async fn get_pending_newly_paid_respects_next_retry_at() {
         let db = setup_test_db().await;
         shared_tests::get_pending_newly_paid_respects_next_retry_at(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_pending_newly_paid_respects_limit() {
+        let db = setup_test_db().await;
+        shared_tests::get_pending_newly_paid_respects_limit(&db).await;
     }
 }
 
@@ -674,5 +709,13 @@ mod postgres_tests {
             return;
         };
         shared_tests::get_pending_newly_paid_respects_next_retry_at(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_pending_newly_paid_respects_limit() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::get_pending_newly_paid_respects_limit(&db).await;
     }
 }

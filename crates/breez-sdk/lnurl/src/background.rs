@@ -11,6 +11,9 @@ const BASE_RETRY_DELAY_MS: i64 = 30_000; // 30 seconds
 const RETRY_MULTIPLIER: f64 = 1.5;
 const MAX_RETRY_DURATION_MS: i64 = 14 * 24 * 60 * 60 * 1000; // 14 days
 
+/// Maximum number of newly paid items to claim and process per poll cycle.
+const NEWLY_PAID_BATCH_LIMIT: u32 = 4;
+
 /// Start the background processor that handles the `newly_paid` queue.
 /// This processor publishes zap receipts for paid invoices with retry logic.
 pub fn start_background_processor<DB>(
@@ -47,26 +50,39 @@ pub fn start_background_processor<DB>(
     });
 }
 
-/// Process all pending items in the `newly_paid` queue.
+/// Process pending items in the `newly_paid` queue, fetching in batches until
+/// the queue is drained.
 async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>, instance_id: &str)
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let pending = match db.get_pending_newly_paid(instance_id).await {
-        Ok(pending) => pending,
-        Err(e) => {
-            error!("Failed to get pending newly paid: {}", e);
+    loop {
+        let pending = match db
+            .get_pending_newly_paid(instance_id, NEWLY_PAID_BATCH_LIMIT)
+            .await
+        {
+            Ok(pending) => pending,
+            Err(e) => {
+                error!("Failed to get pending newly paid: {}", e);
+                return;
+            }
+        };
+
+        if pending.is_empty() {
             return;
         }
-    };
 
-    debug!(
-        "Background processor: found {} pending newly paid items",
-        pending.len()
-    );
+        let count = pending.len();
+        debug!("Background processor: processing {count} newly paid items");
 
-    for item in pending {
-        process_newly_paid_item(db, nostr_keys, &item).await;
+        for item in pending {
+            process_newly_paid_item(db, nostr_keys, &item).await;
+        }
+
+        // If we got fewer than the limit, the queue is drained.
+        if count < NEWLY_PAID_BATCH_LIMIT as usize {
+            return;
+        }
     }
 }
 

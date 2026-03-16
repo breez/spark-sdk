@@ -108,12 +108,13 @@ pub trait LnurlRepository {
         newly_paid: &[NewlyPaid],
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Get all newly paid invoices ready for processing (`next_retry_at` <= now),
+    /// Get newly paid invoices ready for processing (`next_retry_at` <= now),
     /// atomically claiming them for the given instance. Items already claimed by
     /// another instance within the last 5 minutes are skipped.
     async fn get_pending_newly_paid(
         &self,
         instance_id: &str,
+        limit: u32,
     ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
 
     /// Update retry count and next retry time for a newly paid invoice

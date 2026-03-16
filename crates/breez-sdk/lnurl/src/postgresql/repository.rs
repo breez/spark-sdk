@@ -412,6 +412,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     async fn get_pending_newly_paid(
         &self,
         instance_id: &str,
+        limit: u32,
     ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
         let now = now_millis();
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
@@ -423,6 +424,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                  WHERE next_retry_at <= $1
                    AND (claimed_by IS NULL OR claimed_by = $2 OR claimed_at < $4)
                  ORDER BY next_retry_at ASC
+                 LIMIT $5
                  FOR UPDATE SKIP LOCKED
              )
              RETURNING payment_hash, created_at, retry_count, next_retry_at",
@@ -431,6 +433,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(instance_id)
         .bind(now)
         .bind(stale_threshold)
+        .bind(i64::from(limit))
         .fetch_all(&self.pool)
         .await?;
         let newly_paid = rows

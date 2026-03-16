@@ -1424,6 +1424,7 @@ mod tests {
         async fn get_pending_newly_paid(
             &self,
             _instance_id: &str,
+            _limit: u32,
         ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
             Ok(self.newly_paid.lock().unwrap().values().cloned().collect())
         }
