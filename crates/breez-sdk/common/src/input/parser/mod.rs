@@ -362,11 +362,10 @@ where
 
         let response = self.http_client.get(url.to_string(), None).await?;
         let lnurl_data: LnurlRequestDetails = response.json()?;
-        let host = url.base_url();
-        if host.is_empty() {
+        let domain = url.base_url().to_ascii_lowercase();
+        if domain.is_empty() {
             return Err(LnurlError::MissingDomain);
         }
-        let domain = host.to_string();
         Ok(match lnurl_data {
             LnurlRequestDetails::PayRequest { pay_request } => {
                 InputType::LnurlPay(LnurlPayRequestDetails {
@@ -410,7 +409,7 @@ where
             // Try to parse as LnurlRequestDetails
             if let Ok(lnurl_data) = response.json::<LnurlRequestDetails>() {
                 let domain = bitreq::Url::parse(&parser_url)
-                    .map(|url| url.base_url().to_string())
+                    .map(|url| url.base_url().to_ascii_lowercase())
                     .unwrap_or_default();
                 let input_type = lnurl_data.try_into()?;
                 let input_type = match input_type {

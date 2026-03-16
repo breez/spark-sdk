@@ -376,7 +376,7 @@ impl UrlSuccessActionData {
 
         let req_url = bitreq::Url::parse(&pay_request.callback)
             .map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-        let req_domain = req_url.base_url();
+        let req_domain = req_url.base_url().to_ascii_lowercase();
         if req_domain.is_empty() {
             return Err(LnurlError::InvalidUri(
                 "Could not determine callback domain".into(),
@@ -385,7 +385,7 @@ impl UrlSuccessActionData {
 
         let action_res_url =
             bitreq::Url::parse(&self.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-        let action_res_domain = action_res_url.base_url();
+        let action_res_domain = action_res_url.base_url().to_ascii_lowercase();
         if action_res_domain.is_empty() {
             return Err(LnurlError::invalid_uri(
                 "Could not determine Success Action URL domain",
@@ -612,6 +612,25 @@ pub(crate) mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[macros::test_all]
+    fn test_url_success_action_validate_case_insensitive_domain() {
+        // Callback has uppercase domain; success URL has lowercase domain.
+        // After lowercasing both, they should match.
+        let pay_req_data = LnurlPayRequestDetails {
+            callback: "https://LOCALHOST:8080/callback".into(),
+            ..get_test_pay_req_data(0, 100_000, 100)
+        };
+
+        let result = UrlSuccessActionData {
+            description: "short msg".into(),
+            url: "https://localhost:8080/success".into(),
+            matches_callback_domain: true,
+        }
+        .validate(&pay_req_data, true);
+        assert!(result.is_ok());
+        assert!(result.unwrap().matches_callback_domain);
     }
 
     #[macros::test_all]

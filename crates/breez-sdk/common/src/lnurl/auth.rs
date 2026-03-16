@@ -106,7 +106,7 @@ pub fn validate_request(url: &Url) -> Result<LnurlAuthRequestDetails, LnurlError
         return Err(LnurlError::UnsupportedAction);
     }
 
-    let domain = url.base_url();
+    let domain = url.base_url().to_ascii_lowercase();
     if domain.is_empty() {
         return Err(LnurlError::MissingDomain);
     }
@@ -114,7 +114,7 @@ pub fn validate_request(url: &Url) -> Result<LnurlAuthRequestDetails, LnurlError
     Ok(LnurlAuthRequestDetails {
         k1,
         action: maybe_action,
-        domain: domain.to_string(),
+        domain,
         url: url.to_string(),
     })
 }
@@ -123,7 +123,7 @@ pub async fn get_derivation_path<S: LnurlAuthSigner>(
     signer: &S,
     url: Url,
 ) -> LnurlResult<Vec<ChildNumber>> {
-    let domain = url.base_url();
+    let domain = url.base_url().to_ascii_lowercase();
     if domain.is_empty() {
         return Err(LnurlError::invalid_uri("Invalid lnurl auth uri"));
     }
@@ -148,4 +148,61 @@ fn build_path_element_u32(hmac_bytes: [u8; 4]) -> u32 {
     let mut buf = [0u8; 4];
     buf[..4].copy_from_slice(&hmac_bytes);
     u32::from_be_bytes(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::bip32::ChildNumber;
+    use bitcoin::secp256k1::PublicKey;
+    use bitreq::Url;
+
+    use super::*;
+
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    struct MockSigner;
+
+    #[macros::async_trait]
+    impl LnurlAuthSigner for MockSigner {
+        async fn derive_public_key(&self, _: &[ChildNumber]) -> LnurlResult<PublicKey> {
+            unimplemented!()
+        }
+
+        async fn sign_ecdsa(&self, _: &[u8], _: &[ChildNumber]) -> LnurlResult<Vec<u8>> {
+            unimplemented!()
+        }
+
+        async fn hmac_sha256(
+            &self,
+            _key_derivation_path: &[ChildNumber],
+            input: &[u8],
+        ) -> LnurlResult<Vec<u8>> {
+            // Assert the domain passed to HMAC is always lowercase
+            assert_eq!(
+                input, b"example.com",
+                "HMAC domain input should be lowercase"
+            );
+            Ok(vec![0u8; 16])
+        }
+    }
+
+    #[macros::test_all]
+    fn test_validate_request_lowercases_domain() {
+        let k1 = "aa".repeat(32); // 32 hex bytes
+        let url = Url::parse(&format!("https://EXAMPLE.COM/lnurl-auth?tag=login&k1={k1}")).unwrap();
+        let result = validate_request(&url).unwrap();
+        assert_eq!(result.domain, "example.com");
+    }
+
+    #[macros::async_test_all]
+    async fn test_get_derivation_path_lowercases_domain() {
+        // MockSigner::hmac_sha256 asserts input == b"example.com".
+        // If the domain is not lowercased before calling HMAC, the assertion will fail.
+        let k1 = "aa".repeat(32);
+        let url_upper =
+            Url::parse(&format!("https://EXAMPLE.COM/lnurl-auth?tag=login&k1={k1}")).unwrap();
+        let result = get_derivation_path(&MockSigner, url_upper).await;
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
 }

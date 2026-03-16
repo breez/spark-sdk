@@ -940,3 +940,27 @@ async fn test_external_parsing_error() {
 
     assert!(matches!(result, Err(ParseError::InvalidInput)));
 }
+
+#[async_test_all]
+async fn test_lnurl_domain_is_lowercased() {
+    // An lnurlp:// URL with an uppercase domain should resolve to a LnurlPay whose
+    // `domain` field is normalized to lowercase, matching url::Url's prior behavior.
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    mock_lnurl_pay_endpoint(&mock_rest_client, None);
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let result = input_parser
+        .parse("lnurlp://UPPERCASE.EXAMPLE/lnurl-pay")
+        .await;
+
+    match result {
+        Ok(InputType::LnurlPay(pay_req)) => {
+            assert_eq!(
+                pay_req.domain, "uppercase.example",
+                "domain should be lowercased"
+            );
+        }
+        other => panic!("Expected LnurlPay, got: {other:?}"),
+    }
+}
