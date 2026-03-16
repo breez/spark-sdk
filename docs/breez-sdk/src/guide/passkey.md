@@ -7,7 +7,7 @@ Using passkeys eliminates the need to backup mnemonic phrases. Seeds are instead
 The passkey flow uses the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">WebAuthn PRF extension</a> (Pseudo-Random Function), which allows a passkey to deterministically derive secret bytes from a given salt. Two key derivations are used:
 
 1. **Nostr Identity**: `PRF(passkey, magic_salt)` derives a Nostr keypair used to publish and discover labels
-2. **Wallet Seed**: `PRF(passkey, label)` derives a 24-word BIP39 mnemonic
+2. **Wallet Seed**: `PRF(passkey, label)` derives a 12-word BIP39 mnemonic
 
 Labels are published as Nostr kind-1 events, allowing users to discover their wallets on any device with access to their passkey.
 
@@ -167,7 +167,7 @@ The mnemonic should always be re-derived from the passkey and label on each sess
 
 ### Allow manual mnemonic backup
 
-Provide a way for users to reveal their derived 24-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via {{#name Passkey.get_wallet}} with the cached label. This gives users a safety net if they lose access to their passkey.
+Provide a way for users to reveal their derived 12-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via {{#name Passkey.get_wallet}} with the cached label. This gives users a safety net if they lose access to their passkey.
 
 ### Offer a mnemonic fallback
 
