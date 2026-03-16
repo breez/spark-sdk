@@ -14,8 +14,8 @@
 //! 2. **Salt Storage**: User-provided salts are published as Nostr kind-1 events,
 //!    allowing discovery during wallet restore.
 //!
-//! 3. **Wallet Seed Derivation**: `PRF(passkey, user_salt)` produces 32 bytes that
-//!    are converted to a 24-word BIP39 mnemonic.
+//! 3. **Wallet Seed Derivation**: `PRF(passkey, user_salt)` produces 32 bytes, the first
+//!    16 of which are converted to a 12-word BIP39 mnemonic.
 //!
 //! # Platform Implementation
 //!
@@ -143,7 +143,7 @@ impl Passkey {
 
     /// Derive a wallet for a given label.
     ///
-    /// Uses the passkey PRF to derive a 24-word BIP39 mnemonic from the label
+    /// Uses the passkey PRF to derive a 12-word BIP39 mnemonic from the label
     /// and returns it as a [`Wallet`] containing the seed and resolved label.
     /// This works for both creating a new wallet and restoring an existing one.
     ///
@@ -396,14 +396,14 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_get_wallet_produces_24_words() {
+    async fn test_get_wallet_produces_12_words() {
         let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         let mnemonic = unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
 
         let word_count = mnemonic.split_whitespace().count();
-        assert_eq!(word_count, 24, "Mnemonic should be 24 words");
+        assert_eq!(word_count, 12, "Mnemonic should be 12 words");
     }
 
     #[macros::async_test_all]
