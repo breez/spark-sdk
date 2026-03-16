@@ -159,37 +159,6 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(maybe_zap)
     }
 
-    async fn get_zap_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        let now = now();
-        let rows = sqlx::query(
-            "SELECT DISTINCT user_pubkey
-             FROM zaps
-             WHERE invoice_expiry > $1 AND zap_event IS NULL AND is_user_nostr_key = FALSE",
-        )
-        .bind(now)
-        .fetch_all(&self.pool)
-        .await?;
-        let keys = rows
-            .into_iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<Vec<_>, sqlx::Error>>()?;
-        Ok(keys)
-    }
-
-    async fn is_zap_monitored_user(&self, user_pubkey: &str) -> Result<bool, LnurlRepositoryError> {
-        let now = now();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-             FROM zaps
-             WHERE user_pubkey = $1 AND invoice_expiry > $2 AND zap_event IS NULL AND is_user_nostr_key = FALSE",
-        )
-        .bind(user_pubkey)
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(count > 0)
-    }
-
     async fn insert_lnurl_sender_comment(
         &self,
         comment: &LnurlSenderComment,
@@ -396,42 +365,6 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         })
         .transpose()?;
         Ok(maybe_invoice)
-    }
-
-    async fn get_invoice_monitored_users(&self) -> Result<Vec<String>, LnurlRepositoryError> {
-        let now = now();
-        let rows = sqlx::query(
-            "SELECT DISTINCT i.user_pubkey
-             FROM invoices i
-             JOIN users u ON i.user_pubkey = u.pubkey
-             WHERE i.invoice_expiry > $1 AND i.preimage IS NULL AND u.lnurl_private_mode_enabled = FALSE",
-        )
-        .bind(now)
-        .fetch_all(&self.pool)
-        .await?;
-        let keys = rows
-            .into_iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<Vec<_>, sqlx::Error>>()?;
-        Ok(keys)
-    }
-
-    async fn is_invoice_monitored_user(
-        &self,
-        user_pubkey: &str,
-    ) -> Result<bool, LnurlRepositoryError> {
-        let now = now();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-             FROM invoices i
-             JOIN users u ON i.user_pubkey = u.pubkey
-             WHERE i.user_pubkey = $1 AND i.invoice_expiry > $2 AND i.preimage IS NULL AND u.lnurl_private_mode_enabled = FALSE",
-        )
-        .bind(user_pubkey)
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(count > 0)
     }
 
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError> {
