@@ -307,7 +307,10 @@ where
                     .unwrap_or("")
                     .split('?')
                     .next()
-                    .unwrap_or("");
+                    .unwrap_or("")
+                    .split(':')
+                    .next()
+                    .unwrap_or(""); // strip optional port
                 let new_scheme = if has_extension(host, "onion") {
                     "http"
                 } else {
