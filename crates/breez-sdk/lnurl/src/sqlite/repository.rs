@@ -371,7 +371,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError> {
-        let maybe_row = sqlx::query(
+        let row = sqlx::query(
             "SELECT z.payment_hash   AS z_payment_hash
              ,      z.zap_request    AS z_zap_request
              ,      z.zap_event      AS z_zap_event
@@ -391,12 +391,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
         )
         .bind(payment_hash)
-        .fetch_optional(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-
-        let Some(row) = maybe_row else {
-            return Ok((None, None));
-        };
 
         let zap = row
             .try_get::<Option<String>, _>("z_payment_hash")?
@@ -524,7 +520,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "UPDATE newly_paid
-             SET retry_count = $2, next_retry_at = $3
+             SET retry_count = $2, next_retry_at = $3, claimed_at = NULL, claimed_by = NULL
              WHERE payment_hash = $1",
         )
         .bind(payment_hash)
