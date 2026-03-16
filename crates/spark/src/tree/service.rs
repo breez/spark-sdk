@@ -139,24 +139,21 @@ impl TreeService for SynchronousTreeService {
             let reservation = self.renew_reservation_timelocks(reservation).await?;
 
             // Check if swap is needed
-            let needs_swap = if self.reservation_matches_target(&reservation, target_amounts) {
-                // Even if the reservation matches, check the amount leaf count limit
-                if let Some(max_count) = options.max_amount_leaf_count {
-                    let amount_leaf_count = self.count_amount_leaves(&reservation, target_amounts);
-                    if amount_leaf_count > max_count {
-                        trace!(
-                            "Amount leaf count {amount_leaf_count} exceeds max {max_count}, forcing swap to consolidate"
-                        );
-                        true
-                    } else {
-                        false
-                    }
+            let exceeds_leaf_count = |max_count: usize| {
+                let count = self.count_amount_leaves(&reservation, target_amounts);
+                if count > max_count {
+                    trace!(
+                        "Amount leaf count {count} exceeds max {max_count}, forcing swap to consolidate"
+                    );
+                    true
                 } else {
                     false
                 }
-            } else {
-                true
             };
+            let needs_swap = !self.reservation_matches_target(&reservation, target_amounts)
+                || options
+                    .max_amount_leaf_count
+                    .is_some_and(exceeds_leaf_count);
 
             if !needs_swap {
                 trace!("Selected leaves match requirements, no swap needed");

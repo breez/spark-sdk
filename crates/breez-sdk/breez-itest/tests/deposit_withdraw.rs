@@ -580,7 +580,7 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
         max_leaf_count_for_quote(quoted_leaf_count_1)
     );
 
-    // Trigger manual optimization (multiplicity=5 will fragment the single leaf)
+    // Trigger manual optimization (multiplicity=15 will fragment the single leaf)
     alice.sdk.start_leaf_optimization();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
     loop {
