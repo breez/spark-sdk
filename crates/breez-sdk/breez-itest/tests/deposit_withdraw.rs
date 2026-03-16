@@ -518,3 +518,79 @@ async fn test_deposit_low_amount_refund_fee_rate(
 
     Ok(())
 }
+
+/// Verify deposits to multiple rotated addresses are all discovered and claimed.
+///
+/// This test:
+/// 1. Generates several deposit addresses (each call rotates to a new one)
+/// 2. Funds the first (oldest) and last (newest) address via faucet
+/// 3. Waits until both deposits are claimed by polling balance
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_deposits_to_multiple_addresses(#[future] alice_sdk: Result<SdkInstance>) -> Result<()>
+{
+    let alice = alice_sdk.await?;
+
+    // Generate several deposit addresses; each call rotates to a new one.
+    let mut addresses = Vec::new();
+    for _ in 0..5 {
+        let addr = alice
+            .sdk
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::BitcoinAddress,
+            })
+            .await?
+            .payment_request;
+        info!("Generated deposit address: {}", addr);
+        addresses.push(addr);
+    }
+
+    // All addresses must be distinct.
+    let unique: std::collections::HashSet<&String> = addresses.iter().collect();
+    assert_eq!(
+        unique.len(),
+        addresses.len(),
+        "Every rotated address should be unique"
+    );
+
+    let first_addr = &addresses[0];
+    let last_addr = addresses.last().unwrap();
+    info!(
+        "Funding oldest ({}) and newest ({})",
+        first_addr, last_addr
+    );
+
+    // Fund both the oldest and the newest address.
+    let faucet = RegtestFaucet::new()?;
+    let amount_first = 20_000u64;
+    let amount_last = 30_000u64;
+    let txid_first = faucet.fund_address(first_addr, amount_first).await?;
+    let txid_last = faucet.fund_address(last_addr, amount_last).await?;
+    info!("Faucet txids: first={}, last={}", txid_first, txid_last);
+
+    // Wait until balance reflects both deposits (minus claim fees).
+    let expected_min = amount_first + amount_last - 1_000;
+    wait_for_balance(&alice.sdk, Some(expected_min), None, 200).await?;
+
+    let info = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+    info!("Final balance: {} sats", info.balance_sats);
+
+    // No unclaimed deposits should remain.
+    let unclaimed = alice
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    assert!(
+        unclaimed.is_empty(),
+        "All deposits should be auto-claimed, but found: {:?}",
+        unclaimed
+    );
+
+    Ok(())
+}
