@@ -1430,7 +1430,7 @@ mod tests {
                 .insert(newly_paid.payment_hash.clone(), newly_paid.clone());
             Ok(())
         }
-        async fn get_pending_newly_paid(
+        async fn take_pending_newly_paid(
             &self,
             _instance_id: &str,
             _limit: u32,

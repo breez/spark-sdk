@@ -58,7 +58,7 @@ where
 {
     loop {
         let pending = match db
-            .get_pending_newly_paid(instance_id, NEWLY_PAID_BATCH_LIMIT)
+            .take_pending_newly_paid(instance_id, NEWLY_PAID_BATCH_LIMIT)
             .await
         {
             Ok(pending) => pending,

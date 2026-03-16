@@ -472,7 +472,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn get_pending_newly_paid(
+    async fn take_pending_newly_paid(
         &self,
         instance_id: &str,
         limit: u32,
@@ -545,19 +545,15 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         key: &str,
         default_value: &str,
     ) -> Result<String, LnurlRepositoryError> {
-        sqlx::query(
+        let value: String = sqlx::query_scalar(
             "INSERT INTO settings (key, value) VALUES ($1, $2)
-             ON CONFLICT(key) DO NOTHING",
+             ON CONFLICT(key) DO UPDATE SET value = settings.value
+             RETURNING value",
         )
         .bind(key)
         .bind(default_value)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-
-        let value: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = $1")
-            .bind(key)
-            .fetch_one(&self.pool)
-            .await?;
         Ok(value)
     }
 }

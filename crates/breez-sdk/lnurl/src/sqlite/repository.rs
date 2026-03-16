@@ -476,7 +476,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn get_pending_newly_paid(
+    async fn take_pending_newly_paid(
         &self,
         instance_id: &str,
         limit: u32,
