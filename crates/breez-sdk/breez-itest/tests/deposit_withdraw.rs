@@ -527,8 +527,9 @@ async fn test_deposit_low_amount_refund_fee_rate(
 /// 3. Waits until both deposits are claimed by polling balance
 #[rstest]
 #[test_log::test(tokio::test)]
-async fn test_deposits_to_multiple_addresses(#[future] alice_sdk: Result<SdkInstance>) -> Result<()>
-{
+async fn test_deposits_to_multiple_addresses(
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
     let alice = alice_sdk.await?;
 
     // Generate several deposit addresses; each call rotates to a new one.
@@ -555,10 +556,7 @@ async fn test_deposits_to_multiple_addresses(#[future] alice_sdk: Result<SdkInst
 
     let first_addr = &addresses[0];
     let last_addr = addresses.last().unwrap();
-    info!(
-        "Funding oldest ({}) and newest ({})",
-        first_addr, last_addr
-    );
+    info!("Funding oldest ({}) and newest ({})", first_addr, last_addr);
 
     // Fund both the oldest and the newest address.
     let faucet = RegtestFaucet::new()?;

@@ -18,10 +18,7 @@ use crate::{
         OperatorPool,
         rpc::{
             self as operator_rpc,
-            spark::{
-                HashVariant, TransferFilter,
-                transfer_filter::Participant,
-            },
+            spark::{HashVariant, TransferFilter, transfer_filter::Participant},
         },
     },
     services::{Transfer, Utxo},
