@@ -118,6 +118,10 @@ class BreezSdkSpark {
           // Data has been synchronized with the network. When this event is received,
           // it is recommended to refresh the payment list and wallet balance.
           break;
+        case SdkEvent_NewDeposits(:final newDeposits):
+          // New deposits were detected (may be pending or confirmed)
+          final _ = newDeposits;
+          break;
         case SdkEvent_UnclaimedDeposits(:final unclaimedDeposits):
           // SDK was unable to claim some deposits automatically
           final _ = unclaimedDeposits;

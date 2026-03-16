@@ -527,8 +527,11 @@ impl Storage for SyncedStorage {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<(), StorageError> {
-        self.inner.add_deposit(txid, vout, amount_sats).await
+        self.inner
+            .add_deposit(txid, vout, amount_sats, is_mature)
+            .await
     }
 
     async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {

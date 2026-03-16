@@ -239,6 +239,10 @@ impl PostgresStorage {
             &["ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage"],
             // Migration 13: Clear cached lightning address - format changed to CachedLightningAddress wrapper
             &["DELETE FROM settings WHERE key = 'lightning_address'"],
+            // Migration 14: Add is_mature to unclaimed_deposits
+            &[
+                "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE",
+            ],
         ]
     }
 }
@@ -758,14 +762,20 @@ impl Storage for PostgresStorage {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<(), StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         client
             .execute(
-                "INSERT INTO unclaimed_deposits (txid, vout, amount_sats)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT(txid, vout) DO NOTHING",
-                &[&txid, &i32::try_from(vout)?, &i64::try_from(amount_sats)?],
+                "INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT(txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats",
+                &[
+                    &txid,
+                    &i32::try_from(vout)?,
+                    &i64::try_from(amount_sats)?,
+                    &is_mature,
+                ],
             )
             .await?;
         Ok(())
@@ -786,14 +796,14 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits",
                 &[],
             )
             .await?;
 
         let mut deposits = Vec::new();
         for row in rows {
-            let claim_error_json: Option<serde_json::Value> = row.get(3);
+            let claim_error_json: Option<serde_json::Value> = row.get(4);
             let claim_error: Option<DepositClaimError> = from_json_opt(claim_error_json)?;
 
             deposits.push(DepositInfo {
@@ -804,9 +814,10 @@ impl Storage for PostgresStorage {
                     .map(u64::try_from)
                     .transpose()?
                     .unwrap_or(0),
+                is_mature: row.get(3),
                 claim_error,
-                refund_tx: row.get(4),
-                refund_tx_id: row.get(5),
+                refund_tx: row.get(5),
+                refund_tx_id: row.get(6),
             });
         }
         Ok(deposits)

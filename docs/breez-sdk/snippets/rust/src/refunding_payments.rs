@@ -37,6 +37,25 @@ async fn list_unclaimed_deposits(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 
+async fn list_pending_deposits(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: list-pending-deposits
+    let request = ListUnclaimedDepositsRequest {};
+    let response = sdk.list_unclaimed_deposits(request).await?;
+
+    let pending_deposits: Vec<&DepositInfo> = response
+        .deposits
+        .iter()
+        .filter(|d| !d.is_mature)
+        .collect();
+
+    for deposit in pending_deposits {
+        info!("Pending deposit: {}:{}", deposit.txid, deposit.vout);
+        info!("Amount: {} sats", deposit.amount_sats);
+    }
+    // ANCHOR_END: list-pending-deposits
+    Ok(())
+}
+
 async fn handle_fee_exceeded(sdk: &BreezSdk, deposit: &DepositInfo) -> Result<()> {
     // ANCHOR: handle-fee-exceeded
     if let Some(DepositClaimError::MaxDepositClaimFeeExceeded {

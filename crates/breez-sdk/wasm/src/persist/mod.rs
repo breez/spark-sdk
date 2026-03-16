@@ -191,10 +191,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<(), StorageError> {
         let promise = self
             .storage
-            .add_deposit(txid, vout, amount_sats)
+            .add_deposit(txid, vout, amount_sats, is_mature)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_storage_error)?;
@@ -479,7 +480,7 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
-    addDeposit: (txid: string, vout: number, amount_sats: number) => Promise<void>;
+    addDeposit: (txid: string, vout: number, amount_sats: number, isMature: boolean) => Promise<void>;
     deleteDeposit: (txid: string, vout: number) => Promise<void>;
     listDeposits: () => Promise<DepositInfo[]>;
     updateDeposit: (txid: string, vout: number, payload: UpdateDepositPayload) => Promise<void>;
@@ -542,6 +543,7 @@ extern "C" {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = deleteDeposit, catch)]

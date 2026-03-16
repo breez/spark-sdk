@@ -1109,12 +1109,14 @@ pub struct Utxo {
     pub vout: u32,
     pub network: Network,
     pub txid: Txid,
+    pub is_mature: bool,
 }
 
-impl TryFrom<operator_rpc::spark::Utxo> for Utxo {
-    type Error = ServiceError;
-
-    fn try_from(utxo: operator_rpc::spark::Utxo) -> Result<Self, Self::Error> {
+impl Utxo {
+    pub fn from_proto(
+        utxo: operator_rpc::spark::Utxo,
+        is_mature: bool,
+    ) -> Result<Self, ServiceError> {
         let network = Network::from_proto_network(utxo.network)
             .map_err(|_| ServiceError::InvalidNetwork(utxo.network))?;
         let mut tx: Option<Transaction> = None;
@@ -1127,6 +1129,7 @@ impl TryFrom<operator_rpc::spark::Utxo> for Utxo {
             network,
             txid: Txid::from_str(&hex::encode(utxo.txid))
                 .map_err(|_| ServiceError::InvalidTransaction)?,
+            is_mature,
         })
     }
 }

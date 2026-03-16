@@ -1,6 +1,6 @@
 # Claiming on-chain deposits
 
-When receiving bitcoin through on-chain deposits, the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim these funds to make them available in your balance. However, if the maximum deposit claim fee is too low for claiming deposits, they won't be automatically claimed and should be [manually claimed](#manually-claiming-deposits).
+On-chain deposits go through three stages: once detected, the deposit is visible in the SDK and each deposit includes a {{#name is_mature}} field; after **3 on-chain confirmations** the deposit has sufficient confirmations ({{#name is_mature}} is true) and the SDK [automatically attempts](#setting-a-max-fee-for-automatic-claims) to claim it. If the maximum deposit claim fee is too low, the deposit won't be automatically claimed and should be [manually claimed](#manually-claiming-deposits).
 
 ## Setting a max fee for automatic claims
 
@@ -20,7 +20,7 @@ When a deposit cannot be automatically claimed due to the configured maximum fee
 
 ## Listing unclaimed deposits
 
-Retrieve all deposits that have not yet been claimed, including the specific reason why each deposit is unclaimed.
+Retrieve all deposits that have not yet been claimed. This includes pending deposits that do not yet have sufficient confirmations, as well as deposits with sufficient confirmations that failed to claim (with the specific failure reason). Pending deposits will be automatically claimed once they have sufficient confirmations.
 
 {{#tabs refunding_payments:list-unclaimed-deposits}}
 

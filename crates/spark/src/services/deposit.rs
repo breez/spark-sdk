@@ -179,16 +179,16 @@ impl DepositService {
                     cursor: cursor.unwrap_or_default(),
                     ..Default::default()
                 }),
-                include_pending: false,
+                include_pending: true,
             })
             .await?;
         let utxos = res
             .utxos
             .into_iter()
             .map(|au| {
-                au.utxo
-                    .ok_or(ServiceError::MissingUtxo)
-                    .and_then(Utxo::try_from)
+                au.utxo.ok_or(ServiceError::MissingUtxo).and_then(|u| {
+                    Utxo::from_proto(u, au.is_confirmed /* proto field maps to is_mature */)
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = res.page.filter(|p| p.has_next_page).map(|p| p.next_cursor);

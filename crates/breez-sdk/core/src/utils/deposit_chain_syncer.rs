@@ -22,9 +22,9 @@ pub struct DepositChainSyncer {
 }
 
 #[derive(Eq, Hash, PartialEq, Clone)]
-struct TxOutput {
-    txid: String,
-    vout: u32,
+pub(crate) struct TxOutput {
+    pub txid: String,
+    pub vout: u32,
 }
 
 impl DepositChainSyncer {
@@ -41,10 +41,11 @@ impl DepositChainSyncer {
         }
     }
 
-    pub async fn sync(&self) -> Result<Vec<DetailedUtxo>, SdkError> {
+    /// Returns a list of (`DetailedUtxo`, `is_mature`) pairs for all non-refunded deposit UTXOs.
+    pub async fn sync(&self) -> Result<Vec<(DetailedUtxo, bool)>, SdkError> {
         info!("Syncing deposit UTXOs via identity");
 
-        let mut detailed_utxos = HashMap::new();
+        let mut detailed_utxos: HashMap<TxOutput, (DetailedUtxo, bool)> = HashMap::new();
         let mut cursor = None;
         let mut hit_error = false;
 
@@ -83,12 +84,14 @@ impl DepositChainSyncer {
                                 detailed_utxo.txid.to_string(),
                                 detailed_utxo.vout,
                                 detailed_utxo.value,
+                                utxo.is_mature,
                             )
                             .await?;
-                        detailed_utxos.insert(
-                            format!("{}:{}", detailed_utxo.txid, detailed_utxo.vout),
-                            detailed_utxo,
-                        );
+                        let key = TxOutput {
+                            txid: detailed_utxo.txid.to_string(),
+                            vout: detailed_utxo.vout,
+                        };
+                        detailed_utxos.insert(key, (detailed_utxo, utxo.is_mature));
                     }
                     Err(e) => {
                         warn!(
@@ -110,14 +113,13 @@ impl DepositChainSyncer {
         let refunded = self.reconcile_deposits(&detailed_utxos, hit_error).await?;
 
         Ok(detailed_utxos
-            .values()
-            .filter(|u| {
+            .into_values()
+            .filter(|(u, _)| {
                 !refunded.contains(&TxOutput {
                     txid: u.txid.to_string(),
                     vout: u.vout,
                 })
             })
-            .cloned()
             .collect())
     }
 
@@ -125,14 +127,17 @@ impl DepositChainSyncer {
     /// Returns the set of refunded outputs.
     async fn reconcile_deposits(
         &self,
-        all_utxos: &HashMap<String, DetailedUtxo>,
+        all_utxos: &HashMap<TxOutput, (DetailedUtxo, bool)>,
         incomplete: bool,
     ) -> Result<HashSet<TxOutput>, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         let mut refunded = HashSet::new();
         let mut refunded_deposits = HashMap::new();
         for deposit in deposits {
-            let key = format!("{}:{}", deposit.txid, deposit.vout);
+            let key = TxOutput {
+                txid: deposit.txid.clone(),
+                vout: deposit.vout,
+            };
             match deposit.refund_tx_id.clone() {
                 Some(txid) => {
                     info!(

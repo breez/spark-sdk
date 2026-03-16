@@ -583,13 +583,13 @@ class PostgresStorage {
 
   // ===== Deposit Operations =====
 
-  async addDeposit(txid, vout, amountSats) {
+  async addDeposit(txid, vout, amountSats, isMature) {
     try {
       await this.pool.query(
-        `INSERT INTO unclaimed_deposits (txid, vout, amount_sats)
-         VALUES ($1, $2, $3)
-         ON CONFLICT(txid, vout) DO NOTHING`,
-        [txid, vout, amountSats]
+        `INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT(txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats`,
+        [txid, vout, amountSats, isMature]
       );
     } catch (error) {
       throw new StorageError(
@@ -616,13 +616,14 @@ class PostgresStorage {
   async listDeposits() {
     try {
       const result = await this.pool.query(
-        "SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits"
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits"
       );
 
       return result.rows.map((row) => ({
         txid: row.txid,
         vout: row.vout,
         amountSats: row.amount_sats != null ? BigInt(row.amount_sats) : BigInt(0),
+        isMature: row.is_mature ?? true,
         claimError: row.claim_error || null,
         refundTx: row.refund_tx,
         refundTxId: row.refund_tx_id,

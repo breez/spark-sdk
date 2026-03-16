@@ -81,6 +81,10 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 	case breez_sdk_spark.SdkEventSynced:
 		// Data has been synchronized with the network. When this event is received,
 		// it is recommended to refresh the payment list and wallet balance.
+	case breez_sdk_spark.SdkEventNewDeposits:
+		// New deposits were detected (may be pending or confirmed)
+		newDeposits := event.NewDeposits
+		_ = newDeposits
 	case breez_sdk_spark.SdkEventUnclaimedDeposits:
 		// SDK was unable to claim some deposits automatically
 		unclaimedDeposits := event.UnclaimedDeposits

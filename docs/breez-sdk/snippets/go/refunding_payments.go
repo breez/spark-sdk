@@ -50,6 +50,29 @@ func ListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk) error {
 	return nil
 }
 
+func ListPendingDeposits(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: list-pending-deposits
+	request := breez_sdk_spark.ListUnclaimedDepositsRequest{}
+	response, err := sdk.ListUnclaimedDeposits(request)
+	if err != nil {
+		return err
+	}
+
+	var pendingDeposits []breez_sdk_spark.DepositInfo
+	for _, deposit := range response.Deposits {
+		if !deposit.IsMature {
+			pendingDeposits = append(pendingDeposits, deposit)
+		}
+	}
+
+	for _, deposit := range pendingDeposits {
+		log.Printf("Pending deposit: %v:%v", deposit.Txid, deposit.Vout)
+		log.Printf("Amount: %v sats", deposit.AmountSats)
+	}
+	// ANCHOR_END: list-pending-deposits
+	return nil
+}
+
 func HandleFeeExceeded(sdk *breez_sdk_spark.BreezSdk, deposit breez_sdk_spark.DepositInfo) error {
 	// ANCHOR: handle-fee-exceeded
 	if claimErr := *deposit.ClaimError; claimErr != nil {

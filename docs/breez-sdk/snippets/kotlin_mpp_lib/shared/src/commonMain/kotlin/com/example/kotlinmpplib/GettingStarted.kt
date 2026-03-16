@@ -63,6 +63,10 @@ class GettingStarted {
                     // Data has been synchronized with the network. When this event is received,
                     // it is recommended to refresh the payment list and wallet balance.
                 }
+                is SdkEvent.NewDeposits -> {
+                    // New deposits were detected (may be pending or confirmed)
+                    val newDeposits = e.newDeposits
+                }
                 is SdkEvent.UnclaimedDeposits -> {
                     // SDK was unable to claim some deposits automatically
                     val unclaimedDeposits = e.unclaimedDeposits

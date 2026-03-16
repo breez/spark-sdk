@@ -27,6 +27,21 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
   // ANCHOR_END: list-unclaimed-deposits
 }
 
+Future<void> listPendingDeposits(BreezSdk sdk) async {
+  // ANCHOR: list-pending-deposits
+  final request = ListUnclaimedDepositsRequest();
+  final response = await sdk.listUnclaimedDeposits(request: request);
+
+  final pendingDeposits =
+      response.deposits.where((d) => !d.isMature).toList();
+
+  for (DepositInfo deposit in pendingDeposits) {
+    print("Pending deposit: ${deposit.txid}:${deposit.vout}");
+    print("Amount: ${deposit.amountSats} sats");
+  }
+  // ANCHOR_END: list-pending-deposits
+}
+
 Future<void> handleFeeExceeded(BreezSdk sdk, DepositInfo deposit) async {
   // ANCHOR: handle-fee-exceeded
   final claimError = deposit.claimError;

@@ -345,12 +345,13 @@ pub trait Storage: Send + Sync {
         parent_payment_ids: Vec<String>,
     ) -> Result<HashMap<String, Vec<Payment>>, StorageError>;
 
-    /// Add a deposit to storage
+    /// Add a deposit to storage (upsert: updates `is_mature` and `amount_sats` on conflict)
     /// # Arguments
     ///
     /// * `txid` - The transaction ID of the deposit
     /// * `vout` - The output index of the deposit
     /// * `amount_sats` - The amount of the deposit in sats
+    /// * `is_mature` - Whether the deposit UTXO has enough confirmations to be claimable
     ///
     /// # Returns
     ///
@@ -360,6 +361,7 @@ pub trait Storage: Send + Sync {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<(), StorageError>;
 
     /// Removes an unclaimed deposit from storage

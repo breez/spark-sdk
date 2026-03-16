@@ -246,6 +246,12 @@ class PostgresMigrationManager {
           `DELETE FROM settings WHERE key = 'lightning_address'`,
         ],
       },
+      {
+        name: "Add is_mature to unclaimed_deposits",
+        sql: [
+          `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE`,
+        ],
+      },
     ];
   }
 }

@@ -1180,7 +1180,7 @@ class IndexedDBStorage {
 
   // ===== Deposit Operations =====
 
-  async addDeposit(txid, vout, amountSats) {
+  async addDeposit(txid, vout, amountSats, isMature) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
@@ -1192,23 +1192,40 @@ class IndexedDBStorage {
       );
       const store = transaction.objectStore("unclaimed_deposits");
 
-      const depositToStore = {
-        txid,
-        vout,
-        amountSats,
-        claimError: null,
-        refundTx: null,
-        refundTxId: null,
+      // Get existing deposit first to preserve fields on upsert
+      const getRequest = store.get([txid, vout]);
+
+      getRequest.onsuccess = () => {
+        const existing = getRequest.result;
+        const depositToStore = {
+          txid,
+          vout,
+          amountSats,
+          isMature: isMature ?? true,
+          claimError: existing?.claimError ?? null,
+          refundTx: existing?.refundTx ?? null,
+          refundTxId: existing?.refundTxId ?? null,
+        };
+
+        const putRequest = store.put(depositToStore);
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => {
+          reject(
+            new StorageError(
+              `Failed to add deposit '${txid}:${vout}': ${putRequest.error?.message || "Unknown error"
+              }`,
+              putRequest.error
+            )
+          );
+        };
       };
 
-      const request = store.put(depositToStore);
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
+      getRequest.onerror = () => {
         reject(
           new StorageError(
-            `Failed to add deposit '${txid}:${vout}': ${request.error?.message || "Unknown error"
+            `Failed to add deposit '${txid}:${vout}': ${getRequest.error?.message || "Unknown error"
             }`,
-            request.error
+            getRequest.error
           )
         );
       };
@@ -1256,6 +1273,7 @@ class IndexedDBStorage {
           txid: row.txid,
           vout: row.vout,
           amountSats: row.amountSats,
+          isMature: row.isMature ?? true,
           claimError: row.claimError ? JSON.parse(row.claimError) : null,
           refundTx: row.refundTx,
           refundTxId: row.refundTxId,

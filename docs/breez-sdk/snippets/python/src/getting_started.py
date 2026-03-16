@@ -75,6 +75,9 @@ class SdkListener(EventListener):
             # Data has been synchronized with the network. When this event is received,
             # it is recommended to refresh the payment list and wallet balance.
             pass
+        elif isinstance(event, SdkEvent.NEW_DEPOSITS):
+            # New deposits were detected (may be pending or confirmed)
+            new_deposits = event.new_deposits
         elif isinstance(event, SdkEvent.UNCLAIMED_DEPOSITS):
             # SDK was unable to claim some deposits automatically
             unclaimed_deposits = event.unclaimed_deposits

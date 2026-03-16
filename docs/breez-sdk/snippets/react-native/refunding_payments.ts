@@ -46,6 +46,20 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
   // ANCHOR_END: list-unclaimed-deposits
 }
 
+const listPendingDeposits = async (sdk: BreezSdk) => {
+  // ANCHOR: list-pending-deposits
+  const request: ListUnclaimedDepositsRequest = {}
+  const response = await sdk.listUnclaimedDeposits(request)
+
+  const pendingDeposits = response.deposits.filter((d) => !d.isMature)
+
+  for (const deposit of pendingDeposits) {
+    console.log(`Pending deposit: ${deposit.txid}:${deposit.vout}`)
+    console.log(`Amount: ${deposit.amountSats} sats`)
+  }
+  // ANCHOR_END: list-pending-deposits
+}
+
 const handleFeeExceeded = async (sdk: BreezSdk, deposit: DepositInfo) => {
   // ANCHOR: handle-fee-exceeded
   if (deposit.claimError?.tag === DepositClaimError_Tags.MaxDepositClaimFeeExceeded) {

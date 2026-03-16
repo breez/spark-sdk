@@ -39,6 +39,24 @@ class RefundingPayments {
         // ANCHOR_END: list-unclaimed-deposits
     }
 
+    suspend fun listPendingDeposits(sdk: BreezSdk) {
+        // ANCHOR: list-pending-deposits
+        try {
+            val request = ListUnclaimedDepositsRequest
+            val response = sdk.listUnclaimedDeposits(request)
+
+            val pendingDeposits = response.deposits.filter { !it.isMature }
+
+            for (deposit in pendingDeposits) {
+                // Log.v("Breez", "Pending deposit: ${deposit.txid}:${deposit.vout}")
+                // Log.v("Breez", "Amount: ${deposit.amountSats} sats")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: list-pending-deposits
+    }
+
     suspend fun handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) {
         // ANCHOR: handle-fee-exceeded
         try {

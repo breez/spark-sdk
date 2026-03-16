@@ -64,6 +64,9 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       if (event.tag === SdkEvent_Tags.Synced) {
         // Data has been synchronized with the network. When this event is received,
         // it is recommended to refresh the payment list and wallet balance.
+      } else if (event.tag === SdkEvent_Tags.NewDeposits) {
+        // New deposits were detected (may be pending or confirmed)
+        const newDeposits = event.inner.newDeposits
       } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
         // SDK was unable to claim some deposits automatically
         const unclaimedDeposits = event.inner.unclaimedDeposits
