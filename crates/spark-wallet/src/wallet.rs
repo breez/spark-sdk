@@ -637,13 +637,6 @@ impl SparkWallet {
             .await?)
     }
 
-    pub async fn get_utxos_for_address(
-        &self,
-        address: &str,
-    ) -> Result<Vec<Utxo>, SparkWalletError> {
-        Ok(self.deposit_service.get_utxos_for_address(address).await?)
-    }
-
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
     // Intuitively this function is being called when you've already learned about a transaction, so it could be passed in directly.
     /// Claims a deposit by finding the first unused deposit address in the transaction outputs.

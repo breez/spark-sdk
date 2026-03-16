@@ -19,7 +19,7 @@ use crate::{
         rpc::{
             self as operator_rpc,
             spark::{
-                GetUtxosForAddressRequest, HashVariant, TransferFilter,
+                HashVariant, TransferFilter,
                 transfer_filter::Participant,
             },
         },
@@ -196,25 +196,6 @@ impl DepositService {
             .collect::<Result<Vec<_>, _>>()?;
         let next_cursor = res.page.filter(|p| p.has_next_page).map(|p| p.next_cursor);
         Ok((utxos, next_cursor))
-    }
-
-    pub async fn get_utxos_for_address(&self, address: &str) -> Result<Vec<Utxo>, ServiceError> {
-        let res = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .get_utxos_for_address(GetUtxosForAddressRequest {
-                address: address.to_string(),
-                offset: 0,
-                limit: 100,
-                network: self.network.to_proto_network() as i32,
-                exclude_claimed: true,
-            })
-            .await?;
-        res.utxos
-            .into_iter()
-            .map(Utxo::try_from)
-            .collect::<Result<Vec<_>, _>>()
     }
 
     pub async fn claim_deposit(

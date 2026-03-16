@@ -599,19 +599,6 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn get_utxos_for_address(
-        &self,
-        req: GetUtxosForAddressRequest,
-    ) -> Result<GetUtxosForAddressResponse> {
-        debug!("Calling get_utxos_for_address with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .get_utxos_for_address(req)
-            .await?
-            .into_inner())
-    }
-
     pub async fn get_utxos_for_identity(
         &self,
         req: GetUtxosForIdentityRequest,

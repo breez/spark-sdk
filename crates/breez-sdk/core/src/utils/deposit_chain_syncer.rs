@@ -42,6 +42,8 @@ impl DepositChainSyncer {
     }
 
     pub async fn sync(&self) -> Result<Vec<DetailedUtxo>, SdkError> {
+        info!("Syncing deposit UTXOs via identity");
+
         let mut detailed_utxos = HashMap::new();
         let mut cursor = None;
         let mut hit_error = false;
@@ -49,10 +51,23 @@ impl DepositChainSyncer {
         // Process UTXOs page by page, fetching tx details sequentially.
         // On fetch errors we stop processing but still reconcile what succeeded.
         loop {
-            let (utxos, next_cursor) = self
+            let (utxos, next_cursor) = match self
                 .spark_wallet
                 .get_utxos_for_identity(UTXO_PAGE_SIZE, cursor)
-                .await?;
+                .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    if detailed_utxos.is_empty() {
+                        return Err(e.into());
+                    }
+                    warn!(
+                        "Failed to fetch UTXOs page, processing {} fetched so far: {e}",
+                        detailed_utxos.len()
+                    );
+                    break;
+                }
+            };
 
             for utxo in &utxos {
                 let txid_str = utxo.txid.to_string();

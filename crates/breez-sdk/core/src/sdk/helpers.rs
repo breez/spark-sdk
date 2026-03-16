@@ -206,23 +206,16 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 
 /// Returns a fresh static deposit address.
 ///
-/// Always rotates to create a new address (or generates the first one).
+/// Tries to rotate first (common path); falls back to generate when no
+/// address exists yet.
 ///
 /// Used by both `receive_payment(BitcoinAddress)` and `buy_bitcoin`.
 pub(crate) async fn new_deposit_address(spark_wallet: &SparkWallet) -> Result<String, SdkError> {
-    let existing = spark_wallet.list_static_deposit_addresses(None).await?;
-
-    let address = if existing.items.is_empty() {
-        spark_wallet
+    match spark_wallet.rotate_static_deposit_address().await {
+        Ok(addr) => Ok(addr.to_string()),
+        Err(_) => Ok(spark_wallet
             .generate_static_deposit_address()
             .await?
-            .to_string()
-    } else {
-        spark_wallet
-            .rotate_static_deposit_address()
-            .await?
-            .to_string()
-    };
-
-    Ok(address)
+            .to_string()),
+    }
 }
