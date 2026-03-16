@@ -324,12 +324,21 @@ impl BreezSdk {
                     )));
                 }
 
+                // For FeesIncluded, the actual send amount (amount - fee) can have
+                // more set bits than the original amount, requiring more leaves.
+                // Quote for prev_power_of_2(amount) - 1 so the quoted leaf count
+                // accommodates any post-fee amount.
+                // amount_u64 > 0 (dust limit check above) so ilog2 is safe
+                #[allow(clippy::arithmetic_side_effects)]
+                let quote_amount: u64 = if fee_policy == FeePolicy::FeesIncluded {
+                    (1u64 << amount_u64.ilog2()) - 1
+                } else {
+                    amount_u64
+                };
+
                 let fee_quote: SendOnchainFeeQuote = self
                     .spark_wallet
-                    .fetch_coop_exit_fee_quote(
-                        &withdrawal_address.address,
-                        Some(amount.try_into()?),
-                    )
+                    .fetch_coop_exit_fee_quote(&withdrawal_address.address, Some(quote_amount))
                     .await?
                     .into();
 

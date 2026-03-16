@@ -9,7 +9,6 @@ use tracing::{info, warn};
 // Local helpers
 // ---------------------
 
-
 /// Extract `quoted_leaf_count` from a Bitcoin address prepare response.
 fn extract_quoted_leaf_count(prepare: &PrepareSendPaymentResponse) -> u32 {
     match &prepare.payment_method {
@@ -531,10 +530,13 @@ async fn test_deposit_low_amount_refund_fee_rate(
 /// Verify that on-chain withdrawal succeeds even when leaves have fragmented
 /// beyond the original quote's tolerance, thanks to the consolidation swap.
 #[rstest]
+#[case(None)]
+#[case(Some(FeePolicy::FeesIncluded))]
 #[test_log::test(tokio::test)]
 async fn test_onchain_withdraw_with_leaf_count_tolerance(
     #[future] alice_sdk_manual_opt: Result<SdkInstance>,
     #[future] bob_sdk: Result<SdkInstance>,
+    #[case] fee_policy: Option<FeePolicy>,
 ) -> Result<()> {
     let mut alice = alice_sdk_manual_opt.await?;
     let bob = bob_sdk.await?;
@@ -552,8 +554,9 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
         .payment_request;
     info!("Bob deposit address: {}", bob_address);
 
-    // Prepare 1: quote obtained with few leaves (pre-optimization)
-    let amount = 30_000u64;
+    // Use a power-of-2 amount: worst case for FeesIncluded since any fee
+    // subtraction maximizes popcount (e.g. 32768 - fee has up to 15 set bits).
+    let amount = 32_768u64;
     let prepare_1 = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
@@ -561,11 +564,20 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,
-            fee_policy: None,
+            fee_policy,
         })
         .await?;
     let quoted_leaf_count_1 = extract_quoted_leaf_count(&prepare_1);
     info!("Prepare 1 quoted_leaf_count: {}", quoted_leaf_count_1);
+
+    // For FeesIncluded we quote for prev_power_of_2(32768) - 1 = 32767,
+    // which has 15 set bits → 15 leaves.
+    if fee_policy == Some(FeePolicy::FeesIncluded) {
+        assert_eq!(
+            quoted_leaf_count_1, 15,
+            "FeesIncluded should quote for 15 leaves (popcount of 32767)"
+        );
+    }
 
     // Trigger manual optimization (multiplicity=15 will fragment the single leaf)
     alice.sdk.start_leaf_optimization();
@@ -611,7 +623,7 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,
-            fee_policy: None,
+            fee_policy,
         })
         .await?;
     let quoted_leaf_count_2 = extract_quoted_leaf_count(&prepare_2);
@@ -655,10 +667,11 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
         .await?
         .balance_sats;
     info!("Alice final balance: {} sats", alice_final);
+
     assert!(
         alice_final < 50_000 - amount,
-        "Alice should have less than 20k sats after sending 30k + fees (got {})",
-        alice_final
+        "Alice should have less than {} sats (got {alice_final})",
+        50_000 - amount,
     );
 
     Ok(())
