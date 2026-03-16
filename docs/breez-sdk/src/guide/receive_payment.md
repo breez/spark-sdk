@@ -23,11 +23,11 @@ To receive via LNURL-Pay and/or a Lightning address, follow [these instructions]
 
 ## Bitcoin
 
-For on-chain payments you can use the static Bitcoin address to receive payments.
+For on-chain payments you can generate a Bitcoin deposit address to receive payments. Each call generates a new address for improved privacy. All previously generated addresses remain monitored.
 
 > **Note:** Spark currently requires **3 on-chain confirmations** for Bitcoin transactions before they can be claimed.
 
-The SDK monitors the specified address for new UTXOs and automatically initiates the claim process when funds are detected. If the Config's maximum deposit claim fee is not set or below the current Spark fee to claim the Bitcoin deposit, the deposit will need to be claimed or refunded manually. See [Claiming on-chain deposits](/guide/onchain_claims.md) for more details on this process.
+The SDK monitors your deposit addresses for new UTXOs and automatically initiates the claim process when funds are detected. If the Config's maximum deposit claim fee is not set or below the current Spark fee to claim the Bitcoin deposit, the deposit will need to be claimed or refunded manually. See [Claiming on-chain deposits](/guide/onchain_claims.md) for more details on this process.
 
 {{#tabs receive_payment:receive-payment-onchain}}
 
