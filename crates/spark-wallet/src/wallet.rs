@@ -66,17 +66,6 @@ const RATE_LIMIT_MAX_DELAY_MS: u64 = 3000;
 
 use super::{SparkWalletConfig, SparkWalletError, TokenOutputsOptimizationOptions};
 
-/// Computes the maximum allowed leaf count given the quoted leaf count,
-/// using the same formula as the SSP: `ceil(q * (1.2 + 1.0 / q^0.6))`.
-fn max_leaf_count_for_quote(quoted: usize) -> usize {
-    if quoted == 0 {
-        return 0;
-    }
-    let q = quoted as f64;
-    let result = q * (1.2 + 1.0 / q.powf(0.6));
-    result.ceil() as usize
-}
-
 /// Checks if an error indicates a transfer lock conflict that should trigger a retry.
 // TODO: We want to move to an error code but it isn't available yet.
 fn is_transfer_locked_error<E: std::fmt::Display>(error: &E) -> bool {
@@ -1181,13 +1170,11 @@ impl SparkWallet {
         let target_amounts = amount_sats
             .map(|amount_sats| TargetAmounts::new_amount_and_fee(amount_sats, Some(fee_sats)));
 
-        // Compute max_amount_leaf_count from the quoted leaf count to enforce
-        // the SSP's leaf count tolerance. Skip for withdraw-all (no quote used).
+        // Cap leaf count to the quoted value so the SSP doesn't reject the
+        // withdrawal. Skip for withdraw-all (no quote used).
         let select_options = if target_amounts.is_some() && fee_quote.quoted_leaf_count > 0 {
             SelectLeavesOptions {
-                max_amount_leaf_count: Some(max_leaf_count_for_quote(
-                    fee_quote.quoted_leaf_count as usize,
-                )),
+                max_amount_leaf_count: Some(fee_quote.quoted_leaf_count as usize),
                 ..SelectLeavesOptions::default()
             }
         } else {
@@ -2296,38 +2283,6 @@ impl BackgroundProcessor {
                     break;
                 }
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_max_leaf_count_for_quote() {
-        // q=0 → 0
-        assert_eq!(max_leaf_count_for_quote(0), 0);
-
-        // q=1 → ceil(1 * (1.2 + 1.0/1^0.6)) = ceil(1 * 2.2) = ceil(2.2) = 3
-        assert_eq!(max_leaf_count_for_quote(1), 3);
-
-        // q=2 → ceil(2 * (1.2 + 1.0/2^0.6)) = ceil(2 * (1.2 + 0.6598)) = ceil(2 * 1.8598) = ceil(3.7196) = 4
-        assert_eq!(max_leaf_count_for_quote(2), 4);
-
-        // q=5 → ceil(5 * (1.2 + 1.0/5^0.6)) = ceil(5 * (1.2 + 0.3299)) = ceil(5 * 1.5299) = ceil(7.6497) = 8
-        assert_eq!(max_leaf_count_for_quote(5), 8);
-
-        // q=10 → ceil(10 * (1.2 + 1.0/10^0.6)) = ceil(10 * (1.2 + 0.2512)) = ceil(10 * 1.4512) = ceil(14.512) = 15
-        assert_eq!(max_leaf_count_for_quote(10), 15);
-
-        // q=100 → ceil(100 * (1.2 + 1.0/100^0.6)) = ceil(100 * (1.2 + 0.0631)) = ceil(100 * 1.2631) = ceil(126.31) = 127
-        assert_eq!(max_leaf_count_for_quote(100), 127);
-
-        // Monotonically increasing
-        for q in 1..50 {
-            assert!(max_leaf_count_for_quote(q) >= q);
-            assert!(max_leaf_count_for_quote(q + 1) >= max_leaf_count_for_quote(q));
         }
     }
 }

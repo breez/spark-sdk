@@ -169,15 +169,10 @@ impl TreeService for SynchronousTreeService {
             if let Some(max_count) = options.max_amount_leaf_count {
                 let amount_leaf_count = self.count_amount_leaves(&reservation, target_amounts);
                 if amount_leaf_count > max_count {
-                    error!(
-                        "Swap produced {amount_leaf_count} amount leaves, exceeding max {max_count}"
+                    warn!(
+                        "Swap produced {amount_leaf_count} amount leaves, exceeding max {max_count}. \
+                         Proceeding anyway — the SSP will enforce its own tolerance."
                     );
-                    if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
-                        error!("Failed to cancel reservation after leaf count exceeded: {e:?}");
-                    }
-                    return Err(TreeServiceError::Generic(format!(
-                        "Swap produced {amount_leaf_count} amount leaves, exceeding max allowed {max_count}"
-                    )));
                 }
             }
 

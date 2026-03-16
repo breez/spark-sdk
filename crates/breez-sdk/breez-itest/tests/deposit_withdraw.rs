@@ -9,15 +9,6 @@ use tracing::{info, warn};
 // Local helpers
 // ---------------------
 
-/// Compute the maximum leaf count allowed for a given quoted leaf count.
-/// Mirrors the tolerance formula in `spark-wallet/src/wallet.rs`.
-fn max_leaf_count_for_quote(quoted: u32) -> u32 {
-    if quoted == 0 {
-        return 0;
-    }
-    let q = f64::from(quoted);
-    (q * (1.2 + 1.0 / q.powf(0.6))).ceil() as u32
-}
 
 /// Extract `quoted_leaf_count` from a Bitcoin address prepare response.
 fn extract_quoted_leaf_count(prepare: &PrepareSendPaymentResponse) -> u32 {
@@ -574,11 +565,7 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
         })
         .await?;
     let quoted_leaf_count_1 = extract_quoted_leaf_count(&prepare_1);
-    info!(
-        "Prepare 1 quoted_leaf_count: {}, max tolerance: {}",
-        quoted_leaf_count_1,
-        max_leaf_count_for_quote(quoted_leaf_count_1)
-    );
+    info!("Prepare 1 quoted_leaf_count: {}", quoted_leaf_count_1);
 
     // Trigger manual optimization (multiplicity=15 will fragment the single leaf)
     alice.sdk.start_leaf_optimization();
@@ -628,19 +615,18 @@ async fn test_onchain_withdraw_with_leaf_count_tolerance(
         })
         .await?;
     let quoted_leaf_count_2 = extract_quoted_leaf_count(&prepare_2);
-    let max_allowed = max_leaf_count_for_quote(quoted_leaf_count_1);
     info!(
-        "Prepare 2 quoted_leaf_count: {} (max allowed by prepare 1 tolerance: {})",
-        quoted_leaf_count_2, max_allowed
+        "Prepare 2 quoted_leaf_count: {} (max allowed by prepare 1: {})",
+        quoted_leaf_count_2, quoted_leaf_count_1
     );
 
-    // The fragmented leaf count must exceed the first quote's tolerance,
+    // The fragmented leaf count must exceed the first quote's leaf count,
     // proving the consolidation path will be exercised at send time.
     assert!(
-        quoted_leaf_count_2 > max_allowed,
-        "Post-optimization leaf count ({}) should exceed the tolerance ({}) of the original quote",
+        quoted_leaf_count_2 > quoted_leaf_count_1,
+        "Post-optimization leaf count ({}) should exceed the original quote ({})",
         quoted_leaf_count_2,
-        max_allowed
+        quoted_leaf_count_1
     );
 
     // Send using prepare_1 — the SDK should perform a consolidation swap to
