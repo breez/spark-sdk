@@ -112,30 +112,15 @@ impl SdkBuilder {
 ))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// Sets a `PostgreSQL`-backed tree store for persistent tree storage.
-    ///
-    /// This is suitable for server-side deployments where tree state
-    /// needs to persist across restarts.
-    ///
-    /// # Arguments
-    /// - `config`: Configuration for the `PostgreSQL` connection pool.
-    pub async fn with_postgres_tree_store(
-        &self,
-        config: crate::persist::postgres::PostgresStorageConfig,
-    ) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_tree_store(config);
-    }
-
-    /// Sets `PostgreSQL` storage to be used by the SDK.
-    /// The storage instance will be created during `build()`.
+    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
     /// Arguments:
     /// - `config`: The `PostgreSQL` storage configuration.
-    pub async fn with_postgres_storage(
+    pub async fn with_postgres_backend(
         &self,
         config: crate::persist::postgres::PostgresStorageConfig,
     ) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_storage(config);
+        *builder = builder.clone().with_postgres_backend(config);
     }
 }

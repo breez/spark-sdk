@@ -106,7 +106,7 @@ The Kotlin CLI uses the breez-sdk-spark-kmp bindings (built locally via `make se
 - Sealed class enum variants: `is SdkEvent.Synced`, `is InputType.LnurlPay`
 - Sealed class fields accessed directly: `(input as InputType.LnurlPay).payRequest`
 - SdkBuilder: `SdkBuilder(config, seed)` → `.withDefaultStorage(dir)` → `.build()`
-- `.withDefaultStorage()`, `.withPostgresStorage()`, `.withKeySet()` consume the builder — capture return value
+- `.withDefaultStorage()`, `.withPostgresBackend()`, `.withKeySet()` consume the builder — capture return value
 - Token issuer: `sdk.getTokenIssuer()` → `tokenIssuer.getIssuerTokenBalance()`
 - `Seed` → `Seed.Mnemonic(mnemonic, null)`
 - EventListener is an interface with `suspend fun onEvent(e: SdkEvent)`

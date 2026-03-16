@@ -242,7 +242,7 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    sdkBuilder = sdkBuilder.withPostgresStorage(
+    sdkBuilder = sdkBuilder.withPostgresBackend(
       defaultPostgresStorageConfig(opts.postgresConnectionString)
     )
   } else {

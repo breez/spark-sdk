@@ -36,6 +36,11 @@ impl TokenOutputService for SynchronousTokenOutputService {
     }
 
     async fn refresh_tokens_outputs(&self) -> Result<(), TokenOutputServiceError> {
+        // Capture the start time before any network calls from the store's clock.
+        // This uses the DB server time for database-backed stores to avoid clock skew.
+        // Outputs added after this time will be preserved even if not in the refresh data.
+        let refresh_started_at = self.state.now().await?;
+
         let outputs = self
             .operator_pool
             .get_coordinator()
@@ -54,7 +59,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
             .await?;
         if outputs.is_empty() {
             // Clear stored token outputs if none are returned
-            self.state.set_tokens_outputs(&[]).await?;
+            self.state
+                .set_tokens_outputs(&[], refresh_started_at)
+                .await?;
             return Ok(());
         }
 
@@ -97,7 +104,9 @@ impl TokenOutputService for SynchronousTokenOutputService {
             })
             .collect::<Result<Vec<TokenOutputs>, TokenOutputServiceError>>()?;
 
-        self.state.set_tokens_outputs(&token_outputs).await?;
+        self.state
+            .set_tokens_outputs(&token_outputs, refresh_started_at)
+            .await?;
 
         Ok(())
     }

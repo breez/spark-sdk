@@ -86,7 +86,7 @@ class SdkBuilding {
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
-        // Configure PostgreSQL storage
+        // Configure PostgreSQL backend
         // Connection string format: "host=localhost user=postgres password=secret dbname=spark"
         // Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
         val postgresConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
@@ -94,15 +94,10 @@ class SdkBuilding {
         postgresConfig.maxPoolSize = 8u // Max connections in pool
         postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
 
-        // Configure PostgreSQL tree store
-        // Can use the same or a different PostgreSQL database
-        val treeStoreConfig = defaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
-
         try {
-            // Build the SDK with PostgreSQL storage and tree store
+            // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
             val builder = SdkBuilder(config, seed)
-            builder.withPostgresStorage(postgresConfig)
-            builder.withPostgresTreeStore(treeStoreConfig)
+            builder.withPostgresBackend(postgresConfig)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

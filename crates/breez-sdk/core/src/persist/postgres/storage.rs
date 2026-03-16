@@ -24,9 +24,9 @@ use crate::{
     },
 };
 
-use super::base::{
-    PostgresStorageConfig, create_pool, map_db_error, map_pool_error, run_migrations,
-};
+#[cfg(test)]
+use super::base::{PostgresStorageConfig, create_pool};
+use super::base::{map_db_error, map_pool_error, run_migrations};
 
 /// Name of the schema migrations table for `PostgresStorage`.
 const MIGRATIONS_TABLE: &str = "schema_migrations";
@@ -59,8 +59,16 @@ impl PostgresStorage {
     /// # Returns
     ///
     /// A new `PostgresStorage` instance or an error
+    #[cfg(test)]
     pub async fn new(config: PostgresStorageConfig) -> Result<Self, StorageError> {
         let pool = create_pool(&config)?;
+        Self::new_with_pool(pool).await
+    }
+
+    /// Creates a new `PostgresStorage` using an existing connection pool.
+    ///
+    /// This allows sharing a single pool across multiple store implementations.
+    pub async fn new_with_pool(pool: Pool) -> Result<Self, StorageError> {
         let storage = Self { pool };
         storage.migrate().await?;
         Ok(storage)

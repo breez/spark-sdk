@@ -101,7 +101,7 @@ The TypeScript CLI uses the `@breeztech/breez-sdk-spark` WASM package (Node.js e
 - Use CommonJS (`require`) not ESM (`import`) — the WASM Node.js bindings use CommonJS
 - `BigInt.prototype.toJSON = function() { return this.toString() }` is needed for JSON serialization of BigInt values
 - `u128` maps to native `BigInt` — parse with `BigInt(str)`, not `parseInt`
-- `SdkBuilder.new(config, seed)` returns a builder; `.withDefaultStorage()` and `.withPostgresStorage()` are chained
+- `SdkBuilder.new(config, seed)` returns a builder; `.withDefaultStorage()` and `.withPostgresBackend()` are chained
 - `Seed` is `{ type: 'mnemonic', mnemonic: str, passphrase: undefined }`
 - `defaultConfig('regtest')` takes a string, not an enum variant
 - Token issuer: `sdk.getTokenIssuer()` → `await tokenIssuer.methodName({...})`

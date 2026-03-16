@@ -8,4 +8,5 @@ mod persist;
 mod sdk;
 mod sdk_builder;
 mod signer;
+mod token_store;
 mod tree_store;

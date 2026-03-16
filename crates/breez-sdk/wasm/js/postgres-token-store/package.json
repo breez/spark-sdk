@@ -1,0 +1,26 @@
+{
+  "name": "@breez-sdk/postgres-token-store",
+  "version": "1.0.0",
+  "description": "Node.js PostgreSQL token store implementation for Breez SDK WASM (CommonJS)",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./token-store": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "scripts": {
+    "lint": "eslint *.cjs",
+    "lint:fix": "eslint *.cjs --fix"
+  },
+  "dependencies": {
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "testcontainers": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

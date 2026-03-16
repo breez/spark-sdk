@@ -26,7 +26,7 @@ For each file pair, list every SDK/builder method call in both versions:
 
 #### 2b. Compare call-by-call
 For each SDK call in the Rust file, find the corresponding call in the {{LANG_NAME}} file. Flag any of these as a **divergence**:
-- Different function name (e.g., `with_postgres_storage()` vs `create_postgres_storage()`)
+- Different function name (e.g., `with_postgres_backend()` vs `create_postgres_storage()`)
 - Different arguments or parameters
 - Extra steps in one version that don't exist in the other (e.g., two-step init vs one-step)
 - Missing calls — an SDK call in Rust with no equivalent in {{LANG_NAME}}
@@ -38,7 +38,7 @@ For each SDK call in the Rust file, find the corresponding call in the {{LANG_NA
 #### 2d. Verify divergences against snippets
 For every divergence found, check the snippets you read in Step 1 (and any additional snippets from `{{SNIPPET_DIR}}` that cover the relevant command). The snippets are always up-to-date — if the Rust CLI uses a function, assume it exists in the {{LANG_NAME}} SDK unless the snippets prove otherwise.
 
-**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_storage()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
+**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_backend()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
 
 Only after completing 2a–2d should you decide which divergences to fix.
 

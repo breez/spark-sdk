@@ -163,7 +163,7 @@ func main() {
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	if *postgresConnectionString != "" {
 		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
-		builder.WithPostgresStorage(pgConfig)
+		builder.WithPostgresBackend(pgConfig)
 	} else {
 		builder.WithDefaultStorage(resolvedDir)
 	}

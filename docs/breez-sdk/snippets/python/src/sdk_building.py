@@ -106,17 +106,10 @@ async def init_sdk_postgres():
     postgres_config.max_pool_size = 8  # Max connections in pool
     postgres_config.wait_timeout_secs = 30  # Timeout waiting for connection
 
-    # Configure PostgreSQL tree store
-    # Can use the same or a different PostgreSQL database
-    tree_store_config = default_postgres_storage_config(
-        connection_string="host=localhost user=postgres dbname=spark"
-    )
-
     try:
-        # Build the SDK with PostgreSQL storage and tree store
+        # Build the SDK with PostgreSQL backend (storage, tree store, and token store)
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_postgres_storage(config=postgres_config)
-        await builder.with_postgres_tree_store(config=tree_store_config)
+        await builder.with_postgres_backend(config=postgres_config)
         sdk = await builder.build()
         return sdk
     except Exception as error:
