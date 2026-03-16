@@ -99,6 +99,11 @@ pub trait LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Invoice>, LnurlRepositoryError>;
 
+    /// Get both the zap and invoice for a payment hash in a single query
+    async fn get_zap_and_invoice_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError>;
     /// Insert a newly paid invoice into the queue
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError>;
 

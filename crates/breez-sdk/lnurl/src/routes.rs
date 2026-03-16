@@ -1411,6 +1411,15 @@ mod tests {
         ) -> Result<Option<Invoice>, LnurlRepositoryError> {
             Ok(self.invoices.lock().unwrap().get(payment_hash).cloned())
         }
+        async fn get_zap_and_invoice_by_payment_hash(
+            &self,
+            payment_hash: &str,
+        ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError> {
+            Ok((
+                None,
+                self.invoices.lock().unwrap().get(payment_hash).cloned(),
+            ))
+        }
         async fn insert_newly_paid(
             &self,
             newly_paid: &NewlyPaid,

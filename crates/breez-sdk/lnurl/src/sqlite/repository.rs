@@ -367,6 +367,69 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(maybe_invoice)
     }
 
+    async fn get_zap_and_invoice_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError> {
+        let maybe_row = sqlx::query(
+            "SELECT z.payment_hash   AS z_payment_hash
+             ,      z.zap_request    AS z_zap_request
+             ,      z.zap_event      AS z_zap_event
+             ,      z.user_pubkey    AS z_user_pubkey
+             ,      z.invoice_expiry AS z_invoice_expiry
+             ,      z.updated_at     AS z_updated_at
+             ,      z.is_user_nostr_key AS z_is_user_nostr_key
+             ,      i.payment_hash   AS i_payment_hash
+             ,      i.user_pubkey    AS i_user_pubkey
+             ,      i.invoice        AS i_invoice
+             ,      i.preimage       AS i_preimage
+             ,      i.invoice_expiry AS i_invoice_expiry
+             ,      i.created_at     AS i_created_at
+             ,      i.updated_at     AS i_updated_at
+             FROM (SELECT $1 AS payment_hash) ph
+             LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
+             LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
+        )
+        .bind(payment_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = maybe_row else {
+            return Ok((None, None));
+        };
+
+        let zap = row
+            .try_get::<Option<String>, _>("z_payment_hash")?
+            .map(|ph| {
+                Ok::<_, sqlx::Error>(Zap {
+                    payment_hash: ph,
+                    zap_request: row.try_get("z_zap_request")?,
+                    zap_event: row.try_get("z_zap_event")?,
+                    user_pubkey: row.try_get("z_user_pubkey")?,
+                    invoice_expiry: row.try_get("z_invoice_expiry")?,
+                    updated_at: row.try_get("z_updated_at")?,
+                    is_user_nostr_key: row.try_get("z_is_user_nostr_key")?,
+                })
+            })
+            .transpose()?;
+
+        let invoice = row
+            .try_get::<Option<String>, _>("i_payment_hash")?
+            .map(|ph| {
+                Ok::<_, sqlx::Error>(Invoice {
+                    payment_hash: ph,
+                    user_pubkey: row.try_get("i_user_pubkey")?,
+                    invoice: row.try_get("i_invoice")?,
+                    preimage: row.try_get("i_preimage")?,
+                    invoice_expiry: row.try_get("i_invoice_expiry")?,
+                    created_at: row.try_get("i_created_at")?,
+                    updated_at: row.try_get("i_updated_at")?,
+                })
+            })
+            .transpose()?;
+
+        Ok((zap, invoice))
+    }
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "INSERT INTO newly_paid (payment_hash, created_at, retry_count, next_retry_at)
