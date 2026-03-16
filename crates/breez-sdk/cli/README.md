@@ -95,7 +95,7 @@ Labels are stored on Nostr relays, allowing discovery during restore. If no `--l
 
 1. **Account master derivation**: `PRF(key, magic_salt)` produces a 32-byte account master used to derive a Nostr identity at `m/44'/1237'/55'/0/0`.
 2. **Label storage**: Labels are published as Nostr events, allowing discovery during restore.
-3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes that are converted to a 24-word BIP39 mnemonic.
+3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes, the first 16 of which are converted to a 12-word BIP39 mnemonic.
 
 The PRF function differs by provider:
 - **File**: `HMAC-SHA256(file_secret, label)`

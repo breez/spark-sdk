@@ -86,23 +86,26 @@ pub fn derive_nip42_keypair(api_key: &str) -> Result<nostr::Keys, PasskeyError> 
 
 /// Converts PRF output to a BIP39 mnemonic.
 ///
-/// The PRF output (32 bytes) is used directly as entropy for a 24-word mnemonic.
+/// The first 16 bytes of the 32-byte PRF output are used as entropy for a 12-word mnemonic.
+/// Truncation is safe because the PRF output is uniformly random (HMAC-SHA256),
+/// so any 16-byte subset is itself uniformly distributed.
 ///
 /// # Arguments
 /// * `prf_output` - The 32-byte PRF output from the wallet salt
 ///
 /// # Returns
-/// * `Ok(String)` - The 24-word BIP39 mnemonic
+/// * `Ok(String)` - The 12-word BIP39 mnemonic
 /// * `Err(PasskeyError)` - If conversion fails
 pub fn prf_to_mnemonic(prf_output: &[u8]) -> Result<String, PasskeyError> {
     if prf_output.len() != 32 {
         return Err(PasskeyError::InvalidPrfOutput(format!(
-            "PRF output must be 32 bytes for 24-word mnemonic, got {}",
+            "PRF output must be 32 bytes, got {}",
             prf_output.len()
         )));
     }
 
-    let mnemonic = bip39::Mnemonic::from_entropy(prf_output)?;
+    // Use first 16 bytes (128 bits) for a 12-word BIP39 mnemonic
+    let mnemonic = bip39::Mnemonic::from_entropy(&prf_output[..16])?;
     Ok(mnemonic.to_string())
 }
 
@@ -139,9 +142,9 @@ mod tests {
 
         let mnemonic = prf_to_mnemonic(&prf_output).expect("Should create mnemonic");
 
-        // Verify it's a 24-word mnemonic
+        // Verify it's a 12-word mnemonic
         let words: Vec<&str> = mnemonic.split_whitespace().collect();
-        assert_eq!(words.len(), 24);
+        assert_eq!(words.len(), 12);
     }
 
     #[macros::test_all]
