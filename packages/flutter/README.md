@@ -1,4 +1,4 @@
-# Breez Spark SDK bindings for Flutter
+# Breez SDK - Spark bindings for Flutter
 
 ## Installation
 
@@ -47,6 +47,6 @@ extension ConfigCopyWith on Config {
 
 ## Documentation
 
-Please refer to Flutter examples on Breez SDK - Nodeless *(Spark Implementation)* documentation for more information on how to use the SDK.
+Please refer to Flutter examples on the Breez SDK - Spark documentation for more information on how to use the SDK.
 
-- [Breez SDK - Nodeless *(Spark Implementation)*](https://sdk-doc-spark.breez.technology/)
+- [Breez SDK - Spark](https://sdk-doc-spark.breez.technology/)
