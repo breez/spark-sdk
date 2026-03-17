@@ -14,9 +14,9 @@ enum PasskeyProviderType: String {
 
 struct PasskeyConfig {
     let provider: PasskeyProviderType
-    let walletName: String?
-    let listWalletNames: Bool
-    let storeWalletName: Bool
+    let label: String?
+    let listLabels: Bool
+    let storeLabel: Bool
     let rpid: String?
 }
 
@@ -137,49 +137,49 @@ func createPrfProvider(type: PasskeyProviderType, dataDir: String) throws -> Pas
 func resolvePasskeySeed(
     provider: PasskeyPrfProvider,
     breezApiKey: String?,
-    walletName: String?,
-    listWalletNames: Bool,
-    storeWalletName: Bool
+    label: String?,
+    listLabels: Bool,
+    storeLabel: Bool
 ) async throws -> Seed {
     let relayConfig = NostrRelayConfig(breezApiKey: breezApiKey)
     let passkey = Passkey(prfProvider: provider, relayConfig: relayConfig)
 
-    // --store-wallet-name: publish the wallet name to Nostr
-    if storeWalletName, let walletName {
-        print("Publishing wallet name '\(walletName)' to Nostr...")
-        try await passkey.storeWalletName(walletName: walletName)
-        print("Wallet name '\(walletName)' published successfully.")
+    // --store-label: publish the label to Nostr
+    if storeLabel, let label {
+        print("Publishing label '\(label)' to Nostr...")
+        try await passkey.storeLabel(label: label)
+        print("Label '\(label)' published successfully.")
     }
 
-    // --list-wallet-names: query Nostr and prompt user to select
+    // --list-labels: query Nostr and prompt user to select
     let resolvedName: String?
-    if listWalletNames {
-        print("Querying Nostr for available wallet names...")
-        let walletNames = try await passkey.listWalletNames()
+    if listLabels {
+        print("Querying Nostr for available labels...")
+        let labels = try await passkey.listLabels()
 
-        if walletNames.isEmpty {
+        if labels.isEmpty {
             throw PasskeyPrfError.Generic(
-                "No wallet names found on Nostr for this identity"
+                "No labels found on Nostr for this identity"
             )
         }
 
-        print("Available wallet names:")
-        for (i, name) in walletNames.enumerated() {
+        print("Available labels:")
+        for (i, name) in labels.enumerated() {
             print("  \(i + 1): \(name)")
         }
 
-        guard let line = readlinePrompt("Select wallet name (1-\(walletNames.count)): "),
+        guard let line = readlinePrompt("Select label (1-\(labels.count)): "),
               let idx = Int(line.trimmingCharacters(in: .whitespaces)),
-              idx >= 1, idx <= walletNames.count
+              idx >= 1, idx <= labels.count
         else {
             throw PasskeyPrfError.Generic( "Invalid selection")
         }
 
-        resolvedName = walletNames[idx - 1]
+        resolvedName = labels[idx - 1]
     } else {
-        resolvedName = walletName
+        resolvedName = label
     }
 
-    let wallet = try await passkey.getWallet(walletName: resolvedName)
+    let wallet = try await passkey.getWallet(label: resolvedName)
     return wallet.seed
 }

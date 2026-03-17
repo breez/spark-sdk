@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use platform_utils::tokio;
 use spark_wallet::SparkWallet;
 use tokio::sync::{Notify, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, info, warn};
 
 use breez_sdk_common::sync::SigningClient;

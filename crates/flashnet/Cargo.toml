@@ -26,7 +26,6 @@ serde_with.workspace = true
 spark.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true
-tokio_with_wasm.workspace = true
 tracing.workspace = true
 web-time.workspace = true
 

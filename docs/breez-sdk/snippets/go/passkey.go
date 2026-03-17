@@ -29,8 +29,8 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	passkey := breez_sdk_spark.NewPasskey(prfProvider, nil)
 
 	// Derive the wallet from the passkey (pass nil for the default wallet)
-	walletName := "personal"
-	wallet, err := passkey.GetWallet(&walletName)
+	label := "personal"
+	wallet, err := passkey.GetWallet(&label)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +48,8 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	return sdk, nil
 }
 
-func ListWalletNames() ([]string, error) {
-	// ANCHOR: list-wallet-names
+func ListLabels() ([]string, error) {
+	// ANCHOR: list-labels
 	prfProvider := &ExamplePasskeyPrfProvider{}
 	breezApiKey := "<breez api key>"
 	relayConfig := &breez_sdk_spark.NostrRelayConfig{
@@ -57,21 +57,21 @@ func ListWalletNames() ([]string, error) {
 	}
 	passkey := breez_sdk_spark.NewPasskey(prfProvider, relayConfig)
 
-	// Query Nostr for wallet names associated with this passkey
-	walletNames, err := passkey.ListWalletNames()
+	// Query Nostr for labels associated with this passkey
+	labels, err := passkey.ListLabels()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, walletName := range walletNames {
-		log.Printf("Found wallet: %s", walletName)
+	for _, label := range labels {
+		log.Printf("Found label: %s", label)
 	}
-	// ANCHOR_END: list-wallet-names
-	return walletNames, nil
+	// ANCHOR_END: list-labels
+	return labels, nil
 }
 
-func StoreWalletName() error {
-	// ANCHOR: store-wallet-name
+func StoreLabel() error {
+	// ANCHOR: store-label
 	prfProvider := &ExamplePasskeyPrfProvider{}
 	breezApiKey := "<breez api key>"
 	relayConfig := &breez_sdk_spark.NostrRelayConfig{
@@ -79,11 +79,11 @@ func StoreWalletName() error {
 	}
 	passkey := breez_sdk_spark.NewPasskey(prfProvider, relayConfig)
 
-	// Publish the wallet name to Nostr for later discovery
-	err := passkey.StoreWalletName("personal")
+	// Publish the label to Nostr for later discovery
+	err := passkey.StoreLabel("personal")
 	if err != nil {
 		return err
 	}
-	// ANCHOR_END: store-wallet-name
+	// ANCHOR_END: store-label
 	return nil
 }

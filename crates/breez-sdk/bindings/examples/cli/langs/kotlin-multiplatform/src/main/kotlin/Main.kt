@@ -64,9 +64,9 @@ fun main(args: Array<String>) {
     var stableBalanceTokenIdentifier: String? = null
     var stableBalanceThreshold: ULong? = null
     var passkeyProviderStr: String? = null
-    var walletName: String? = null
-    var listWalletNames = false
-    var storeWalletName = false
+    var label: String? = null
+    var listLabels = false
+    var storeLabel = false
     var rpId: String? = null
 
     // Simple argument parsing
@@ -101,15 +101,15 @@ fun main(args: Array<String>) {
                 i++
                 if (i < args.size) passkeyProviderStr = args[i]
             }
-            "--wallet-name" -> {
+            "--label" -> {
                 i++
-                if (i < args.size) walletName = args[i]
+                if (i < args.size) label = args[i]
             }
-            "--list-wallet-names" -> {
-                listWalletNames = true
+            "--list-labels" -> {
+                listLabels = true
             }
-            "--store-wallet-name" -> {
-                storeWalletName = true
+            "--store-label" -> {
+                storeLabel = true
             }
             "--rpid" -> {
                 i++
@@ -126,9 +126,9 @@ fun main(args: Array<String>) {
                 println("  --stable-balance-token-identifier <ID>       Stable balance token identifier")
                 println("  --stable-balance-threshold <SATS>            Stable balance threshold in sats")
                 println("  --passkey <PROVIDER>                         Use passkey with PRF provider (file, yubikey, or fido2)")
-                println("  --wallet-name <NAME>                         Wallet name for seed derivation (requires --passkey)")
-                println("  --list-wallet-names                          List and select from wallet names on Nostr (requires --passkey)")
-                println("  --store-wallet-name                          Publish the wallet name to Nostr (requires --passkey and --wallet-name)")
+                println("  --label <NAME>                               Label for seed derivation (requires --passkey)")
+                println("  --list-labels                                List and select from labels on Nostr (requires --passkey)")
+                println("  --store-label                                Publish the label to Nostr (requires --passkey and --label)")
                 println("  --rpid <ID>                                  Relying party ID for FIDO2 provider (requires --passkey)")
                 println("  -h, --help                                   Show this help message")
                 return
@@ -143,17 +143,17 @@ fun main(args: Array<String>) {
 
     // Validate flag combinations
     if (passkeyProviderStr == null) {
-        if (walletName != null || listWalletNames || storeWalletName || rpId != null) {
-            System.err.println("Error: --wallet-name, --list-wallet-names, --store-wallet-name, and --rpid require --passkey")
+        if (label != null || listLabels || storeLabel || rpId != null) {
+            System.err.println("Error: --label, --list-labels, --store-label, and --rpid require --passkey")
             return
         }
     }
-    if (storeWalletName && walletName == null) {
-        System.err.println("Error: --store-wallet-name requires --wallet-name")
+    if (storeLabel && label == null) {
+        System.err.println("Error: --store-label requires --label")
         return
     }
-    if (listWalletNames && (walletName != null || storeWalletName)) {
-        System.err.println("Error: --list-wallet-names conflicts with --wallet-name and --store-wallet-name")
+    if (listLabels && (label != null || storeLabel)) {
+        System.err.println("Error: --list-labels conflicts with --label and --store-label")
         return
     }
 
@@ -185,9 +185,9 @@ fun main(args: Array<String>) {
             val provider = PasskeyProvider.fromString(passkeyProviderStr)
             PasskeyConfig(
                 provider = provider,
-                walletName = walletName,
-                listWalletNames = listWalletNames,
-                storeWalletName = storeWalletName,
+                label = label,
+                listLabels = listLabels,
+                storeLabel = storeLabel,
                 rpId = rpId,
             )
         } catch (e: IllegalArgumentException) {
@@ -240,9 +240,9 @@ suspend fun runInteractiveMode(
         resolvePasskeySeed(
             prfProvider,
             if (!apiKey.isNullOrEmpty()) apiKey else null,
-            passkeyConfig.walletName,
-            passkeyConfig.listWalletNames,
-            passkeyConfig.storeWalletName,
+            passkeyConfig.label,
+            passkeyConfig.listLabels,
+            passkeyConfig.storeLabel,
         )
     } else {
         val mnemonic = persistence.getOrCreateMnemonic()

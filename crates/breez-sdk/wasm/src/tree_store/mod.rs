@@ -4,12 +4,12 @@ mod tests;
 use std::sync::Arc;
 
 use macros::async_trait;
+use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeServiceError, TreeStore,
 };
-use tokio_with_wasm::alias::sync::watch;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;

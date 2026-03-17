@@ -12,9 +12,9 @@ string? postgresConnectionString = null;
 string? stableBalanceTokenIdentifier = null;
 ulong? stableBalanceThreshold = null;
 string? passkeyProviderStr = null;
-string? walletName = null;
-bool listWalletNames = false;
-bool storeWalletName = false;
+string? label = null;
+bool listLabels = false;
+bool storeLabel = false;
 string? rpId = null;
 
 for (int i = 0; i < args.Length; i++)
@@ -43,14 +43,14 @@ for (int i = 0; i < args.Length; i++)
         case "--passkey":
             if (i + 1 < args.Length) passkeyProviderStr = args[++i];
             break;
-        case "--wallet-name":
-            if (i + 1 < args.Length) walletName = args[++i];
+        case "--label":
+            if (i + 1 < args.Length) label = args[++i];
             break;
-        case "--list-wallet-names":
-            listWalletNames = true;
+        case "--list-labels":
+            listLabels = true;
             break;
-        case "--store-wallet-name":
-            storeWalletName = true;
+        case "--store-label":
+            storeLabel = true;
             break;
         case "--rpid":
             if (i + 1 < args.Length) rpId = args[++i];
@@ -66,27 +66,27 @@ for (int i = 0; i < args.Length; i++)
 // Validate passkey flag combinations
 // ---------------------------------------------------------------------------
 
-if (listWalletNames && passkeyProviderStr == null)
+if (listLabels && passkeyProviderStr == null)
 {
-    Console.Error.WriteLine("Error: --list-wallet-names requires --passkey");
+    Console.Error.WriteLine("Error: --list-labels requires --passkey");
     return;
 }
 
-if (storeWalletName && passkeyProviderStr == null)
+if (storeLabel && passkeyProviderStr == null)
 {
-    Console.Error.WriteLine("Error: --store-wallet-name requires --passkey");
+    Console.Error.WriteLine("Error: --store-label requires --passkey");
     return;
 }
 
-if (storeWalletName && walletName == null)
+if (storeLabel && label == null)
 {
-    Console.Error.WriteLine("Error: --store-wallet-name requires --wallet-name");
+    Console.Error.WriteLine("Error: --store-label requires --label");
     return;
 }
 
-if (walletName != null && passkeyProviderStr == null)
+if (label != null && passkeyProviderStr == null)
 {
-    Console.Error.WriteLine("Error: --wallet-name requires --passkey");
+    Console.Error.WriteLine("Error: --label requires --passkey");
     return;
 }
 
@@ -96,9 +96,9 @@ if (rpId != null && passkeyProviderStr == null)
     return;
 }
 
-if (listWalletNames && (walletName != null || storeWalletName))
+if (listLabels && (label != null || storeLabel))
 {
-    Console.Error.WriteLine("Error: --list-wallet-names conflicts with --wallet-name and --store-wallet-name");
+    Console.Error.WriteLine("Error: --list-labels conflicts with --label and --store-label");
     return;
 }
 
@@ -145,9 +145,9 @@ if (passkeyProviderStr != null)
     passkeyConfig = new PasskeyConfig
     {
         Provider = PasskeyProviderExtensions.ParseProvider(passkeyProviderStr),
-        WalletName = walletName,
-        ListWalletNames = listWalletNames,
-        StoreWalletName = storeWalletName,
+        Label = label,
+        ListLabels = listLabels,
+        StoreLabel = storeLabel,
         RpId = rpId,
     };
 }
@@ -195,9 +195,9 @@ static void PrintUsage()
     Console.WriteLine("  --stable-balance-token-identifier <TOKEN>   Stable balance token identifier");
     Console.WriteLine("  --stable-balance-threshold <SATS>           Stable balance threshold in sats");
     Console.WriteLine("  --passkey <PROVIDER>                        Use passkey with file, yubikey, or fido2 provider");
-    Console.WriteLine("  --wallet-name <NAME>                        Wallet name for seed derivation (requires --passkey)");
-    Console.WriteLine("  --list-wallet-names                         List and select from wallet names on Nostr (requires --passkey)");
-    Console.WriteLine("  --store-wallet-name                         Publish wallet name to Nostr (requires --passkey and --wallet-name)");
+    Console.WriteLine("  --label <NAME>                              Label for seed derivation (requires --passkey)");
+    Console.WriteLine("  --list-labels                               List and select from labels on Nostr (requires --passkey)");
+    Console.WriteLine("  --store-label                               Publish label to Nostr (requires --passkey and --label)");
     Console.WriteLine("  --rpid <RPID>                               Relying party ID for FIDO2 provider (requires --passkey)");
     Console.WriteLine("  -h, --help                                  Show this help");
 }
@@ -247,9 +247,9 @@ static async Task RunInteractiveMode(
         seed = await PasskeyResolver.ResolvePasskeySeed(
             prfProvider,
             apiKey,
-            passkeyConfig.WalletName,
-            passkeyConfig.ListWalletNames,
-            passkeyConfig.StoreWalletName);
+            passkeyConfig.Label,
+            passkeyConfig.ListLabels,
+            passkeyConfig.StoreLabel);
     }
     else
     {

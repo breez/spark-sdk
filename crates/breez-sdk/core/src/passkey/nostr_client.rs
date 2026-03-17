@@ -6,7 +6,7 @@ use std::time::Duration;
 use nostr::nips::nip65;
 use nostr::{Event, Filter, Kind, PublicKey, RelayUrl};
 use nostr_sdk::Client;
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;
@@ -30,9 +30,9 @@ const BREEZ_RELAY: &str = "wss://nr1.breez.technology";
 /// the authoritative NIP-65 relay list.
 const BREEZ_NIP65_PUBKEY: &str = "0478caf9d25260b7603154c4227d4af5c2e4937092fbdbc9958aef9ea8856e23";
 
-/// Client for publishing and discovering wallet names on Nostr relays.
+/// Client for publishing and discovering labels on Nostr relays.
 ///
-/// Wallet names are stored as kind-1 (text note) events with plain text content.
+/// Labels are stored as kind-1 (text note) events with plain text content.
 /// The Nostr identity is derived from the passkey PRF at account 55.
 ///
 /// Relay URLs are managed internally:
@@ -57,31 +57,27 @@ impl NostrSaltClient {
         }
     }
 
-    /// Publish a wallet name to Nostr relays.
+    /// Publish a label to Nostr relays.
     ///
-    /// The wallet name is published as a kind-1 text note event, signed by the provided keys.
-    /// Per the seedless-restore spec, the content is plain text (the wallet name itself).
+    /// The label is published as a kind-1 text note event, signed by the provided keys.
+    /// Per the seedless-restore spec, the content is plain text (the label itself).
     ///
     /// # Arguments
     /// * `keys` - The Nostr keypair derived from the account master
-    /// * `wallet_name` - The wallet name string to publish
+    /// * `label` - The label string to publish
     ///
     /// # Returns
-    /// * `Ok(())` - Wallet name was published successfully
+    /// * `Ok(())` - Label was published successfully
     /// * `Err(PasskeyError)` - Publication failed
-    pub async fn publish_wallet_name(
-        &self,
-        keys: &nostr::Keys,
-        wallet_name: &str,
-    ) -> Result<(), PasskeyError> {
-        let builder = nostr::EventBuilder::text_note(wallet_name);
+    pub async fn publish_label(&self, keys: &nostr::Keys, label: &str) -> Result<(), PasskeyError> {
+        let builder = nostr::EventBuilder::text_note(label);
         self.write_event(keys, builder).await
     }
 
-    /// Query all wallet names published by the given Nostr identity.
+    /// Query all labels published by the given Nostr identity.
     ///
     /// Returns all kind-1 text note events authored by the pubkey.
-    /// The wallet name values are extracted from the event content.
+    /// The label values are extracted from the event content.
     ///
     /// On the first call, spawns a background task to sync the NIP-65 relay list
     /// with the breez server's authoritative list. This does not block the response.
@@ -90,20 +86,17 @@ impl NostrSaltClient {
     /// * `keys` - The Nostr keypair (used to identify the pubkey to query)
     ///
     /// # Returns
-    /// * `Ok(Vec<String>)` - List of wallet names found
+    /// * `Ok(Vec<String>)` - List of labels found
     /// * `Err(PasskeyError)` - Query failed
-    pub async fn query_wallet_names(
-        &self,
-        keys: &nostr::Keys,
-    ) -> Result<Vec<String>, PasskeyError> {
+    pub async fn query_labels(&self, keys: &nostr::Keys) -> Result<Vec<String>, PasskeyError> {
         let filter = Filter::new()
             .author(keys.public_key())
             .kind(nostr::Kind::TextNote);
 
         let events_vec = self.read_events(keys, filter).await?;
 
-        // Extract wallet name content from events
-        let wallet_names: Vec<String> = events_vec
+        // Extract label content from events
+        let labels: Vec<String> = events_vec
             .iter()
             .map(|event| event.content.clone())
             .collect();
@@ -111,26 +104,26 @@ impl NostrSaltClient {
         // Trigger one-time NIP-65 relay sync in the background
         self.spawn_relay_sync(keys, events_vec);
 
-        Ok(wallet_names)
+        Ok(labels)
     }
 
-    /// Check if a specific wallet name has already been published.
+    /// Check if a specific label has already been published.
     ///
     /// # Arguments
     /// * `keys` - The Nostr keypair
-    /// * `wallet_name` - The wallet name to check for
+    /// * `label` - The label to check for
     ///
     /// # Returns
-    /// * `Ok(true)` - Wallet name already exists
-    /// * `Ok(false)` - Wallet name not found
+    /// * `Ok(true)` - Label already exists
+    /// * `Ok(false)` - Label not found
     /// * `Err(PasskeyError)` - Query failed
-    pub async fn wallet_name_exists(
+    pub async fn label_exists(
         &self,
         keys: &nostr::Keys,
-        wallet_name: &str,
+        label: &str,
     ) -> Result<bool, PasskeyError> {
-        let wallet_names = self.query_wallet_names(keys).await?;
-        Ok(wallet_names.iter().any(|w| w == wallet_name))
+        let labels = self.query_labels(keys).await?;
+        Ok(labels.iter().any(|l| l == label))
     }
 
     /// Spawn the NIP-65 relay sync task if it hasn't been triggered yet.
@@ -176,7 +169,7 @@ impl NostrSaltClient {
     ///
     /// 1. Fetches the relay list (populating `server_relays` if not already set).
     /// 2. Queries the user's published NIP-65 event.
-    /// 3. If they differ, re-publishes all wallet name events and updates the NIP-65 event.
+    /// 3. If they differ, re-publishes all label events and updates the NIP-65 event.
     async fn sync_relay_list(
         &self,
         keys: &nostr::Keys,
@@ -342,7 +335,7 @@ impl NostrSaltClient {
         self.write_event(keys, builder).await
     }
 
-    /// Re-publish existing wallet name events to the current write relay set.
+    /// Re-publish existing label events to the current write relay set.
     async fn republish_events_to_relays(
         &self,
         keys: &nostr::Keys,

@@ -1,10 +1,10 @@
+use platform_utils::tokio;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, warn};
 use web_time::SystemTime;
 
@@ -667,11 +667,11 @@ mod tests {
 
     use anyhow::anyhow;
     use mockall::{Sequence, predicate::eq};
+    use platform_utils::tokio;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{Mutex, broadcast, mpsc, watch};
-    use tokio_with_wasm::alias as tokio;
 
     // Helper function to create test records
     fn create_record(id_type: &str, id_data: &str, revision: u64) -> crate::sync::storage::Record {

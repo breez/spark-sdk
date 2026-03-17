@@ -28,7 +28,7 @@ const exampleGettingStartedAdvanced = async () => {
   // methods. This is not needed when using the SDK in a Node.js/Deno environment.
   await init()
 
-  // Construct the seed using a mnemonic or entropy bytes
+  // Construct the seed using a mnemonic, entropy or passkey
   const mnemonic = '<mnemonic words>'
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 
@@ -51,7 +51,7 @@ const exampleGettingStartedAdvanced = async () => {
 
 const exampleWithPostgresStorage = async () => {
   // ANCHOR: init-sdk-postgres
-  // Construct the seed using a mnemonic or entropy bytes
+  // Construct the seed using a mnemonic, entropy or passkey
   const mnemonic = '<mnemonic words>'
   const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
 

@@ -14,8 +14,8 @@
 //! 2. **Salt Storage**: User-provided salts are published as Nostr kind-1 events,
 //!    allowing discovery during wallet restore.
 //!
-//! 3. **Wallet Seed Derivation**: `PRF(passkey, user_salt)` produces 32 bytes that
-//!    are converted to a 24-word BIP39 mnemonic.
+//! 3. **Wallet Seed Derivation**: `PRF(passkey, user_salt)` produces 32 bytes, the first
+//!    16 of which are converted to a 12-word BIP39 mnemonic.
 //!
 //! # Platform Implementation
 //!
@@ -36,11 +36,11 @@
 //! // Get a wallet (creates or restores)
 //! let wallet = passkey.get_wallet(Some("my-wallet".to_string())).await?;
 //!
-//! // List available wallet names for restore
-//! let wallet_names = passkey.list_wallet_names().await?;
+//! // List available labels for restore
+//! let labels = passkey.list_labels().await?;
 //!
-//! // Store a wallet name to Nostr
-//! passkey.store_wallet_name("my-wallet".to_string()).await?;
+//! // Store a label to Nostr
+//! passkey.store_label("my-wallet".to_string()).await?;
 //! ```
 
 mod derivation;
@@ -57,29 +57,29 @@ pub use passkey_prf_provider::PasskeyPrfProvider;
 
 use std::sync::Arc;
 
+use platform_utils::tokio;
 use tokio::sync::OnceCell;
-use tokio_with_wasm::alias as tokio;
 
 use crate::Seed;
 use derivation::derive_nostr_keypair;
 use nostr_client::NostrSaltClient;
 
-/// The default wallet name used when none is provided to [`Passkey::get_wallet`].
-const DEFAULT_WALLET_NAME: &str = "Default";
+/// The default label used when none is provided to [`Passkey::get_wallet`].
+const DEFAULT_LABEL: &str = "Default";
 
-/// Maximum allowed wallet name length in bytes.
-const MAX_WALLET_NAME_LENGTH: usize = 1024;
+/// Maximum allowed label length in bytes.
+const MAX_LABEL_LENGTH: usize = 1024;
 
-/// Validate a user-provided wallet name string.
-fn validate_wallet_name(wallet_name: &str) -> Result<(), PasskeyError> {
-    if wallet_name.is_empty() {
+/// Validate a user-provided label string.
+fn validate_label(label: &str) -> Result<(), PasskeyError> {
+    if label.is_empty() {
         return Err(PasskeyError::InvalidSalt(
-            "wallet name must not be empty".to_string(),
+            "label must not be empty".to_string(),
         ));
     }
-    if wallet_name.len() > MAX_WALLET_NAME_LENGTH {
+    if label.len() > MAX_LABEL_LENGTH {
         return Err(PasskeyError::InvalidSalt(format!(
-            "wallet name exceeds maximum length of {MAX_WALLET_NAME_LENGTH} bytes"
+            "label exceeds maximum length of {MAX_LABEL_LENGTH} bytes"
         )));
     }
     Ok(())
@@ -88,11 +88,11 @@ fn validate_wallet_name(wallet_name: &str) -> Result<(), PasskeyError> {
 /// Orchestrates passkey-based wallet creation and restore operations.
 ///
 /// This struct coordinates between the platform's passkey PRF provider and
-/// Nostr relays to derive wallet mnemonics and manage wallet names.
+/// Nostr relays to derive wallet mnemonics and manage labels.
 ///
 /// The Nostr identity (derived from the passkey's magic salt) is cached after
-/// the first derivation so that subsequent calls to [`Passkey::list_wallet_names`]
-/// and [`Passkey::store_wallet_name`] do not require additional PRF interactions.
+/// the first derivation so that subsequent calls to [`Passkey::list_labels`]
+/// and [`Passkey::store_label`] do not require additional PRF interactions.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct Passkey {
@@ -141,57 +141,52 @@ impl Passkey {
         }
     }
 
-    /// Derive a wallet for a given wallet name.
+    /// Derive a wallet for a given label.
     ///
-    /// Uses the passkey PRF to derive a 24-word BIP39 mnemonic from the wallet name
-    /// and returns it as a [`Wallet`] containing the seed and resolved name.
+    /// Uses the passkey PRF to derive a 12-word BIP39 mnemonic from the label
+    /// and returns it as a [`Wallet`] containing the seed and resolved label.
     /// This works for both creating a new wallet and restoring an existing one.
     ///
     /// # Arguments
-    /// * `wallet_name` - A user-chosen wallet name (e.g., "personal", "business").
-    ///   If `None`, defaults to [`DEFAULT_WALLET_NAME`].
-    pub async fn get_wallet(&self, wallet_name: Option<String>) -> Result<Wallet, PasskeyError> {
-        let name = wallet_name.unwrap_or_else(|| DEFAULT_WALLET_NAME.to_string());
-        validate_wallet_name(&name)?;
-        let root_key = self.prf_provider.derive_prf_seed(name.clone()).await?;
+    /// * `label` - A user-chosen label (e.g., "personal", "business").
+    ///   If `None`, defaults to [`DEFAULT_LABEL`].
+    pub async fn get_wallet(&self, label: Option<String>) -> Result<Wallet, PasskeyError> {
+        let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+        validate_label(&label)?;
+        let root_key = self.prf_provider.derive_prf_seed(label.clone()).await?;
         let mnemonic = prf_to_mnemonic(&root_key)?;
         Ok(Wallet {
             seed: Seed::Mnemonic {
                 mnemonic,
                 passphrase: None,
             },
-            name,
+            label,
         })
     }
 
-    /// List all wallet names published to Nostr for this passkey's identity.
+    /// List all labels published to Nostr for this passkey's identity.
     ///
-    /// Queries Nostr relays for all wallet names associated with the Nostr identity
+    /// Queries Nostr relays for all labels associated with the Nostr identity
     /// derived from this passkey. Requires 1 PRF call.
-    pub async fn list_wallet_names(&self) -> Result<Vec<String>, PasskeyError> {
+    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
         let nostr_keys = self.derive_nostr_identity().await?;
-        self.nostr_client.query_wallet_names(&nostr_keys).await
+        self.nostr_client.query_labels(&nostr_keys).await
     }
 
-    /// Publish a wallet name to Nostr relays for this passkey's identity.
+    /// Publish a label to Nostr relays for this passkey's identity.
     ///
-    /// Idempotent: if the wallet name already exists, it is not published again.
+    /// Idempotent: if the label already exists, it is not published again.
     /// Requires 1 PRF call.
     ///
     /// # Arguments
-    /// * `wallet_name` - A user-chosen wallet name (e.g., "personal", "business")
-    pub async fn store_wallet_name(&self, wallet_name: String) -> Result<(), PasskeyError> {
-        validate_wallet_name(&wallet_name)?;
+    /// * `label` - A user-chosen label (e.g., "personal", "business")
+    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
+        validate_label(&label)?;
         let nostr_keys = self.derive_nostr_identity().await?;
 
-        let exists = self
-            .nostr_client
-            .wallet_name_exists(&nostr_keys, &wallet_name)
-            .await?;
+        let exists = self.nostr_client.label_exists(&nostr_keys, &label).await?;
         if !exists {
-            self.nostr_client
-                .publish_wallet_name(&nostr_keys, &wallet_name)
-                .await?;
+            self.nostr_client.publish_label(&nostr_keys, &label).await?;
         }
         Ok(())
     }
@@ -401,28 +396,28 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_get_wallet_produces_24_words() {
+    async fn test_get_wallet_produces_12_words() {
         let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         let mnemonic = unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
 
         let word_count = mnemonic.split_whitespace().count();
-        assert_eq!(word_count, 24, "Mnemonic should be 24 words");
+        assert_eq!(word_count, 12, "Mnemonic should be 12 words");
     }
 
     #[macros::async_test_all]
-    async fn test_get_wallet_default_name() {
+    async fn test_get_wallet_default_label() {
         let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
-        // None wallet_name should default to "Default" and not error
+        // None label should default to "Default" and not error
         let wallet = passkey.get_wallet(None).await.unwrap();
-        assert_eq!(wallet.name, "Default");
+        assert_eq!(wallet.label, "Default");
     }
 
     #[macros::async_test_all]
-    async fn test_get_wallet_custom_name() {
+    async fn test_get_wallet_custom_label() {
         let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
@@ -430,7 +425,7 @@ mod tests {
             .get_wallet(Some("personal".to_string()))
             .await
             .unwrap();
-        assert_eq!(wallet.name, "personal");
+        assert_eq!(wallet.label, "personal");
     }
 
     #[macros::async_test_all]
@@ -449,7 +444,7 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_different_wallet_names_produce_different_mnemonics() {
+    async fn test_different_labels_produce_different_mnemonics() {
         let prf_provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
@@ -468,12 +463,12 @@ mod tests {
 
         assert_ne!(
             mnemonic1, mnemonic2,
-            "Different wallet names should produce different mnemonics"
+            "Different labels should produce different mnemonics"
         );
     }
 
     #[macros::async_test_all]
-    async fn test_same_wallet_name_deterministic() {
+    async fn test_same_label_deterministic() {
         let prf_provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
@@ -484,7 +479,7 @@ mod tests {
 
         assert_eq!(
             mnemonic1, mnemonic2,
-            "Same wallet name should produce same mnemonic"
+            "Same label should produce same mnemonic"
         );
     }
 

@@ -33,9 +33,9 @@ namespace BreezSdkSnippets
 
             var request = new ListPaymentsRequest(
                 // Filter by payment type
-                typeFilter: new List<PaymentType> { PaymentType.Send, PaymentType.Receive },
+                typeFilter: new PaymentType[] { PaymentType.Send, PaymentType.Receive },
                 // Filter by status
-                statusFilter: new List<PaymentStatus> { PaymentStatus.Completed },
+                statusFilter: new PaymentStatus[] { PaymentStatus.Completed },
                 assetFilter: assetFilter,
                 // Time range filters
                 fromTimestamp: 1704067200, // Unix timestamp

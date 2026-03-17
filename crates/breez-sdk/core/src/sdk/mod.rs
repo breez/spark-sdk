@@ -14,10 +14,10 @@ pub(crate) use sync_coordinator::SyncCoordinator;
 use bitflags::bitflags;
 use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService, sync::SigningClient};
 use platform_utils::HttpClient;
+use platform_utils::tokio;
 use spark_wallet::SparkWallet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
-use tokio_with_wasm::alias as tokio;
 
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,

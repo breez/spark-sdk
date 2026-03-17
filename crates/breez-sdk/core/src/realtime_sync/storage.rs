@@ -21,8 +21,8 @@ use crate::{
     persist::{LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest},
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
+use platform_utils::tokio;
 use serde::{Deserialize, Serialize};
-use tokio_with_wasm::alias as tokio;
 
 const INITIAL_SYNC_CACHE_KEY: &str = "sync_initial_complete";
 

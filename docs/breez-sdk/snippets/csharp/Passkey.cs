@@ -30,7 +30,7 @@ namespace BreezSdkSnippets
             var passkey = new Passkey(prfProvider, null);
 
             // Derive the wallet from the passkey (pass null for the default wallet)
-            var wallet = await passkey.GetWallet(walletName: "personal");
+            var wallet = await passkey.GetWallet(label: "personal");
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
             var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(
@@ -42,38 +42,38 @@ namespace BreezSdkSnippets
             return sdk;
         }
 
-        async Task<List<string>> ListWalletNames()
+        async Task<string[]> ListLabels()
         {
-            // ANCHOR: list-wallet-names
+            // ANCHOR: list-labels
             var prfProvider = new ExamplePasskeyPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );
             var passkey = new Passkey(prfProvider, relayConfig);
 
-            // Query Nostr for wallet names associated with this passkey
-            var walletNames = await passkey.ListWalletNames();
+            // Query Nostr for labels associated with this passkey
+            var labels = await passkey.ListLabels();
 
-            foreach (var walletName in walletNames)
+            foreach (var label in labels)
             {
-                Console.WriteLine($"Found wallet: {walletName}");
+                Console.WriteLine($"Found label: {label}");
             }
-            // ANCHOR_END: list-wallet-names
-            return walletNames;
+            // ANCHOR_END: list-labels
+            return labels;
         }
 
-        async Task StoreWalletName()
+        async Task StoreLabel()
         {
-            // ANCHOR: store-wallet-name
+            // ANCHOR: store-label
             var prfProvider = new ExamplePasskeyPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );
             var passkey = new Passkey(prfProvider, relayConfig);
 
-            // Publish the wallet name to Nostr for later discovery
-            await passkey.StoreWalletName(walletName: "personal");
-            // ANCHOR_END: store-wallet-name
+            // Publish the label to Nostr for later discovery
+            await passkey.StoreLabel(label: "personal");
+            // ANCHOR_END: store-label
         }
     }
 }

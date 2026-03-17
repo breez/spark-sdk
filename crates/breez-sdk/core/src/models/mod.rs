@@ -314,24 +314,11 @@ impl TryFrom<&Payment> for ConversionStep {
 }
 
 #[cfg(feature = "uniffi")]
-uniffi::custom_type!(u128, String);
-
-#[cfg(feature = "uniffi")]
-impl crate::UniffiCustomTypeConverter for u128 {
-    type Builtin = String;
-
-    fn into_custom(val: Self::Builtin) -> ::uniffi::Result<Self>
-    where
-        Self: ::std::marker::Sized,
-    {
-        val.parse::<u128>()
-            .map_err(uniffi::deps::anyhow::Error::msg)
-    }
-
-    fn from_custom(obj: Self) -> Self::Builtin {
-        obj.to_string()
-    }
-}
+uniffi::custom_type!(u128, String, {
+    remote,
+    try_lift: |val| val.parse::<u128>().map_err(uniffi::deps::anyhow::Error::msg),
+    lower: |obj| obj.to_string(),
+});
 
 // TODO: fix large enum variant lint - may be done by boxing lnurl_pay_info but that requires
 //  some changes to the wasm bindgen macro

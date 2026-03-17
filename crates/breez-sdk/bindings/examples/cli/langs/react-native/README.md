@@ -54,22 +54,22 @@ To enable passkey support, edit the `PASSKEY_CONFIG` constant in `src/App.tsx`:
 ```typescript
 const PASSKEY_CONFIG: PasskeyConfig = {
   provider: PasskeyProvider.File,
-  walletName: 'personal',        // Optional wallet name
-  listWalletNames: false,        // Query Nostr for wallet names
-  storeWalletName: false,        // Publish wallet name to Nostr
+  label: 'personal',             // Optional label
+  listLabels: false,             // Query Nostr for labels
+  storeLabel: false,             // Publish label to Nostr
 }
 ```
 
 When `PASSKEY_CONFIG` is `undefined` (the default), the CLI uses a mnemonic-based seed
 stored in the app's data directory, matching the default behavior of the Rust CLI.
 
-### Wallet Name Management
+### Label Management
 
 When using passkey with Nostr relay support:
 
-- **Store**: Set `storeWalletName: true` and `walletName: '<name>'` to publish a wallet name to Nostr
-- **List**: Set `listWalletNames: true` to query Nostr for wallet names associated with the passkey
-- **Select**: When listing, the available names are displayed in the log output
+- **Store**: Set `storeLabel: true` and `label: '<name>'` to publish a label to Nostr
+- **List**: Set `listLabels: true` to query Nostr for labels associated with the passkey
+- **Select**: When listing, the available labels are displayed in the log output
 
 ## Available Commands
 

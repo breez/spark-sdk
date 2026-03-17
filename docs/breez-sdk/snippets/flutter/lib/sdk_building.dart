@@ -3,7 +3,7 @@ import 'dart:async';
 
 Future<void> initSdkAdvanced() async {
   // ANCHOR: init-sdk-advanced
-  // Construct the seed using a mnemonic or entropy bytes
+  // Construct the seed using a mnemonic, entropy or passkey
   String mnemonic = "<mnemonic words>";
   final seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: null);
 

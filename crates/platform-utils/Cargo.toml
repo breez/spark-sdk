@@ -13,12 +13,19 @@ macros.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-bitreq.workspace = true
+bitreq = { workspace = true, features = ["async", "async-https", "json-using-serde"] }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 reqwest.workspace = true
+tokio_with_wasm = { version = "0.8.7", features = [
+  "macros",
+  "rt",
+  "sync",
+  "time",
+] }

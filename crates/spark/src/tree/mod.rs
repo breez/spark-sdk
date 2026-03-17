@@ -7,6 +7,7 @@ mod store;
 pub mod tests;
 
 pub use error::TreeServiceError;
+use platform_utils::tokio::sync::watch;
 pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
 };
@@ -15,7 +16,6 @@ pub use service::SynchronousTreeService;
 pub use store::{
     DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
 };
-use tokio_with_wasm::alias::sync::watch;
 use tracing::trace;
 
 use std::str::FromStr;

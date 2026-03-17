@@ -38,9 +38,9 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use passkey with PRF provider (`file`, `yubikey`, or `fido2`) |
-| `--wallet-name` | - | Wallet name for seed derivation (requires `--passkey`) |
-| `--list-wallet-names` | - | List and select from wallet names published to Nostr (requires `--passkey`) |
-| `--store-wallet-name` | - | Publish the wallet name to Nostr (requires `--passkey` and `--wallet-name`) |
+| `--label` | - | Label for seed derivation (requires `--passkey`) |
+| `--list-labels` | - | List and select from labels published to Nostr (requires `--passkey`) |
+| `--store-label` | - | Publish the label to Nostr (requires `--passkey` and `--label`) |
 | `--rpid` | - | Relying party ID for FIDO2 provider (requires `--passkey`) |
 
 ### Passkey Support
@@ -55,14 +55,14 @@ The CLI supports seedless wallet creation using passkey-based PRF (Pseudo-Random
 # Use file-based passkey provider
 dotnet run --project BreezCli.csproj -- --passkey file
 
-# Use a specific wallet name
-dotnet run --project BreezCli.csproj -- --passkey file --wallet-name "personal"
+# Use a specific label
+dotnet run --project BreezCli.csproj -- --passkey file --label "personal"
 
-# List wallet names from Nostr and select one
-dotnet run --project BreezCli.csproj -- --passkey file --list-wallet-names
+# List labels from Nostr and select one
+dotnet run --project BreezCli.csproj -- --passkey file --list-labels
 
-# Publish a wallet name to Nostr
-dotnet run --project BreezCli.csproj -- --passkey file --wallet-name "personal" --store-wallet-name
+# Publish a label to Nostr
+dotnet run --project BreezCli.csproj -- --passkey file --label "personal" --store-label
 ```
 
 ### Environment Variables

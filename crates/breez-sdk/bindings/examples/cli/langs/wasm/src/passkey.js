@@ -41,9 +41,9 @@ function parsePasskeyProvider(s) {
 /**
  * @typedef {object} PasskeyConfig
  * @property {string} provider - The PRF provider to use (file, yubikey, fido2)
- * @property {string|undefined} walletName - Optional wallet name for seed derivation
- * @property {boolean} listWalletNames - Whether to list and select from wallet names on Nostr
- * @property {boolean} storeWalletName - Whether to publish the wallet name to Nostr
+ * @property {string|undefined} label - Optional label for seed derivation
+ * @property {boolean} listLabels - Whether to list and select from labels on Nostr
+ * @property {boolean} storeLabel - Whether to publish the label to Nostr
  * @property {string|undefined} rpid - Optional relying party ID for FIDO2 provider
  */
 
@@ -200,52 +200,52 @@ function promptStdin(prompt) {
  *
  * @param {object} provider - A PasskeyPrfProvider implementation
  * @param {string|undefined} breezApiKey - Optional Breez API key
- * @param {string|undefined} walletName - Optional wallet name for seed derivation
- * @param {boolean} listWalletNames - Whether to list and select from wallet names on Nostr
- * @param {boolean} storeWalletName - Whether to publish the wallet name to Nostr
+ * @param {string|undefined} label - Optional label for seed derivation
+ * @param {boolean} listLabels - Whether to list and select from labels on Nostr
+ * @param {boolean} storeLabel - Whether to publish the label to Nostr
  * @returns {Promise<object>} The seed object for use with SdkBuilder
  */
 async function resolvePasskeySeed(
   provider,
   breezApiKey,
-  walletName,
-  listWalletNames,
-  storeWalletName
+  label,
+  listLabels,
+  storeLabel
 ) {
   const relayConfig = {
     breezApiKey
   }
   const passkey = new Passkey(provider, relayConfig)
 
-  // --store-wallet-name: publish to Nostr
-  if (storeWalletName && walletName) {
-    console.log(`Publishing wallet name '${walletName}' to Nostr...`)
-    await passkey.storeWalletName(walletName)
-    console.log(`Wallet name '${walletName}' published successfully.`)
+  // --store-label: publish to Nostr
+  if (storeLabel && label) {
+    console.log(`Publishing label '${label}' to Nostr...`)
+    await passkey.storeLabel(label)
+    console.log(`Label '${label}' published successfully.`)
   }
 
-  // --list-wallet-names: query Nostr and prompt user to select
-  let resolvedName = walletName
-  if (listWalletNames) {
-    console.log('Querying Nostr for available wallet names...')
-    const walletNames = await passkey.listWalletNames()
+  // --list-labels: query Nostr and prompt user to select
+  let resolvedName = label
+  if (listLabels) {
+    console.log('Querying Nostr for available labels...')
+    const labels = await passkey.listLabels()
 
-    if (walletNames.length === 0) {
-      throw new Error('No wallet names found on Nostr for this identity')
+    if (labels.length === 0) {
+      throw new Error('No labels found on Nostr for this identity')
     }
 
-    console.log('Available wallet names:')
-    for (let i = 0; i < walletNames.length; i++) {
-      console.log(`  ${i + 1}: ${walletNames[i]}`)
+    console.log('Available labels:')
+    for (let i = 0; i < labels.length; i++) {
+      console.log(`  ${i + 1}: ${labels[i]}`)
     }
 
-    const input = await promptStdin(`Select wallet name (1-${walletNames.length}): `)
+    const input = await promptStdin(`Select label (1-${labels.length}): `)
     const idx = parseInt(input, 10)
-    if (isNaN(idx) || idx < 1 || idx > walletNames.length) {
+    if (isNaN(idx) || idx < 1 || idx > labels.length) {
       throw new Error('Invalid selection')
     }
 
-    resolvedName = walletNames[idx - 1]
+    resolvedName = labels[idx - 1]
   }
 
   const wallet = await passkey.getWallet(resolvedName)

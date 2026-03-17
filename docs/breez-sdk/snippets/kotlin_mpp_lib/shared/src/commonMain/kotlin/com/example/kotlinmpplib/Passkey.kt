@@ -33,30 +33,30 @@ class PasskeySnippets {
         return sdk
     }
 
-    suspend fun listWalletNames(): List<String> {
-        // ANCHOR: list-wallet-names
+    suspend fun listLabels(): List<String> {
+        // ANCHOR: list-labels
         val prfProvider = ExamplePasskeyPrfProvider()
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
         val passkey = Passkey(prfProvider, relayConfig)
 
-        // Query Nostr for wallet names associated with this passkey
-        val walletNames = passkey.listWalletNames()
+        // Query Nostr for labels associated with this passkey
+        val labels = passkey.listLabels()
 
-        for (walletName in walletNames) {
-            // Log.v("Breez", "Found wallet: $walletName")
+        for (label in labels) {
+            // Log.v("Breez", "Found label: $label")
         }
-        // ANCHOR_END: list-wallet-names
-        return walletNames
+        // ANCHOR_END: list-labels
+        return labels
     }
 
-    suspend fun storeWalletName() {
-        // ANCHOR: store-wallet-name
+    suspend fun storeLabel() {
+        // ANCHOR: store-label
         val prfProvider = ExamplePasskeyPrfProvider()
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
         val passkey = Passkey(prfProvider, relayConfig)
 
-        // Publish the wallet name to Nostr for later discovery
-        passkey.storeWalletName("personal")
-        // ANCHOR_END: store-wallet-name
+        // Publish the label to Nostr for later discovery
+        passkey.storeLabel("personal")
+        // ANCHOR_END: store-label
     }
 }

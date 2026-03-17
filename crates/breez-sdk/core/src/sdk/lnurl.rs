@@ -1,6 +1,6 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
 use lnurl_models::PaidInvoice;
-use tokio_with_wasm::alias as tokio;
+use platform_utils::tokio;
 use tracing::{Instrument, debug, error, info};
 
 use crate::{

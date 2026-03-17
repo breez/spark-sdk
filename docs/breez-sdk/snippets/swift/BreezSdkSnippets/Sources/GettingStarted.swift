@@ -2,7 +2,7 @@ import BreezSdkSpark
 
 func initSdk() async throws -> BreezSdk {
     // ANCHOR: init-sdk
-    // Construct the seed using a mnemonic or entropy bytes
+    // Construct the seed using a mnemonic, entropy or passkey
     let mnemonic = "<mnemonic words>"
     let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
 

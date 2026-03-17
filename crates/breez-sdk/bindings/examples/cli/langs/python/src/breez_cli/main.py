@@ -60,30 +60,30 @@ def expand_path(path: str) -> Path:
 @click.option("--stable-balance-token-identifier", default=None, help="Stable balance token identifier")
 @click.option("--stable-balance-threshold", type=int, default=None, help="Stable balance threshold in sats")
 @click.option("--passkey", "passkey_provider", default=None, help="Use passkey with file, yubikey, or fido2 provider")
-@click.option("--wallet-name", default=None, help="Wallet name for seed derivation (requires --passkey)")
-@click.option("--list-wallet-names", is_flag=True, default=False, help="List and select from wallet names published to Nostr (requires --passkey)")
-@click.option("--store-wallet-name", is_flag=True, default=False, help="Publish the wallet name to Nostr (requires --passkey and --wallet-name)")
+@click.option("--label", default=None, help="Label for seed derivation (requires --passkey)")
+@click.option("--list-labels", is_flag=True, default=False, help="List and select from labels published to Nostr (requires --passkey)")
+@click.option("--store-label", is_flag=True, default=False, help="Publish the label to Nostr (requires --passkey and --label)")
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 async def main(data_dir, network, account_number, postgres_connection_string,
                stable_balance_token_identifier, stable_balance_threshold,
-               passkey_provider, wallet_name, list_wallet_names, store_wallet_name, rpid):
+               passkey_provider, label, list_labels, store_label, rpid):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
     # Validate passkey flag combinations
-    if wallet_name and not passkey_provider:
-        raise click.UsageError("--wallet-name requires --passkey")
-    if list_wallet_names and not passkey_provider:
-        raise click.UsageError("--list-wallet-names requires --passkey")
-    if store_wallet_name and not passkey_provider:
-        raise click.UsageError("--store-wallet-name requires --passkey")
-    if store_wallet_name and not wallet_name:
-        raise click.UsageError("--store-wallet-name requires --wallet-name")
+    if label and not passkey_provider:
+        raise click.UsageError("--label requires --passkey")
+    if list_labels and not passkey_provider:
+        raise click.UsageError("--list-labels requires --passkey")
+    if store_label and not passkey_provider:
+        raise click.UsageError("--store-label requires --passkey")
+    if store_label and not label:
+        raise click.UsageError("--store-label requires --label")
     if rpid and not passkey_provider:
         raise click.UsageError("--rpid requires --passkey")
-    if list_wallet_names and (wallet_name or store_wallet_name):
-        raise click.UsageError("--list-wallet-names conflicts with --wallet-name and --store-wallet-name")
+    if list_labels and (label or store_label):
+        raise click.UsageError("--list-labels conflicts with --label and --store-label")
 
     init_logging(log_dir=str(data_dir), app_logger=None, log_filter=None)
 
@@ -105,7 +105,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     if passkey_provider:
         provider = create_provider(passkey_provider, data_dir, rpid=rpid)
         seed = await resolve_passkey_seed(
-            provider, breez_api_key, wallet_name, list_wallet_names, store_wallet_name,
+            provider, breez_api_key, label, list_labels, store_label,
         )
     else:
         mnemonic = persistence.get_or_create_mnemonic()

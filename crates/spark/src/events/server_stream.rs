@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::tokio;
 use tokio::time::sleep;
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -83,21 +83,49 @@ pub async fn subscribe_server_events(
             };
 
             let spark_event = match event {
-                Event::Transfer(transfer_event) => {
+                Event::ReceiverTransfer(transfer_event) => {
                     let Some(transfer) = transfer_event.transfer else {
-                        warn!("Received empty transfer event, skipping");
+                        warn!("Received empty receiver transfer event, skipping");
                         continue;
                     };
-                    debug!("Received transfer event with transfer id {}", transfer.id);
-                    trace!("Received transfer event with transfer: {:?}", transfer);
+                    debug!(
+                        "Received receiver transfer event with transfer id {}",
+                        transfer.id
+                    );
+                    trace!(
+                        "Received receiver transfer event with transfer: {:?}",
+                        transfer
+                    );
                     let transfer: Transfer = match transfer.try_into() {
                         Ok(transfer) => transfer,
                         Err(e) => {
-                            error!("Failed to convert transfer event: {}", e);
+                            error!("Failed to convert receiver transfer event: {}", e);
                             continue;
                         }
                     };
-                    SparkEvent::Transfer(Box::new(transfer))
+                    SparkEvent::ReceiverTransfer(Box::new(transfer))
+                }
+                Event::SenderTransfer(transfer_event) => {
+                    let Some(transfer) = transfer_event.transfer else {
+                        warn!("Received empty sender transfer event, skipping");
+                        continue;
+                    };
+                    debug!(
+                        "Received sender transfer event with transfer id {}",
+                        transfer.id
+                    );
+                    trace!(
+                        "Received sender transfer event with transfer: {:?}",
+                        transfer
+                    );
+                    let transfer: Transfer = match transfer.try_into() {
+                        Ok(transfer) => transfer,
+                        Err(e) => {
+                            error!("Failed to convert sender transfer event: {}", e);
+                            continue;
+                        }
+                    };
+                    SparkEvent::SenderTransfer(Box::new(transfer))
                 }
                 Event::Deposit(deposit_event) => {
                     let Some(deposit) = deposit_event.deposit else {

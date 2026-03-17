@@ -51,9 +51,9 @@ make clean            Remove venv and build artifacts
 | `--stable-balance-token-identifier` | - | Stable balance token identifier |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
-| `--wallet-name` | `Default` | Requires `--passkey`. The wallet name to use |
-| `--list-wallet-names` | false | Requires `--passkey`. Select wallet name from NOSTR |
-| `--store-wallet-name` | false | Requires `--passkey`. Publish wallet name to NOSTR |
+| `--label` | `Default` | Requires `--passkey`. The label to use |
+| `--list-labels` | false | Requires `--passkey`. Select label from NOSTR |
+| `--store-label` | false | Requires `--passkey`. Publish label to NOSTR |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
 
 ## Environment Variables
@@ -99,13 +99,13 @@ breez-cli --help
 
 Using a passkey enables a deterministic seed to be derived without storing a mnemonic on disk. Instead, a file-based secret is used to deterministically derive wallet seeds via HMAC challenge-response.
 
-Wallet names are stored on Nostr relays, allowing discovery during restore. If no `--wallet-name` is specified, the default wallet name ("Default") is used.
+Labels are stored on Nostr relays, allowing discovery during restore. If no `--label` is specified, the default label ("Default") is used.
 
 ### How It Works
 
 1. **Account master derivation**: `PRF(key, magic_salt)` produces a 32-byte account master used to derive a Nostr identity.
-2. **Wallet name storage**: Wallet names are published as Nostr events, allowing discovery during restore.
-3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes that are converted to a 24-word BIP39 mnemonic.
+2. **Label storage**: Labels are published as Nostr events, allowing discovery during restore.
+3. **Wallet seed derivation**: `PRF(key, user_salt)` produces 32 bytes, the first 16 of which are converted to a 12-word BIP39 mnemonic.
 
 ### PRF Providers
 
@@ -114,17 +114,17 @@ Wallet names are stored on Nostr relays, allowing discovery during restore. If n
 Uses a random 32-byte secret stored in `<data-dir>/seedless-restore-secret`. The secret is generated on first use. Suitable for development and testing.
 
 ```bash
-# Use passkey with the default wallet name
+# Use passkey with the default label
 breez-cli --passkey file
 
-# Use passkey with a specific wallet name
-breez-cli --passkey file --wallet-name personal
+# Use passkey with a specific label
+breez-cli --passkey file --label personal
 
-# Use passkey after selecting a wallet name published to Nostr
-breez-cli --passkey file --list-wallet-names
+# Use passkey after selecting a label published to Nostr
+breez-cli --passkey file --list-labels
 
-# Use passkey with a specific wallet name and publish the wallet name to Nostr
-breez-cli --passkey file --wallet-name personal --store-wallet-name
+# Use passkey with a specific label and publish the label to Nostr
+breez-cli --passkey file --label personal --store-label
 ```
 
 #### YubiKey Provider

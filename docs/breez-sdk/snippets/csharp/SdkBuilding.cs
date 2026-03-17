@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         async Task InitSdkAdvanced()
         {
             // ANCHOR: init-sdk-advanced
-            // Construct the seed using a mnemonic or entropy bytes
+            // Construct the seed using a mnemonic, entropy or passkey
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
             // Create the default config
@@ -65,7 +65,7 @@ namespace BreezSdkSnippets
         // ANCHOR: with-payment-observer
         class ExamplePaymentObserver : PaymentObserver
         {
-            public async Task BeforeSend(List<ProvisionalPayment> payments)
+            public async Task BeforeSend(ProvisionalPayment[] payments)
             {
                 foreach (var payment in payments)
                 {
@@ -84,7 +84,7 @@ namespace BreezSdkSnippets
         async Task InitSdkPostgres()
         {
             // ANCHOR: init-sdk-postgres
-            // Construct the seed using a mnemonic or entropy bytes
+            // Construct the seed using a mnemonic, entropy or passkey
             var mnemonic = "<mnemonic words>";
             var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
 
