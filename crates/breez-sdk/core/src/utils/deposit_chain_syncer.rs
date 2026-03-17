@@ -65,6 +65,7 @@ impl DepositChainSyncer {
                         "Failed to fetch UTXOs page, processing {} fetched so far: {e}",
                         detailed_utxos.len()
                     );
+                    hit_error = true;
                     break;
                 }
             };
@@ -106,7 +107,7 @@ impl DepositChainSyncer {
             cursor = next_cursor;
         }
 
-        let refunded = self.reconcile_deposits(&detailed_utxos).await?;
+        let refunded = self.reconcile_deposits(&detailed_utxos, hit_error).await?;
 
         Ok(detailed_utxos
             .values()
@@ -125,6 +126,7 @@ impl DepositChainSyncer {
     async fn reconcile_deposits(
         &self,
         all_utxos: &HashMap<String, DetailedUtxo>,
+        incomplete: bool,
     ) -> Result<HashSet<TxOutput>, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         let mut refunded = HashSet::new();
@@ -144,7 +146,7 @@ impl DepositChainSyncer {
                     refunded_deposits.insert(txid, deposit.clone());
                 }
                 None => {
-                    if !all_utxos.contains_key(&key) {
+                    if !incomplete && !all_utxos.contains_key(&key) {
                         self.storage
                             .delete_deposit(deposit.txid, deposit.vout)
                             .await?;
