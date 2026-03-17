@@ -178,8 +178,8 @@ fn test_cmd(
         c.args(["--exclude", "breez-sdk-itest"]);
         c.args(workspace_exclude_wasm());
     }
-    if let Some(pkg) = package {
-        c.args(["-p", &pkg]);
+    if let Some(ref pkg) = package {
+        c.args(["-p", pkg]);
     }
     if doc {
         c.arg("--doc");
@@ -194,6 +194,26 @@ fn test_cmd(
     if !status.success() {
         bail!("tests failed");
     }
+
+    // Run spark crate tests again with arbitrary_precision enabled to exercise
+    // regression tests for serde-rs/json#505 (tagged enum + f64 deserialization).
+    if package.is_none() {
+        let status = Command::new("cargo")
+            .args([
+                "test",
+                "-p",
+                "spark",
+                "--features",
+                "test-arbitrary-precision",
+                "--no-fail-fast",
+            ])
+            .status()
+            .with_context(|| "failed to run spark arbitrary_precision tests")?;
+        if !status.success() {
+            bail!("spark arbitrary_precision tests failed");
+        }
+    }
+
     Ok(())
 }
 

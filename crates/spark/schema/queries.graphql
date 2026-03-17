@@ -50,7 +50,6 @@ fragment CurrencyAmountFragment on CurrencyAmount {
   original_unit
   preferred_currency_unit
   preferred_currency_value_rounded
-  preferred_currency_value_approx
 }
 
 fragment LeavesSwapRequestFragment on LeavesSwapRequest {
