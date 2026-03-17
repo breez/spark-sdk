@@ -7,7 +7,7 @@ use breez_sdk_common::lnurl::{
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use x509_parser::parse_x509_certificate;
 
 use crate::{
@@ -207,15 +207,19 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 /// Returns a fresh static deposit address.
 ///
 /// Tries to rotate first (common path); falls back to generate when no
-/// address exists yet.
+/// address exists yet (gRPC `NotFound`).
 ///
 /// Used by both `receive_payment(BitcoinAddress)` and `buy_bitcoin`.
 pub(crate) async fn new_deposit_address(spark_wallet: &SparkWallet) -> Result<String, SdkError> {
     match spark_wallet.rotate_static_deposit_address().await {
         Ok(addr) => Ok(addr.to_string()),
-        Err(_) => Ok(spark_wallet
-            .generate_static_deposit_address()
-            .await?
-            .to_string()),
+        Err(e) if e.is_not_found() => {
+            debug!("No existing deposit address found, generating a new one");
+            Ok(spark_wallet
+                .generate_static_deposit_address()
+                .await?
+                .to_string())
+        }
+        Err(e) => Err(e.into()),
     }
 }
