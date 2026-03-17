@@ -6,6 +6,32 @@ use crate::{
 };
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Returns the value in `[lo, hi]` with the maximum number of set bits.
+///
+/// For each set bit `b` in `hi`, considers the candidate formed by clearing
+/// bit `b` and setting all bits below it to 1. This is always ≤ `hi`, and
+/// among valid candidates ≥ `lo` the one with the highest popcount is
+/// provably optimal.
+///
+/// Panics if `lo > hi`.
+#[allow(clippy::arithmetic_side_effects)]
+pub(crate) fn max_popcount_in_range(lo: u64, hi: u64) -> u64 {
+    assert!(lo <= hi, "lo ({lo}) must be <= hi ({hi})");
+    let mut best = hi;
+    let mut remaining = hi;
+    while remaining != 0 {
+        let b = remaining.trailing_zeros();
+        // Clear bit b in hi, set all bits below b to 1.
+        let below_mask = (1u64 << b) - 1;
+        let candidate = (hi & !(below_mask | (1u64 << b))) | below_mask;
+        if candidate >= lo && candidate.count_ones() > best.count_ones() {
+            best = candidate;
+        }
+        remaining &= remaining - 1; // clear lowest set bit
+    }
+    best
+}
+
 /// Returns the minimum non-dust amount in sats for the given Bitcoin address.
 pub(crate) fn get_dust_limit_sats(address: &str) -> Result<u64, SdkError> {
     let addr = address
@@ -1231,5 +1257,78 @@ mod tests {
         } else {
             panic!("Expected InvalidInput error");
         }
+    }
+
+    // max_popcount_in_range tests
+
+    #[test_all]
+    fn test_max_popcount_equal_range() {
+        assert_eq!(max_popcount_in_range(42, 42), 42);
+    }
+
+    #[test_all]
+    fn test_max_popcount_power_of_two_hi() {
+        // hi = 1024 (popcount 1), best is 1023 (popcount 10) if lo allows
+        assert_eq!(max_popcount_in_range(1, 1024), 1023);
+    }
+
+    #[test_all]
+    fn test_max_popcount_lo_constrains_result() {
+        // [546, 600]: best is 575 = 0b1000111111 (popcount 7)
+        let result = max_popcount_in_range(546, 600);
+        assert_eq!(result, 575);
+        assert_eq!(result.count_ones(), 7);
+    }
+
+    #[test_all]
+    fn test_max_popcount_all_ones_value() {
+        // hi = 1023 = 0b1111111111 (popcount 10), already optimal
+        assert_eq!(max_popcount_in_range(1, 1023), 1023);
+    }
+
+    #[test_all]
+    fn test_max_popcount_small_range() {
+        // [5, 7]: 7 = 0b111 (popcount 3) is best
+        assert_eq!(max_popcount_in_range(5, 7), 7);
+    }
+
+    #[test_all]
+    fn test_max_popcount_dust_limit_546() {
+        // Simulates FeesIncluded with amount just above p2pkh dust (546)
+        // amount = 547, adjusted = prev_power_of_2(547) - 1 = 511 < 546
+        // so we call max_popcount_in_range(546, 547)
+        let result = max_popcount_in_range(546, 547);
+        assert!((546..=547).contains(&result));
+        // 547 = 0b1000100011 (popcount 4), 546 = 0b1000100010 (popcount 3)
+        assert_eq!(result, 547);
+    }
+
+    #[test_all]
+    fn test_max_popcount_result_in_range() {
+        // Verify result is always within [lo, hi] for various ranges
+        for (lo, hi) in [(100, 200), (330, 500), (546, 1000), (1, 65535)] {
+            let result = max_popcount_in_range(lo, hi);
+            assert!(
+                result >= lo && result <= hi,
+                "Result {result} not in [{lo}, {hi}]"
+            );
+        }
+    }
+
+    #[test_all]
+    fn test_max_popcount_result_is_optimal() {
+        // Brute-force verify for a small range
+        let lo = 90u64;
+        let hi = 100u64;
+        let result = max_popcount_in_range(lo, hi);
+        let brute_force_best = (lo..=hi).max_by_key(|x| x.count_ones()).unwrap();
+        assert_eq!(
+            result.count_ones(),
+            brute_force_best.count_ones(),
+            "max_popcount_in_range({lo}, {hi}) = {result} (popcount {}), \
+             but brute force found {brute_force_best} (popcount {})",
+            result.count_ones(),
+            brute_force_best.count_ones(),
+        );
     }
 }

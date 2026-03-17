@@ -27,7 +27,9 @@ use crate::{
     },
     utils::{
         payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
-        send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
+        send_payment_validation::{
+            get_dust_limit_sats, max_popcount_in_range, validate_prepare_send_payment_request,
+        },
         token::map_and_persist_token_transaction,
     },
 };
@@ -326,12 +328,10 @@ impl BreezSdk {
 
                 // For FeesIncluded, the actual send amount (amount - fee) can have
                 // more set bits than the original amount, requiring more leaves.
-                // Quote for prev_power_of_2(amount) - 1 so the quoted leaf count
-                // accommodates any post-fee amount.
-                // amount_u64 > 0 (dust limit check above) so ilog2 is safe
-                #[allow(clippy::arithmetic_side_effects)]
+                // Quote for the value in [dust_limit, amount] with the highest
+                // popcount so the quoted leaf count accommodates any post-fee amount.
                 let quote_amount: u64 = if fee_policy == FeePolicy::FeesIncluded {
-                    (1u64 << amount_u64.ilog2()) - 1
+                    max_popcount_in_range(dust_limit_sats, amount_u64)
                 } else {
                     amount_u64
                 };
