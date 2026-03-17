@@ -4,7 +4,7 @@ import breez_sdk_spark.*
 class SdkBuilding {
     suspend fun initSdkAdvanced() {
         // ANCHOR: init-sdk-advanced
-        // Construct the seed using a mnemonic or entropy bytes
+        // Construct the seed using a mnemonic, entropy or passkey
         val mnemonic = "<mnemonic words>"
         val seed = Seed.Mnemonic(mnemonic, null)
 
@@ -78,7 +78,7 @@ class SdkBuilding {
 
     suspend fun initSdkPostgres() {
         // ANCHOR: init-sdk-postgres
-        // Construct the seed using a mnemonic or entropy bytes
+        // Construct the seed using a mnemonic, entropy or passkey
         val mnemonic = "<mnemonic words>"
         val seed = Seed.Mnemonic(mnemonic, null)
 
