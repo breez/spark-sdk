@@ -300,23 +300,7 @@ where
         for pref in supported_prefixes {
             let scheme_authority = format!("{pref}://");
             if has_prefix(&input, &scheme_authority) {
-                let after_scheme = &input[scheme_authority.len()..];
-                let host = after_scheme
-                    .split('/')
-                    .next()
-                    .unwrap_or("")
-                    .split('?')
-                    .next()
-                    .unwrap_or("")
-                    .split(':')
-                    .next()
-                    .unwrap_or(""); // strip optional port
-                let new_scheme = if has_extension(host, "onion") {
-                    "http"
-                } else {
-                    "https"
-                };
-                input = replace_prefix(&input, pref, new_scheme);
+                input = replace_prefix(&input, pref, "https");
                 break;
             }
         }
@@ -325,25 +309,28 @@ where
             return Ok(None);
         };
 
-        let host_str = parsed_url.base_url();
-        if host_str.is_empty() {
+        let host = parsed_url.base_url();
+        if host.is_empty() {
             return Ok(None); // TODO: log or return error.
         }
-        let host = host_str.to_string();
-
         let url = match parsed_url.scheme() {
             "http" => {
                 // Allow http for .onion domains and local domains (for testing)
-                if !has_extension(&host, "onion") && !is_local_domain(&host) {
+                if !has_extension(host, "onion") && !is_local_domain(host) {
                     return Err(LnurlError::HttpSchemeWithoutOnionDomain);
                 }
                 parsed_url
             }
             "https" => {
-                if has_extension(&host, "onion") {
-                    return Err(LnurlError::HttpsSchemeWithOnionDomain);
+                if has_extension(host, "onion") {
+                    // Rewrote an lnurl scheme to https, but it's .onion — reparse as http
+                    let http_input = replace_prefix(&input, "https", "http");
+                    bitreq::Url::parse(&http_input).map_err(|_| {
+                        LnurlError::General("failed to rewrite lnurl scheme to http".to_string())
+                    })?
+                } else {
+                    parsed_url
                 }
-                parsed_url
             }
             &_ => return Err(LnurlError::UnknownScheme), // TODO: log or return error.
         };
