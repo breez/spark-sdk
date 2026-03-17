@@ -4,8 +4,9 @@ version.workspace = true
 edition = "2024"
 
 [features]
-browser-tests = [] # Enable browser wasm-pack tests
-test-utils = []    # Expose shared test helpers for downstream crates
+browser-tests = []              # Enable browser wasm-pack tests
+test-utils = []                 # Expose shared test helpers for downstream crates
+test-arbitrary-precision = ["serde_json/arbitrary_precision"] # Regression tests for serde-rs/json#505
 
 [dependencies]
 async-trait.workspace = true
