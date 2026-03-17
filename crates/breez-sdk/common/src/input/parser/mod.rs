@@ -47,7 +47,7 @@ pub fn validate_lightning_address_format(input: &str) -> bool {
     {
         return false;
     }
-    url::Url::parse(&format!("https://{domain}")).is_ok()
+    bitreq::Url::parse(&format!("https://{domain}")).is_ok()
 }
 
 pub async fn parse(
@@ -240,7 +240,7 @@ where
             "https://"
         };
 
-        let Ok(url) = url::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
+        let Ok(url) = bitreq::Url::parse(&format!("{scheme}{domain}/.well-known/lnurlp/{user}"))
         else {
             return None;
         };
@@ -295,55 +295,52 @@ where
             }
         }
 
-        let Ok(parsed_url) = url::Url::parse(&input) else {
+        // bitreq::Url only accepts http/https schemes, so rewrite lnurl-specific schemes
+        // to http/https before parsing. Extract the host from the raw string to decide which.
+        for pref in supported_prefixes {
+            let scheme_authority = format!("{pref}://");
+            if has_prefix(&input, &scheme_authority) {
+                input = replace_prefix(&input, pref, "https");
+                break;
+            }
+        }
+
+        let Ok(parsed_url) = bitreq::Url::parse(&input) else {
             return Ok(None);
         };
 
-        let host = match parsed_url.host() {
-            Some(domain) => domain.to_string(),
-            None => return Ok(None), // TODO: log or return error.
-        };
-
-        let mut url = parsed_url.clone();
-        match parsed_url.scheme() {
+        let host = parsed_url.base_url();
+        if host.is_empty() {
+            return Ok(None); // TODO: log or return error.
+        }
+        let url = match parsed_url.scheme() {
             "http" => {
                 // Allow http for .onion domains and local domains (for testing)
-                if !has_extension(&host, "onion") && !is_local_domain(&host) {
+                if !has_extension(host, "onion") && !is_local_domain(host) {
                     return Err(LnurlError::HttpSchemeWithoutOnionDomain);
                 }
+                parsed_url
             }
             "https" => {
-                if has_extension(&host, "onion") {
-                    return Err(LnurlError::HttpsSchemeWithOnionDomain);
-                }
-            }
-            scheme if supported_prefixes.contains(&scheme) => {
-                if has_extension(&host, "onion") {
-                    url =
-                        url::Url::parse(&replace_prefix(&input, scheme, "http")).map_err(|_| {
-                            LnurlError::General(
-                                "failed to rewrite lnurl scheme to http".to_string(),
-                            )
-                        })?;
+                if has_extension(host, "onion") {
+                    // Rewrote an lnurl scheme to https, but it's .onion — reparse as http
+                    let http_input = replace_prefix(&input, "https", "http");
+                    bitreq::Url::parse(&http_input).map_err(|_| {
+                        LnurlError::General("failed to rewrite lnurl scheme to http".to_string())
+                    })?
                 } else {
-                    url = url::Url::parse(&replace_prefix(&input, scheme, "https")).map_err(
-                        |_| {
-                            LnurlError::General(
-                                "failed to rewrite lnurl scheme to https".to_string(),
-                            )
-                        },
-                    )?;
+                    parsed_url
                 }
             }
             &_ => return Err(LnurlError::UnknownScheme), // TODO: log or return error.
-        }
+        };
 
         Ok(Some(self.resolve_lnurl(&url, source).await?))
     }
 
     async fn resolve_lnurl(
         &self,
-        url: &url::Url,
+        url: &bitreq::Url,
         _source: &PaymentRequestSource,
     ) -> Result<InputType, LnurlError> {
         if let Some(query) = url.query()
@@ -355,7 +352,10 @@ where
 
         let response = self.http_client.get(url.to_string(), None).await?;
         let lnurl_data: LnurlRequestDetails = response.json()?;
-        let domain = url.host().ok_or(LnurlError::MissingDomain)?.to_string();
+        let domain = url.base_url().to_ascii_lowercase();
+        if domain.is_empty() {
+            return Err(LnurlError::MissingDomain);
+        }
         Ok(match lnurl_data {
             LnurlRequestDetails::PayRequest { pay_request } => {
                 InputType::LnurlPay(LnurlPayRequestDetails {
@@ -398,9 +398,8 @@ where
 
             // Try to parse as LnurlRequestDetails
             if let Ok(lnurl_data) = response.json::<LnurlRequestDetails>() {
-                let domain = url::Url::parse(&parser_url)
-                    .ok()
-                    .and_then(|url| url.host_str().map(ToString::to_string))
+                let domain = bitreq::Url::parse(&parser_url)
+                    .map(|url| url.base_url().to_ascii_lowercase())
                     .unwrap_or_default();
                 let input_type = lnurl_data.try_into()?;
                 let input_type = match input_type {

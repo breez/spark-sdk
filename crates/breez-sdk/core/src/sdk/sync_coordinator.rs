@@ -4,9 +4,9 @@
 //! a sync is running, they share a single NEW sync that starts after the current
 //! one completes. Different sync types are processed in order.
 
+use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, oneshot};
-use tokio_with_wasm::alias as tokio;
 use tracing::debug;
 
 use super::{SyncRequest, SyncType};

@@ -32,8 +32,8 @@ use crate::{
     },
 };
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::tokio;
 use spark_wallet::{InvoiceDescription, Preimage};
-use tokio_with_wasm::alias as tokio;
 use web_time::SystemTime;
 
 use super::{

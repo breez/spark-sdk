@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use platform_utils::tokio;
 use tokio::sync::Mutex;
-use tokio_with_wasm::alias as tokio;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::FlashnetError;
@@ -66,7 +66,7 @@ impl CacheStore {
 mod tests {
     use std::time::Duration;
 
-    use tokio_with_wasm::alias as tokio;
+    use platform_utils::tokio;
 
     use super::CacheStore;
 

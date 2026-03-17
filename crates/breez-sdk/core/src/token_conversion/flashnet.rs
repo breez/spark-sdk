@@ -6,12 +6,12 @@ use flashnet::{
     FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder,
     SimulateSwapRequest,
 };
+use platform_utils::tokio;
 use spark_wallet::{ListTransfersRequest, SparkWallet, TransferId};
 use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tokio_with_wasm::alias as tokio;
 use tracing::{Instrument, debug, error, info, warn};
 use web_time::Duration;
 

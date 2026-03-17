@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use web_time::SystemTime;
 
-use tokio_with_wasm::alias as tokio;
-use tokio_with_wasm::alias::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use platform_utils::tokio;
+use platform_utils::tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
@@ -799,7 +799,7 @@ impl TreeStore for InMemoryTreeStore {
             available_permits, self.max_concurrent_reservations
         );
 
-        let permit = tokio_with_wasm::alias::time::timeout(
+        let permit = platform_utils::tokio::time::timeout(
             self.reservation_timeout,
             self.reservation_semaphore.clone().acquire_owned(),
         )

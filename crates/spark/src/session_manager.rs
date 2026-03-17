@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::tokio;
 use thiserror::Error;
-use tokio_with_wasm::alias as tokio;
 
 #[derive(Debug, Error, Clone)]
 pub enum SessionManagerError {

@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::tokio;
 use tokio::time::sleep;
-use tokio_with_wasm::alias as tokio;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
