@@ -7,7 +7,7 @@ use log::info;
 
 pub(crate) async fn init_sdk() -> Result<BreezSdk> {
     // ANCHOR: init-sdk
-    // Construct the seed using a mnemonic or entropy bytes
+    // Construct the seed using a mnemonic, entropy or passkey
     let mnemonic = "<mnemonic words>".to_string();
     let seed = Seed::Mnemonic {
         mnemonic,

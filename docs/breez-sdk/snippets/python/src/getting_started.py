@@ -19,7 +19,7 @@ from breez_sdk_spark import (
 
 async def init_sdk():
     # ANCHOR: init-sdk
-    # Construct the seed using a mnemonic or entropy bytes
+    # Construct the seed using a mnemonic, entropy or passkey
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config

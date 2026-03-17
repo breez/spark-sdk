@@ -17,7 +17,7 @@ from breez_sdk_spark import (
 
 async def init_sdk_advanced():
     # ANCHOR: init-sdk-advanced
-    # Construct the seed using a mnemonic or entropy bytes
+    # Construct the seed using a mnemonic, entropy or passkey
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
     # Create the default config
@@ -88,7 +88,7 @@ async def with_payment_observer(builder: SdkBuilder):
 
 # ANCHOR: init-sdk-postgres
 async def init_sdk_postgres():
-    # Construct the seed using a mnemonic or entropy bytes
+    # Construct the seed using a mnemonic, entropy or passkey
     mnemonic = "<mnemonic words>"
     seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
 
