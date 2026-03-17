@@ -1,6 +1,6 @@
 # LNURL Server
 
-This crate provides an LNURL server implementation for Breez SDK - Nodeless (Spark Implementation). 
+This crate provides an LNURL server implementation for Breez SDK - Spark. 
 
 ## About LNURL
 
