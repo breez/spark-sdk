@@ -32,8 +32,10 @@ namespace BreezSdkSnippets
         async Task ReceiveOnchain(BreezSdk sdk)
         {
             // ANCHOR: receive-payment-onchain
+            bool? newAddress = null; // Set to true to get a new address
             var request = new ReceivePaymentRequest(
-                paymentMethod: new ReceivePaymentMethod.BitcoinAddress()
+                paymentMethod: new ReceivePaymentMethod.BitcoinAddress(
+                    newAddress: newAddress)
             );
             var response = await sdk.ReceivePayment(request: request);
 

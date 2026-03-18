@@ -439,7 +439,7 @@ async fn fund_sdk_via_faucet(
     // Get deposit address
     let receive = sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?;
     let deposit_address = receive.payment_request;

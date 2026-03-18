@@ -31,11 +31,13 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
 
 func receiveOnchain(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
     // ANCHOR: receive-payment-onchain
+    let newAddress: Bool? = nil // Set to true to get a new address
     let response =
         try await sdk
         .receivePayment(
             request: ReceivePaymentRequest(
-                paymentMethod: ReceivePaymentMethod.bitcoinAddress
+                paymentMethod: ReceivePaymentMethod.bitcoinAddress(
+                    newAddress: newAddress)
             ))
 
     let paymentRequest = response.paymentRequest

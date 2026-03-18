@@ -88,8 +88,9 @@ impl BreezSdk {
                     payment_request: invoice,
                 })
             }
-            ReceivePaymentMethod::BitcoinAddress => {
-                let address = new_deposit_address(&self.spark_wallet).await?;
+            ReceivePaymentMethod::BitcoinAddress { new_address } => {
+                let address =
+                    new_deposit_address(&self.spark_wallet, new_address.unwrap_or(false)).await?;
                 Ok(ReceivePaymentResponse {
                     payment_request: address,
                     fee: 0,

@@ -31,9 +31,12 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
 
 async fn receive_onchain(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: receive-payment-onchain
+    let new_address = None; // Set to Some(true) to get a new address
     let response = sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress {
+                new_address,
+            },
         })
         .await?;
 

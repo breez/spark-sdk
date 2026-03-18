@@ -770,7 +770,7 @@ async fn receive_and_fund_inner(
     let receive = sdk_instance
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?;
 

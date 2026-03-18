@@ -298,7 +298,7 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let address = new_deposit_address(&self.spark_wallet).await?;
+        let address = new_deposit_address(&self.spark_wallet, true).await?;
 
         let url = self
             .buy_bitcoin_provider

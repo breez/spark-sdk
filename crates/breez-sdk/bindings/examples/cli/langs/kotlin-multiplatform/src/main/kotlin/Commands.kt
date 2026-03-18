@@ -288,6 +288,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
     val expirySecs = fp.getUInt("e", "expiry-secs")
     val senderPublicKey = fp.getString("s", "sender-public-key")
     val hodl = fp.hasFlag("hodl")
+    val newAddress = fp.hasFlag("new-address")
 
     if (method == null) {
         println("Usage: receive -m <method> [options]")
@@ -299,6 +300,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
         println("  -e, --expiry-secs <secs>         Expiry in seconds")
         println("  -s, --sender-public-key <key>    Sender public key (spark invoice only)")
         println("  --hodl                           Create a HODL invoice (bolt11 only)")
+        println("  --new-address                    Get a new bitcoin deposit address")
         return
     }
 
@@ -329,7 +331,7 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
             )
         }
 
-        "bitcoin" -> ReceivePaymentMethod.BitcoinAddress
+        "bitcoin" -> ReceivePaymentMethod.BitcoinAddress(newAddress = newAddress)
 
         "bolt11" -> {
             var paymentHash: String? = null

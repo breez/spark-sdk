@@ -273,6 +273,7 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 	senderPublicKey := fs.String("s", "", "Optional sender public key (sparkinvoice only)")
 	fs.StringVar(senderPublicKey, "sender-public-key", "", "Optional sender public key")
 	hodl := fs.Bool("hodl", false, "Create a HODL invoice (bolt11 only)")
+	newAddress := fs.Bool("new-address", false, "Get a new bitcoin deposit address (bitcoin only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -315,7 +316,9 @@ func handleReceive(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []s
 		paymentMethod = pm
 
 	case "bitcoin":
-		paymentMethod = breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{}
+		paymentMethod = breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{
+			NewAddress: newAddress,
+		}
 
 	case "bolt11":
 		pm := breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{

@@ -27,8 +27,9 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
 
 const exampleReceiveOnchainPayment = async (sdk: BreezSdk) => {
   // ANCHOR: receive-payment-onchain
+  const newAddress = undefined // Set to true to get a new address
   const response = await sdk.receivePayment({
-    paymentMethod: { type: 'bitcoinAddress' }
+    paymentMethod: { type: 'bitcoinAddress', newAddress }
   })
 
   const paymentRequest = response.paymentRequest

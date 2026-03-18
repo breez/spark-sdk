@@ -356,6 +356,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
     let expirySecs = fp.get("e", "expiry-secs").flatMap { UInt32($0) }
     let senderPublicKey = fp.get("s", "sender-public-key")
     let hodl = fp.has("hodl")
+    let newAddress = fp.has("new-address")
 
     let paymentMethod: ReceivePaymentMethod
 
@@ -377,7 +378,7 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
         )
 
     case "bitcoin":
-        paymentMethod = .bitcoinAddress
+        paymentMethod = .bitcoinAddress(newAddress: newAddress)
 
     case "bolt11":
         var paymentHash: String? = nil

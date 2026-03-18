@@ -433,6 +433,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
   const expirySecsStr = parseFlag(args, '--expiry-secs', '-e')
   const senderPublicKey = parseFlag(args, '--sender-public-key', '-s')
   const hodl = hasFlag(args, '--hodl')
+  const newAddress = hasFlag(args, '--new-address')
 
   const amount = amountStr !== undefined ? BigInt(amountStr) : undefined
   const expirySecs = expirySecsStr !== undefined ? parseInt(expirySecsStr, 10) : undefined
@@ -468,7 +469,7 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
     }
 
     case 'bitcoin':
-      paymentMethod = new ReceivePaymentMethod.BitcoinAddress()
+      paymentMethod = new ReceivePaymentMethod.BitcoinAddress({ newAddress })
       break
 
     case 'bolt11': {

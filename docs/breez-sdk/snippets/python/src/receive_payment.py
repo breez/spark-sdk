@@ -38,8 +38,10 @@ async def receive_lightning(sdk: BreezSdk):
 async def receive_onchain(sdk: BreezSdk):
     # ANCHOR: receive-payment-onchain
     try:
+        new_address = None  # Set to True to get a new address
         request = ReceivePaymentRequest(
-            payment_method=ReceivePaymentMethod.BITCOIN_ADDRESS()
+            payment_method=ReceivePaymentMethod.BITCOIN_ADDRESS(
+                new_address=new_address)
         )
         response = await sdk.receive_payment(request=request)
 

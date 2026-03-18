@@ -726,7 +726,9 @@ pub enum ReceivePaymentMethod {
         description: Option<String>,
         sender_public_key: Option<String>,
     },
-    BitcoinAddress,
+    BitcoinAddress {
+        new_address: Option<bool>,
+    },
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,

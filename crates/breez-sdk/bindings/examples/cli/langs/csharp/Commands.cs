@@ -474,6 +474,7 @@ public static class Commands
         var expirySecsStr = GetFlag(args, "-e", "--expiry-secs");
         var senderPubKey = GetFlag(args, "-s", "--sender-public-key");
         var hodl = HasFlag(args, "--hodl");
+        var newAddress = HasFlag(args, "--new-address");
 
         if (method == null)
         {
@@ -508,7 +509,7 @@ public static class Commands
                 break;
 
             case "bitcoin":
-                paymentMethod = new ReceivePaymentMethod.BitcoinAddress();
+                paymentMethod = new ReceivePaymentMethod.BitcoinAddress(newAddress: newAddress);
                 break;
 
             case "bolt11":

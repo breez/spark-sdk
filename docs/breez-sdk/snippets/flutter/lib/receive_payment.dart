@@ -31,8 +31,10 @@ Future<ReceivePaymentResponse> receivePaymentLightning(
 Future<ReceivePaymentResponse> receivePaymentOnchain(
     BreezSdk sdk) async {
   // ANCHOR: receive-payment-onchain
+  bool? newAddress; // Set to true to get a new address
   ReceivePaymentRequest request = ReceivePaymentRequest(
-      paymentMethod: ReceivePaymentMethod.bitcoinAddress());
+      paymentMethod: ReceivePaymentMethod.bitcoinAddress(
+          newAddress: newAddress));
   ReceivePaymentResponse response = await sdk.receivePayment(
     request: request,
   );

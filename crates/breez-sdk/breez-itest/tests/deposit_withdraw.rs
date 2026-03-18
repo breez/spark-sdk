@@ -67,7 +67,7 @@ async fn test_onchain_withdraw_to_static_address(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -156,7 +156,7 @@ async fn test_deposit_fee_manual_claim(
     let addr = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -253,7 +253,7 @@ async fn test_send_all_to_bitcoin_address(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -342,7 +342,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     let addr = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -450,7 +450,7 @@ async fn test_deposit_low_amount_refund_fee_rate(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -538,7 +538,9 @@ async fn test_deposits_to_multiple_addresses(
         let addr = alice
             .sdk
             .receive_payment(ReceivePaymentRequest {
-                payment_method: ReceivePaymentMethod::BitcoinAddress,
+                payment_method: ReceivePaymentMethod::BitcoinAddress {
+                    new_address: Some(true),
+                },
             })
             .await?
             .payment_request;
@@ -551,7 +553,35 @@ async fn test_deposits_to_multiple_addresses(
     assert_eq!(
         unique.len(),
         addresses.len(),
-        "Every rotated address should be unique"
+        "Every new address should be unique"
+    );
+
+    // Calling with new_address=false (or None) should return the same address.
+    let reused_1 = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress {
+                new_address: Some(false),
+            },
+        })
+        .await?
+        .payment_request;
+    let reused_2 = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+    assert_eq!(
+        reused_1, reused_2,
+        "new_address=false and None should return the same address"
+    );
+    // The reused address should match the last one obtained with new_address=true.
+    assert_eq!(
+        reused_1,
+        *addresses.last().unwrap(),
+        "new_address=false should return the latest address"
     );
 
     let first_addr = &addresses[0];
