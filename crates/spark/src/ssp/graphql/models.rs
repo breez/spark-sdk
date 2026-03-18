@@ -313,7 +313,6 @@ pub struct CurrencyAmount {
     pub original_unit: CurrencyUnit,
     pub preferred_currency_unit: CurrencyUnit,
     pub preferred_currency_value_rounded: u64,
-    pub preferred_currency_value_approx: f64,
 }
 
 impl Default for CurrencyAmount {
@@ -323,7 +322,6 @@ impl Default for CurrencyAmount {
             original_unit: CurrencyUnit::Satoshi,
             preferred_currency_unit: CurrencyUnit::Satoshi,
             preferred_currency_value_rounded: 0,
-            preferred_currency_value_approx: 0.0,
         }
     }
 }
@@ -599,4 +597,134 @@ pub struct StaticDepositQuote {
 #[macros::derive_from(ClaimStaticDepositClaimStaticDeposit)]
 pub struct ClaimStaticDeposit {
     pub transfer_id: String,
+}
+
+#[cfg(all(test, feature = "test-arbitrary-precision"))]
+mod tests {
+    use super::*;
+
+    /// Tests that CurrencyAmount deserializes correctly from a JSON response.
+    #[test]
+    fn test_currency_amount_json_deserialization() {
+        let json = r#"{
+            "original_value": 50000,
+            "original_unit": "MILLISATOSHI",
+            "preferred_currency_unit": "SATOSHI",
+            "preferred_currency_value_rounded": 50
+        }"#;
+
+        let amount: CurrencyAmount =
+            serde_json::from_str(json).expect("CurrencyAmount should deserialize from JSON");
+
+        assert_eq!(amount.original_value, 50000);
+        assert_eq!(amount.preferred_currency_value_rounded, 50);
+    }
+
+    /// Tests that internally tagged enums containing CurrencyAmount
+    /// deserialize correctly.
+    ///
+    /// serde_json's `arbitrary_precision` feature (a global Cargo feature)
+    /// breaks deserialization of `#[serde(tag = ...)]` enums with numeric
+    /// fields (serde-rs/json#505). The `graphql_client` crate generates
+    /// such enums for GraphQL union types (e.g., `UserRequestFragment`).
+    ///
+    /// CurrencyAmount previously contained an `f64` field
+    /// (`preferred_currency_value_approx`) which triggered this bug: the
+    /// SSP GraphQL response for transfers containing a
+    /// LightningReceiveRequest failed to deserialize, causing the sync to
+    /// silently skip HTLC status updates on the sender side.
+    /// Tests that internally tagged enums containing CurrencyAmount
+    /// deserialize correctly.
+    ///
+    /// serde_json's `arbitrary_precision` feature (a global Cargo feature)
+    /// breaks deserialization of `#[serde(tag = ...)]` enums with numeric
+    /// fields (serde-rs/json#505). The `graphql_client` crate generates
+    /// such enums for GraphQL union types (e.g., `UserRequestFragment`).
+    ///
+    /// CurrencyAmount previously contained an `f64` field
+    /// (`preferred_currency_value_approx`) which triggered this bug: the
+    /// SSP GraphQL response for transfers containing a
+    /// LightningReceiveRequest failed to deserialize, causing the sync to
+    /// silently skip HTLC status updates on the sender side.
+    /// Exhaustive check of numeric types inside `#[serde(tag = ...)]` enums
+    /// with `arbitrary_precision` (enabled as a dev-dependency).
+    ///
+    /// serde-rs/json#505 documents that `arbitrary_precision` breaks numeric
+    /// deserialization inside tagged enums. With our current serde_json
+    /// version only `f64` is affected; integer types work. This test guards
+    /// against regressions if future serde_json versions change behavior.
+    #[test]
+    fn test_tagged_enum_with_all_numeric_types() {
+        #[derive(serde::Deserialize, Debug)]
+        #[serde(tag = "t")]
+        enum Numeric {
+            U64 { v: u64 },
+            I64 { v: i64 },
+            U32 { v: u32 },
+            I32 { v: i32 },
+            Usize { v: usize },
+        }
+
+        let cases: &[(&str, &str)] = &[
+            (r#"{"t":"U64","v":42}"#, "u64"),
+            (r#"{"t":"I64","v":-5}"#, "i64"),
+            (r#"{"t":"U32","v":42}"#, "u32"),
+            (r#"{"t":"I32","v":-5}"#, "i32"),
+            (r#"{"t":"Usize","v":42}"#, "usize"),
+        ];
+
+        for (json, label) in cases {
+            let result: Result<Numeric, _> = serde_json::from_str(json);
+            assert!(
+                result.is_ok(),
+                "{label} in tagged enum failed with arbitrary_precision: {:?}",
+                result.err()
+            );
+        }
+
+        // f64 is known broken with arbitrary_precision (serde-rs/json#505).
+        // Verify it still fails so we know if a future serde_json version
+        // fixes it (at which point we could safely re-add Float fields).
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "t")]
+        enum WithFloat {
+            F { v: f64 },
+        }
+        let f64_result: Result<WithFloat, _> = serde_json::from_str(r#"{"t":"F","v":3.14}"#);
+        assert!(
+            f64_result.is_err(),
+            "f64 in tagged enum now works with arbitrary_precision — \
+             serde-rs/json#505 may be fixed; re-evaluate whether \
+             preferred_currency_value_approx can be restored"
+        );
+    }
+
+    #[test]
+    fn test_tagged_enum_with_currency_amount_deserialization() {
+        #[derive(serde::Deserialize, Debug)]
+        #[serde(tag = "__typename")]
+        enum MockUserRequest {
+            LightningReceiveRequest { id: String, amount: CurrencyAmount },
+            SparkTransfer { id: String },
+        }
+
+        let json = r#"{
+            "__typename": "LightningReceiveRequest",
+            "id": "req-123",
+            "amount": {
+                "original_value": 50000,
+                "original_unit": "MILLISATOSHI",
+                "preferred_currency_unit": "SATOSHI",
+                "preferred_currency_value_rounded": 50
+            }
+        }"#;
+
+        let result: Result<MockUserRequest, _> = serde_json::from_str(json);
+        assert!(
+            result.is_ok(),
+            "Internally tagged enum with CurrencyAmount should deserialize. \
+             Error: {:?}",
+            result.err()
+        );
+    }
 }

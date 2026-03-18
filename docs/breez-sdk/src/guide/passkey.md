@@ -1,28 +1,8 @@
-# Connecting with a Passkey
+# Passkey Login
 
-Using passkeys eliminates the need to backup mnemonic phrases. Seeds are instead derived deterministically from a passkey, using a default or user-chosen label. Labels can be discovered and stored on Nostr relays using a passkey derived Nostr key.
+Passkey Login lets users access their wallet with biometrics (fingerprint, face scan, or device PIN) instead of writing down and safeguarding a seed phrase. The SDK uses the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">WebAuthn PRF extension</a> to deterministically derive wallet keys from a passkey. Keys are never stored; they're regenerated on demand each time the user authenticates. The protocol also supports multiple wallets, each derived from a different label, with labels discoverable via Nostr relays.
 
-## Overview
-
-The passkey flow uses the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">WebAuthn PRF extension</a> (Pseudo-Random Function), which allows a passkey to deterministically derive secret bytes from a given salt. Two key derivations are used:
-
-1. **Nostr Identity**: `PRF(passkey, magic_salt)` derives a Nostr keypair used to publish and discover labels
-2. **Wallet Seed**: `PRF(passkey, label)` derives a 12-word BIP39 mnemonic
-
-Labels are published as Nostr kind-1 events, allowing users to discover their wallets on any device with access to their passkey.
-
-```
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐     ┌───────────────┐
-│ Application │────▶│ PRF Provider     │────▶│ SDK               │────▶│ Nostr Relays  │
-│             │     │ (platform-       │     │ Passkey           │     │ (label        │
-│             │     │  specific)       │     │                   │     │  discovery)   │
-└─────────────┘     └──────────────────┘     └───────────────────┘     └───────────────┘
-```
-
-<div class="warning">
-<h4>Developer note</h4>
-The passkey PRF functionality must be implemented by your application using platform-specific APIs (WebAuthn in browsers, native passkey APIs on mobile). The SDK orchestrates the flow but requires you to provide a PRF provider implementation.
-</div>
+For the full technical specification, see the <a target="_blank" href="https://github.com/breez/passkey-login/blob/main/spec.md">Passkey Login spec</a>.
 
 ## Application configuration
 
@@ -106,7 +86,12 @@ To register your iOS app, [contact us](mailto:contact@breez.technology?subject=P
 
 ### Nostr relay configuration
 
-The SDK uses Nostr relays to store and discover labels. A Breez API key is required for authenticated access to the Breez-managed relay via <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>. The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
+The SDK uses Nostr relays to store and discover labels. Configure relay access by passing a {{#name NostrRelayConfig}} when constructing the {{#name Passkey}} instance:
+
+- {{#name breez_api_key}} - Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication.
+- {{#name timeout_secs}} - Connection timeout in seconds (defaults to 30).
+
+The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy. See the [Listing labels](#listing-labels) and [Storing a label](#storing-a-label) code examples below for usage.
 
 ## Implementing the PRF provider
 
@@ -176,24 +161,6 @@ Not all devices support the PRF extension. Check {{#name Passkey.is_available}} 
 ### Handle label discovery failures
 
 When discovering labels, {{#name Passkey.list_labels}} may return an empty list if relays are unreachable or the label events have been pruned. Always allow manual label entry as a fallback alongside the Nostr-discovered list.
-
-## Security considerations
-
-- **Passkey security**: The wallet's security depends on the passkey. Different passkeys produce different wallets.
-- **Label visibility**: Labels are published publicly on Nostr. Security comes from the passkey secret, not the label.
-- **PRF availability**: Check {{#name Passkey.is_available}} to gracefully handle devices without PRF support.
-- **Discoverable credentials**: Use resident keys so no credential IDs need to be stored by your application. The authenticator discovers the credential by RP ID.
-- **User verification**: All passkey operations should require user verification (`userVerification: 'required'`) to ensure biometric or PIN confirmation.
-
-## Passkey migration
-
-Passkey portability across platforms depends on Credential Provider (CXP) protocol support:
-
-- **iOS**: Supports CXP for exporting passkeys
-- **Android**: CXP support expected in future versions
-- **Third-party password managers**: Varying support for both CXP and PRF extensions. Neither iOS Password Manager nor Android's Google Password Manager currently support RP ID domain modification.
-
-For users who need to move between ecosystems, the manual mnemonic backup serves as a universal fallback.
 
 ## Supported specs
 
