@@ -18,6 +18,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments (BTC)
+- [x] Passkey login for seedless experience
 - [x] Issue, send and receive Spark tokens (BTKN)
 - [x] On-chain interoperability
 - [x] Convert Spark tokens (BTKN) to bitcoin and vice versa 
@@ -115,7 +116,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Fiat on-ramp
 - [x] BTC <> USDB swaps
 - [x] Hodl invoice support
-- [x] Passkey login (seedless restore) 
+- [x] Passkey login for seedless experience
 - [ ] Stable balance
 - [ ] USDT send support
 - [ ] USDC send support
