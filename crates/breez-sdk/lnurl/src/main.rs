@@ -275,17 +275,8 @@ where
     // Create watch channel for triggering background processing
     let (invoice_paid_trigger, invoice_paid_rx) = watch::channel(());
 
-    // Generate a unique instance ID for this server instance
-    let instance_id = hex::encode(rand::random::<[u8; 16]>());
-    info!("instance_id: {instance_id}");
-
     // Start background processor for handling paid invoices.
-    background::start_background_processor(
-        repository.clone(),
-        nostr_keys.clone(),
-        instance_id,
-        invoice_paid_rx,
-    );
+    background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
 
     // Get or create a shared webhook secret persisted in the database.
     // All instances share the same secret so webhooks verify correctly

@@ -19,16 +19,15 @@ const NEWLY_PAID_BATCH_LIMIT: u32 = 4;
 pub fn start_background_processor<DB>(
     db: DB,
     nostr_keys: Option<nostr::Keys>,
-    instance_id: String,
     mut trigger_rx: watch::Receiver<()>,
 ) where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
-        debug!("Background processor started (instance_id: {instance_id})");
+        debug!("Background processor started");
 
         // Process any pending items on startup
-        process_newly_paid_queue(&db, nostr_keys.as_ref(), &instance_id).await;
+        process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
 
         // Wait for triggers
         loop {
@@ -45,22 +44,19 @@ pub fn start_background_processor<DB>(
                 }
             }
 
-            process_newly_paid_queue(&db, nostr_keys.as_ref(), &instance_id).await;
+            process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
         }
     });
 }
 
 /// Process pending items in the `newly_paid` queue, fetching in batches until
 /// the queue is drained.
-async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>, instance_id: &str)
+async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     loop {
-        let pending = match db
-            .take_pending_newly_paid(instance_id, NEWLY_PAID_BATCH_LIMIT)
-            .await
-        {
+        let pending = match db.take_pending_newly_paid(NEWLY_PAID_BATCH_LIMIT).await {
             Ok(pending) => pending,
             Err(e) => {
                 error!("Failed to get pending newly paid: {}", e);

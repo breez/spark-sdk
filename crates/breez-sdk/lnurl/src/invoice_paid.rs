@@ -462,7 +462,7 @@ mod shared_tests {
         );
     }
 
-    pub async fn take_pending_newly_paid_claims_for_instance<DB>(db: &DB)
+    pub async fn take_pending_newly_paid_claims_items<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
@@ -476,24 +476,16 @@ mod shared_tests {
         };
         db.insert_newly_paid(&item).await.unwrap();
 
-        // Instance A claims the item
-        let claimed = db.take_pending_newly_paid("instance_a", 100).await.unwrap();
+        // First call claims the item
+        let claimed = db.take_pending_newly_paid(100).await.unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].payment_hash, "claim_test_hash");
 
-        // Instance B cannot claim the same item (it was just claimed by A)
-        let claimed_b = db.take_pending_newly_paid("instance_b", 100).await.unwrap();
+        // Second call cannot claim the same item (it was just claimed)
+        let claimed_again = db.take_pending_newly_paid(100).await.unwrap();
         assert!(
-            claimed_b.is_empty(),
-            "instance B should not be able to claim items already claimed by instance A"
-        );
-
-        // Instance A can re-claim its own items
-        let reclaimed = db.take_pending_newly_paid("instance_a", 100).await.unwrap();
-        assert_eq!(
-            reclaimed.len(),
-            1,
-            "instance A should be able to re-claim its own items"
+            claimed_again.is_empty(),
+            "recently claimed items should not be claimable again"
         );
     }
 
@@ -509,7 +501,7 @@ mod shared_tests {
         };
         db.insert_newly_paid(&future_item).await.unwrap();
 
-        let claimed = db.take_pending_newly_paid("instance_a", 100).await.unwrap();
+        let claimed = db.take_pending_newly_paid(100).await.unwrap();
         assert!(
             claimed.is_empty(),
             "items with future next_retry_at should not be claimed"
@@ -533,15 +525,15 @@ mod shared_tests {
         }
 
         // Request at most 2
-        let claimed = db.take_pending_newly_paid("instance_a", 2).await.unwrap();
+        let claimed = db.take_pending_newly_paid(2).await.unwrap();
         assert_eq!(claimed.len(), 2, "should only return up to the limit");
 
-        // Next call picks up more (still claimed by instance_a, so re-claimable)
-        let claimed2 = db.take_pending_newly_paid("instance_a", 10).await.unwrap();
+        // Remaining 3 are still unclaimed
+        let claimed2 = db.take_pending_newly_paid(10).await.unwrap();
         assert_eq!(
             claimed2.len(),
-            5,
-            "instance should be able to claim remaining items"
+            3,
+            "should claim the remaining unclaimed items"
         );
     }
 }
@@ -596,9 +588,9 @@ mod sqlite_tests {
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_claims_for_instance() {
+    async fn take_pending_newly_paid_claims_items() {
         let db = setup_test_db().await;
-        shared_tests::take_pending_newly_paid_claims_for_instance(&db).await;
+        shared_tests::take_pending_newly_paid_claims_items(&db).await;
     }
 
     #[tokio::test]
@@ -696,11 +688,11 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_claims_for_instance() {
+    async fn take_pending_newly_paid_claims_items() {
         let Some(db) = setup_test_db().await else {
             return;
         };
-        shared_tests::take_pending_newly_paid_claims_for_instance(&db).await;
+        shared_tests::take_pending_newly_paid_claims_items(&db).await;
     }
 
     #[tokio::test]

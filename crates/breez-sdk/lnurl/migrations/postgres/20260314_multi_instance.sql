@@ -3,5 +3,4 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
-ALTER TABLE newly_paid ADD COLUMN claimed_by TEXT;
 ALTER TABLE newly_paid ADD COLUMN claimed_at BIGINT;

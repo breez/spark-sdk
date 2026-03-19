@@ -470,26 +470,24 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn take_pending_newly_paid(
         &self,
-        instance_id: &str,
         limit: u32,
     ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
         let now = now_millis();
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let rows = sqlx::query(
             "UPDATE newly_paid
-             SET claimed_by = $2, claimed_at = $3
+             SET claimed_at = $2
              WHERE payment_hash IN (
                  SELECT payment_hash FROM newly_paid
                  WHERE next_retry_at <= $1
-                   AND (claimed_by IS NULL OR claimed_by = $2 OR claimed_at < $4)
+                   AND COALESCE(claimed_at, 0) < $3
                  ORDER BY next_retry_at ASC
-                 LIMIT $5
+                 LIMIT $4
                  FOR UPDATE SKIP LOCKED
              )
              RETURNING payment_hash, created_at, retry_count, next_retry_at",
         )
         .bind(now)
-        .bind(instance_id)
         .bind(now)
         .bind(stale_threshold)
         .bind(i64::from(limit))
@@ -517,7 +515,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "UPDATE newly_paid
-             SET retry_count = $2, next_retry_at = $3, claimed_at = NULL, claimed_by = NULL
+             SET retry_count = $2, next_retry_at = $3, claimed_at = NULL
              WHERE payment_hash = $1",
         )
         .bind(payment_hash)
