@@ -45,10 +45,13 @@ func configureStableBalance() async throws {
 
     // Enable stable balance with auto-conversion to a specific token
     config.stableBalanceConfig = StableBalanceConfig(
-        tokenIdentifier: "<token_identifier>",
+        tokens: [StableBalanceToken(
+            ticker: "USDB",
+            tokenIdentifier: "<token_identifier>"
+        )],
+        defaultActiveTicker: "USDB",
         thresholdSats: 10_000,
-        maxSlippageBps: 100,
-        reservedSats: 1_000
+        maxSlippageBps: 100
     )
     // ANCHOR_END: stable-balance-config
     print("Config: \(config)")

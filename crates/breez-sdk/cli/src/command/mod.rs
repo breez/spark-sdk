@@ -1,5 +1,6 @@
 mod contacts;
 mod issuer;
+mod stable_balance;
 mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
@@ -28,6 +29,7 @@ use std::{
 
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
+use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::webhooks::WebhookCommand;
 
 #[derive(Clone, Parser)]
@@ -326,6 +328,10 @@ pub enum Command {
     /// Webhook related commands
     #[command(subcommand)]
     Webhooks(WebhookCommand),
+
+    /// Stable balance related commands
+    #[command(subcommand)]
+    StableBalance(StableBalanceCommand),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -885,6 +891,7 @@ pub(crate) async fn execute_command(
         } => {
             sdk.update_user_settings(UpdateUserSettingsRequest {
                 spark_private_mode_enabled,
+                stable_balance_active_ticker: None,
             })
             .await?;
             Ok(true)
@@ -899,6 +906,7 @@ pub(crate) async fn execute_command(
         }
         Command::Contacts(contact_command) => contacts::handle_command(sdk, contact_command).await,
         Command::Webhooks(webhook_command) => webhooks::handle_command(sdk, webhook_command).await,
+        Command::StableBalance(sb_command) => stable_balance::handle_command(sdk, sb_command).await,
     }
 }
 

@@ -12,7 +12,7 @@ use crate::{
     error::SdkError,
     events::EventListener,
     issuer::TokenIssuer,
-    models::{GetInfoRequest, GetInfoResponse},
+    models::{GetInfoRequest, GetInfoResponse, StableBalanceActiveTicker},
     persist::ObjectCacheRepository,
     utils::token::get_tokens_metadata_cached_or_query,
 };
@@ -32,7 +32,7 @@ impl BreezSdk {
     ///
     /// A unique identifier for the listener, which can be used to remove it later
     pub async fn add_event_listener(&self, listener: Box<dyn EventListener>) -> String {
-        self.event_emitter.add_listener(listener).await
+        self.event_emitter.add_external_listener(listener).await
     }
 
     /// Removes a previously registered event listener
@@ -45,7 +45,7 @@ impl BreezSdk {
     ///
     /// `true` if the listener was found and removed, `false` otherwise
     pub async fn remove_event_listener(&self, id: &str) -> bool {
-        self.event_emitter.remove_listener(id).await
+        self.event_emitter.remove_external_listener(id).await
     }
 
     /// Stops the SDK's background tasks
@@ -207,10 +207,14 @@ impl BreezSdk {
 
         let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
 
-        // We may in the future have user settings that are stored locally and synced using real-time sync.
+        let stable_balance_active_ticker = match &self.stable_balance {
+            Some(sb) => sb.get_active_ticker().await,
+            None => None,
+        };
 
         Ok(UserSettings {
             spark_private_mode_enabled: spark_user_settings.private_enabled,
+            stable_balance_active_ticker,
         })
     }
 
@@ -226,6 +230,20 @@ impl BreezSdk {
                 .update_wallet_settings(spark_private_mode_enabled)
                 .await?;
         }
+
+        if let Some(active_ticker) = request.stable_balance_active_ticker {
+            let sb = self
+                .stable_balance
+                .as_ref()
+                .ok_or_else(|| SdkError::Generic("Stable balance is not configured".to_string()))?;
+            let ticker = if let StableBalanceActiveTicker::Set { ticker } = active_ticker {
+                Some(ticker)
+            } else {
+                None
+            };
+            sb.set_active_token(ticker).await?;
+        }
+
         Ok(())
     }
 

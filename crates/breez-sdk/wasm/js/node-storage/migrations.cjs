@@ -400,6 +400,10 @@ class MigrationManager {
         name: "Clear cached lightning address for CachedLightningAddress format change",
         sql: `DELETE FROM settings WHERE key = 'lightning_address'`
       },
+      {
+        name: "Add conversion_status to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT`,
+      },
     ];
   }
 }

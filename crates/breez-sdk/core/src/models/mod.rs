@@ -12,7 +12,11 @@ use core::fmt;
 use lnurl_models::RecoverLnurlPayResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    str::FromStr,
+};
 
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
@@ -226,39 +230,43 @@ pub struct Payment {
     pub conversion_details: Option<ConversionDetails>,
 }
 
-/// Outlines the steps involved in a conversion
+/// Outlines the steps involved in a conversion.
+///
+/// Built progressively: `status` is available immediately from payment metadata,
+/// while `from`/`to` steps are enriched later from child payments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionDetails {
-    /// First step is converting from the available asset
-    pub from: ConversionStep,
-    /// Second step is converting to the requested asset
-    pub to: ConversionStep,
+    /// Current status of the conversion
+    pub status: ConversionStatus,
+    /// The send step of the conversion (e.g., sats sent to Flashnet)
+    pub from: Option<ConversionStep>,
+    /// The receive step of the conversion (e.g., tokens received from Flashnet)
+    pub to: Option<ConversionStep>,
 }
 
-/// Conversions have one send and one receive payment that are associated to the
-/// ongoing payment via the `parent_payment_id` in the payment metadata. These payments
-/// are queried from the storage by the SDK, then converted.
-impl TryFrom<&Vec<Payment>> for ConversionDetails {
-    type Error = SdkError;
-    fn try_from(payments: &Vec<Payment>) -> Result<Self, Self::Error> {
-        let from = payments
-            .iter()
-            .find(|p| p.payment_type == PaymentType::Send)
-            .ok_or(SdkError::Generic(
-                "From step of conversion not found".to_string(),
-            ))?;
-        let to = payments
-            .iter()
-            .find(|p| p.payment_type == PaymentType::Receive)
-            .ok_or(SdkError::Generic(
-                "To step of conversion not found".to_string(),
-            ))?;
-        Ok(ConversionDetails {
-            from: from.try_into()?,
-            to: to.try_into()?,
-        })
-    }
+/// Extracts conversion steps (from/to) from a conversion's child payments.
+///
+/// Each conversion produces a send payment (sats → Flashnet) and a receive payment
+/// (tokens ← Flashnet), linked to the parent payment via `parent_payment_id` in
+/// payment metadata. The SDK queries these children from storage and converts them
+/// into the `from` and `to` steps.
+///
+/// Returns `(None, None)` when no child payments exist yet (e.g. Pending or Failed).
+pub fn conversion_steps_from_payments(
+    payments: &[Payment],
+) -> Result<(Option<ConversionStep>, Option<ConversionStep>), SdkError> {
+    let from = payments
+        .iter()
+        .find(|p| p.payment_type == PaymentType::Send)
+        .map(TryInto::try_into)
+        .transpose()?;
+    let to = payments
+        .iter()
+        .find(|p| p.payment_type == PaymentType::Receive)
+        .map(TryInto::try_into)
+        .transpose()?;
+    Ok((from, to))
 }
 
 /// A single step in a conversion
@@ -276,6 +284,10 @@ pub struct ConversionStep {
     pub method: PaymentMethod,
     /// Token metadata if a token is used for payment
     pub token_metadata: Option<TokenMetadata>,
+    /// Whether the conversion amount was adjusted (e.g. floored to min limit or
+    /// increased to avoid stranded token dust).
+    #[serde(default)]
+    pub amount_adjusted: bool,
 }
 
 /// Converts a Spark or Token payment into a `ConversionStep`.
@@ -309,6 +321,7 @@ impl TryFrom<&Payment> for ConversionStep {
                 .saturating_add(conversion_info.fee.unwrap_or(0)),
             method: payment.method,
             token_metadata,
+            amount_adjusted: conversion_info.amount_adjusted,
         })
     }
 }
@@ -597,22 +610,43 @@ pub struct OptimizationConfig {
     pub multiplicity: u8,
 }
 
+/// A stable token that can be used for automatic balance conversion.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct StableBalanceToken {
+    /// Short identifier for the token, e.g. "USDB".
+    pub ticker: String,
+
+    /// The full token identifier string used for conversions.
+    pub token_identifier: String,
+}
+
 /// Configuration for automatic conversion of Bitcoin to stable tokens.
 ///
 /// When configured, the SDK automatically monitors the Bitcoin balance after each
 /// wallet sync. When the balance exceeds the configured threshold plus the reserved
 /// amount, the SDK automatically converts the excess balance (above the reserve)
-/// to the specified stable token.
+/// to the active stable token.
 ///
 /// When the balance is held in a stable token, Bitcoin payments can still be sent.
 /// The SDK automatically detects when there's not enough Bitcoin balance to cover a
 /// payment and auto-populates the token-to-Bitcoin conversion options to facilitate
 /// the payment.
+///
+/// The active token can be changed at runtime via [`UpdateUserSettingsRequest`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct StableBalanceConfig {
-    /// The token identifier to convert Bitcoin to (required).
-    pub token_identifier: String,
+    /// Available tokens that can be used for stable balance.
+    pub tokens: Vec<StableBalanceToken>,
+
+    /// The ticker of the token to activate by default.
+    ///
+    /// If `None`, stable balance starts deactivated. The user can activate it
+    /// at runtime via [`UpdateUserSettingsRequest`]. If a user setting is cached
+    /// locally, it takes precedence over this default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_active_ticker: Option<String>,
 
     /// The minimum sats balance that triggers auto-conversion.
     ///
@@ -626,13 +660,16 @@ pub struct StableBalanceConfig {
     /// Defaults to 50 bps (0.5%) if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_slippage_bps: Option<u32>,
+}
 
-    /// Amount of sats to keep as Bitcoin and not convert to stable tokens.
-    ///
-    /// This reserve ensures you can send Bitcoin payments without hitting
-    /// the minimum conversion limit. Defaults to the conversion minimum if not set.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub reserved_sats: Option<u64>,
+/// Specifies how to update the active stable balance token.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum StableBalanceActiveTicker {
+    /// Activate stable balance with the given ticker.
+    Set { ticker: String },
+    /// Deactivate stable balance.
+    Unset,
 }
 
 impl Config {
@@ -645,6 +682,58 @@ impl Config {
                 "max_concurrent_claims must be greater than 0".to_string(),
             ));
         }
+
+        if let Some(sb) = &self.stable_balance_config {
+            if sb.tokens.is_empty() {
+                return Err(SdkError::InvalidInput(
+                    "tokens must not be empty".to_string(),
+                ));
+            }
+
+            let mut seen_tickers = HashSet::new();
+            let mut seen_identifiers = HashSet::new();
+            for token in &sb.tokens {
+                if token.ticker.is_empty() {
+                    return Err(SdkError::InvalidInput(
+                        "token ticker must not be empty".to_string(),
+                    ));
+                }
+                if token.token_identifier.is_empty() {
+                    return Err(SdkError::InvalidInput(
+                        "token_identifier must not be empty".to_string(),
+                    ));
+                }
+                if !seen_tickers.insert(&token.ticker) {
+                    return Err(SdkError::InvalidInput(format!(
+                        "tokens contains duplicate ticker: {}",
+                        token.ticker
+                    )));
+                }
+                if !seen_identifiers.insert(&token.token_identifier) {
+                    return Err(SdkError::InvalidInput(format!(
+                        "tokens contains duplicate token_identifier: {}",
+                        token.token_identifier
+                    )));
+                }
+            }
+
+            if let Some(bps) = sb.max_slippage_bps
+                && bps > 10000
+            {
+                return Err(SdkError::InvalidInput(
+                    "max_slippage_bps must be <= 10000".to_string(),
+                ));
+            }
+
+            if let Some(default_ticker) = &sb.default_active_ticker
+                && !seen_tickers.contains(default_ticker)
+            {
+                return Err(SdkError::InvalidInput(format!(
+                    "default_active_ticker '{default_ticker}' not found in tokens list"
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -1501,11 +1590,18 @@ pub struct CheckMessageResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct UserSettings {
     pub spark_private_mode_enabled: bool,
+
+    /// The ticker of the currently active stable balance token, or `None` if deactivated.
+    pub stable_balance_active_ticker: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+
+    /// Update the active stable balance token. `None` means no change.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub stable_balance_active_ticker: Option<StableBalanceActiveTicker>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

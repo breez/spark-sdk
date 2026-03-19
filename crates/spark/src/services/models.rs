@@ -510,6 +510,14 @@ impl TransferId {
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         TransferId(Uuid::from_bytes(bytes))
     }
+
+    /// Creates a deterministic TransferId from a name using UUID v5.
+    ///
+    /// Uses `NAMESPACE_OID` as the namespace, ensuring all instances
+    /// derive the same transfer ID for the same input name.
+    pub fn from_name(name: &str) -> Self {
+        Self(Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()))
+    }
 }
 
 impl std::fmt::Display for TransferId {

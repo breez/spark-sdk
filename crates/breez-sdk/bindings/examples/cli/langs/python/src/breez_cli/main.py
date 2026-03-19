@@ -18,6 +18,7 @@ from breez_sdk_spark import (
     SdkEvent,
     Seed,
     StableBalanceConfig,
+    StableBalanceToken,
     default_config,
     default_postgres_storage_config,
     init_logging,
@@ -96,10 +97,10 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     if stable_balance_token_identifier:
         config.stable_balance_config = StableBalanceConfig(
-            token_identifier=stable_balance_token_identifier,
+            tokens=[StableBalanceToken(ticker="USDB", token_identifier=stable_balance_token_identifier)],
+            default_active_ticker="USDB",
             threshold_sats=stable_balance_threshold,
             max_slippage_bps=None,
-            reserved_sats=None,
         )
 
     if passkey_provider:

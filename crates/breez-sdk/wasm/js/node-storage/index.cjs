@@ -53,6 +53,7 @@ const SELECT_PAYMENT_SQL = `
            pm.lnurl_pay_info,
            pm.lnurl_withdraw_info,
            pm.conversion_info,
+           pm.conversion_status,
            t.metadata AS token_metadata,
            t.tx_hash AS token_tx_hash,
            t.tx_type AS token_tx_type,
@@ -545,14 +546,15 @@ class SqliteStorage {
   insertPaymentMetadata(paymentId, metadata) {
     try {
       const stmt = this.db.prepare(`
-                INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(payment_id) DO UPDATE SET
                     parent_payment_id = COALESCE(excluded.parent_payment_id, parent_payment_id),
                     lnurl_pay_info = COALESCE(excluded.lnurl_pay_info, lnurl_pay_info),
                     lnurl_withdraw_info = COALESCE(excluded.lnurl_withdraw_info, lnurl_withdraw_info),
                     lnurl_description = COALESCE(excluded.lnurl_description, lnurl_description),
-                    conversion_info = COALESCE(excluded.conversion_info, conversion_info)
+                    conversion_info = COALESCE(excluded.conversion_info, conversion_info),
+                    conversion_status = COALESCE(excluded.conversion_status, conversion_status)
             `);
 
       stmt.run(
@@ -565,7 +567,8 @@ class SqliteStorage {
         metadata.lnurlDescription,
         metadata.conversionInfo
           ? JSON.stringify(metadata.conversionInfo)
-          : null
+          : null,
+        metadata.conversionStatus ?? null
       );
       return Promise.resolve();
     } catch (error) {
@@ -814,7 +817,9 @@ class SqliteStorage {
       timestamp: row.timestamp,
       method,
       details,
-      conversionDetails: null,
+      conversionDetails: row.conversion_status
+        ? { status: row.conversion_status, from: null, to: null }
+        : null,
     };
   }
 

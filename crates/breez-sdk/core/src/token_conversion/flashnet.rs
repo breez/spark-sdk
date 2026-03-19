@@ -2,9 +2,9 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use bitcoin::secp256k1::PublicKey;
 use flashnet::{
-    CacheStore, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest, FlashnetClient,
-    FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder,
-    SimulateSwapRequest,
+    BTC_ASSET_ADDRESS, CacheStore, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest,
+    FlashnetClient, FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest,
+    PoolSortOrder, SimulateSwapRequest,
 };
 use platform_utils::time::Duration;
 use platform_utils::tokio;
@@ -24,8 +24,8 @@ use crate::{
 
 use super::{
     ConversionError, ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose,
-    ConversionStatus, FetchConversionLimitsRequest, FetchConversionLimitsResponse,
-    TokenConversionPool, TokenConversionResponse, TokenConverter,
+    ConversionStatus, ConversionType, FeeSplit, FetchConversionLimitsRequest,
+    FetchConversionLimitsResponse, TokenConversionPool, TokenConversionResponse, TokenConverter,
 };
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
@@ -190,6 +190,7 @@ impl FlashnetTokenConverter {
             status: ConversionStatus::RefundNeeded,
             fee,
             purpose,
+            amount_adjusted,
         }) = conversion_info
         else {
             return Err(ConversionError::RefundFailed(
@@ -235,6 +236,7 @@ impl FlashnetTokenConverter {
                                 status: ConversionStatus::Refunded,
                                 fee: *fee,
                                 purpose: purpose.clone(),
+                                amount_adjusted: *amount_adjusted,
                             }),
                             ..Default::default()
                         },
@@ -328,6 +330,7 @@ impl FlashnetTokenConverter {
         &self,
         conversion_pool: &TokenConversionPool,
         conversion_options: &ConversionOptions,
+        token_identifier: Option<&String>,
         amount_out: u128,
     ) -> Result<Option<ConversionEstimate>, ConversionError> {
         let TokenConversionPool {
@@ -337,7 +340,7 @@ impl FlashnetTokenConverter {
         } = conversion_pool;
 
         // Calculate the required amount in for the desired amount out
-        let amount_in = pool.calculate_amount_in(
+        let calculated_amount_in = pool.calculate_amount_in(
             asset_in_address,
             amount_out,
             conversion_options
@@ -346,6 +349,11 @@ impl FlashnetTokenConverter {
             self.integrator_fee_bps,
             self.network.into(),
         )?;
+
+        // Apply min conversion limit floor and token dust check
+        let (amount_in, amount_adjusted) = self
+            .maybe_adjust_to_min_limit(conversion_options, token_identifier, calculated_amount_in)
+            .await?;
 
         // Simulate the swap to validate the conversion
         let response = self
@@ -370,10 +378,11 @@ impl FlashnetTokenConverter {
             )));
         }
 
-        Ok(response.fee_paid_asset_in.map(|fee| ConversionEstimate {
+        Ok(Some(ConversionEstimate {
             options: conversion_options.clone(),
             amount: amount_in,
-            fee,
+            fee: response.fee_paid_asset_in.unwrap_or(0),
+            amount_adjusted,
         }))
     }
 
@@ -439,23 +448,26 @@ impl FlashnetTokenConverter {
     /// * `outbound_identifier` - The outbound spark transfer id or token transaction hash.
     /// * `inbound_identifier` - The inbound spark transfer id or token transaction hash if the conversion was successful.
     /// * `refund_identifier` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
-    /// * `fee` - The fee paid for the conversion.
+    /// * `fee_split` - The fee split between sent and received sides of the conversion.
     /// * `purpose` - The purpose of the conversion.
     ///
     /// Returns:
     /// * The sent payment id of the conversion.
     /// * The received payment id of the conversion.
+    #[allow(clippy::too_many_arguments)]
     async fn update_payment_conversion_info(
         &self,
         pool_id: &PublicKey,
         outbound_identifier: String,
         inbound_identifier: Option<String>,
         refund_identifier: Option<String>,
-        fee: Option<u128>,
+        fee_split: FeeSplit,
         purpose: &ConversionPurpose,
+        amount_adjusted: bool,
     ) -> Result<(String, Option<String>), ConversionError> {
         debug!(
-            "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}"
+            "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}, sent_fee: {:?}, received_fee: {:?}",
+            fee_split.sent, fee_split.received
         );
 
         let cache = ObjectCacheRepository::new(self.storage.clone());
@@ -480,8 +492,9 @@ impl FlashnetTokenConverter {
                         pool_id: pool_id_str.clone(),
                         conversion_id: conversion_id.clone(),
                         status: status.clone(),
-                        fee,
-                        purpose: None,
+                        fee: fee_split.sent,
+                        purpose: Some(purpose.clone()),
+                        amount_adjusted,
                     }),
                     ..Default::default()
                 },
@@ -495,8 +508,9 @@ impl FlashnetTokenConverter {
                     pool_id: pool_id_str.clone(),
                     conversion_id: conversion_id.clone(),
                     status: status.clone(),
-                    fee: None,
+                    fee: fee_split.received,
                     purpose: Some(purpose.clone()),
+                    amount_adjusted: false,
                 }),
                 ..Default::default()
             };
@@ -522,6 +536,7 @@ impl FlashnetTokenConverter {
                     status,
                     fee: None,
                     purpose: None,
+                    amount_adjusted: false,
                 }),
                 ..Default::default()
             };
@@ -536,6 +551,90 @@ impl FlashnetTokenConverter {
 
         Ok((sent_payment_id, received_payment_id))
     }
+
+    /// For `ToBitcoin` conversions, ensures `amount_in` meets the min conversion limit
+    /// and avoids leaving token dust (a balance below the min).
+    ///
+    /// Returns `(adjusted_amount_in, was_adjusted)`.
+    async fn maybe_adjust_to_min_limit(
+        &self,
+        options: &ConversionOptions,
+        token_identifier: Option<&String>,
+        amount_in: u128,
+    ) -> Result<(u128, bool), ConversionError> {
+        let ConversionType::ToBitcoin {
+            from_token_identifier,
+        } = &options.conversion_type
+        else {
+            return Ok((amount_in, false));
+        };
+
+        // Fetch ToBitcoin limits (denominated in token units)
+        let limits = self
+            .fetch_limits(&FetchConversionLimitsRequest {
+                conversion_type: options.conversion_type.clone(),
+                token_identifier: token_identifier.cloned(),
+            })
+            .await?;
+
+        let Some(min_from_amount) = limits.min_from_amount else {
+            return Ok((amount_in, false));
+        };
+
+        // Floor check: ensure amount_in meets the min conversion limit
+        let adjusted = amount_in.max(min_from_amount);
+
+        // Dust check: if converting would leave a token balance below the min,
+        // convert all tokens to avoid dust
+        let token_balances = self.spark_wallet.get_token_balances().await?;
+        let token_balance = token_balances
+            .get(from_token_identifier)
+            .map_or(0, |b| b.balance);
+
+        let remaining = token_balance.saturating_sub(adjusted);
+        if remaining > 0 && remaining < min_from_amount {
+            info!(
+                "Adjusting ToBitcoin conversion to avoid token dust: \
+                 converting all {token_balance} tokens (remaining {remaining} < min {min_from_amount})"
+            );
+            return Ok((token_balance, true));
+        }
+
+        if adjusted != amount_in {
+            info!(
+                "Floored ToBitcoin conversion amount_in from {amount_in} to {adjusted} (min {min_from_amount})"
+            );
+        }
+
+        Ok((adjusted, adjusted != amount_in))
+    }
+
+    /// Resolves a `ConversionAmount` into `(amount_in, amount_out, amount_adjusted)`.
+    ///
+    /// For `MinAmountOut`: uses `estimate_internal` to compute `amount_in` from desired output.
+    /// For `AmountIn`: simulates the swap to compute expected `amount_out`.
+    async fn resolve_amount(
+        &self,
+        options: &ConversionOptions,
+        token_identifier: Option<&String>,
+        amount: &ConversionAmount,
+    ) -> Result<(u128, u128, bool), ConversionError> {
+        let estimate = self
+            .validate(Some(options), token_identifier, amount.clone())
+            .await?
+            .ok_or(ConversionError::ConversionFailed(
+                "No conversion estimate available".to_string(),
+            ))?;
+
+        match amount {
+            ConversionAmount::MinAmountOut(min_out) => {
+                Ok((estimate.amount, *min_out, estimate.amount_adjusted))
+            }
+            ConversionAmount::AmountIn(amount_in) => {
+                Ok((*amount_in, estimate.amount, estimate.amount_adjusted))
+            }
+        }
+    }
 }
 
 #[macros::async_trait]
@@ -547,51 +646,12 @@ impl TokenConverter for FlashnetTokenConverter {
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
         amount: ConversionAmount,
+        transfer_id: Option<TransferId>,
     ) -> Result<TokenConversionResponse, ConversionError> {
         // Determine amount_in and min_amount_out based on ConversionAmount variant
-        let (amount_in, min_amount_out) = match amount {
-            ConversionAmount::MinAmountOut(min_out) => {
-                // Calculate amount_in from min_amount_out
-                let conversion_pool = self
-                    .get_conversion_pool(options, token_identifier, min_out)
-                    .await?;
-                let estimate = self
-                    .estimate_internal(&conversion_pool, options, min_out)
-                    .await?
-                    .ok_or(ConversionError::ConversionFailed(
-                        "No conversion estimate available".to_string(),
-                    ))?;
-                (estimate.amount, min_out)
-            }
-            ConversionAmount::AmountIn(amount_in) => {
-                // We have the input, simulate to get expected output
-                let conversion_pool = self
-                    .get_conversion_pool(options, token_identifier, 0)
-                    .await?;
-
-                let simulate_response = self
-                    .flashnet_client
-                    .simulate_swap(SimulateSwapRequest {
-                        asset_in_address: conversion_pool.asset_in_address.clone(),
-                        asset_out_address: conversion_pool.asset_out_address.clone(),
-                        pool_id: conversion_pool.pool.lp_public_key,
-                        amount_in,
-                        integrator_bps: None,
-                    })
-                    .await?;
-
-                // Apply slippage tolerance to get minimum acceptable output
-                let max_slippage = options
-                    .max_slippage_bps
-                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS);
-                let min_out = simulate_response
-                    .amount_out
-                    .saturating_mul(10_000u128.saturating_sub(u128::from(max_slippage)))
-                    .saturating_div(10_000);
-
-                (amount_in, min_out)
-            }
-        };
+        let (amount_in, min_amount_out, amount_adjusted) = self
+            .resolve_amount(options, token_identifier, &amount)
+            .await?;
 
         // Get the conversion pool for execution
         let conversion_pool = self
@@ -613,23 +673,40 @@ impl TokenConverter for FlashnetTokenConverter {
                 min_amount_out,
                 integrator_fee_rate_bps: None,
                 integrator_public_key: None,
+                transfer_id,
             })
             .await;
 
         match response_res {
             Ok(response) => {
-                info!(
-                    "Conversion executed: accepted {}, error {:?}",
-                    response.accepted, response.error
+                debug!(
+                    "Conversion executed: accepted {}, error {:?}, fee_amount: {:?}",
+                    response.accepted, response.error, response.fee_amount,
                 );
+                // Fee from ExecuteSwapResponse is denominated in the non-BTC asset (token units).
+                // Route to the token-side payment: sent if asset_in is the token, received if
+                // asset_in is BTC (meaning the token is on the received side).
+                let fee_split = if conversion_pool.asset_in_address == BTC_ASSET_ADDRESS {
+                    FeeSplit {
+                        sent: None,
+                        received: response.fee_amount,
+                    }
+                } else {
+                    FeeSplit {
+                        sent: response.fee_amount,
+                        received: None,
+                    }
+                };
+
                 let (sent_payment_id, received_payment_id) = self
                     .update_payment_conversion_info(
                         &pool_id,
                         response.transfer_id,
                         response.outbound_transfer_id,
                         response.refund_transfer_id,
-                        response.fee_amount,
+                        fee_split,
                         purpose,
+                        amount_adjusted,
                     )
                     .await?;
 
@@ -662,8 +739,9 @@ impl TokenConverter for FlashnetTokenConverter {
                             transaction_identifier.clone(),
                             None,
                             None,
-                            None,
+                            FeeSplit::default(),
                             purpose,
+                            amount_adjusted,
                         )
                         .await;
                     let _ = self.refund_trigger.send(());
@@ -682,18 +760,57 @@ impl TokenConverter for FlashnetTokenConverter {
         &self,
         options: Option<&ConversionOptions>,
         token_identifier: Option<&String>,
-        amount_out: u128,
+        amount: ConversionAmount,
     ) -> Result<Option<ConversionEstimate>, ConversionError> {
         let Some(options) = options else {
             return Ok(None);
         };
 
-        let conversion_pool = self
-            .get_conversion_pool(options, token_identifier, amount_out)
-            .await?;
+        match amount {
+            ConversionAmount::MinAmountOut(amount_out) => {
+                // Estimates the amount in from desired output
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, amount_out)
+                    .await?;
+                self.estimate_internal(&conversion_pool, options, token_identifier, amount_out)
+                    .await
+            }
+            ConversionAmount::AmountIn(amount_in) => {
+                // Simulate to get expected output and fee
+                let conversion_pool = self
+                    .get_conversion_pool(options, token_identifier, 0)
+                    .await?;
+                let response = self
+                    .flashnet_client
+                    .simulate_swap(SimulateSwapRequest {
+                        asset_in_address: conversion_pool.asset_in_address.clone(),
+                        asset_out_address: conversion_pool.asset_out_address.clone(),
+                        pool_id: conversion_pool.pool.lp_public_key,
+                        amount_in,
+                        integrator_bps: if self.integrator_fee_bps > 0 {
+                            Some(self.integrator_fee_bps)
+                        } else {
+                            None
+                        },
+                    })
+                    .await?;
 
-        self.estimate_internal(&conversion_pool, options, amount_out)
-            .await
+                let max_slippage = options
+                    .max_slippage_bps
+                    .unwrap_or(DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS);
+                let estimated_out = response
+                    .amount_out
+                    .saturating_mul(10_000u128.saturating_sub(u128::from(max_slippage)))
+                    .saturating_div(10_000);
+
+                Ok(Some(ConversionEstimate {
+                    options: options.clone(),
+                    amount: estimated_out,
+                    fee: response.fee_paid_asset_in.unwrap_or(0),
+                    amount_adjusted: false,
+                }))
+            }
+        }
     }
 
     async fn fetch_limits(

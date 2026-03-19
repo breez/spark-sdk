@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, default_config,
-    default_postgres_storage_config,
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, StableBalanceToken,
+    default_config, default_postgres_storage_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -41,12 +41,16 @@ struct Cli {
     #[arg(long)]
     postgres_connection_string: Option<String>,
 
-    /// Stable balance token identifer
-    #[arg(long)]
-    stable_balance_token_identifier: Option<String>,
+    /// Stable balance tokens in "`TICKER:token_identifier`" format (repeatable)
+    #[arg(long = "stable-balance-token")]
+    stable_balance_tokens: Vec<String>,
+
+    /// Default active ticker for stable balance (must match a token ticker)
+    #[arg(long, requires = "stable_balance_tokens")]
+    stable_balance_default_active_ticker: Option<String>,
 
     /// Stable balance threshold, in sats
-    #[arg(long)]
+    #[arg(long, requires = "stable_balance_tokens")]
     stable_balance_threshold: Option<u64>,
 
     /// Use passkey with `file`, `yubikey`, or `fido2` provider
@@ -262,14 +266,29 @@ async fn main() -> Result<(), anyhow::Error> {
         "mainnet" => Network::Mainnet,
         _ => return Err(anyhow!("Invalid network. Use 'regtest' or 'mainnet'")),
     };
-    let stable_balance_config =
-        cli.stable_balance_token_identifier
-            .map(|token_identifier| StableBalanceConfig {
-                token_identifier,
-                threshold_sats: cli.stable_balance_threshold,
-                max_slippage_bps: None,
-                reserved_sats: None,
-            });
+    let stable_balance_config = if cli.stable_balance_tokens.is_empty() {
+        None
+    } else {
+        let tokens: Vec<StableBalanceToken> = cli
+            .stable_balance_tokens
+            .into_iter()
+            .map(|s| {
+                let (ticker, token_identifier) = s.split_once(':').unwrap_or_else(|| {
+                    panic!("Invalid token format '{s}', expected TICKER:token_identifier")
+                });
+                StableBalanceToken {
+                    ticker: ticker.to_string(),
+                    token_identifier: token_identifier.to_string(),
+                }
+            })
+            .collect();
+        Some(StableBalanceConfig {
+            tokens,
+            default_active_ticker: cli.stable_balance_default_active_ticker,
+            threshold_sats: cli.stable_balance_threshold,
+            max_slippage_bps: None,
+        })
+    };
 
     let passkey_config = cli.passkey.map(|provider| PasskeyConfig {
         provider,

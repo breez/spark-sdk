@@ -246,6 +246,12 @@ class PostgresMigrationManager {
           `DELETE FROM settings WHERE key = 'lightning_address'`,
         ],
       },
+      {
+        name: "Add conversion_status to payment_metadata",
+        sql: [
+          `ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT`,
+        ],
+      },
     ];
   }
 }
