@@ -5,8 +5,9 @@ use tracing::{error, info};
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, SignMessageRequest, SignMessageResponse,
-    UpdateUserSettingsRequest, UserSettings,
+    ListFiatRatesResponse, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
+    UserSettings, Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -279,6 +280,65 @@ impl BreezSdk {
     /// Returns the current optimization progress snapshot.
     pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
         self.spark_wallet.get_leaf_optimization_progress().into()
+    }
+
+    /// Registers a webhook to receive notifications for wallet events.
+    ///
+    /// When registered events occur (e.g., a Lightning payment is received),
+    /// the Spark service provider will send an HTTP POST to the specified URL
+    /// with a payload signed using HMAC-SHA256 with the provided secret.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The webhook registration details including URL, secret, and event types
+    ///
+    /// # Returns
+    ///
+    /// A response containing the unique identifier of the registered webhook
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> Result<RegisterWebhookResponse, SdkError> {
+        let event_types = request.event_types.into_iter().map(Into::into).collect();
+        let webhook_id = self
+            .spark_wallet
+            .register_wallet_webhook(&request.url, &request.secret, event_types)
+            .await
+            .map_err(|e| SdkError::Generic(format!("Failed to register webhook: {e}")))?;
+        Ok(RegisterWebhookResponse { webhook_id })
+    }
+
+    /// Unregisters a previously registered webhook.
+    ///
+    /// After unregistering, the Spark service provider will no longer send
+    /// notifications to the webhook URL.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The unregister request containing the webhook ID
+    pub async fn unregister_webhook(
+        &self,
+        request: UnregisterWebhookRequest,
+    ) -> Result<(), SdkError> {
+        self.spark_wallet
+            .delete_wallet_webhook(&request.webhook_id)
+            .await
+            .map_err(|e| SdkError::Generic(format!("Failed to unregister webhook: {e}")))?;
+        Ok(())
+    }
+
+    /// Lists all webhooks currently registered for this wallet.
+    ///
+    /// # Returns
+    ///
+    /// A list of registered webhooks with their IDs, URLs, and subscribed event types
+    pub async fn list_webhooks(&self) -> Result<Vec<Webhook>, SdkError> {
+        let webhooks = self
+            .spark_wallet
+            .list_wallet_webhooks()
+            .await
+            .map_err(|e| SdkError::Generic(format!("Failed to list webhooks: {e}")))?;
+        Ok(webhooks.into_iter().map(Into::into).collect())
     }
 
     /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).

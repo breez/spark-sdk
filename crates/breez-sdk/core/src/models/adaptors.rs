@@ -524,3 +524,46 @@ impl From<spark_wallet::OptimizationProgress> for OptimizationProgress {
         }
     }
 }
+
+impl From<crate::WebhookEventType> for spark_wallet::SparkWalletWebhookEventType {
+    fn from(value: crate::WebhookEventType) -> Self {
+        match value {
+            crate::WebhookEventType::LightningReceiveFinished => {
+                Self::SparkLightningReceiveFinished
+            }
+            crate::WebhookEventType::LightningSendFinished => Self::SparkLightningSendFinished,
+            crate::WebhookEventType::CoopExitFinished => Self::SparkCoopExitFinished,
+            crate::WebhookEventType::StaticDepositFinished => Self::SparkStaticDepositFinished,
+        }
+    }
+}
+
+impl From<spark_wallet::SparkWalletWebhookEventType> for crate::WebhookEventType {
+    fn from(value: spark_wallet::SparkWalletWebhookEventType) -> Self {
+        match value {
+            spark_wallet::SparkWalletWebhookEventType::SparkLightningReceiveFinished => {
+                Self::LightningReceiveFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkLightningSendFinished => {
+                Self::LightningSendFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkCoopExitFinished => {
+                Self::CoopExitFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::SparkStaticDepositFinished => {
+                Self::StaticDepositFinished
+            }
+            spark_wallet::SparkWalletWebhookEventType::Unknown => Self::LightningReceiveFinished,
+        }
+    }
+}
+
+impl From<spark_wallet::WebhookEntry> for crate::Webhook {
+    fn from(value: spark_wallet::WebhookEntry) -> Self {
+        Self {
+            id: value.webhook_id,
+            url: value.url,
+            event_types: value.event_types.into_iter().map(Into::into).collect(),
+        }
+    }
+}

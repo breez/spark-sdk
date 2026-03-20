@@ -1185,6 +1185,38 @@ pub struct _ListContactsRequest {
     pub limit: Option<u32>,
 }
 
+#[frb(mirror(WebhookEventType))]
+pub enum _WebhookEventType {
+    LightningReceiveFinished,
+    LightningSendFinished,
+    CoopExitFinished,
+    StaticDepositFinished,
+}
+
+#[frb(mirror(Webhook))]
+pub struct _Webhook {
+    pub id: String,
+    pub url: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+#[frb(mirror(RegisterWebhookRequest))]
+pub struct _RegisterWebhookRequest {
+    pub url: String,
+    pub secret: String,
+    pub event_types: Vec<WebhookEventType>,
+}
+
+#[frb(mirror(RegisterWebhookResponse))]
+pub struct _RegisterWebhookResponse {
+    pub webhook_id: String,
+}
+
+#[frb(mirror(UnregisterWebhookRequest))]
+pub struct _UnregisterWebhookRequest {
+    pub webhook_id: String,
+}
+
 #[frb(mirror(NostrRelayConfig))]
 pub struct _NostrRelayConfig {
     pub breez_api_key: Option<String>,
