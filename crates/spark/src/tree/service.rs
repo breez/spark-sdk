@@ -621,7 +621,7 @@ mod tests {
                 direct_from_cpfp_refund_tx: None,
                 vout: 0,
                 verifying_public_key: PublicKey::from_slice(&[2; 33]).unwrap(),
-                owner_identity_public_key: PublicKey::from_slice(&[2; 33]).unwrap(),
+                owner_identity_public_key: Some(PublicKey::from_slice(&[2; 33]).unwrap()),
                 signing_keyshare: SigningKeyshare {
                     owner_identifiers: Vec::new(),
                     threshold: 0,

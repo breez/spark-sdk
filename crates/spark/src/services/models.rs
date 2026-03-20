@@ -12,6 +12,7 @@ use frost_secp256k1_tr::{
     round1::{NonceCommitment, SigningCommitments},
 };
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 use uuid::Uuid;
 use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -435,8 +436,16 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
         let verifying_public_key = PublicKey::from_slice(&node.verifying_public_key)
             .map_err(|_| ServiceError::Generic("Invalid verifying public key".to_string()))?;
 
-        let owner_identity_public_key = PublicKey::from_slice(&node.owner_identity_public_key)
-            .map_err(|_| ServiceError::Generic("Invalid owner identity public key".to_string()))?;
+        let owner_identity_public_key = if node.owner_identity_public_key.is_empty() {
+            warn!("Node {} has empty owner_identity_public_key", node.id);
+            None
+        } else {
+            Some(
+                PublicKey::from_slice(&node.owner_identity_public_key).map_err(|_| {
+                    ServiceError::Generic("Invalid owner identity public key".to_string())
+                })?,
+            )
+        };
 
         let signing_keyshare = node
             .signing_keyshare
@@ -1292,16 +1301,87 @@ impl From<operator_rpc::spark::PreimageRequestStatus> for PreimageRequestStatus 
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::consensus::serialize;
     use bitcoin::secp256k1::PublicKey;
+    use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use frost_secp256k1_tr::Identifier;
     use macros::test_all;
 
     use crate::Network;
     use crate::operator::rpc as operator_rpc;
     use crate::services::bech32m_decode_token_id;
     use crate::token::TokenOutputWithPrevOut;
+    use crate::tree::TreeNode;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    const TEST_PUBKEY_BYTES: [u8; 33] = [
+        3, 141, 37, 201, 160, 148, 226, 93, 184, 201, 131, 47, 222, 91, 55, 171, 38, 95, 13, 248,
+        175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
+    ];
+
+    fn create_proto_tree_node(owner_identity_public_key: Vec<u8>) -> operator_rpc::spark::TreeNode {
+        let dummy_tx = serialize(&Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        });
+        let identifier = Identifier::try_from(1u16).unwrap();
+        let identifier_hex = hex::encode(identifier.serialize());
+
+        operator_rpc::spark::TreeNode {
+            id: "01020304-0506-0708-090a-0b0c0d0e0f10".to_string(),
+            tree_id: "test_tree".to_string(),
+            value: 1000,
+            parent_node_id: None,
+            node_tx: dummy_tx,
+            refund_tx: vec![],
+            direct_tx: vec![],
+            direct_refund_tx: vec![],
+            direct_from_cpfp_refund_tx: vec![],
+            vout: 0,
+            verifying_public_key: TEST_PUBKEY_BYTES.to_vec(),
+            owner_identity_public_key,
+            owner_signing_public_key: TEST_PUBKEY_BYTES.to_vec(),
+            signing_keyshare: Some(operator_rpc::spark::SigningKeyshare {
+                owner_identifiers: vec![identifier_hex],
+                threshold: 1,
+                public_key: TEST_PUBKEY_BYTES.to_vec(),
+                public_shares: std::collections::HashMap::new(),
+                updated_time: None,
+            }),
+            status: "AVAILABLE".to_string(),
+            network: 0,
+            created_time: None,
+            updated_time: None,
+        }
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_with_valid_owner_identity_public_key() {
+        let proto_node = create_proto_tree_node(TEST_PUBKEY_BYTES.to_vec());
+        let tree_node = TreeNode::try_from(proto_node).unwrap();
+        assert_eq!(
+            tree_node.owner_identity_public_key,
+            Some(PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap())
+        );
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_with_empty_owner_identity_public_key() {
+        let proto_node = create_proto_tree_node(vec![]);
+        let tree_node = TreeNode::try_from(proto_node).unwrap();
+        assert_eq!(tree_node.owner_identity_public_key, None);
+    }
+
+    #[test_all]
+    fn test_tree_node_try_from_with_invalid_owner_identity_public_key() {
+        let proto_node = create_proto_tree_node(vec![0, 1, 2]);
+        let result = TreeNode::try_from(proto_node);
+        assert!(result.is_err());
+    }
 
     #[test_all]
     fn test_token_output_with_prev_out_roundtrip() {
