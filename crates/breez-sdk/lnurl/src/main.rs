@@ -278,9 +278,13 @@ where
     // Start background processor for handling paid invoices.
     background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
 
-    // Generate webhook secret and register with SSP
-    let webhook_secret_bytes: [u8; 32] = rand::random();
-    let webhook_secret = hex::encode(webhook_secret_bytes);
+    // Get or create a shared webhook secret persisted in the database.
+    // All instances share the same secret so webhooks verify correctly
+    // regardless of which instance receives them.
+    let default_secret = hex::encode(rand::random::<[u8; 32]>());
+    let webhook_secret = repository
+        .get_or_create_setting("webhook_secret", &default_secret)
+        .await?;
 
     if let Some(webhook_domain) = &args.webhook_domain {
         let webhook_url = format!("{}://{}/webhook", args.scheme, webhook_domain);

@@ -211,24 +211,14 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+mod test_helpers {
     use super::*;
-    use crate::repository::LnurlSenderComment;
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
     use lightning_invoice::{Currency, InvoiceBuilder};
 
-    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect(":memory:")
-            .await
-            .unwrap();
-        crate::sqlite::run_migrations(&pool).await.unwrap();
-        crate::sqlite::LnurlRepository::new(pool)
-    }
-
     /// Generate a valid bolt11 invoice for the given preimage bytes.
     /// Returns (`preimage_hex`, `payment_hash_hex`, `invoice_string`).
-    fn generate_test_invoice(preimage_bytes: &[u8; 32]) -> (String, String, String) {
+    pub fn generate_test_invoice(preimage_bytes: &[u8; 32]) -> (String, String, String) {
         let preimage_hex = hex::encode(preimage_bytes);
         let payment_hash = sha256::Hash::hash(preimage_bytes);
 
@@ -247,19 +237,26 @@ mod tests {
 
         (preimage_hex, payment_hash.to_string(), invoice.to_string())
     }
+}
 
-    /// When the server has a sender comment for a payment hash but no invoice record,
-    /// `handle_invoices_paid` should create the invoice from the client-provided bolt11.
-    #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_comment_exists() {
-        let db = setup_test_db().await;
+/// Shared test logic that runs against any `LnurlRepository` implementation.
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    use crate::repository::LnurlSenderComment;
+
+    use super::test_helpers::generate_test_invoice;
+
+    pub async fn invoices_paid_creates_invoice_when_only_comment_exists<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
         let (trigger, _rx) = watch::channel(());
 
         let preimage_bytes = [1u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
         let user_pubkey = "test_user_pubkey";
 
-        // Server has a sender comment but no invoice record for this payment hash.
         db.insert_lnurl_sender_comment(&LnurlSenderComment {
             comment: "hello from sender".to_string(),
             payment_hash: payment_hash.clone(),
@@ -269,7 +266,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Verify no invoice exists yet.
         assert!(
             db.get_invoice_by_payment_hash(&payment_hash)
                 .await
@@ -277,9 +273,8 @@ mod tests {
                 .is_none()
         );
 
-        // Client posts the paid invoice.
         handle_invoices_paid(
-            &db,
+            db,
             &[PaidInvoice {
                 preimage: preimage_hex.clone(),
                 invoice: invoice_str.clone(),
@@ -290,7 +285,6 @@ mod tests {
         .await
         .unwrap();
 
-        // The server should now have the invoice stored.
         let stored = db
             .get_invoice_by_payment_hash(&payment_hash)
             .await
@@ -301,18 +295,16 @@ mod tests {
         assert_eq!(stored.invoice, invoice_str);
     }
 
-    /// When the server has a zap for a payment hash but no invoice record,
-    /// `handle_invoices_paid` should create the invoice from the client-provided bolt11.
-    #[tokio::test]
-    async fn invoices_paid_creates_invoice_when_only_zap_exists() {
-        let db = setup_test_db().await;
+    pub async fn invoices_paid_creates_invoice_when_only_zap_exists<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
         let (trigger, _rx) = watch::channel(());
 
         let preimage_bytes = [2u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
         let user_pubkey = "test_user_pubkey";
 
-        // Server has a zap but no invoice record for this payment hash.
         db.upsert_zap(&crate::zap::Zap {
             payment_hash: payment_hash.clone(),
             zap_request: r#"{"kind":9734}"#.to_string(),
@@ -325,7 +317,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Verify no invoice exists yet.
         assert!(
             db.get_invoice_by_payment_hash(&payment_hash)
                 .await
@@ -333,9 +324,8 @@ mod tests {
                 .is_none()
         );
 
-        // Client posts the paid invoice.
         handle_invoices_paid(
-            &db,
+            db,
             &[PaidInvoice {
                 preimage: preimage_hex.clone(),
                 invoice: invoice_str.clone(),
@@ -346,7 +336,6 @@ mod tests {
         .await
         .unwrap();
 
-        // The server should now have the invoice stored.
         let stored = db
             .get_invoice_by_payment_hash(&payment_hash)
             .await
@@ -357,20 +346,18 @@ mod tests {
         assert_eq!(stored.invoice, invoice_str);
     }
 
-    /// When the server has no prior record for a payment hash (no invoice, zap, or comment),
-    /// `handle_invoices_paid` should silently ignore it and not create an invoice.
-    #[tokio::test]
-    async fn invoices_paid_ignores_unknown_payment_hash() {
-        let db = setup_test_db().await;
+    pub async fn invoices_paid_ignores_unknown_payment_hash<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
         let (trigger, _rx) = watch::channel(());
 
         let preimage_bytes = [3u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
         let user_pubkey = "test_user_pubkey";
 
-        // No prior records exist for this payment hash.
         handle_invoices_paid(
-            &db,
+            db,
             &[PaidInvoice {
                 preimage: preimage_hex,
                 invoice: invoice_str,
@@ -381,7 +368,6 @@ mod tests {
         .await
         .unwrap();
 
-        // The invoice should NOT have been created.
         assert!(
             db.get_invoice_by_payment_hash(&payment_hash)
                 .await
@@ -391,15 +377,13 @@ mod tests {
         );
     }
 
-    /// When a batch contains both known and unknown payment hashes,
-    /// only the known ones should be stored.
-    #[tokio::test]
-    async fn invoices_paid_filters_mixed_batch() {
-        let db = setup_test_db().await;
+    pub async fn invoices_paid_filters_mixed_batch<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
         let (trigger, _rx) = watch::channel(());
         let user_pubkey = "test_user_pubkey";
 
-        // Known: has a sender comment.
         let known_preimage = [4u8; 32];
         let (known_hex, known_hash, known_invoice) = generate_test_invoice(&known_preimage);
         db.insert_lnurl_sender_comment(&LnurlSenderComment {
@@ -411,12 +395,11 @@ mod tests {
         .await
         .unwrap();
 
-        // Unknown: no prior records.
         let unknown_preimage = [5u8; 32];
         let (unknown_hex, unknown_hash, unknown_invoice) = generate_test_invoice(&unknown_preimage);
 
         handle_invoices_paid(
-            &db,
+            db,
             &[
                 PaidInvoice {
                     preimage: known_hex.clone(),
@@ -433,7 +416,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Known invoice should be stored.
         let stored = db
             .get_invoice_by_payment_hash(&known_hash)
             .await
@@ -441,7 +423,6 @@ mod tests {
             .expect("known invoice should have been created");
         assert_eq!(stored.preimage.as_deref(), Some(known_hex.as_str()));
 
-        // Unknown invoice should NOT be stored.
         assert!(
             db.get_invoice_by_payment_hash(&unknown_hash)
                 .await
@@ -449,5 +430,284 @@ mod tests {
                 .is_none(),
             "unknown invoice should not be created"
         );
+    }
+
+    pub async fn get_or_create_setting_returns_default_on_first_call<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let value = db
+            .get_or_create_setting("webhook_secret", "my_secret")
+            .await
+            .unwrap();
+        assert_eq!(value, "my_secret");
+    }
+
+    pub async fn get_or_create_setting_returns_existing_on_subsequent_calls<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let first = db
+            .get_or_create_setting("webhook_secret", "first_secret")
+            .await
+            .unwrap();
+        let second = db
+            .get_or_create_setting("webhook_secret", "different_secret")
+            .await
+            .unwrap();
+        assert_eq!(first, "first_secret");
+        assert_eq!(
+            second, "first_secret",
+            "should return the first value, not the new default"
+        );
+    }
+
+    pub async fn take_pending_newly_paid_claims_items<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let now = now_millis();
+
+        let item = NewlyPaid {
+            payment_hash: "claim_test_hash".to_string(),
+            created_at: now,
+            retry_count: 0,
+            next_retry_at: now,
+        };
+        db.insert_newly_paid(&item).await.unwrap();
+
+        // First call claims the item
+        let claimed = db.take_pending_newly_paid(100).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].payment_hash, "claim_test_hash");
+
+        // Second call cannot claim the same item (it was just claimed)
+        let claimed_again = db.take_pending_newly_paid(100).await.unwrap();
+        assert!(
+            claimed_again.is_empty(),
+            "recently claimed items should not be claimable again"
+        );
+    }
+
+    pub async fn take_pending_newly_paid_respects_next_retry_at<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let future_item = NewlyPaid {
+            payment_hash: "future_hash".to_string(),
+            created_at: now_millis(),
+            retry_count: 1,
+            next_retry_at: now_millis().saturating_add(999_999_999),
+        };
+        db.insert_newly_paid(&future_item).await.unwrap();
+
+        let claimed = db.take_pending_newly_paid(100).await.unwrap();
+        assert!(
+            claimed.is_empty(),
+            "items with future next_retry_at should not be claimed"
+        );
+    }
+
+    pub async fn take_pending_newly_paid_respects_limit<DB>(db: &DB)
+    where
+        DB: LnurlRepository + Clone + Send + Sync + 'static,
+    {
+        let now = now_millis();
+
+        for i in 0..5 {
+            let item = NewlyPaid {
+                payment_hash: format!("limit_test_{i}"),
+                created_at: now,
+                retry_count: 0,
+                next_retry_at: now,
+            };
+            db.insert_newly_paid(&item).await.unwrap();
+        }
+
+        // Request at most 2
+        let claimed = db.take_pending_newly_paid(2).await.unwrap();
+        assert_eq!(claimed.len(), 2, "should only return up to the limit");
+
+        // Remaining 3 are still unclaimed
+        let claimed2 = db.take_pending_newly_paid(10).await.unwrap();
+        assert_eq!(
+            claimed2.len(),
+            3,
+            "should claim the remaining unclaimed items"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sqlite_tests {
+    use super::shared_tests;
+
+    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+        crate::sqlite::run_migrations(&pool).await.unwrap();
+        crate::sqlite::LnurlRepository::new(pool)
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_creates_invoice_when_only_comment_exists() {
+        let db = setup_test_db().await;
+        shared_tests::invoices_paid_creates_invoice_when_only_comment_exists(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_creates_invoice_when_only_zap_exists() {
+        let db = setup_test_db().await;
+        shared_tests::invoices_paid_creates_invoice_when_only_zap_exists(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_ignores_unknown_payment_hash() {
+        let db = setup_test_db().await;
+        shared_tests::invoices_paid_ignores_unknown_payment_hash(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_filters_mixed_batch() {
+        let db = setup_test_db().await;
+        shared_tests::invoices_paid_filters_mixed_batch(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_or_create_setting_returns_default_on_first_call() {
+        let db = setup_test_db().await;
+        shared_tests::get_or_create_setting_returns_default_on_first_call(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_or_create_setting_returns_existing_on_subsequent_calls() {
+        let db = setup_test_db().await;
+        shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_claims_items() {
+        let db = setup_test_db().await;
+        shared_tests::take_pending_newly_paid_claims_items(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_respects_next_retry_at() {
+        let db = setup_test_db().await;
+        shared_tests::take_pending_newly_paid_respects_next_retry_at(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_respects_limit() {
+        let db = setup_test_db().await;
+        shared_tests::take_pending_newly_paid_respects_limit(&db).await;
+    }
+}
+
+// PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
+// Example: LNURL_TEST_POSTGRES_URL="postgres://user:pass@localhost/lnurl_test" cargo test
+#[cfg(test)]
+mod postgres_tests {
+    use super::shared_tests;
+
+    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
+        let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
+        let pool = sqlx::PgPool::connect(&url).await.ok()?;
+        crate::postgresql::run_migrations(&pool).await.ok()?;
+
+        // Clean tables so each test starts fresh
+        sqlx::query("DELETE FROM newly_paid")
+            .execute(&pool)
+            .await
+            .ok()?;
+        sqlx::query("DELETE FROM invoices")
+            .execute(&pool)
+            .await
+            .ok()?;
+        sqlx::query("DELETE FROM zaps").execute(&pool).await.ok()?;
+        sqlx::query("DELETE FROM sender_comments")
+            .execute(&pool)
+            .await
+            .ok()?;
+        sqlx::query("DELETE FROM settings")
+            .execute(&pool)
+            .await
+            .ok()?;
+
+        Some(crate::postgresql::LnurlRepository::new(pool))
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_creates_invoice_when_only_comment_exists() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoices_paid_creates_invoice_when_only_comment_exists(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_creates_invoice_when_only_zap_exists() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoices_paid_creates_invoice_when_only_zap_exists(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_ignores_unknown_payment_hash() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoices_paid_ignores_unknown_payment_hash(&db).await;
+    }
+
+    #[tokio::test]
+    async fn invoices_paid_filters_mixed_batch() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::invoices_paid_filters_mixed_batch(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_or_create_setting_returns_default_on_first_call() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::get_or_create_setting_returns_default_on_first_call(&db).await;
+    }
+
+    #[tokio::test]
+    async fn get_or_create_setting_returns_existing_on_subsequent_calls() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_claims_items() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::take_pending_newly_paid_claims_items(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_respects_next_retry_at() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::take_pending_newly_paid_respects_next_retry_at(&db).await;
+    }
+
+    #[tokio::test]
+    async fn take_pending_newly_paid_respects_limit() {
+        let Some(db) = setup_test_db().await else {
+            return;
+        };
+        shared_tests::take_pending_newly_paid_respects_limit(&db).await;
     }
 }

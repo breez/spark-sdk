@@ -99,6 +99,11 @@ pub trait LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Invoice>, LnurlRepositoryError>;
 
+    /// Get both the zap and invoice for a payment hash in a single query
+    async fn get_zap_and_invoice_by_payment_hash(
+        &self,
+        payment_hash: &str,
+    ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError>;
     /// Insert a newly paid invoice into the queue
     async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError>;
 
@@ -108,8 +113,13 @@ pub trait LnurlRepository {
         newly_paid: &[NewlyPaid],
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Get all newly paid invoices ready for processing (`next_retry_at` <= now)
-    async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
+    /// Get newly paid invoices ready for processing (`next_retry_at` <= now),
+    /// atomically claiming them. Items already claimed by another instance
+    /// within the last 5 minutes are skipped.
+    async fn take_pending_newly_paid(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
 
     /// Update retry count and next retry time for a newly paid invoice
     async fn update_newly_paid_retry(
@@ -121,4 +131,12 @@ pub trait LnurlRepository {
 
     /// Delete a newly paid invoice from the queue
     async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError>;
+
+    /// Get or create a setting. If the key doesn't exist, insert the default value.
+    /// Returns the current value (either existing or newly inserted).
+    async fn get_or_create_setting(
+        &self,
+        key: &str,
+        default_value: &str,
+    ) -> Result<String, LnurlRepositoryError>;
 }

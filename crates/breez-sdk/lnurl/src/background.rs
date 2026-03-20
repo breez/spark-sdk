@@ -11,6 +11,9 @@ const BASE_RETRY_DELAY_MS: i64 = 30_000; // 30 seconds
 const RETRY_MULTIPLIER: f64 = 1.5;
 const MAX_RETRY_DURATION_MS: i64 = 14 * 24 * 60 * 60 * 1000; // 14 days
 
+/// Maximum number of newly paid items to claim and process per poll cycle.
+const NEWLY_PAID_BATCH_LIMIT: u32 = 4;
+
 /// Start the background processor that handles the `newly_paid` queue.
 /// This processor publishes zap receipts for paid invoices with retry logic.
 pub fn start_background_processor<DB>(
@@ -46,26 +49,36 @@ pub fn start_background_processor<DB>(
     });
 }
 
-/// Process all pending items in the `newly_paid` queue.
+/// Process pending items in the `newly_paid` queue, fetching in batches until
+/// the queue is drained.
 async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
-    let pending = match db.get_pending_newly_paid().await {
-        Ok(pending) => pending,
-        Err(e) => {
-            error!("Failed to get pending newly paid: {}", e);
+    loop {
+        let pending = match db.take_pending_newly_paid(NEWLY_PAID_BATCH_LIMIT).await {
+            Ok(pending) => pending,
+            Err(e) => {
+                error!("Failed to get pending newly paid: {}", e);
+                return;
+            }
+        };
+
+        if pending.is_empty() {
             return;
         }
-    };
 
-    debug!(
-        "Background processor: found {} pending newly paid items",
-        pending.len()
-    );
+        let count = pending.len();
+        debug!("Background processor: processing {count} newly paid items");
 
-    for item in pending {
-        process_newly_paid_item(db, nostr_keys, &item).await;
+        for item in pending {
+            process_newly_paid_item(db, nostr_keys, &item).await;
+        }
+
+        // If we got fewer than the limit, the queue is drained.
+        if count < NEWLY_PAID_BATCH_LIMIT as usize {
+            return;
+        }
     }
 }
 
@@ -107,24 +120,28 @@ async fn process_newly_paid_item<DB>(
         return;
     }
 
-    // Check if there's a zap record for this payment
-    let zap = match db.get_zap_by_payment_hash(payment_hash).await {
-        Ok(Some(zap)) => zap,
-        Ok(None) => {
-            // No zap record - just remove from queue (non-zap invoice)
-            debug!(
-                "No zap found for payment hash {}, removing from queue",
-                payment_hash
-            );
-            if let Err(e) = db.delete_newly_paid(payment_hash).await {
-                error!("Failed to delete newly paid {}: {}", payment_hash, e);
-            }
-            return;
-        }
+    // Fetch both zap and invoice in a single query
+    let (zap, invoice) = match db.get_zap_and_invoice_by_payment_hash(payment_hash).await {
+        Ok(result) => result,
         Err(e) => {
-            error!("Failed to get zap by payment hash {}: {}", payment_hash, e);
+            error!(
+                "Failed to get zap and invoice for payment hash {}: {}",
+                payment_hash, e
+            );
             return;
         }
+    };
+
+    let Some(zap) = zap else {
+        // No zap record - just remove from queue (non-zap invoice)
+        debug!(
+            "No zap found for payment hash {}, removing from queue",
+            payment_hash
+        );
+        if let Err(e) = db.delete_newly_paid(payment_hash).await {
+            error!("Failed to delete newly paid {}: {}", payment_hash, e);
+        }
+        return;
     };
 
     // If zap receipt already exists, remove from queue
@@ -139,26 +156,15 @@ async fn process_newly_paid_item<DB>(
         return;
     }
 
-    // Get the invoice to get preimage and bolt11
-    let invoice = match db.get_invoice_by_payment_hash(payment_hash).await {
-        Ok(Some(invoice)) => invoice,
-        Ok(None) => {
-            debug!(
-                "Invoice not found for payment hash {}, removing from queue",
-                payment_hash
-            );
-            if let Err(e) = db.delete_newly_paid(payment_hash).await {
-                error!("Failed to delete newly paid {}: {}", payment_hash, e);
-            }
-            return;
+    let Some(invoice) = invoice else {
+        debug!(
+            "Invoice not found for payment hash {}, removing from queue",
+            payment_hash
+        );
+        if let Err(e) = db.delete_newly_paid(payment_hash).await {
+            error!("Failed to delete newly paid {}: {}", payment_hash, e);
         }
-        Err(e) => {
-            error!(
-                "Failed to get invoice by payment hash {}: {}",
-                payment_hash, e
-            );
-            return;
-        }
+        return;
     };
 
     let Some(preimage) = &invoice.preimage else {

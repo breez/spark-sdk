@@ -1411,6 +1411,15 @@ mod tests {
         ) -> Result<Option<Invoice>, LnurlRepositoryError> {
             Ok(self.invoices.lock().unwrap().get(payment_hash).cloned())
         }
+        async fn get_zap_and_invoice_by_payment_hash(
+            &self,
+            payment_hash: &str,
+        ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError> {
+            Ok((
+                None,
+                self.invoices.lock().unwrap().get(payment_hash).cloned(),
+            ))
+        }
         async fn insert_newly_paid(
             &self,
             newly_paid: &NewlyPaid,
@@ -1421,7 +1430,10 @@ mod tests {
                 .insert(newly_paid.payment_hash.clone(), newly_paid.clone());
             Ok(())
         }
-        async fn get_pending_newly_paid(&self) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+        async fn take_pending_newly_paid(
+            &self,
+            _limit: u32,
+        ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
             Ok(self.newly_paid.lock().unwrap().values().cloned().collect())
         }
         async fn update_newly_paid_retry(
@@ -1463,6 +1475,13 @@ mod tests {
                 store.insert(np.payment_hash.clone(), np.clone());
             }
             Ok(())
+        }
+        async fn get_or_create_setting(
+            &self,
+            _key: &str,
+            default_value: &str,
+        ) -> Result<String, LnurlRepositoryError> {
+            Ok(default_value.to_string())
         }
     }
 
