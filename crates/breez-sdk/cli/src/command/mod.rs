@@ -1,5 +1,6 @@
 mod contacts;
 mod issuer;
+mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
@@ -27,6 +28,7 @@ use std::{
 
 use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
+use crate::command::webhooks::WebhookCommand;
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -316,6 +318,10 @@ pub enum Command {
     /// Contacts related commands
     #[command(subcommand)]
     Contacts(ContactCommand),
+
+    /// Webhook related commands
+    #[command(subcommand)]
+    Webhooks(WebhookCommand),
 }
 
 #[derive(Helper, Completer, Hinter, Validator)]
@@ -885,6 +891,7 @@ pub(crate) async fn execute_command(
             issuer::handle_command(token_issuer, issuer_command).await
         }
         Command::Contacts(contact_command) => contacts::handle_command(sdk, contact_command).await,
+        Command::Webhooks(webhook_command) => webhooks::handle_command(sdk, webhook_command).await,
     }
 }
 
