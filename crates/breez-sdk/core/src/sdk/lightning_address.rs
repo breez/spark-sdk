@@ -38,10 +38,35 @@ impl BreezSdk {
         &self,
         request: RegisterLightningAddressRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
-        // Ensure spark private mode is initialized before registering
-        self.ensure_spark_private_mode_initialized().await?;
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
 
-        self.register_lightning_address_internal(request).await
+        let username = sanitize_username(&request.username);
+
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", username, client.domain()),
+        };
+
+        let params = crate::lnurl::RegisterLightningAddressRequest {
+            username: username.clone(),
+            description: description.clone(),
+            lnurl_private_mode_enabled: !self.config.support_lnurl_verify,
+        };
+
+        let response = client.register_lightning_address(&params).await?;
+        let address_info = LightningAddressInfo {
+            lightning_address: response.lightning_address,
+            description,
+            lnurl: LnurlInfo::new(response.lnurl),
+            username,
+        };
+        cache.save_lightning_address(&address_info, false).await?;
+        Ok(address_info)
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {
@@ -91,41 +116,6 @@ impl BreezSdk {
         };
 
         Ok(result)
-    }
-
-    pub(super) async fn register_lightning_address_internal(
-        &self,
-        request: RegisterLightningAddressRequest,
-    ) -> Result<LightningAddressInfo, SdkError> {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
-        let Some(client) = &self.lnurl_server_client else {
-            return Err(SdkError::Generic(
-                "LNURL server is not configured".to_string(),
-            ));
-        };
-
-        let username = sanitize_username(&request.username);
-
-        let description = match request.description {
-            Some(description) => description,
-            None => format!("Pay to {}@{}", username, client.domain()),
-        };
-
-        let params = crate::lnurl::RegisterLightningAddressRequest {
-            username: username.clone(),
-            description: description.clone(),
-            lnurl_private_mode_enabled: !self.config.support_lnurl_verify,
-        };
-
-        let response = client.register_lightning_address(&params).await?;
-        let address_info = LightningAddressInfo {
-            lightning_address: response.lightning_address,
-            description,
-            lnurl: LnurlInfo::new(response.lnurl),
-            username,
-        };
-        cache.save_lightning_address(&address_info, false).await?;
-        Ok(address_info)
     }
 }
 
