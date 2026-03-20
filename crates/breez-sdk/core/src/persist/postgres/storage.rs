@@ -234,6 +234,9 @@ impl PostgresStorage {
                     created_at BIGINT NOT NULL,
                     updated_at BIGINT NOT NULL
                 )"],
+            // Migration 12: Drop preimage column from lnurl_receive_metadata - no longer needed
+            // since the server handles preimage tracking via webhooks.
+            &["ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage"],
         ]
     }
 }
@@ -422,22 +425,6 @@ impl Storage for PostgresStorage {
                     payment_details_clauses.push(format!("t.tx_type = ${param_idx}"));
                     param_idx += 1;
                     params.push(Box::new(tx_type.to_string()));
-                }
-
-                // Filter by LNURL preimage status
-                if let StoragePaymentDetailsFilter::Lightning {
-                    has_lnurl_preimage: Some(has_preimage),
-                    ..
-                } = payment_details_filter
-                {
-                    if *has_preimage {
-                        payment_details_clauses.push("lrm.preimage IS NOT NULL".to_string());
-                    } else {
-                        // Has lnurl metadata, lightning preimage exists, but lnurl preimage not yet sent
-                        payment_details_clauses.push(
-                            "lrm.payment_hash IS NOT NULL AND l.preimage IS NOT NULL AND lrm.preimage IS NULL".to_string(),
-                        );
-                    }
                 }
 
                 if !payment_details_clauses.is_empty() {
@@ -864,14 +851,13 @@ impl Storage for PostgresStorage {
         for m in metadata {
             client
                 .execute(
-                    "INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
-                     VALUES ($1, $2, $3, $4, $5)
+                    "INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                     VALUES ($1, $2, $3, $4)
                      ON CONFLICT(payment_hash) DO UPDATE SET
                         nostr_zap_request = EXCLUDED.nostr_zap_request,
                         nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-                        sender_comment = EXCLUDED.sender_comment,
-                        preimage = EXCLUDED.preimage",
-                    &[&m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment, &m.preimage],
+                        sender_comment = EXCLUDED.sender_comment",
+                    &[&m.payment_hash, &m.nostr_zap_request, &m.nostr_zap_receipt, &m.sender_comment],
                 )
                 .await?;
         }
@@ -1648,12 +1634,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pending_lnurl_preimages() {
-        let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_pending_lnurl_preimages(Box::new(fixture.storage)).await;
-    }
-
-    #[tokio::test]
     async fn test_sync_storage() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_sync_storage(Box::new(fixture.storage)).await;
@@ -1894,7 +1874,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })
@@ -1907,7 +1886,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })
@@ -1920,7 +1898,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })

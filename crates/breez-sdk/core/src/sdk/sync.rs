@@ -130,12 +130,6 @@ impl BreezSdk {
                     // Note this is already synced at TransferClaimStarting, but it might not have completed yet, so that could race.
                     self.sync_single_lnurl_metadata(&mut payment).await;
 
-                    // Trigger preimage publisher now that the payment is completed.
-                    // The lnurl metadata was likely already synced during TransferClaimStarting,
-                    // but the payment was still pending at that point so the preimage publisher
-                    // couldn't process it. Now that the payment is completed, re-trigger.
-                    let _ = self.lnurl_preimage_trigger.send(());
-
                     // Update balance before emitting the event so that listeners can immediately
                     // query the new balance.
                     if let Err(e) =
@@ -525,7 +519,6 @@ impl BreezSdk {
                 .save_lnurl_metadata_updated_after(updated_after)
                 .await?;
 
-            let _ = self.lnurl_preimage_trigger.send(());
             if len < SYNC_PAGING_LIMIT {
                 // No more invoices to fetch
                 break;

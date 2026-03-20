@@ -320,6 +320,9 @@ impl SqliteStorage {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );",
+            // Drop preimage column from lnurl_receive_metadata - no longer needed
+            // since the server handles preimage tracking via webhooks.
+            "ALTER TABLE lnurl_receive_metadata DROP COLUMN preimage;",
         ]
     }
 }
@@ -501,22 +504,6 @@ impl Storage for SqliteStorage {
                 {
                     payment_details_clauses.push("t.tx_type = ?".to_string());
                     params.push(Box::new(tx_type.to_string()));
-                }
-
-                // Filter by LNURL preimage status
-                if let StoragePaymentDetailsFilter::Lightning {
-                    has_lnurl_preimage: Some(has_preimage),
-                    ..
-                } = payment_details_filter
-                {
-                    if *has_preimage {
-                        payment_details_clauses.push("lrm.preimage IS NOT NULL".to_string());
-                    } else {
-                        // Has lnurl metadata, lightning preimage exists, but lnurl preimage not yet sent
-                        payment_details_clauses.push(
-                            "lrm.payment_hash IS NOT NULL AND l.preimage IS NOT NULL AND lrm.preimage IS NULL".to_string(),
-                        );
-                    }
                 }
 
                 if !payment_details_clauses.is_empty() {
@@ -902,14 +889,13 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         for metadata in metadata {
             connection.execute(
-                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                 VALUES (?, ?, ?, ?)",
                 params![
                     metadata.payment_hash,
                     metadata.nostr_zap_request,
                     metadata.nostr_zap_receipt,
                     metadata.sender_comment,
-                    metadata.preimage,
                 ],
             )?;
         }
@@ -1816,14 +1802,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pending_lnurl_preimages() {
-        let temp_dir = create_temp_dir("sqlite_storage_pending_lnurl_preimages");
-        let storage = SqliteStorage::new(&temp_dir).unwrap();
-
-        crate::persist::tests::test_pending_lnurl_preimages(Box::new(storage)).await;
-    }
-
-    #[tokio::test]
     async fn test_sync_storage() {
         let temp_dir = create_temp_dir("sqlite_sync_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2213,7 +2191,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })
@@ -2226,7 +2203,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })
@@ -2239,7 +2215,6 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                    has_lnurl_preimage: None,
                 }]),
                 ..Default::default()
             })

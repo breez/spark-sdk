@@ -1,22 +1,17 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
-use lnurl_models::PaidInvoice;
-use platform_utils::tokio;
-use tracing::{Instrument, debug, error, info};
+use tracing::info;
 
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
-    LnurlWithdrawResponse, PaymentDetails, PaymentStatus, PaymentType, PrepareLnurlPayRequest,
-    PrepareLnurlPayResponse, SendPaymentMethod, SetLnurlMetadataItem, WaitForPaymentIdentifier,
+    LnurlWithdrawResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
+    WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
         PrepareSendPaymentResponse, ReceivePaymentMethod, ReceivePaymentRequest, SendPaymentRequest,
     },
-    persist::{
-        ObjectCacheRepository, PaymentMetadata, StorageListPaymentsRequest,
-        StoragePaymentDetailsFilter,
-    },
+    persist::{ObjectCacheRepository, PaymentMetadata},
 };
 use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 
@@ -497,136 +492,5 @@ impl BreezSdk {
             conversion_estimate: None,
             fee_policy: FeePolicy::FeesIncluded,
         })
-    }
-
-    /// Background task that publishes lnurl preimages for received lnurl payments for nostr zaps
-    /// and LNURL verify. Triggered on startup and after syncing lnurl metadata.
-    pub(super) fn spawn_lnurl_preimage_publisher(&self) {
-        if !self.config.support_lnurl_verify {
-            debug!("LNURL verify support is disabled. Not enabling LNURL payment status.");
-            return;
-        }
-
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut trigger_receiver = sdk.lnurl_preimage_trigger.clone().subscribe();
-        let span = tracing::Span::current();
-
-        tokio::spawn(
-            async move {
-                if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
-                    error!("Failed to process pending LNURL preimages on startup: {e:?}");
-                }
-
-                loop {
-                    tokio::select! {
-                        _ = shutdown_receiver.changed() => {
-                            info!("LNURL preimage publisher shutdown signal received");
-                            return;
-                        }
-                        _ = trigger_receiver.recv() => {
-                            if let Err(e) = Self::process_pending_lnurl_preimages(&sdk).await {
-                                error!("Failed to process pending LNURL preimages: {e:?}");
-                            }
-                        }
-                    }
-                }
-            }
-            .instrument(span),
-        );
-    }
-
-    async fn process_pending_lnurl_preimages(&self) -> Result<(), SdkError> {
-        let Some(lnurl_server_client) = self.lnurl_server_client.clone() else {
-            return Ok(());
-        };
-
-        let limit = 100;
-        loop {
-            // Query only payments that need their preimage sent to the server
-            let pending = self
-                .storage
-                .list_payments(StorageListPaymentsRequest {
-                    type_filter: Some(vec![PaymentType::Receive]),
-                    status_filter: Some(vec![PaymentStatus::Completed]),
-                    payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
-                        htlc_status: None,
-                        has_lnurl_preimage: Some(false),
-                    }]),
-                    limit: Some(limit),
-                    ..Default::default()
-                })
-                .await?;
-
-            debug!("Got {} pending lnurl preimages", pending.len());
-            if pending.is_empty() {
-                break;
-            }
-
-            let len = pending.len();
-
-            // Collect preimages, invoices, and metadata for batch notification
-            let mut batch_items = Vec::new();
-            let mut batch_metadata = Vec::new();
-
-            for payment in &pending {
-                let Some(PaymentDetails::Lightning {
-                    htlc_details,
-                    invoice,
-                    lnurl_receive_metadata: Some(metadata),
-                    ..
-                }) = &payment.details
-                else {
-                    continue;
-                };
-
-                let Some(preimage) = &htlc_details.preimage else {
-                    continue;
-                };
-
-                batch_items.push(PaidInvoice {
-                    preimage: preimage.clone(),
-                    invoice: invoice.clone(),
-                });
-                batch_metadata.push((htlc_details.clone(), metadata.clone()));
-            }
-
-            if !batch_items.is_empty() {
-                // Notify the LNURL server about all paid invoices in one request
-                if let Err(e) = lnurl_server_client.notify_invoices_paid(&batch_items).await {
-                    error!("Failed to notify invoices paid: {}", e);
-                    break;
-                }
-
-                debug!(
-                    "Notified LNURL server about {} paid invoices",
-                    batch_items.len()
-                );
-
-                // Update the LNURL metadata to mark all preimages as sent
-                let metadata_updates: Vec<SetLnurlMetadataItem> = batch_items
-                    .iter()
-                    .zip(&batch_metadata)
-                    .map(|(item, (htlc_details, metadata))| SetLnurlMetadataItem {
-                        payment_hash: htlc_details.payment_hash.clone(),
-                        sender_comment: metadata.sender_comment.clone(),
-                        nostr_zap_request: metadata.nostr_zap_request.clone(),
-                        nostr_zap_receipt: metadata.nostr_zap_receipt.clone(),
-                        preimage: Some(item.preimage.clone()),
-                    })
-                    .collect();
-
-                if let Err(e) = self.storage.set_lnurl_metadata(metadata_updates).await {
-                    error!("Failed to update LNURL metadata: {}", e);
-                }
-            }
-
-            // If we got fewer than the limit, we're done
-            if len < limit as usize {
-                break;
-            }
-        }
-
-        Ok(())
     }
 }

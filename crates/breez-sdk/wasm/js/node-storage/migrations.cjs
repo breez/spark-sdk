@@ -392,6 +392,10 @@ class MigrationManager {
           updated_at INTEGER NOT NULL
         )`
       },
+      {
+        name: "Drop preimage column from lnurl_receive_metadata",
+        sql: `ALTER TABLE lnurl_receive_metadata DROP COLUMN preimage`
+      },
     ];
   }
 }

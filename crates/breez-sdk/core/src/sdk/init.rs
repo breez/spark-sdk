@@ -74,7 +74,6 @@ impl BreezSdk {
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
             sync_coordinator,
-            lnurl_preimage_trigger: tokio::sync::broadcast::channel(10).0,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
@@ -93,12 +92,10 @@ impl BreezSdk {
     /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
     /// 2. `periodic_sync`: syncs the wallet with the Spark network
     /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
-    /// 4. `spawn_lnurl_preimage_publisher`: publishes lnurl preimages for completed payments
     pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
         self.spawn_spark_private_mode_initialization();
         self.periodic_sync(initial_synced_sender);
         self.try_recover_lightning_address();
-        self.spawn_lnurl_preimage_publisher();
     }
 
     fn spawn_spark_private_mode_initialization(&self) {

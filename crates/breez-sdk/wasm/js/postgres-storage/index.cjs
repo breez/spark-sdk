@@ -281,20 +281,6 @@ class PostgresStorage {
             params.push(paymentDetailsFilter.txType);
           }
 
-          // Filter by LNURL preimage status
-          if (
-            paymentDetailsFilter.type === "lightning" &&
-            paymentDetailsFilter.hasLnurlPreimage !== undefined
-          ) {
-            if (paymentDetailsFilter.hasLnurlPreimage) {
-              paymentDetailsClauses.push("lrm.preimage IS NOT NULL");
-            } else {
-              paymentDetailsClauses.push(
-                "lrm.payment_hash IS NOT NULL AND l.preimage IS NOT NULL AND lrm.preimage IS NULL"
-              );
-            }
-          }
-
           if (paymentDetailsClauses.length > 0) {
             allPaymentDetailsClauses.push(
               `(${paymentDetailsClauses.join(" AND ")})`
@@ -682,19 +668,17 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment, preimage)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT(payment_hash) DO UPDATE SET
                nostr_zap_request = EXCLUDED.nostr_zap_request,
                nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
-               sender_comment = EXCLUDED.sender_comment,
-               preimage = EXCLUDED.preimage`,
+               sender_comment = EXCLUDED.sender_comment`,
             [
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
               item.senderComment || null,
-              item.preimage || null,
             ]
           );
         }
