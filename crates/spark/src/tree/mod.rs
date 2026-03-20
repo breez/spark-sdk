@@ -154,7 +154,7 @@ pub struct TreeNode {
     /// parent node.
     pub vout: u32,
     pub verifying_public_key: PublicKey,
-    pub owner_identity_public_key: PublicKey,
+    pub owner_identity_public_key: Option<PublicKey>,
     /// The signing keyshare information of the node on the SE side.
     pub signing_keyshare: SigningKeyshare,
     pub status: TreeNodeStatus,

@@ -736,10 +736,14 @@ impl DepositService {
                     vout: node.vout,
                     verifying_public_key: PublicKey::from_slice(&node.verifying_public_key)
                         .map_err(|_| ServiceError::InvalidVerifyingKey)?,
-                    owner_identity_public_key: PublicKey::from_slice(
-                        &node.owner_identity_public_key,
-                    )
-                    .map_err(|_| ServiceError::InvalidPublicKey)?,
+                    owner_identity_public_key: if node.owner_identity_public_key.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            PublicKey::from_slice(&node.owner_identity_public_key)
+                                .map_err(|_| ServiceError::InvalidPublicKey)?,
+                        )
+                    },
                     signing_keyshare: signing_keyshare.try_into()?,
                     status: node
                         .status

@@ -236,7 +236,7 @@ pub struct WalletLeaf {
     pub direct_from_cpfp_refund_tx: Option<Transaction>,
     pub vout: u32,
     pub verifying_public_key: PublicKey,
-    pub owner_identity_public_key: PublicKey,
+    pub owner_identity_public_key: Option<PublicKey>,
     pub signing_keyshare: Option<SigningKeyshare>,
     pub status: String,
 }
