@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::auth::OperatorAuth;
 use super::error::Result;
+use super::metadata::set_idempotency_key;
 use super::spark::*;
 use super::spark_token;
 use crate::operator::rpc::OperatorRpcError;
@@ -308,12 +309,18 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn renew_leaf(&self, req: RenewLeafRequest) -> Result<RenewLeafResponse> {
+    pub async fn renew_leaf(
+        &self,
+        req: RenewLeafRequest,
+        idempotency_key: Option<String>,
+    ) -> Result<RenewLeafResponse> {
         debug!("Calling renew_leaf with request: {:?}", req);
+        let mut request = Request::new(req);
+        set_idempotency_key(request.metadata_mut(), idempotency_key)?;
         Ok(self
             .spark_service_client()
             .await?
-            .renew_leaf(req)
+            .renew_leaf(request)
             .await?
             .into_inner())
     }
