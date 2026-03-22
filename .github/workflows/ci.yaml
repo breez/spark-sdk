@@ -11,7 +11,7 @@ on:
           required: false
           default: manual
 
-run-name: CI triggered by ${{ inputs.triggered_by || 'manual' }}
+run-name: ${{ inputs.triggered_by != '' && format('CI triggered by {0}', inputs.triggered_by) || github.event.head_commit.message || github.ref_name }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
