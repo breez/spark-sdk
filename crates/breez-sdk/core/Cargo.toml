@@ -52,7 +52,6 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
-web-time.workspace = true
 x509-parser = { version = "0.16.0" }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }

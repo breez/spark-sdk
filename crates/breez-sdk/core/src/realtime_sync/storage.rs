@@ -588,8 +588,8 @@ impl Storage for SyncedStorage {
     }
 
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
-        let now = web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        let now = platform_utils::time::SystemTime::now()
+            .duration_since(platform_utils::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let mut updated_fields = HashMap::new();

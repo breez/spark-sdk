@@ -11,9 +11,9 @@ use frost_secp256k1_tr::{
     Identifier,
     round1::{NonceCommitment, SigningCommitments},
 };
+use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::address::SparkAddress;
 use crate::core::Network;

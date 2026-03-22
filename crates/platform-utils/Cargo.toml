@@ -23,6 +23,7 @@ bitreq = { workspace = true, features = ["async", "async-https", "json-using-ser
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 reqwest.workspace = true
+web-time = { version = "1.1.0", features = ["serde"] }
 tokio_with_wasm = { version = "0.8.7", features = [
   "macros",
   "rt",

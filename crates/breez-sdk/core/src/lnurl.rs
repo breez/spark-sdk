@@ -5,11 +5,11 @@ use lnurl_models::{
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
     RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
 };
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum LnurlServerError {

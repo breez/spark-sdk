@@ -15,6 +15,7 @@ use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
+use platform_utils::time::SystemTime;
 use prost::Message as ProstMessage;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,6 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use web_time::SystemTime;
 
 use super::models::LightningSendRequestStatus;
 

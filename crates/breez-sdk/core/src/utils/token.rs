@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use breez_sdk_common::input::{InputType, PaymentRequestSource, parse_spark_address};
+use platform_utils::time::UNIX_EPOCH;
 use spark_wallet::{BURN_PUBLIC_KEY, PublicKey, SparkWallet};
 use tracing::{debug, warn};
-use web_time::UNIX_EPOCH;
 
 use crate::{
     Payment, PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, Storage,

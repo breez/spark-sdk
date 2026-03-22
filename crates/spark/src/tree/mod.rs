@@ -516,7 +516,7 @@ pub trait TreeStore: Send + Sync {
     ///
     /// ```
     /// use spark::tree::{TreeStore, TreeNode, TreeServiceError};
-    /// use web_time::SystemTime;
+    /// use platform_utils::time::SystemTime;
     ///
     /// # async fn example(store: &dyn TreeStore, updated_leaves: &[TreeNode], missing_operators_leaves: &[TreeNode]) -> Result<(), TreeServiceError> {
     /// // Capture time before querying operators
@@ -531,7 +531,7 @@ pub trait TreeStore: Send + Sync {
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
-        refresh_started_at: web_time::SystemTime,
+        refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the leaves to the available pool.
@@ -643,7 +643,7 @@ pub trait TreeStore: Send + Sync {
     /// For in-memory stores this returns `SystemTime::now()`. For database-backed
     /// stores this queries the database server time, avoiding clock skew between
     /// the application and database servers.
-    async fn now(&self) -> Result<web_time::SystemTime, TreeServiceError>;
+    async fn now(&self) -> Result<platform_utils::time::SystemTime, TreeServiceError>;
 
     /// Subscribe to balance change notifications.
     ///

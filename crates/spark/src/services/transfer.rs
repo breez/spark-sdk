@@ -28,10 +28,10 @@ use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::Identifier;
 use k256::Scalar;
+use platform_utils::time::SystemTime;
 use platform_utils::tokio;
 use prost::Message as ProstMessage;
 use tracing::{debug, error, trace};
-use web_time::SystemTime;
 
 use crate::{
     signer::Signer,

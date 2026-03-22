@@ -6,6 +6,7 @@ use flashnet::{
     FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder,
     SimulateSwapRequest,
 };
+use platform_utils::time::Duration;
 use platform_utils::tokio;
 use spark_wallet::{ListTransfersRequest, SparkWallet, TransferId};
 use tokio::{
@@ -13,7 +14,6 @@ use tokio::{
     sync::{broadcast, watch},
 };
 use tracing::{Instrument, debug, error, info, warn};
-use web_time::Duration;
 
 use crate::{
     Network, Payment, PaymentDetails, PaymentMetadata, Storage,

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use jwt::{Claims, Header, Token};
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     FlashnetClient, FlashnetError,

@@ -39,7 +39,6 @@ tokio = { workspace = true, features = ["sync"] }
 tower-service.workspace = true
 tracing.workspace = true
 unicode-normalization = "0.1.25"
-web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bitcoin::hashes::Hash as _;
 use bitcoin::hashes::sha256::Hash;
 use bitcoin::secp256k1::PublicKey;
-use web_time::SystemTime;
+use platform_utils::time::SystemTime;
 
 use crate::address::SparkAddress;
 use crate::operator::rpc as operator_rpc;

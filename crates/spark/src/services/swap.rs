@@ -2,9 +2,9 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::consensus::serialize;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use platform_utils::time::SystemTime;
 use rand::rngs::OsRng;
 use tracing::debug;
-use web_time::SystemTime;
 
 use crate::bitcoin::sighash_from_tx;
 use crate::{

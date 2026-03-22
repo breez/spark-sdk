@@ -12,6 +12,12 @@ pub use tokio;
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 pub use tokio_with_wasm::alias as tokio;
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use web_time as time;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use std::time;
+
 pub use auth::{
     ContentType, add_basic_auth_header, add_content_type_header, make_basic_auth_header,
 };

@@ -9,6 +9,7 @@ use bitcoin::{
 };
 
 use futures::stream::{self, StreamExt};
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use spark::{
     address::{
@@ -48,7 +49,6 @@ use spark::{
 };
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, debug, error, info, trace, warn};
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
