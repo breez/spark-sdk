@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+        triggered_by:
+          description: Who triggered this run
+          required: false
+          default: manual
+
+run-name: CI triggered by ${{ inputs.triggered_by || 'manual' }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
