@@ -46,8 +46,11 @@ func ReceiveLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Rec
 
 func ReceiveOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.ReceivePaymentResponse, error) {
 	// ANCHOR: receive-payment-onchain
+	var newAddress *bool // To get a new address: t := true; newAddress = &t
 	request := breez_sdk_spark.ReceivePaymentRequest{
-		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{},
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBitcoinAddress{
+			NewAddress: newAddress,
+		},
 	}
 
 	response, err := sdk.ReceivePayment(request)

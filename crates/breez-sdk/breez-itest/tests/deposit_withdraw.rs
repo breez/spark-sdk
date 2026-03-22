@@ -67,7 +67,7 @@ async fn test_onchain_withdraw_to_static_address(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -156,7 +156,7 @@ async fn test_deposit_fee_manual_claim(
     let addr = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -253,7 +253,7 @@ async fn test_send_all_to_bitcoin_address(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -342,7 +342,7 @@ async fn test_deposit_fee_refund(#[future] bob_no_fee_sdk: Result<SdkInstance>) 
     let addr = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -450,7 +450,7 @@ async fn test_deposit_low_amount_refund_fee_rate(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;
@@ -514,6 +514,110 @@ async fn test_deposit_low_amount_refund_fee_rate(
     info!(
         "Low amount refund succeeded with fee rate, tx_id: {}",
         refund.tx_id
+    );
+
+    Ok(())
+}
+
+/// Verify deposits to multiple rotated addresses are all discovered and claimed.
+///
+/// This test:
+/// 1. Generates several deposit addresses (each call rotates to a new one)
+/// 2. Funds the first (oldest) and last (newest) address via faucet
+/// 3. Waits until both deposits are claimed by polling balance
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_deposits_to_multiple_addresses(
+    #[future] alice_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    let alice = alice_sdk.await?;
+
+    // Generate several deposit addresses; each call rotates to a new one.
+    let mut addresses = Vec::new();
+    for _ in 0..5 {
+        let addr = alice
+            .sdk
+            .receive_payment(ReceivePaymentRequest {
+                payment_method: ReceivePaymentMethod::BitcoinAddress {
+                    new_address: Some(true),
+                },
+            })
+            .await?
+            .payment_request;
+        info!("Generated deposit address: {}", addr);
+        addresses.push(addr);
+    }
+
+    // All addresses must be distinct.
+    let unique: std::collections::HashSet<&String> = addresses.iter().collect();
+    assert_eq!(
+        unique.len(),
+        addresses.len(),
+        "Every new address should be unique"
+    );
+
+    // Calling with new_address=false (or None) should return the same address.
+    let reused_1 = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress {
+                new_address: Some(false),
+            },
+        })
+        .await?
+        .payment_request;
+    let reused_2 = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+    assert_eq!(
+        reused_1, reused_2,
+        "new_address=false and None should return the same address"
+    );
+    // The reused address should match the last one obtained with new_address=true.
+    assert_eq!(
+        reused_1,
+        *addresses.last().unwrap(),
+        "new_address=false should return the latest address"
+    );
+
+    let first_addr = &addresses[0];
+    let last_addr = addresses.last().unwrap();
+    info!("Funding oldest ({}) and newest ({})", first_addr, last_addr);
+
+    // Fund both the oldest and the newest address.
+    let faucet = RegtestFaucet::new()?;
+    let amount_first = 20_000u64;
+    let amount_last = 30_000u64;
+    let txid_first = faucet.fund_address(first_addr, amount_first).await?;
+    let txid_last = faucet.fund_address(last_addr, amount_last).await?;
+    info!("Faucet txids: first={}, last={}", txid_first, txid_last);
+
+    // Wait until balance reflects both deposits (minus claim fees).
+    let expected_min = amount_first + amount_last - 1_000;
+    wait_for_balance(&alice.sdk, Some(expected_min), None, 200).await?;
+
+    let info = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+    info!("Final balance: {} sats", info.balance_sats);
+
+    // No unclaimed deposits should remain.
+    let unclaimed = alice
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits;
+    assert!(
+        unclaimed.is_empty(),
+        "All deposits should be auto-claimed, but found: {:?}",
+        unclaimed
     );
 
     Ok(())

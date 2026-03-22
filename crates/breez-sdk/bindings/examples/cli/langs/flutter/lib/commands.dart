@@ -295,7 +295,8 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         ..addOption('token-identifier', abbr: 't')
         ..addOption('expiry-secs', abbr: 'e')
         ..addOption('sender-public-key', abbr: 's')
-        ..addFlag('hodl', defaultsTo: false);
+        ..addFlag('hodl', defaultsTo: false)
+        ..addFlag('new-address', defaultsTo: false, help: 'Get a new bitcoin deposit address');
   final results = _parseArgs(parser, args, 'receive -m <method> [options]');
   if (results == null) return;
 
@@ -308,6 +309,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
   final expirySecs = expirySecsStr != null ? int.parse(expirySecsStr) : null;
   final senderPublicKey = results.option('sender-public-key');
   final hodl = results.flag('hodl');
+  final newAddress = results.flag('new-address');
 
   ReceivePaymentMethod paymentMethod;
   switch (method) {
@@ -326,7 +328,7 @@ Future<void> _handleReceive(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> 
         senderPublicKey: senderPublicKey,
       );
     case 'bitcoin':
-      paymentMethod = ReceivePaymentMethod.bitcoinAddress();
+      paymentMethod = ReceivePaymentMethod.bitcoinAddress(newAddress: newAddress);
     case 'bolt11':
       String? paymentHash;
       if (hodl) {

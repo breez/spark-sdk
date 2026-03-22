@@ -365,7 +365,7 @@ async fn test_03_bitcoin_idempotency_key(
     let bob_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;

@@ -567,6 +567,22 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    pub async fn rotate_static_deposit_address(
+        &self,
+        req: RotateStaticDepositAddressRequest,
+    ) -> Result<RotateStaticDepositAddressResponse> {
+        debug!(
+            "Calling rotate_static_deposit_address with request: {:?}",
+            req
+        );
+        Ok(self
+            .spark_service_client()
+            .await?
+            .rotate_static_deposit_address(req)
+            .await?
+            .into_inner())
+    }
+
     pub async fn query_static_deposit_addresses(
         &self,
         req: QueryStaticDepositAddressesRequest,
@@ -583,15 +599,15 @@ impl SparkRpcClient {
             .into_inner())
     }
 
-    pub async fn get_utxos_for_address(
+    pub async fn get_utxos_for_identity(
         &self,
-        req: GetUtxosForAddressRequest,
-    ) -> Result<GetUtxosForAddressResponse> {
-        debug!("Calling get_utxos_for_address with request: {:?}", req);
+        req: GetUtxosForIdentityRequest,
+    ) -> Result<GetUtxosForIdentityResponse> {
+        debug!("Calling get_utxos_for_identity with request: {:?}", req);
         Ok(self
             .spark_service_client()
             .await?
-            .get_utxos_for_address(req)
+            .get_utxos_for_identity(req)
             .await?
             .into_inner())
     }

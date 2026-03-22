@@ -579,7 +579,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let withdraw_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?
         .payment_request;

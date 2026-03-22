@@ -28,7 +28,7 @@ pub(crate) const LIGHTNING_ADDRESS_KEY: &str = "lightning_address";
 const LNURL_METADATA_UPDATED_AFTER_KEY: &str = "lnurl_metadata_updated_after";
 const SYNC_OFFSET_KEY: &str = "sync_offset";
 const TX_CACHE_KEY: &str = "tx_cache";
-const STATIC_DEPOSIT_ADDRESS_CACHE_KEY: &str = "static_deposit_address";
+// Note: the key "static_deposit_address" may still exist in storage from older versions.
 const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
@@ -520,32 +520,6 @@ impl ObjectCacheRepository {
         }
     }
 
-    pub(crate) async fn save_static_deposit_address(
-        &self,
-        value: &StaticDepositAddress,
-    ) -> Result<(), StorageError> {
-        self.storage
-            .set_cached_item(
-                STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string(),
-                serde_json::to_string(value)?,
-            )
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn fetch_static_deposit_address(
-        &self,
-    ) -> Result<Option<StaticDepositAddress>, StorageError> {
-        let value = self
-            .storage
-            .get_cached_item(STATIC_DEPOSIT_ADDRESS_CACHE_KEY.to_string())
-            .await?;
-        match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
-            None => Ok(None),
-        }
-    }
-
     pub(crate) async fn save_lightning_address(
         &self,
         value: &LightningAddressInfo,
@@ -735,11 +709,6 @@ pub(crate) struct CachedSyncInfo {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedTx {
     pub(crate) raw_tx: String,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub(crate) struct StaticDepositAddress {
-    pub(crate) address: String,
 }
 
 #[cfg(feature = "test-utils")]

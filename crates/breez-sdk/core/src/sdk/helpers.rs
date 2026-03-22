@@ -7,7 +7,7 @@ use breez_sdk_common::lnurl::{
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use x509_parser::parse_x509_certificate;
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
     error::SdkError,
     events::{EventListener, SdkEvent},
     models::Payment,
-    persist::{CachedAccountInfo, ObjectCacheRepository, StaticDepositAddress, Storage},
+    persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
 };
 
 pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
@@ -204,38 +204,34 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     Ok(())
 }
 
-/// Gets an existing static deposit address from cache/network or creates a new one.
+/// Returns a static deposit address.
 ///
-/// This helper is used by both `receive_payment(BitcoinAddress)` and `buy_bitcoin`.
-pub(crate) async fn get_or_create_deposit_address(
+/// When `new_address` is `true`, rotates to a fresh address (archives the
+/// old one), falling back to generate when no address exists yet (gRPC
+/// `NotFound`).
+///
+/// When `new_address` is `false`, returns the existing address via
+/// generate (which creates one on first call).
+pub(crate) async fn get_deposit_address(
     spark_wallet: &SparkWallet,
-    storage: Arc<dyn Storage>,
+    new_address: bool,
 ) -> Result<String, SdkError> {
-    let object_repository = ObjectCacheRepository::new(storage);
-
-    // First lookup in storage cache
-    if let Some(static_deposit_address) = object_repository.fetch_static_deposit_address().await? {
-        return Ok(static_deposit_address.address);
-    }
-
-    // Then query existing addresses
-    let deposit_addresses = spark_wallet.list_static_deposit_addresses(None).await?;
-
-    // Use existing address or generate a new one
-    let address = match deposit_addresses.items.last() {
-        Some(address) => address.to_string(),
-        None => spark_wallet
+    if new_address {
+        match spark_wallet.rotate_static_deposit_address().await {
+            Ok(addr) => Ok(addr.to_string()),
+            Err(e) if e.is_not_found() => {
+                debug!("No existing deposit address found, generating a new one");
+                Ok(spark_wallet
+                    .generate_static_deposit_address()
+                    .await?
+                    .to_string())
+            }
+            Err(e) => Err(e.into()),
+        }
+    } else {
+        Ok(spark_wallet
             .generate_static_deposit_address()
             .await?
-            .to_string(),
-    };
-
-    // Cache the address
-    object_repository
-        .save_static_deposit_address(&StaticDepositAddress {
-            address: address.clone(),
-        })
-        .await?;
-
-    Ok(address)
+            .to_string())
+    }
 }

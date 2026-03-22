@@ -56,6 +56,8 @@ pub enum DepositCommand {
         #[clap(short, long)]
         offset: Option<u64>,
     },
+    /// Rotate the static deposit address (archive current default, generate new).
+    RotateStaticAddress,
     /// Refund a static deposit.
     Refund {
         /// The transaction ID of the static deposit transaction.
@@ -140,6 +142,10 @@ pub async fn handle_command(
             };
             let addresses = wallet.list_unused_deposit_addresses(paging).await?;
             println!("{}", serde_json::to_string_pretty(&addresses.items)?);
+        }
+        DepositCommand::RotateStaticAddress => {
+            let new_addr = wallet.rotate_static_deposit_address().await?;
+            println!("New address: {new_addr}");
         }
         DepositCommand::Refund {
             txid,

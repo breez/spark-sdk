@@ -626,11 +626,15 @@ impl SparkWallet {
             .await?)
     }
 
-    pub async fn get_utxos_for_address(
+    pub async fn get_utxos_for_identity(
         &self,
-        address: &str,
-    ) -> Result<Vec<Utxo>, SparkWalletError> {
-        Ok(self.deposit_service.get_utxos_for_address(address).await?)
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<(Vec<Utxo>, Option<String>), SparkWalletError> {
+        Ok(self
+            .deposit_service
+            .get_utxos_for_identity(page_size, cursor)
+            .await?)
     }
 
     // TODO: In the js sdk this function calls an electrum server to fetch the transaction hex based on a txid.
@@ -711,6 +715,15 @@ impl SparkWallet {
             .generate_static_deposit_address(signing_public_key)
             .await?;
         Ok(address.address)
+    }
+
+    pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
+        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let new_address = self
+            .deposit_service
+            .rotate_static_deposit_address(signing_public_key)
+            .await?;
+        Ok(new_address.address)
     }
 
     pub async fn list_static_deposit_addresses(

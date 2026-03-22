@@ -122,6 +122,10 @@ pub enum Command {
         /// Create a HODL invoice (bolt11 only). Generates a preimage locally and prints it.
         #[arg(long)]
         hodl: bool,
+
+        /// Request a new bitcoin deposit address instead of reusing the current one.
+        #[arg(long)]
+        new_address: bool,
     },
 
     /// Pay the given payment request
@@ -516,6 +520,7 @@ pub(crate) async fn execute_command(
             expiry_secs,
             sender_public_key,
             hodl,
+            new_address,
         } => {
             let payment_method = match payment_method.as_str() {
                 "sparkaddress" => ReceivePaymentMethod::SparkAddress,
@@ -534,7 +539,9 @@ pub(crate) async fn execute_command(
                     description,
                     sender_public_key,
                 },
-                "bitcoin" => ReceivePaymentMethod::BitcoinAddress,
+                "bitcoin" => ReceivePaymentMethod::BitcoinAddress {
+                    new_address: Some(new_address),
+                },
                 "bolt11" => {
                     let payment_hash = if hodl {
                         let mut preimage_bytes = [0u8; 32];

@@ -18,10 +18,7 @@ use crate::{
         OperatorPool,
         rpc::{
             self as operator_rpc,
-            spark::{
-                GetUtxosForAddressRequest, HashVariant, TransferFilter,
-                transfer_filter::Participant,
-            },
+            spark::{HashVariant, TransferFilter, transfer_filter::Participant},
         },
     },
     services::{Transfer, Utxo},
@@ -164,23 +161,38 @@ impl DepositService {
         }
     }
 
-    pub async fn get_utxos_for_address(&self, address: &str) -> Result<Vec<Utxo>, ServiceError> {
+    pub async fn get_utxos_for_identity(
+        &self,
+        page_size: u32,
+        cursor: Option<String>,
+    ) -> Result<(Vec<Utxo>, Option<String>), ServiceError> {
         let res = self
             .operator_pool
             .get_coordinator()
             .client
-            .get_utxos_for_address(GetUtxosForAddressRequest {
-                address: address.to_string(),
-                offset: 0,
-                limit: 100,
+            .get_utxos_for_identity(operator_rpc::spark::GetUtxosForIdentityRequest {
+                identity_public_key: self.identity_public_key.serialize().to_vec(),
                 network: self.network.to_proto_network() as i32,
                 exclude_claimed: true,
+                page: Some(operator_rpc::spark::PageRequest {
+                    page_size,
+                    cursor: cursor.unwrap_or_default(),
+                    ..Default::default()
+                }),
+                include_pending: false,
             })
             .await?;
-        res.utxos
+        let utxos = res
+            .utxos
             .into_iter()
-            .map(Utxo::try_from)
-            .collect::<Result<Vec<_>, _>>()
+            .map(|au| {
+                au.utxo
+                    .ok_or(ServiceError::MissingUtxo)
+                    .and_then(Utxo::try_from)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = res.page.filter(|p| p.has_next_page).map(|p| p.next_cursor);
+        Ok((utxos, next_cursor))
     }
 
     pub async fn claim_deposit(
@@ -811,6 +823,31 @@ impl DepositService {
             self.validate_deposit_address(deposit_address, signing_public_key, None, true)?;
 
         Ok(address)
+    }
+
+    pub async fn rotate_static_deposit_address(
+        &self,
+        signing_public_key: PublicKey,
+    ) -> Result<DepositAddress, ServiceError> {
+        let resp = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .rotate_static_deposit_address(operator_rpc::spark::RotateStaticDepositAddressRequest {
+                signing_public_key: signing_public_key.serialize().to_vec(),
+                network: self.network.to_proto_network() as i32,
+                hash_variant: HashVariant::V2.into(),
+            })
+            .await?;
+
+        let new_deposit_address = resp
+            .new_deposit_address
+            .ok_or(ServiceError::MissingDepositAddress)?;
+
+        let new_address =
+            self.validate_deposit_address(new_deposit_address, signing_public_key, None, true)?;
+
+        Ok(new_address)
     }
 
     async fn query_static_deposit_addresses_inner(

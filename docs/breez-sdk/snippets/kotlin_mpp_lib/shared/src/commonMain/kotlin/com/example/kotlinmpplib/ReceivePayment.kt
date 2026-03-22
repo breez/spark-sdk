@@ -31,8 +31,9 @@ class ReceivePayment {
     suspend fun receiveOnchain(sdk: BreezSdk) {
         // ANCHOR: receive-payment-onchain
         try {
+            val newAddress: Boolean? = null // Set to true to get a new address
             val request = ReceivePaymentRequest(
-                ReceivePaymentMethod.BitcoinAddress
+                ReceivePaymentMethod.BitcoinAddress(newAddress = newAddress)
             )
             val response = sdk.receivePayment(request)
 

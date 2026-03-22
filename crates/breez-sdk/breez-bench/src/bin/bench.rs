@@ -858,7 +858,7 @@ async fn fund_via_faucet(sdk_instance: &mut BenchSdkInstance, min_balance: u64) 
     let receive = sdk_instance
         .sdk
         .receive_payment(ReceivePaymentRequest {
-            payment_method: ReceivePaymentMethod::BitcoinAddress,
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
         })
         .await?;
     let deposit_address = receive.payment_request;

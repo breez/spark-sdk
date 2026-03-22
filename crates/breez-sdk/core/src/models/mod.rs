@@ -880,7 +880,12 @@ pub enum ReceivePaymentMethod {
         /// If set, the invoice may only be fulfilled by a payer with this public key
         sender_public_key: Option<String>,
     },
-    BitcoinAddress,
+    BitcoinAddress {
+        /// If true, rotate to a new deposit address. Previous ones remain valid.
+        /// If false or absent, return the existing address (creating one if none
+        /// exists yet).
+        new_address: Option<bool>,
+    },
     Bolt11Invoice {
         description: String,
         amount_sats: Option<u64>,
