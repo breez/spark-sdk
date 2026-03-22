@@ -23,7 +23,7 @@ To receive via LNURL-Pay and/or a Lightning address, follow [these instructions]
 
 ## Bitcoin
 
-For on-chain payments you can generate a Bitcoin deposit address to receive payments. Each call generates a new address for improved privacy. All previously generated addresses remain monitored.
+For on-chain payments you can generate a Bitcoin deposit address to receive payments. By default the existing address is returned; you can optionally request a new address to rotate to a fresh one for improved privacy. All previously generated addresses remain monitored.
 
 > **Note:** Spark currently requires **3 on-chain confirmations** for Bitcoin transactions before they can be claimed.
 

@@ -212,7 +212,7 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 ///
 /// When `new_address` is `false`, returns the existing address via
 /// generate (which creates one on first call).
-pub(crate) async fn new_deposit_address(
+pub(crate) async fn get_deposit_address(
     spark_wallet: &SparkWallet,
     new_address: bool,
 ) -> Result<String, SdkError> {
