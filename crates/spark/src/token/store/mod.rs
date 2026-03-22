@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use platform_utils::time::SystemTime;
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 use uuid::Uuid;
-use web_time::SystemTime;
 
 use crate::token::{
     GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
@@ -58,7 +58,6 @@ impl AvailableTokenOutputs {
     fn output_vec(&self) -> Vec<TokenOutputWithPrevOut> {
         self.outputs.values().map(|s| s.output.clone()).collect()
     }
-
 }
 
 #[macros::async_trait]

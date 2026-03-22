@@ -63,6 +63,9 @@ const MAX_LEAF_SPENT_RETRIES: usize = 3;
 const MAX_RATE_LIMIT_RETRIES: u32 = 5;
 const RATE_LIMIT_BASE_DELAY_MS: u64 = 100;
 const RATE_LIMIT_MAX_DELAY_MS: u64 = 3000;
+/// Grace period before claiming orphaned counter-swap transfers.
+/// Generous to absorb clock skew between the server (`created_time`) and the local clock.
+const COUNTER_SWAP_CLAIM_GRACE_PERIOD_SECS: u64 = 300;
 
 use super::{SparkWalletConfig, SparkWalletError, TokenOutputsOptimizationOptions};
 
@@ -1142,7 +1145,9 @@ impl SparkWallet {
     pub async fn sync(&self) -> Result<(), SparkWalletError> {
         self.tree_service.refresh_leaves().await?;
         self.token_output_service.refresh_tokens_outputs().await?;
-        // Claiming here any transfers that may have been missed in the event stream handling (e.g. counter swap transfers are intentionally not claimed there)
+        // Claiming here any transfers that may have been missed in the event stream handling.
+        // Note: recent counter swap transfers are skipped as they are claimed synchronously
+        // by the Swap::swap_leaves() method. Older ones are claimed as fallback.
         self.claim_pending_transfers().await?;
         Ok(())
     }
@@ -1759,8 +1764,34 @@ async fn claim_pending_transfers(
         max_concurrent_claims
     );
 
+    // Skip recent counter-swap transfers — they are claimed synchronously
+    // by swap_leaves(). Only claim them after a grace period as a fallback
+    // for orphaned transfers from failed swaps.
+    let now_secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     // Concurrent claiming with best-effort error handling
-    let claim_results: Vec<_> = stream::iter(transfers.items.iter().cloned())
+    let transfers_to_claim: Vec<_> = transfers
+        .items
+        .iter()
+        .filter(|t| {
+            if t.transfer_type == TransferType::CounterSwap
+                || t.transfer_type == TransferType::CounterSwapV3
+            {
+                let age_secs = t
+                    .created_time
+                    .map(|ct| now_secs.saturating_sub(ct))
+                    .unwrap_or(0);
+                return age_secs > COUNTER_SWAP_CLAIM_GRACE_PERIOD_SECS;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    let claim_results: Vec<_> = stream::iter(transfers_to_claim)
         .enumerate()
         .map(|(i, transfer)| {
             let transfer_service = Arc::clone(transfer_service);

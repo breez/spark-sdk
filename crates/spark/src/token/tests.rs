@@ -8,7 +8,7 @@ use std::slice;
 use std::time::Duration;
 
 use bitcoin::secp256k1::PublicKey;
-use web_time::SystemTime;
+use platform_utils::time::SystemTime;
 
 use crate::token::{
     GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy, TokenMetadata,
@@ -780,9 +780,7 @@ pub async fn test_set_removes_all_tokens(store: &dyn TokenOutputStore) {
         .await;
     assert!(result.is_ok());
 
-    let result = store
-        .set_tokens_outputs(&[], future_refresh_start())
-        .await;
+    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
     assert!(result.is_ok());
 
     let stored_outputs = store.list_tokens_outputs().await.unwrap();
@@ -851,9 +849,7 @@ pub async fn test_set_reconciles_reservation_with_empty_outputs(store: &dyn Toke
         .unwrap();
 
     // Set token outputs to empty list (all outputs removed)
-    let result = store
-        .set_tokens_outputs(&[], future_refresh_start())
-        .await;
+    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
     assert!(result.is_ok());
 
     // Verify no outputs remain
@@ -1311,13 +1307,10 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
     let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure swap completes after refresh started
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Swap completes (finalize marks spent + records swap completion)
-    store
-        .finalize_reservation(&reservation.id)
-        .await
-        .unwrap();
+    store.finalize_reservation(&reservation.id).await.unwrap();
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![300]);
@@ -1351,7 +1344,7 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
     let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure the new output is added AFTER refresh_start
-    tokio_with_wasm::alias::time::sleep(Duration::from_millis(10)).await;
+    platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // While refresh is in progress, a new output arrives
     let token1_new = create_token_outputs(1, vec![200]);
@@ -1402,10 +1395,7 @@ pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn T
         .unwrap();
 
     // Finalize (marks as spent)
-    store
-        .finalize_reservation(&reservation.id)
-        .await
-        .unwrap();
+    store.finalize_reservation(&reservation.id).await.unwrap();
 
     // Verify only 200 remains
     let stored = store
@@ -1462,10 +1452,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
         .unwrap();
 
     // Finalize swap
-    store
-        .finalize_reservation(&reservation.id)
-        .await
-        .unwrap();
+    store.finalize_reservation(&reservation.id).await.unwrap();
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![600]);
@@ -1514,10 +1501,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
         )
         .await
         .unwrap();
-    store
-        .finalize_reservation(&reservation.id)
-        .await
-        .unwrap();
+    store.finalize_reservation(&reservation.id).await.unwrap();
 
     // Insert the same output back (simulating receiving it back)
     let token1_back = create_token_outputs(1, vec![100]);

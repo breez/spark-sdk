@@ -28,7 +28,7 @@ const { TreeStoreMigrationManager } = require("./migrations.cjs");
  * Advisory lock key for serializing tree store write operations.
  * Matches the Rust constant TREE_STORE_WRITE_LOCK_KEY = 0x7472_6565_5354_4f52
  */
-const TREE_STORE_WRITE_LOCK_KEY = "8391086132283252818"; // 0x7472656553544f52 as decimal string
+const TREE_STORE_WRITE_LOCK_KEY = "8390880541608791890"; // 0x7472656553544f52 as decimal string
 
 /**
  * Timeout for reservations in seconds. Reservations older than this are stale.

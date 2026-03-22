@@ -1,4 +1,5 @@
 use macros::async_trait;
+use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput,
@@ -300,14 +301,14 @@ impl TokenOutputStore for WasmTokenStore {
     async fn set_tokens_outputs(
         &self,
         token_outputs: &[TokenOutputs],
-        refresh_started_at: web_time::SystemTime,
+        refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
         let wasm_outputs: Vec<WasmTokenOutputs> = token_outputs.iter().map(Into::into).collect();
         let js_value = serde_wasm_bindgen::to_value(&wasm_outputs)
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
         // Convert SystemTime to milliseconds since epoch for JS
         let refresh_started_at_ms = refresh_started_at
-            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as f64;
         let promise = self
@@ -474,19 +475,16 @@ impl TokenOutputStore for WasmTokenStore {
         Ok(())
     }
 
-    async fn now(&self) -> Result<web_time::SystemTime, TokenOutputServiceError> {
-        let promise = self
-            .token_store
-            .now()
-            .map_err(js_error_to_token_error)?;
+    async fn now(&self) -> Result<SystemTime, TokenOutputServiceError> {
+        let promise = self.token_store.now().map_err(js_error_to_token_error)?;
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_token_error)?;
-        let ms = result
-            .as_f64()
-            .ok_or_else(|| TokenOutputServiceError::Generic("now() did not return a number".to_string()))?;
+        let ms = result.as_f64().ok_or_else(|| {
+            TokenOutputServiceError::Generic("now() did not return a number".to_string())
+        })?;
         let duration = std::time::Duration::from_millis(ms as u64);
-        Ok(web_time::SystemTime::UNIX_EPOCH + duration)
+        Ok(SystemTime::UNIX_EPOCH + duration)
     }
 }
 

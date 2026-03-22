@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use deadpool_postgres::Pool;
 use macros::async_trait;
+use platform_utils::time::SystemTime;
 use spark_wallet::{
     GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput,
     TokenOutputServiceError, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
@@ -17,7 +18,6 @@ use spark_wallet::{
 };
 use tracing::{trace, warn};
 use uuid::Uuid;
-use web_time::SystemTime;
 
 use crate::persist::StorageError;
 
@@ -281,22 +281,26 @@ impl TokenOutputStore for PostgresTokenStore {
 
         for row in rows {
             let identifier: String = row.get("identifier");
-            let entry = map.entry(identifier.clone()).or_insert_with(|| {
-                let metadata = Self::metadata_from_row(&row);
-                TokenOutputsPerStatus {
-                    metadata,
-                    available: Vec::new(),
-                    reserved_for_payment: Vec::new(),
-                    reserved_for_swap: Vec::new(),
-                }
-            });
+            if !map.contains_key(&identifier) {
+                let metadata = Self::metadata_from_row(&row)?;
+                map.insert(
+                    identifier.clone(),
+                    TokenOutputsPerStatus {
+                        metadata,
+                        available: Vec::new(),
+                        reserved_for_payment: Vec::new(),
+                        reserved_for_swap: Vec::new(),
+                    },
+                );
+            }
+            let entry = map.get_mut(&identifier).expect("just inserted");
 
             let output_id: Option<String> = row.get("output_id");
             if output_id.is_none() {
                 continue;
             }
 
-            let output = Self::output_from_row(&row);
+            let output = Self::output_from_row(&row)?;
             let purpose: Option<String> = row.get("purpose");
 
             match purpose.as_deref() {
@@ -345,7 +349,7 @@ impl TokenOutputStore for PostgresTokenStore {
             ));
         }
 
-        let metadata = Self::metadata_from_row(&rows[0]);
+        let metadata = Self::metadata_from_row(&rows[0])?;
         let mut result = TokenOutputsPerStatus {
             metadata,
             available: Vec::new(),
@@ -359,7 +363,7 @@ impl TokenOutputStore for PostgresTokenStore {
                 continue;
             }
 
-            let output = Self::output_from_row(row);
+            let output = Self::output_from_row(row)?;
             let purpose: Option<String> = row.get("purpose");
 
             match purpose.as_deref() {
@@ -456,7 +460,7 @@ impl TokenOutputStore for PostgresTokenStore {
                     "Token outputs not found for identifier: {token_identifier}"
                 ))
             })?;
-        let metadata = Self::metadata_from_row(&metadata_row);
+        let metadata = Self::metadata_from_row(&metadata_row)?;
 
         // Get available (non-reserved) outputs
         let rows = tx
@@ -472,8 +476,10 @@ impl TokenOutputStore for PostgresTokenStore {
             .await
             .map_err(map_err)?;
 
-        let mut outputs: Vec<TokenOutputWithPrevOut> =
-            rows.iter().map(Self::output_from_row).collect();
+        let mut outputs: Vec<TokenOutputWithPrevOut> = rows
+            .iter()
+            .map(Self::output_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Filter by preferred if provided
         if let Some(ref preferred) = preferred_outputs {
@@ -840,9 +846,7 @@ impl PostgresTokenStore {
                 &(metadata.decimals as i32),
                 &metadata.max_supply.to_string(),
                 &metadata.is_freezable,
-                &metadata
-                    .creation_entity_public_key
-                    .map(|pk| pk.to_string()),
+                &metadata.creation_entity_public_key.map(|pk| pk.to_string()),
             ],
         )
         .await
@@ -872,7 +876,9 @@ impl PostgresTokenStore {
 
     /// Parses a `TokenMetadata` from a database row.
     #[allow(clippy::cast_sign_loss)]
-    fn metadata_from_row(row: &tokio_postgres::Row) -> TokenMetadata {
+    fn metadata_from_row(
+        row: &tokio_postgres::Row,
+    ) -> Result<TokenMetadata, TokenOutputServiceError> {
         let identifier: String = row.get("identifier");
         let issuer_pk_str: String = row.get("issuer_public_key");
         let name: String = row.get("name");
@@ -882,22 +888,25 @@ impl PostgresTokenStore {
         let is_freezable: bool = row.get("is_freezable");
         let creation_entity_pk_str: Option<String> = row.get("creation_entity_public_key");
 
-        TokenMetadata {
+        Ok(TokenMetadata {
             identifier,
-            issuer_public_key: issuer_pk_str.parse().expect("valid public key"),
+            issuer_public_key: issuer_pk_str.parse().map_err(map_err)?,
             name,
             ticker,
             decimals: decimals as u32,
-            max_supply: max_supply_str.parse().expect("valid u128"),
+            max_supply: max_supply_str.parse().map_err(map_err)?,
             is_freezable,
             creation_entity_public_key: creation_entity_pk_str
-                .map(|s| s.parse().expect("valid public key")),
-        }
+                .map(|s| s.parse().map_err(map_err))
+                .transpose()?,
+        })
     }
 
     /// Parses a `TokenOutputWithPrevOut` from a database row.
     #[allow(clippy::cast_sign_loss)]
-    fn output_from_row(row: &tokio_postgres::Row) -> TokenOutputWithPrevOut {
+    fn output_from_row(
+        row: &tokio_postgres::Row,
+    ) -> Result<TokenOutputWithPrevOut, TokenOutputServiceError> {
         let output_id: String = row.get("output_id");
         let owner_pk_str: String = row.get("owner_public_key");
         let revocation_commitment: String = row.get("revocation_commitment");
@@ -913,20 +922,22 @@ impl PostgresTokenStore {
             .try_get("token_identifier")
             .unwrap_or_else(|_| row.get("identifier"));
 
-        TokenOutputWithPrevOut {
+        Ok(TokenOutputWithPrevOut {
             output: TokenOutput {
                 id: output_id,
-                owner_public_key: owner_pk_str.parse().expect("valid public key"),
+                owner_public_key: owner_pk_str.parse().map_err(map_err)?,
                 revocation_commitment,
                 withdraw_bond_sats: withdraw_bond_sats as u64,
                 withdraw_relative_block_locktime: withdraw_relative_block_locktime as u64,
-                token_public_key: token_pk_str.map(|s| s.parse().expect("valid public key")),
+                token_public_key: token_pk_str
+                    .map(|s| s.parse().map_err(map_err))
+                    .transpose()?,
                 token_identifier,
-                token_amount: token_amount_str.parse().expect("valid u128"),
+                token_amount: token_amount_str.parse().map_err(map_err)?,
             },
             prev_tx_hash,
             prev_tx_vout: prev_tx_vout as u32,
-        }
+        })
     }
 }
 

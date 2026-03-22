@@ -150,23 +150,21 @@ async fn test_concurrent_token_operations() -> Result<()> {
         .await?;
 
     issuer
-        .mint_issuer_token(MintIssuerTokenRequest {
-            amount: 1_000_000,
-        })
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1_000_000 })
         .await?;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     instance_0.sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     let token_id = token_metadata.identifier.clone();
-    info!(
-        "Token created: {} ({})",
-        token_metadata.name, token_id
-    );
+    info!("Token created: {} ({})", token_metadata.name, token_id);
 
     // Verify Alice has all tokens
     let alice_initial = get_token_balance(&instance_0.sdk, &token_id).await?;
-    assert_eq!(alice_initial, 1_000_000, "Alice should have 1,000,000 tokens after minting");
+    assert_eq!(
+        alice_initial, 1_000_000,
+        "Alice should have 1,000,000 tokens after minting"
+    );
 
     // Now create instances 1 and 2 (after funding + minting to avoid claim race)
     info!("Creating additional SDK instances with shared seed...");
@@ -224,7 +222,10 @@ async fn test_concurrent_token_operations() -> Result<()> {
         "Initial token state: Alice={}, Bob={}",
         alice_token_balance, bob_token_balance
     );
-    assert_eq!(alice_token_balance, 500_000, "Alice should have 500,000 tokens");
+    assert_eq!(
+        alice_token_balance, 500_000,
+        "Alice should have 500,000 tokens"
+    );
     assert_eq!(bob_token_balance, 500_000, "Bob should have 500,000 tokens");
 
     // Count initial token payments (the initial transfer from Alice to Bob)
@@ -250,21 +251,43 @@ async fn test_concurrent_token_operations() -> Result<()> {
     let bal_1 = get_token_balance(&instance_1.sdk, &token_id).await?;
     let bal_2 = get_token_balance(&instance_2.sdk, &token_id).await?;
 
-    assert_eq!(bal_0, alice_token_balance, "Instance 0 token balance mismatch");
-    assert_eq!(bal_1, alice_token_balance, "Instance 1 token balance mismatch");
-    assert_eq!(bal_2, alice_token_balance, "Instance 2 token balance mismatch");
+    assert_eq!(
+        bal_0, alice_token_balance,
+        "Instance 0 token balance mismatch"
+    );
+    assert_eq!(
+        bal_1, alice_token_balance,
+        "Instance 1 token balance mismatch"
+    );
+    assert_eq!(
+        bal_2, alice_token_balance,
+        "Instance 2 token balance mismatch"
+    );
 
     let count_0 = get_token_payment_count(&instance_0.sdk).await?;
     let count_1 = get_token_payment_count(&instance_1.sdk).await?;
     let count_2 = get_token_payment_count(&instance_2.sdk).await?;
 
-    assert_eq!(count_0, expected_token_payment_count, "Instance 0 payment count mismatch");
-    assert_eq!(count_1, expected_token_payment_count, "Instance 1 payment count mismatch");
-    assert_eq!(count_2, expected_token_payment_count, "Instance 2 payment count mismatch");
+    assert_eq!(
+        count_0, expected_token_payment_count,
+        "Instance 0 payment count mismatch"
+    );
+    assert_eq!(
+        count_1, expected_token_payment_count,
+        "Instance 1 payment count mismatch"
+    );
+    assert_eq!(
+        count_2, expected_token_payment_count,
+        "Instance 2 payment count mismatch"
+    );
     info!("Phase 1 passed: All instances consistent");
 
     // --- Phase 2: Stress loop ---
-    info!("=== Phase 2: Stress loop ({} batches of {} bidirectional payments) ===", NUM_BATCHES, PAYMENTS_PER_DIRECTION * 2);
+    info!(
+        "=== Phase 2: Stress loop ({} batches of {} bidirectional payments) ===",
+        NUM_BATCHES,
+        PAYMENTS_PER_DIRECTION * 2
+    );
 
     let instances = [instance_0, instance_1, instance_2];
 
@@ -307,8 +330,12 @@ async fn test_concurrent_token_operations() -> Result<()> {
                             options: None,
                             idempotency_key: None,
                         }),
-                        instances[syncer_idxs[0]].sdk.sync_wallet(SyncWalletRequest {}),
-                        instances[syncer_idxs[1]].sdk.sync_wallet(SyncWalletRequest {})
+                        instances[syncer_idxs[0]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {}),
+                        instances[syncer_idxs[1]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {})
                     );
                     send?;
                     s1?;
@@ -316,13 +343,17 @@ async fn test_concurrent_token_operations() -> Result<()> {
                 }
                 1 => {
                     let (s0, send, s2) = tokio::join!(
-                        instances[syncer_idxs[0]].sdk.sync_wallet(SyncWalletRequest {}),
+                        instances[syncer_idxs[0]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[1].sdk.send_payment(SendPaymentRequest {
                             prepare_response: prepare,
                             options: None,
                             idempotency_key: None,
                         }),
-                        instances[syncer_idxs[1]].sdk.sync_wallet(SyncWalletRequest {})
+                        instances[syncer_idxs[1]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {})
                     );
                     s0?;
                     send?;
@@ -330,8 +361,12 @@ async fn test_concurrent_token_operations() -> Result<()> {
                 }
                 2 => {
                     let (s0, s1, send) = tokio::join!(
-                        instances[syncer_idxs[0]].sdk.sync_wallet(SyncWalletRequest {}),
-                        instances[syncer_idxs[1]].sdk.sync_wallet(SyncWalletRequest {}),
+                        instances[syncer_idxs[0]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {}),
+                        instances[syncer_idxs[1]]
+                            .sdk
+                            .sync_wallet(SyncWalletRequest {}),
                         instances[2].sdk.send_payment(SendPaymentRequest {
                             prepare_response: prepare,
                             options: None,
@@ -480,8 +515,14 @@ async fn test_concurrent_token_operations() -> Result<()> {
     let ids_1 = get_token_payment_ids(&instances[1].sdk).await?;
     let ids_2 = get_token_payment_ids(&instances[2].sdk).await?;
 
-    assert_eq!(ids_0, ids_1, "Instance 0 and 1 should see same token payment IDs");
-    assert_eq!(ids_1, ids_2, "Instance 1 and 2 should see same token payment IDs");
+    assert_eq!(
+        ids_0, ids_1,
+        "Instance 0 and 1 should see same token payment IDs"
+    );
+    assert_eq!(
+        ids_1, ids_2,
+        "Instance 1 and 2 should see same token payment IDs"
+    );
     assert_eq!(
         ids_0.len(),
         expected_token_payment_count,

@@ -12,7 +12,7 @@ fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> TokenOu
     shared_tests::create_token_outputs(identifier_no, output_amounts)
 }
 
-fn future_refresh_start() -> web_time::SystemTime {
+fn future_refresh_start() -> SystemTime {
     shared_tests::future_refresh_start()
 }
 
@@ -197,9 +197,7 @@ async fn test_set_reconciles_reservation_with_empty_outputs() {
         .await
         .unwrap();
 
-    let result = store
-        .set_tokens_outputs(&[], future_refresh_start())
-        .await;
+    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
     assert!(result.is_ok());
 
     // InMemory-specific: check internal state

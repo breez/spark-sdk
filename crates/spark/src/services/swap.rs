@@ -4,7 +4,7 @@ use bitcoin::consensus::serialize;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use platform_utils::time::SystemTime;
 use rand::rngs::OsRng;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::bitcoin::sighash_from_tx;
 use crate::{
@@ -290,15 +290,21 @@ impl Swap {
             .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
         let inbound_transfer = Transfer::try_from(inbound_transfer)?;
 
-        let claimed_nodes = self
+        let claimed_nodes = match self
             .transfer_service
             .claim_transfer(&inbound_transfer, None)
             .await
-            .map_err(|e: ServiceError| {
-                ServiceError::Generic(format!("Failed to claim transfer: {e:?}"))
-            })?;
-
-        // TODO: in case of error the js sdk cancels initiated transfers
+        {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                // The swap was already initiated — the SO has the original leaves.
+                // Return empty so the caller finalizes the reservation (marks old
+                // leaves as spent). The counter-swap output will be picked up by
+                // claim_pending_transfers or refresh_leaves.
+                warn!("Failed to claim counter-swap transfer, returning empty: {e:?}");
+                vec![]
+            }
+        };
 
         Ok(claimed_nodes)
     }

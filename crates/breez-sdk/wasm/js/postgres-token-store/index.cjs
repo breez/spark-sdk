@@ -28,7 +28,7 @@ const { TokenStoreMigrationManager } = require("./migrations.cjs");
  * Advisory lock key for serializing token store write operations.
  * Matches the Rust constant TOKEN_STORE_WRITE_LOCK_KEY = 0x746F_6B65_6E53_5452
  */
-const TOKEN_STORE_WRITE_LOCK_KEY = "8391086132283252818"; // 0x746F6B656E535452 as decimal string
+const TOKEN_STORE_WRITE_LOCK_KEY = "8390042714201347154"; // 0x746F6B656E535452 as decimal string
 
 /**
  * Spent markers are kept for this duration to support multiple SDK instances.
@@ -266,7 +266,7 @@ class PostgresTokenStore {
          FROM token_metadata m
          LEFT JOIN token_outputs o ON o.token_identifier = m.identifier
          LEFT JOIN token_reservations r ON o.reservation_id = r.id
-         ORDER BY m.identifier`
+         ORDER BY m.identifier, o.token_amount ASC`
       );
 
       const map = new Map();
