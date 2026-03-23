@@ -5,7 +5,7 @@ const exampleRegisterWebhook = async (sdk: BreezSdk) => {
   const response = await sdk.registerWebhook({
     url: 'https://example.com/webhook',
     secret: 'your-webhook-secret',
-    eventTypes: [WebhookEventType.LightningReceiveFinished, WebhookEventType.LightningSendFinished]
+    eventTypes: [new WebhookEventType.LightningReceiveFinished(), new WebhookEventType.LightningSendFinished()]
   })
   console.log(`Webhook registered with ID: ${response.webhookId}`)
   // ANCHOR_END: register-webhook

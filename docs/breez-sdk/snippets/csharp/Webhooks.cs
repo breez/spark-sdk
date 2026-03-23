@@ -12,8 +12,8 @@ namespace BreezSdkSnippets
                 secret: "your-webhook-secret",
                 eventTypes: new WebhookEventType[]
                 {
-                    WebhookEventType.LightningReceiveFinished,
-                    WebhookEventType.LightningSendFinished
+                    new WebhookEventType.LightningReceiveFinished(),
+                    new WebhookEventType.LightningSendFinished()
                 }
             ));
             Console.WriteLine($"Webhook registered with ID: {response.webhookId}");

@@ -12,8 +12,8 @@ func RegisterWebhook(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.RegisterWe
 		Url:    "https://example.com/webhook",
 		Secret: "your-webhook-secret",
 		EventTypes: []breez_sdk_spark.WebhookEventType{
-			breez_sdk_spark.WebhookEventTypeLightningReceiveFinished,
-			breez_sdk_spark.WebhookEventTypeLightningSendFinished,
+			breez_sdk_spark.WebhookEventTypeLightningReceiveFinished{},
+			breez_sdk_spark.WebhookEventTypeLightningSendFinished{},
 		},
 	})
 	if err != nil {

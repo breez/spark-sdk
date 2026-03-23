@@ -9,14 +9,15 @@ from breez_sdk_spark import (
 
 async def register_webhook(sdk: BreezSdk):
     # ANCHOR: register-webhook
+    event_types = [
+        WebhookEventType.LIGHTNING_RECEIVE_FINISHED(),
+        WebhookEventType.LIGHTNING_SEND_FINISHED(),
+    ]
     response = await sdk.register_webhook(
         request=RegisterWebhookRequest(
             url="https://example.com/webhook",
             secret="your-webhook-secret",
-            event_types=[
-                WebhookEventType.LIGHTNING_RECEIVE_FINISHED,
-                WebhookEventType.LIGHTNING_SEND_FINISHED,
-            ],
+            event_types=event_types,
         )
     )
     logging.debug(f"Webhook registered with ID: {response.webhook_id}")

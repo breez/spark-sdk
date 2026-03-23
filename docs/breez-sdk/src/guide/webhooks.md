@@ -8,10 +8,10 @@ The following event types are available for webhook subscriptions:
 
 | Event type | Description |
 |-----------|-------------|
-| `LightningReceiveFinished` | A Lightning receive operation completed |
-| `LightningSendFinished` | A Lightning send operation completed |
-| `CoopExitFinished` | A cooperative exit completed |
-| `StaticDepositFinished` | A static deposit completed |
+| {{#enum WebhookEventType::LightningReceiveFinished}} | A Lightning receive operation completed |
+| {{#enum WebhookEventType::LightningSendFinished}} | A Lightning send operation completed |
+| {{#enum WebhookEventType::CoopExitFinished}} | A cooperative exit completed |
+| {{#enum WebhookEventType::StaticDepositFinished}} | A static deposit completed |
 
 ## Webhook payload
 

@@ -9,8 +9,8 @@ class Webhooks {
             url = "https://example.com/webhook",
             secret = "your-webhook-secret",
             eventTypes = listOf(
-                WebhookEventType.LIGHTNING_RECEIVE_FINISHED,
-                WebhookEventType.LIGHTNING_SEND_FINISHED
+                WebhookEventType.LightningReceiveFinished,
+                WebhookEventType.LightningSendFinished
             )
         ))
         // Log.v("Breez", "Webhook registered with ID: ${response.webhookId}")

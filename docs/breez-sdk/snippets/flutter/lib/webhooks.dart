@@ -6,8 +6,8 @@ Future<RegisterWebhookResponse> registerWebhook(BreezSdk sdk) async {
     url: "https://example.com/webhook",
     secret: "your-webhook-secret",
     eventTypes: [
-      WebhookEventType.lightningReceiveFinished,
-      WebhookEventType.lightningSendFinished,
+      WebhookEventType.lightningReceiveFinished(),
+      WebhookEventType.lightningSendFinished(),
     ],
   );
   RegisterWebhookResponse response = await sdk.registerWebhook(request: request);
