@@ -112,12 +112,7 @@ impl BreezSdk {
     }
 
     /// Refreshes the user's lightning address on the server on startup.
-    /// Skipped when real-time sync is enabled, as incoming sync handles it.
     fn try_recover_lightning_address(&self) {
-        if self.config.real_time_sync_server_url.is_some() {
-            return;
-        }
-
         let sdk = self.clone();
         let span = tracing::Span::current();
         tokio::spawn(async move {

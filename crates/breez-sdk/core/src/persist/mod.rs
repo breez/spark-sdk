@@ -33,6 +33,21 @@ const TOKEN_METADATA_KEY_PREFIX: &str = "token_metadata_";
 const PAYMENT_METADATA_KEY_PREFIX: &str = "payment_metadata";
 const SPARK_PRIVATE_MODE_INITIALIZED_KEY: &str = "spark_private_mode_initialized";
 
+/// Wrapper stored in the cache that carries context about whether the value
+/// was written as part of a recovery or a client-initiated change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CachedLightningAddress {
+    pub address: Option<LightningAddressInfo>,
+    pub recovered: bool,
+}
+
+/// Parses a cached lightning address value.
+pub(crate) fn parse_cached_lightning_address(
+    value: &str,
+) -> Result<CachedLightningAddress, StorageError> {
+    serde_json::from_str(value).map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum UpdateDepositPayload {
     ClaimError {
@@ -515,22 +530,34 @@ impl ObjectCacheRepository {
     pub(crate) async fn save_lightning_address(
         &self,
         value: &LightningAddressInfo,
+        recovered: bool,
     ) -> Result<(), StorageError> {
+        let cached = CachedLightningAddress {
+            address: Some(value.clone()),
+            recovered,
+        };
         self.storage
             .set_cached_item(
                 LIGHTNING_ADDRESS_KEY.to_string(),
-                serde_json::to_string(&Some(value))?,
+                serde_json::to_string(&cached)?,
             )
             .await?;
         Ok(())
     }
 
-    /// Marks the lightning address as "recovered, no address registered" by storing `null`.
-    pub(crate) async fn delete_lightning_address(&self) -> Result<(), StorageError> {
+    /// Marks the lightning address as "no address registered" by storing `None`.
+    pub(crate) async fn delete_lightning_address(
+        &self,
+        recovered: bool,
+    ) -> Result<(), StorageError> {
+        let cached = CachedLightningAddress {
+            address: None,
+            recovered,
+        };
         self.storage
             .set_cached_item(
                 LIGHTNING_ADDRESS_KEY.to_string(),
-                serde_json::to_string(&None::<LightningAddressInfo>)?,
+                serde_json::to_string(&cached)?,
             )
             .await?;
         Ok(())
@@ -548,7 +575,10 @@ impl ObjectCacheRepository {
             .get_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
             .await?;
         match value {
-            Some(value) => Ok(Some(serde_json::from_str(&value)?)),
+            Some(value) => {
+                let cached = parse_cached_lightning_address(&value)?;
+                Ok(Some(cached.address))
+            }
             None => Ok(None),
         }
     }

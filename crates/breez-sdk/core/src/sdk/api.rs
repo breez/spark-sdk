@@ -1,6 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
@@ -224,27 +224,6 @@ impl BreezSdk {
             self.spark_wallet
                 .update_wallet_settings(spark_private_mode_enabled)
                 .await?;
-
-            // Reregister the lightning address if spark private mode changed.
-            let lightning_address = match self.get_lightning_address().await {
-                Ok(lightning_address) => lightning_address,
-                Err(e) => {
-                    error!("Failed to get lightning address during user settings update: {e:?}");
-                    return Ok(());
-                }
-            };
-            let Some(lightning_address) = lightning_address else {
-                return Ok(());
-            };
-            if let Err(e) = self
-                .register_lightning_address_internal(crate::RegisterLightningAddressRequest {
-                    username: lightning_address.username,
-                    description: Some(lightning_address.description),
-                })
-                .await
-            {
-                error!("Failed to reregister lightning address during user settings update: {e:?}");
-            }
         }
         Ok(())
     }

@@ -448,6 +448,15 @@ class MigrationManager {
           }
         }
       },
+      {
+        name: "Clear cached lightning address for CachedLightningAddress format change",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("settings")) {
+            const settings = transaction.objectStore("settings");
+            settings.delete("lightning_address");
+          }
+        }
+      },
     ];
   }
 }
@@ -471,7 +480,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 14; // Current schema version
+    this.dbVersion = 15; // Current schema version
   }
 
   /**

@@ -18,7 +18,10 @@ use crate::{
     PaymentMetadata, Storage, StorageError, UpdateDepositPayload,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
-    persist::{LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest},
+    persist::{
+        LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest,
+        parse_cached_lightning_address,
+    },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
 use platform_utils::tokio;
@@ -408,7 +411,7 @@ impl SyncedStorage {
 
                 let new = if let Some(resp) = resp {
                     let address_info = resp.into();
-                    if let Err(e) = cache.save_lightning_address(&address_info).await {
+                    if let Err(e) = cache.save_lightning_address(&address_info, true).await {
                         error!("Failed to save recovered lightning address: {e:?}");
                         if let Err(e) = inner
                             .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
@@ -420,7 +423,7 @@ impl SyncedStorage {
                     }
                     Some(address_info)
                 } else {
-                    if let Err(e) = cache.delete_lightning_address().await {
+                    if let Err(e) = cache.delete_lightning_address(true).await {
                         error!("Failed to delete lightning address from cache: {e:?}");
                         if let Err(e) = inner
                             .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
@@ -451,16 +454,16 @@ impl SyncedStorage {
 #[macros::async_trait]
 impl Storage for SyncedStorage {
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
-        if key == LIGHTNING_ADDRESS_KEY {
-            self.push_lightning_address_sync().await;
-        }
         self.inner.delete_cached_item(key).await
     }
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         self.inner.get_cached_item(key).await
     }
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
-        if key == LIGHTNING_ADDRESS_KEY {
+        if key == LIGHTNING_ADDRESS_KEY
+            && let Ok(cached) = parse_cached_lightning_address(&value)
+            && !cached.recovered
+        {
             self.push_lightning_address_sync().await;
         }
         self.inner.set_cached_item(key, value).await
@@ -997,5 +1000,85 @@ mod tests {
         assert!(result.is_ok());
 
         assert!(storage.get_contact("c3".to_string()).await.is_err());
+    }
+
+    /// Helper: returns the number of pending outgoing sync changes with record type
+    /// `LightningAddress`.
+    async fn lightning_address_outgoing_count(storage: &Arc<dyn Storage>) -> usize {
+        storage
+            .get_pending_outgoing_changes(100)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|c| c.change.id.r#type == RecordType::LightningAddress.to_string())
+            .count()
+    }
+
+    #[tokio::test]
+    async fn test_set_cached_lightning_address_with_recovered_false_triggers_sync() {
+        let temp_dir = create_temp_dir("la_sync_not_recovered");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+
+        // A client-initiated save (recovered: false) should trigger a sync push
+        let cache = ObjectCacheRepository::new(Arc::new(synced) as Arc<dyn Storage>);
+        let address = crate::LightningAddressInfo {
+            lightning_address: "test@example.com".to_string(),
+            username: "test".to_string(),
+            description: "Test".to_string(),
+            lnurl: crate::LnurlInfo::new("https://example.com/.well-known/lnurlp/test".to_string()),
+        };
+        cache.save_lightning_address(&address, false).await.unwrap();
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_set_cached_lightning_address_with_recovered_true_does_not_trigger_sync() {
+        let temp_dir = create_temp_dir("la_sync_recovered");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+
+        // A recovery save (recovered: true) should NOT trigger a sync push
+        let cache = ObjectCacheRepository::new(Arc::new(synced) as Arc<dyn Storage>);
+        let address = crate::LightningAddressInfo {
+            lightning_address: "test@example.com".to_string(),
+            username: "test".to_string(),
+            description: "Test".to_string(),
+            lnurl: crate::LnurlInfo::new("https://example.com/.well-known/lnurlp/test".to_string()),
+        };
+        cache.save_lightning_address(&address, true).await.unwrap();
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_cached_lightning_address_with_recovered_false_triggers_sync() {
+        let temp_dir = create_temp_dir("la_delete_sync_not_recovered");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let cache = ObjectCacheRepository::new(Arc::new(synced) as Arc<dyn Storage>);
+        // A client-initiated delete (recovered: false) should trigger a sync push
+        cache.delete_lightning_address(false).await.unwrap();
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_cached_lightning_address_with_recovered_true_does_not_trigger_sync() {
+        let temp_dir = create_temp_dir("la_delete_sync_recovered");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        let cache = ObjectCacheRepository::new(Arc::new(synced) as Arc<dyn Storage>);
+        // A recovery delete (recovered: true) should NOT trigger a sync push
+        cache.delete_lightning_address(true).await.unwrap();
+
+        assert_eq!(lightning_address_outgoing_count(&storage).await, 0);
     }
 }
