@@ -21,6 +21,7 @@ mod passkey;
 mod send_payment;
 mod tokens;
 mod user_settings;
+mod webhooks;
 
 use anyhow::Result;
 

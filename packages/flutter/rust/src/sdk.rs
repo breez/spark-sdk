@@ -257,6 +257,24 @@ impl BreezSdk {
         self.inner.buy_bitcoin(request).await
     }
 
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> Result<RegisterWebhookResponse, SdkError> {
+        self.inner.register_webhook(request).await
+    }
+
+    pub async fn unregister_webhook(
+        &self,
+        request: UnregisterWebhookRequest,
+    ) -> Result<(), SdkError> {
+        self.inner.unregister_webhook(request).await
+    }
+
+    pub async fn list_webhooks(&self) -> Result<Vec<Webhook>, SdkError> {
+        self.inner.list_webhooks().await
+    }
+
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
         self.inner.add_contact(request).await
     }

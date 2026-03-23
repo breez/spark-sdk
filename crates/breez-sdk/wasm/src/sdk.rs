@@ -347,6 +347,30 @@ impl BreezSdk {
         Ok(self.sdk.buy_bitcoin(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "registerWebhook")]
+    pub async fn register_webhook(
+        &self,
+        request: RegisterWebhookRequest,
+    ) -> WasmResult<RegisterWebhookResponse> {
+        Ok(self.sdk.register_webhook(request.into()).await?.into())
+    }
+
+    #[wasm_bindgen(js_name = "unregisterWebhook")]
+    pub async fn unregister_webhook(&self, request: UnregisterWebhookRequest) -> WasmResult<()> {
+        Ok(self.sdk.unregister_webhook(request.into()).await?)
+    }
+
+    #[wasm_bindgen(js_name = "listWebhooks")]
+    pub async fn list_webhooks(&self) -> WasmResult<Vec<Webhook>> {
+        Ok(self
+            .sdk
+            .list_webhooks()
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     #[wasm_bindgen(js_name = "addContact")]
     pub async fn add_contact(&self, request: AddContactRequest) -> WasmResult<Contact> {
         Ok(self.sdk.add_contact(request.into()).await?.into())

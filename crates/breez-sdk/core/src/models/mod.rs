@@ -1571,3 +1571,60 @@ pub struct ListContactsRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub limit: Option<u32>,
 }
+
+/// The type of event that triggers a webhook notification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(clippy::enum_variant_names)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum WebhookEventType {
+    /// Triggered when a Lightning receive operation completes.
+    LightningReceiveFinished,
+    /// Triggered when a Lightning send operation completes.
+    LightningSendFinished,
+    /// Triggered when a cooperative exit completes.
+    CoopExitFinished,
+    /// Triggered when a static deposit completes.
+    StaticDepositFinished,
+    /// An event type not yet recognized by this version of the SDK.
+    Unknown(String),
+}
+
+/// A registered webhook entry.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Webhook {
+    /// Unique identifier for this webhook.
+    pub id: String,
+    /// The URL that receives webhook notifications.
+    pub url: String,
+    /// The event types this webhook is subscribed to.
+    pub event_types: Vec<WebhookEventType>,
+}
+
+/// Request to register a new webhook.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RegisterWebhookRequest {
+    /// The URL that will receive webhook notifications.
+    pub url: String,
+    /// A secret used for HMAC-SHA256 signature verification of webhook payloads.
+    pub secret: String,
+    /// The event types to subscribe to.
+    pub event_types: Vec<WebhookEventType>,
+}
+
+/// Response from registering a webhook.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RegisterWebhookResponse {
+    /// The unique identifier of the newly registered webhook.
+    pub webhook_id: String,
+}
+
+/// Request to unregister an existing webhook.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnregisterWebhookRequest {
+    /// The unique identifier of the webhook to unregister.
+    pub webhook_id: String,
+}
