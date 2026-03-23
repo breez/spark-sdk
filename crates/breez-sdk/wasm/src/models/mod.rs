@@ -631,6 +631,31 @@ pub struct Config {
     /// Default is 4. Increase for server environments with high incoming
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
+    pub spark_config: Option<SparkConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]
+pub struct SparkConfig {
+    pub coordinator_identifier: String,
+    pub threshold: u32,
+    pub signing_operators: Vec<SparkSigningOperator>,
+    pub ssp_config: SparkSspConfig,
+    pub expected_withdraw_bond_sats: u64,
+    pub expected_withdraw_relative_block_locktime: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSigningOperator)]
+pub struct SparkSigningOperator {
+    pub id: u32,
+    pub identifier: String,
+    pub address: String,
+    pub identity_public_key: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkSspConfig)]
+pub struct SparkSspConfig {
+    pub base_url: String,
+    pub identity_public_key: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]

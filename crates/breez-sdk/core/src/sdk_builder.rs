@@ -12,7 +12,7 @@ use platform_utils::DefaultHttpClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-use spark_wallet::TreeStore;
+use spark_wallet::{SparkWalletConfig, TreeStore};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -291,6 +291,60 @@ impl SdkBuilder {
         self
     }
 
+    /// Builds a [`SparkWalletConfig`](spark_wallet::SparkWalletConfig) from a
+    /// [`SparkConfig`](crate::models::SparkConfig).
+    fn build_spark_wallet_config(
+        network: spark_wallet::Network,
+        env_config: &crate::models::SparkConfig,
+    ) -> Result<spark_wallet::SparkWalletConfig, SdkError> {
+        let coordinator_index = env_config
+            .signing_operators
+            .iter()
+            .position(|op| op.identifier == env_config.coordinator_identifier)
+            .ok_or_else(|| {
+                SdkError::InvalidInput(
+                    "coordinator_identifier does not match any signing operator".to_string(),
+                )
+            })?;
+
+        let operators: Vec<_> = env_config
+            .signing_operators
+            .iter()
+            .map(|op| {
+                SparkWalletConfig::create_operator_config(
+                    op.id as usize,
+                    &op.identifier,
+                    &op.address,
+                    None,
+                    &op.identity_public_key,
+                )
+                .map_err(|e| SdkError::InvalidInput(e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let operator_pool = spark_wallet::OperatorPoolConfig::new(coordinator_index, operators)
+            .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
+
+        let service_provider_config = SparkWalletConfig::create_service_provider_config(
+            &env_config.ssp_config.base_url,
+            &env_config.ssp_config.identity_public_key,
+            None,
+        )
+        .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
+
+        let mut config = SparkWalletConfig::default_config(network);
+        config.operator_pool = operator_pool;
+        config.split_secret_threshold = env_config.threshold;
+        config.service_provider_config = service_provider_config;
+        config.tokens_config.expected_withdraw_bond_sats = env_config.expected_withdraw_bond_sats;
+        config
+            .tokens_config
+            .expected_withdraw_relative_block_locktime =
+            env_config.expected_withdraw_relative_block_locktime;
+
+        Ok(config)
+    }
+
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
@@ -453,8 +507,11 @@ impl SdkBuilder {
             crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
         );
         info!("Building SparkWallet with user agent: {}", user_agent);
-        let mut spark_wallet_config =
-            spark_wallet::SparkWalletConfig::default_config(self.config.network.into());
+        let mut spark_wallet_config = if let Some(env_config) = &self.config.spark_config {
+            Self::build_spark_wallet_config(self.config.network.into(), env_config)?
+        } else {
+            spark_wallet::SparkWalletConfig::default_config(self.config.network.into())
+        };
         spark_wallet_config.operator_pool = spark_wallet_config
             .operator_pool
             .with_user_agent(Some(user_agent.clone()));

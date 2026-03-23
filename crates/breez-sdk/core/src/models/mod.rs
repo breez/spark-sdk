@@ -571,6 +571,13 @@ pub struct Config {
     ///
     /// Default is 4. Increase for server environments with high incoming payment volume.
     pub max_concurrent_claims: u32,
+
+    /// Optional custom Spark environment configuration.
+    ///
+    /// When set, overrides the default Spark operator pool, service provider,
+    /// threshold, and token settings. Use this to connect to alternative Spark
+    /// deployments (e.g. dev/staging environments).
+    pub spark_config: Option<SparkConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -633,6 +640,52 @@ pub struct StableBalanceConfig {
     /// the minimum conversion limit. Defaults to the conversion minimum if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub reserved_sats: Option<u64>,
+}
+
+/// Configuration for a custom Spark environment.
+///
+/// When set on [`Config`], overrides the default Spark operator pool,
+/// service provider, threshold, and token settings. This allows connecting
+/// to alternative Spark deployments (e.g. dev/staging environments).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkConfig {
+    /// Hex-encoded identifier of the coordinator operator.
+    pub coordinator_identifier: String,
+    /// The FROST signing threshold (e.g. 2 of 3).
+    pub threshold: u32,
+    /// The set of signing operators.
+    pub signing_operators: Vec<SparkSigningOperator>,
+    /// Service provider (SSP) configuration.
+    pub ssp_config: SparkSspConfig,
+    /// Expected bond amount in sats for token withdrawals.
+    pub expected_withdraw_bond_sats: u64,
+    /// Expected relative block locktime for token withdrawals.
+    pub expected_withdraw_relative_block_locktime: u64,
+}
+
+/// A Spark signing operator.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkSigningOperator {
+    /// Sequential operator ID (0-indexed).
+    pub id: u32,
+    /// Hex-encoded 32-byte FROST identifier.
+    pub identifier: String,
+    /// gRPC address of the operator (e.g. `https://0.spark.lightspark.com`).
+    pub address: String,
+    /// Hex-encoded compressed public key of the operator.
+    pub identity_public_key: String,
+}
+
+/// Configuration for the Spark Service Provider (SSP).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SparkSspConfig {
+    /// Base URL of the SSP GraphQL API.
+    pub base_url: String,
+    /// Hex-encoded compressed public key of the SSP.
+    pub identity_public_key: String,
 }
 
 impl Config {

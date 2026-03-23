@@ -41,6 +41,31 @@ pub struct _Config {
     /// Default is 4. Increase for server environments with high incoming
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
+    pub spark_config: Option<SparkConfig>,
+}
+
+#[frb(mirror(SparkConfig))]
+pub struct _SparkConfig {
+    pub coordinator_identifier: String,
+    pub threshold: u32,
+    pub signing_operators: Vec<SparkSigningOperator>,
+    pub ssp_config: SparkSspConfig,
+    pub expected_withdraw_bond_sats: u64,
+    pub expected_withdraw_relative_block_locktime: u64,
+}
+
+#[frb(mirror(SparkSigningOperator))]
+pub struct _SparkSigningOperator {
+    pub id: u32,
+    pub identifier: String,
+    pub address: String,
+    pub identity_public_key: String,
+}
+
+#[frb(mirror(SparkSspConfig))]
+pub struct _SparkSspConfig {
+    pub base_url: String,
+    pub identity_public_key: String,
 }
 
 #[frb(mirror(OptimizationConfig))]
