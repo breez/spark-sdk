@@ -753,7 +753,6 @@ dependencies = [
  "futures",
  "hex",
  "macros",
- "nostr",
  "platform-utils",
  "rand 0.8.5",
  "rstest",
@@ -3244,7 +3243,6 @@ version = "0.43.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62a97d745f1bd8d5e05a978632bbb87b0614567d5142906fe7c86fb2440faac6"
 dependencies = [
- "aes",
  "base64 0.22.1",
  "bech32",
  "bip39",

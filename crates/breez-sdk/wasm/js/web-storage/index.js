@@ -428,6 +428,26 @@ class MigrationManager {
           }
         }
       },
+      {
+        name: "Drop preimage from lnurl_receive_metadata records",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("lnurl_receive_metadata")) {
+            const store = transaction.objectStore("lnurl_receive_metadata");
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (cursor) {
+                const record = cursor.value;
+                if ("preimage" in record) {
+                  delete record.preimage;
+                  cursor.update(record);
+                }
+                cursor.continue();
+              }
+            };
+          }
+        }
+      },
     ];
   }
 }
@@ -1335,7 +1355,6 @@ class IndexedDBStorage {
           nostrZapRequest: item.nostrZapRequest || null,
           nostrZapReceipt: item.nostrZapReceipt || null,
           senderComment: item.senderComment || null,
-          preimage: item.preimage || null,
         });
 
         request.onsuccess = () => {
@@ -2089,33 +2108,6 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by LNURL preimage status
-        if (
-          paymentDetailsFilter.type === "lightning" &&
-          paymentDetailsFilter.hasLnurlPreimage != null
-        ) {
-          if (details.type !== "lightning") {
-            continue;
-          }
-          if (paymentDetailsFilter.hasLnurlPreimage) {
-            // Has lnurl preimage - check lnurlReceiveMetadata.preimage exists
-            if (
-              !details.lnurlReceiveMetadata ||
-              !details.lnurlReceiveMetadata.preimage
-            ) {
-              continue;
-            }
-          } else {
-            // Pending: has lnurl metadata, has lightning preimage, but lnurl preimage not yet sent
-            if (
-              !details.lnurlReceiveMetadata ||
-              !details.htlcDetails?.preimage ||
-              details.lnurlReceiveMetadata.preimage
-            ) {
-              continue;
-            }
-          }
-        }
 
 
         paymentDetailsFilterMatches = true;
@@ -2283,7 +2275,6 @@ class IndexedDBStorage {
             nostrZapRequest: lnurlReceiveMetadata.nostrZapRequest || null,
             nostrZapReceipt: lnurlReceiveMetadata.nostrZapReceipt || null,
             senderComment: lnurlReceiveMetadata.senderComment || null,
-            preimage: lnurlReceiveMetadata.preimage || null,
           };
         }
         resolve(payment);

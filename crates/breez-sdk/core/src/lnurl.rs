@@ -1,9 +1,8 @@
 use bitcoin::hex::DisplayHex;
 use lnurl_models::{
-    CheckUsernameAvailableResponse, InvoicesPaidRequest, ListMetadataResponse, PaidInvoice,
-    PublishZapReceiptRequest as ModelPublishZapReceiptRequest, PublishZapReceiptResponse,
-    RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest,
+    CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
+    RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
+    UnregisterLnurlPayRequest,
 };
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use std::collections::HashMap;
@@ -59,12 +58,6 @@ pub struct ListMetadataRequest {
     pub updated_after: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
-pub struct PublishZapReceiptRequest {
-    pub payment_hash: String,
-    pub zap_receipt: String,
-}
-
 #[macros::async_trait]
 pub trait LnurlServerClient: Send + Sync {
     fn domain(&self) -> &str;
@@ -84,13 +77,6 @@ pub trait LnurlServerClient: Send + Sync {
         &self,
         request: &ListMetadataRequest,
     ) -> Result<ListMetadataResponse, LnurlServerError>;
-    async fn publish_zap_receipt(
-        &self,
-        request: &PublishZapReceiptRequest,
-    ) -> Result<String, LnurlServerError>;
-    /// Notify the server that invoices have been paid with the given preimages and invoices.
-    /// This is used for LUD-21 and NIP-57 invoice tracking.
-    async fn notify_invoices_paid(&self, items: &[PaidInvoice]) -> Result<(), LnurlServerError>;
 }
 
 /// Default `LnurlServerClient` implementation using `HttpClient` abstraction.
@@ -326,75 +312,5 @@ impl LnurlServerClient for DefaultLnurlServerClient {
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
         Self::handle_response(response.status, &response.body)
-    }
-
-    async fn publish_zap_receipt(
-        &self,
-        request: &PublishZapReceiptRequest,
-    ) -> Result<String, LnurlServerError> {
-        let pubkey = self.wallet.get_identity_public_key();
-
-        let (signature, timestamp) = self.sign_message(&request.zap_receipt).await?;
-
-        let url = format!(
-            "{}/lnurlpay/{}/metadata/{}/zap",
-            self.base_url(),
-            pubkey,
-            request.payment_hash
-        );
-
-        let payload = ModelPublishZapReceiptRequest {
-            signature,
-            timestamp: Some(timestamp),
-            zap_receipt: request.zap_receipt.clone(),
-        };
-
-        let body = serde_json::to_string(&payload)
-            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
-
-        let response = self
-            .http_client
-            .post(url, Some(self.get_post_headers()), Some(body))
-            .await
-            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
-
-        let result: PublishZapReceiptResponse =
-            Self::handle_response(response.status, &response.body)?;
-        Ok(result.zap_receipt)
-    }
-
-    async fn notify_invoices_paid(&self, items: &[PaidInvoice]) -> Result<(), LnurlServerError> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        let pubkey = self.wallet.get_identity_public_key();
-
-        let (signature, timestamp) = self.sign_message(&pubkey.to_string()).await?;
-
-        let url = format!("{}/lnurlpay/{}/invoices-paid", self.base_url(), pubkey);
-
-        let payload = InvoicesPaidRequest {
-            signature,
-            timestamp: Some(timestamp),
-            invoices: items.to_vec(),
-        };
-        let body = serde_json::to_string(&payload)
-            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
-
-        let response = self
-            .http_client
-            .post(url, Some(self.get_post_headers()), Some(body))
-            .await
-            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
-
-        match response.status {
-            401 => Err(LnurlServerError::InvalidApiKey),
-            s if (200..300).contains(&s) => Ok(()),
-            other => Err(LnurlServerError::Network {
-                statuscode: other,
-                message: Some(response.body),
-            }),
-        }
     }
 }

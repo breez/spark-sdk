@@ -50,7 +50,6 @@ pub struct SetLnurlMetadataItem {
     pub sender_comment: Option<String>,
     pub nostr_zap_request: Option<String>,
     pub nostr_zap_receipt: Option<String>,
-    pub preimage: Option<String>,
 }
 
 impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
@@ -60,7 +59,6 @@ impl From<lnurl_models::ListMetadataMetadata> for SetLnurlMetadataItem {
             sender_comment: value.sender_comment,
             nostr_zap_request: value.nostr_zap_request,
             nostr_zap_receipt: value.nostr_zap_receipt,
-            preimage: value.preimage,
         }
     }
 }
@@ -100,9 +98,7 @@ impl From<std::num::TryFromIntError> for StorageError {
     }
 }
 
-/// Storage-internal variant of [`PaymentDetailsFilter`] that includes the
-/// `has_lnurl_preimage` field on the `Lightning` variant, which is not exposed
-/// in the public API.
+/// Storage-internal variant of [`PaymentDetailsFilter`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StoragePaymentDetailsFilter {
@@ -117,7 +113,6 @@ pub enum StoragePaymentDetailsFilter {
     },
     Lightning {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        has_lnurl_preimage: Option<bool>,
     },
 }
 
@@ -141,10 +136,7 @@ impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
                 tx_type,
             },
             PaymentDetailsFilter::Lightning { htlc_status } => {
-                StoragePaymentDetailsFilter::Lightning {
-                    htlc_status,
-                    has_lnurl_preimage: None,
-                }
+                StoragePaymentDetailsFilter::Lightning { htlc_status }
             }
         }
     }
@@ -169,7 +161,7 @@ impl From<StoragePaymentDetailsFilter> for PaymentDetailsFilter {
                 tx_hash,
                 tx_type,
             },
-            StoragePaymentDetailsFilter::Lightning { htlc_status, .. } => {
+            StoragePaymentDetailsFilter::Lightning { htlc_status } => {
                 PaymentDetailsFilter::Lightning { htlc_status }
             }
         }

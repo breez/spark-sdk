@@ -234,6 +234,12 @@ class PostgresMigrationManager {
           )`,
         ],
       },
+      {
+        name: "Drop preimage column from lnurl_receive_metadata",
+        sql: [
+          `ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage`,
+        ],
+      },
     ];
   }
 }
