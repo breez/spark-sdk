@@ -58,12 +58,3 @@ Future<void> configureStableBalance() async {
   // ANCHOR_END: stable-balance-config
   print(config);
 }
-
-Future<void> configureSupportLnurlVerify() async {
-  // ANCHOR: support-lnurl-verify
-  // Enable LNURL verify support (LUD-21 and NIP-57)
-  var config = defaultConfig(network: Network.mainnet)
-      .copyWith(supportLnurlVerify: true);
-  // ANCHOR_END: support-lnurl-verify
-  print(config);
-}

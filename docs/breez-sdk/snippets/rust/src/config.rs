@@ -65,12 +65,3 @@ pub(crate) fn configure_stable_balance() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn configure_support_lnurl_verify() -> Result<()> {
-    // ANCHOR: support-lnurl-verify
-    // Enable LNURL verify support (LUD-21 and NIP-57)
-    let mut config = default_config(Network::Mainnet);
-    config.support_lnurl_verify = true;
-    // ANCHOR_END: support-lnurl-verify
-    info!("Config: {:?}", config);
-    Ok(())
-}

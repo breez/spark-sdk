@@ -58,19 +58,6 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 </div>
 
-## LNURL Verify Support
-
-Controls whether the SDK enables LNURL verification support. When set to true, the following features are enabled:
-
-- **[LUD-21](https://github.com/lnurl/luds/blob/luds/21.md)**: Lightning payment verification
-- **[NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md)**: Zap receipt publishing
-
-By default, this is set to `false`, which means the client will not share successful payment information with the corresponding LNURL server.
-
-Note: This setting is not required when private mode is disabled.
-
-{{#tabs config:support-lnurl-verify}}
-
 ## Optimization configuration
 
 The SDK can automatically optimize the Spark leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.

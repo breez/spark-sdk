@@ -65,15 +65,5 @@ namespace BreezSdkSnippets
             // ANCHOR_END: stable-balance-config
         }
 
-        void ConfigureSupportLnurlVerify()
-        {
-            // ANCHOR: support-lnurl-verify
-            // Enable LNURL verify support (LUD-21 and NIP-57)
-            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
-            {
-                supportLnurlVerify = true
-            };
-            // ANCHOR_END: support-lnurl-verify
-        }
     }
 }

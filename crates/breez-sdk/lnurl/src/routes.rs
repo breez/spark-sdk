@@ -156,7 +156,6 @@ where
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
-            lnurl_private_mode_enabled: payload.lnurl_private_mode_enabled,
         };
 
         if let Err(e) = state.db.upsert_user(&user).await {

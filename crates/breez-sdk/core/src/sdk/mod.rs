@@ -195,7 +195,6 @@ pub fn default_config(network: Network) -> Config {
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
-        support_lnurl_verify: false,
     }
 }
 

@@ -571,10 +571,6 @@ pub struct Config {
     ///
     /// Default is 4. Increase for server environments with high incoming payment volume.
     pub max_concurrent_claims: u32,
-
-    /// When true, enables LNURL verify support (LUD-21) and zap receipts (NIP-57).
-    /// When false (default), these features are disabled for privacy.
-    pub support_lnurl_verify: bool,
 }
 
 #[derive(Debug, Clone)]

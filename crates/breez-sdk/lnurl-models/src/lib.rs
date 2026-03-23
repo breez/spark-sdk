@@ -25,10 +25,6 @@ pub struct RegisterLnurlPayRequest {
     pub signature: String,
     pub timestamp: Option<u64>,
     pub description: String,
-    /// When true, the SDK operates in LNURL private mode: the LNURL server won't track
-    /// invoice payments for this user (LUD-21 and NIP-57 disabled).
-    #[serde(default)]
-    pub lnurl_private_mode_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -57,12 +57,4 @@ class Config {
         println("Config: $config")
     }
 
-    fun configureSupportLnurlVerify() {
-        // ANCHOR: support-lnurl-verify
-        // Enable LNURL verify support (LUD-21 and NIP-57)
-        val config = defaultConfig(Network.MAINNET)
-        config.supportLnurlVerify = true
-        // ANCHOR_END: support-lnurl-verify
-        println("Config: $config")
-    }
 }

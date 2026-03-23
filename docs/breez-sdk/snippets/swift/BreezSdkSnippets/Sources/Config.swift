@@ -53,12 +53,3 @@ func configureStableBalance() async throws {
     // ANCHOR_END: stable-balance-config
     print("Config: \(config)")
 }
-
-func configureSupportLnurlVerify() async throws {
-    // ANCHOR: support-lnurl-verify
-    // Enable LNURL verify support (LUD-21 and NIP-57)
-    var config = defaultConfig(network: Network.mainnet)
-    config.supportLnurlVerify = true
-    // ANCHOR_END: support-lnurl-verify
-    print("Config: \(config)")
-}

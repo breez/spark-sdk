@@ -37,7 +37,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         name: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let maybe_user = sqlx::query(
-            "SELECT pubkey, name, description, lnurl_private_mode_enabled
+            "SELECT pubkey, name, description
              FROM users
              WHERE domain = $1 AND name = $2",
         )
@@ -51,7 +51,6 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 pubkey: row.try_get(0)?,
                 name: row.try_get(1)?,
                 description: row.try_get(2)?,
-                lnurl_private_mode_enabled: row.try_get(3)?,
             })
         })
         .transpose()?;
@@ -64,7 +63,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError> {
         let maybe_user = sqlx::query(
-            "SELECT pubkey, name, description, lnurl_private_mode_enabled
+            "SELECT pubkey, name, description
                 FROM users
                 WHERE domain = $1 AND pubkey = $2",
         )
@@ -78,7 +77,6 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 pubkey: row.try_get(0)?,
                 name: row.try_get(1)?,
                 description: row.try_get(2)?,
-                lnurl_private_mode_enabled: row.try_get(3)?,
             })
         })
         .transpose()?;
@@ -87,19 +85,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO users (domain, pubkey, name, description, lnurl_private_mode_enabled, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            "INSERT INTO users (domain, pubkey, name, description, updated_at)
+             VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(domain, pubkey) DO UPDATE
              SET name = excluded.name
              ,   description = excluded.description
-             ,   lnurl_private_mode_enabled = excluded.lnurl_private_mode_enabled
              ,   updated_at = excluded.updated_at",
         )
         .bind(&user.domain)
         .bind(&user.pubkey)
         .bind(&user.name)
         .bind(&user.description)
-        .bind(user.lnurl_private_mode_enabled)
         .bind(now())
         .execute(&self.pool)
         .await?;

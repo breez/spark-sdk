@@ -60,19 +60,9 @@ const exampleConfigureStableBalance = () => {
   console.log('Config:', config)
 }
 
-const exampleConfigureSupportLnurlVerify = () => {
-  // ANCHOR: support-lnurl-verify
-  // Enable LNURL verify support (LUD-21 and NIP-57)
-  const config = defaultConfig(Network.Mainnet)
-  config.supportLnurlVerify = true
-  // ANCHOR_END: support-lnurl-verify
-  console.log('Config:', config)
-}
-
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
   exampleConfigureOptimizationConfiguration,
-  exampleConfigureStableBalance,
-  exampleConfigureSupportLnurlVerify
+  exampleConfigureStableBalance
 }
