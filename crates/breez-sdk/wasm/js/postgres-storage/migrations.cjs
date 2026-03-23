@@ -240,6 +240,12 @@ class PostgresMigrationManager {
           `ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage`,
         ],
       },
+      {
+        name: "Clear cached lightning address for CachedLightningAddress format change",
+        sql: [
+          `DELETE FROM settings WHERE key = 'lightning_address'`,
+        ],
+      },
     ];
   }
 }

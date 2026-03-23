@@ -237,6 +237,8 @@ impl PostgresStorage {
             // Migration 12: Drop preimage column from lnurl_receive_metadata - no longer needed
             // since the server handles preimage tracking via webhooks.
             &["ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage"],
+            // Migration 13: Clear cached lightning address - format changed to CachedLightningAddress wrapper
+            &["DELETE FROM settings WHERE key = 'lightning_address'"],
         ]
     }
 }

@@ -396,6 +396,10 @@ class MigrationManager {
         name: "Drop preimage column from lnurl_receive_metadata",
         sql: `ALTER TABLE lnurl_receive_metadata DROP COLUMN preimage`
       },
+      {
+        name: "Clear cached lightning address for CachedLightningAddress format change",
+        sql: `DELETE FROM settings WHERE key = 'lightning_address'`
+      },
     ];
   }
 }

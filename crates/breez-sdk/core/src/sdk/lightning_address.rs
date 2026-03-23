@@ -61,7 +61,7 @@ impl BreezSdk {
         };
 
         client.unregister_lightning_address(&params).await?;
-        cache.delete_lightning_address().await?;
+        cache.delete_lightning_address(false).await?;
         Ok(())
     }
 }
@@ -83,10 +83,10 @@ impl BreezSdk {
 
         let result = if let Some(resp) = resp {
             let address_info = resp.into();
-            cache.save_lightning_address(&address_info).await?;
+            cache.save_lightning_address(&address_info, true).await?;
             Some(address_info)
         } else {
-            cache.delete_lightning_address().await?;
+            cache.delete_lightning_address(true).await?;
             None
         };
 
@@ -124,7 +124,7 @@ impl BreezSdk {
             lnurl: LnurlInfo::new(response.lnurl),
             username,
         };
-        cache.save_lightning_address(&address_info).await?;
+        cache.save_lightning_address(&address_info, false).await?;
         Ok(address_info)
     }
 }
@@ -134,9 +134,7 @@ impl BreezSdk {
 mod tests {
     use std::{path::PathBuf, sync::Arc};
 
-    use crate::{
-        LightningAddressInfo, LnurlInfo, persist::Storage, persist::sqlite::SqliteStorage,
-    };
+    use crate::{LightningAddressInfo, LnurlInfo, persist::sqlite::SqliteStorage};
 
     use crate::persist::ObjectCacheRepository;
 
@@ -179,10 +177,10 @@ mod tests {
 
         // Save an address, then delete it
         cache
-            .save_lightning_address(&sample_address_info())
+            .save_lightning_address(&sample_address_info(), false)
             .await
             .unwrap();
-        cache.delete_lightning_address().await.unwrap();
+        cache.delete_lightning_address(false).await.unwrap();
 
         // Key present, value null -> Some(None) (recovered, no address)
         let result = cache.fetch_lightning_address().await.unwrap();
@@ -198,7 +196,7 @@ mod tests {
         let cache = ObjectCacheRepository::new(storage as Arc<_>);
 
         cache
-            .save_lightning_address(&sample_address_info())
+            .save_lightning_address(&sample_address_info(), false)
             .await
             .unwrap();
 
@@ -207,25 +205,6 @@ mod tests {
         let info = result
             .flatten()
             .expect("Expected Some(Some(info)) after save");
-        assert_eq!(info.lightning_address, "test@example.com");
-    }
-
-    #[tokio::test]
-    async fn test_backward_compat_old_cached_json() {
-        let (storage, _dir) = create_temp_storage("backward_compat");
-
-        // Simulate old cache format: raw JSON object without Option wrapper
-        let old_value = serde_json::to_string(&sample_address_info()).unwrap();
-        storage
-            .set_cached_item("lightning_address".to_string(), old_value)
-            .await
-            .unwrap();
-
-        let cache = ObjectCacheRepository::new(storage as Arc<_>);
-        let result = cache.fetch_lightning_address().await.unwrap();
-        let info = result
-            .flatten()
-            .expect("Expected old cached JSON to deserialize as Some(info)");
         assert_eq!(info.lightning_address, "test@example.com");
     }
 }
