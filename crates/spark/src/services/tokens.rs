@@ -5,9 +5,9 @@ use bitcoin::{
     hashes::{Hash, HashEngine, sha256},
     secp256k1::PublicKey,
 };
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     Network,

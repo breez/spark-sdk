@@ -734,7 +734,6 @@ dependencies = [
  "tonic-web-wasm-client",
  "tracing",
  "wasm-bindgen-test",
- "web-time",
 ]
 
 [[package]]
@@ -817,7 +816,6 @@ dependencies = [
  "uniffi",
  "uuid",
  "wasm-bindgen-test",
- "web-time",
  "webpki-roots 1.0.2",
  "x509-parser 0.16.0",
 ]
@@ -842,7 +840,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
- "web-time",
 ]
 
 [[package]]
@@ -1775,7 +1772,6 @@ dependencies = [
  "tokio",
  "tracing",
  "wasm-bindgen-test",
- "web-time",
 ]
 
 [[package]]
@@ -3715,6 +3711,7 @@ dependencies = [
  "tokio",
  "tokio_with_wasm",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -5023,7 +5020,6 @@ dependencies = [
  "unicode-normalization",
  "uuid",
  "wasm-bindgen-test",
- "web-time",
 ]
 
 [[package]]
@@ -5094,7 +5090,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
- "web-time",
 ]
 
 [[package]]

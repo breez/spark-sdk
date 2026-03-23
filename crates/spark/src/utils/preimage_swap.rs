@@ -4,7 +4,7 @@ use bitcoin::{
     hashes::{Hash, sha256},
     secp256k1::PublicKey,
 };
-use web_time::SystemTime;
+use platform_utils::time::SystemTime;
 
 use crate::{
     Network,

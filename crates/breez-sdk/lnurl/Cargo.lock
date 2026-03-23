@@ -2829,6 +2829,7 @@ dependencies = [
  "tokio",
  "tokio_with_wasm",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -3714,7 +3715,6 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "uuid",
- "web-time",
 ]
 
 [[package]]
@@ -3733,7 +3733,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
- "web-time",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+use platform_utils::time::SystemTime;
 use platform_utils::tokio;
 use std::{
     collections::{HashMap, HashSet},
@@ -6,7 +7,6 @@ use std::{
 };
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tracing::{debug, error, warn};
-use web_time::SystemTime;
 
 use crate::sync::{
     model::{IncomingChange, OutgoingChange, RecordId},

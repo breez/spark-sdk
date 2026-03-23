@@ -207,7 +207,7 @@ impl TreeStore for WasmTreeStore {
         &self,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
-        refresh_started_at: web_time::SystemTime,
+        refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError> {
         let leaves_js = serde_wasm_bindgen::to_value(leaves)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
@@ -215,7 +215,7 @@ impl TreeStore for WasmTreeStore {
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
 
         let refresh_ms = refresh_started_at
-            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .duration_since(platform_utils::time::SystemTime::UNIX_EPOCH)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?
             .as_millis() as f64;
 
@@ -293,7 +293,7 @@ impl TreeStore for WasmTreeStore {
         Ok(reserve_result)
     }
 
-    async fn now(&self) -> Result<web_time::SystemTime, TreeServiceError> {
+    async fn now(&self) -> Result<platform_utils::time::SystemTime, TreeServiceError> {
         let promise = self.tree_store.now().map_err(js_error_to_tree_error)?;
         let result = JsFuture::from(promise)
             .await
@@ -303,7 +303,7 @@ impl TreeStore for WasmTreeStore {
             .ok_or_else(|| TreeServiceError::Generic("now() did not return a number".into()))?;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let duration = std::time::Duration::from_millis(ms as u64);
-        Ok(web_time::SystemTime::UNIX_EPOCH + duration)
+        Ok(platform_utils::time::SystemTime::UNIX_EPOCH + duration)
     }
 
     fn subscribe_balance_changes(&self) -> watch::Receiver<()> {

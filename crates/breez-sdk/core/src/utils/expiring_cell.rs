@@ -1,6 +1,6 @@
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use tokio::sync::RwLock;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 /// A cell that holds a value with a time-to-live (TTL) expiration.
 ///

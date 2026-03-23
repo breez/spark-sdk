@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use bitcoin::{Address, Transaction, hashes::sha256, secp256k1::PublicKey};
+use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use spark::{
     Network,
@@ -18,7 +19,6 @@ use spark::{
     tree::{Leaves, LeavesReservation, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
-use web_time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::SparkWalletError;
 

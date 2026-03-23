@@ -8,8 +8,8 @@ use spark_wallet::{
 };
 use std::time::Duration;
 
+use platform_utils::time::UNIX_EPOCH;
 use tracing::{debug, warn};
-use web_time::UNIX_EPOCH;
 
 use crate::{
     Fee, Network, OnchainConfirmationSpeed, OptimizationProgress, Payment, PaymentDetails,

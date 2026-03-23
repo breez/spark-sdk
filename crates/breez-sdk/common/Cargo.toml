@@ -37,7 +37,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 spark.workspace = true
-web-time.workspace = true
 spark-wallet.workspace = true
 futures.workspace = true
 bitreq.workspace = true

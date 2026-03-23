@@ -1,11 +1,11 @@
 use bitcoin::hashes::sha256;
+use platform_utils::time::Duration;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
 use std::str::FromStr;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{Instrument, error, info, warn};
-use web_time::Duration;
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -32,9 +32,9 @@ use crate::{
     },
 };
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::time::SystemTime;
 use platform_utils::tokio;
 use spark_wallet::{InvoiceDescription, Preimage};
-use web_time::SystemTime;
 
 use super::{
     BreezSdk, SyncType,

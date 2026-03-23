@@ -23,8 +23,8 @@ use bytes::BytesMut;
 use prost::{Message as ProstMessage, encoding};
 
 use error::AddressError;
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Network;
 

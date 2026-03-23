@@ -4,7 +4,7 @@ use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, InputType,
     SparkInvoiceDetails, error::SdkError, models::PrepareSendPaymentRequest,
 };
-use web_time::{Duration, SystemTime, UNIX_EPOCH};
+use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Returns the minimum non-dust amount in sats for the given Bitcoin address.
 pub(crate) fn get_dust_limit_sats(address: &str) -> Result<u64, SdkError> {

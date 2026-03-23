@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use bitcoin::{Transaction, absolute::LockTime, secp256k1::PublicKey, transaction::Version};
 use frost_secp256k1_tr::Identifier;
-use web_time::SystemTime;
+use platform_utils::time::SystemTime;
 
 use crate::tree::{
     Leaves, LeavesReservation, ReservationPurpose, ReserveResult, TargetAmounts, TreeNode,

@@ -21,8 +21,8 @@ impl BreezSdk {
         let name = validate_contact_input(&request.name, &request.payment_identifier)?;
         let payment_identifier = request.payment_identifier.trim().to_string();
 
-        let now = web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        let now = platform_utils::time::SystemTime::now()
+            .duration_since(platform_utils::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
 
@@ -53,8 +53,8 @@ impl BreezSdk {
 
         let existing = self.storage.get_contact(request.id.clone()).await?;
 
-        let now = web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        let now = platform_utils::time::SystemTime::now()
+            .duration_since(platform_utils::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .map_err(|_| SdkError::Generic("Failed to get current time".to_string()))?;
 

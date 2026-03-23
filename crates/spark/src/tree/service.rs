@@ -96,7 +96,7 @@ impl TreeService for SynchronousTreeService {
         let max_wait = options.max_wait_for_pending;
 
         let mut balance_rx = self.state.subscribe_balance_changes();
-        let wait_start = web_time::Instant::now();
+        let wait_start = platform_utils::time::Instant::now();
         let mut wait_count = 0u32;
 
         loop {
@@ -326,7 +326,7 @@ impl SynchronousTreeService {
     async fn wait_for_pending_balance(
         &self,
         balance_rx: &mut tokio::sync::watch::Receiver<()>,
-        wait_start: &web_time::Instant,
+        wait_start: &platform_utils::time::Instant,
         wait_count: &mut u32,
         max_wait: Duration,
         available: u64,

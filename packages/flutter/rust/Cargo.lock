@@ -502,7 +502,6 @@ dependencies = [
  "tonic-build",
  "tonic-web-wasm-client",
  "tracing",
- "web-time",
 ]
 
 [[package]]
@@ -539,7 +538,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "web-time",
  "x509-parser",
 ]
 
@@ -1167,7 +1165,6 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
- "web-time",
 ]
 
 [[package]]
@@ -2646,6 +2643,7 @@ dependencies = [
  "tokio",
  "tokio_with_wasm",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -3498,7 +3496,6 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "uuid",
- "web-time",
 ]
 
 [[package]]
@@ -3517,7 +3514,6 @@ dependencies = [
  "tonic",
  "tracing",
  "uuid",
- "web-time",
 ]
 
 [[package]]

@@ -5,12 +5,12 @@ use crate::{
 };
 use bitcoin::consensus::encode::FromHexError;
 use breez_sdk_common::error::ServiceConnectivityError;
+use platform_utils::time::SystemTimeError;
 use serde::{Deserialize, Serialize};
 use spark_wallet::SparkWalletError;
 use std::{convert::Infallible, num::TryFromIntError};
 use thiserror::Error;
 use tracing_subscriber::util::TryInitError;
-use web_time::SystemTimeError;
 
 /// Error type for the `BreezSdk`
 #[derive(Debug, Error, Clone)]

@@ -19,7 +19,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tonic.workspace = true
 tracing.workspace = true
-web-time.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

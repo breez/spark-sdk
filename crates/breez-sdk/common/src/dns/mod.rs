@@ -8,7 +8,7 @@ use anyhow::Result;
 use dnssec_prover::rr::{Name, RR};
 use dnssec_prover::ser::parse_rr_stream;
 use dnssec_prover::validation::verify_rr_stream;
-use web_time::{SystemTime, UNIX_EPOCH};
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 
 pub use resolver::Resolver;
 
