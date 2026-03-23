@@ -57,11 +57,3 @@ async def configure_stable_balance():
     )
     # ANCHOR_END: stable-balance-config
     logging.info(f"Config: {config}")
-
-async def configure_support_lnurl_verify():
-    # ANCHOR: support-lnurl-verify
-    # Enable LNURL verify support (LUD-21 and NIP-57)
-    config = default_config(network=Network.MAINNET)
-    config.support_lnurl_verify = True
-    # ANCHOR_END: support-lnurl-verify
-    logging.info(f"Config: {config}")

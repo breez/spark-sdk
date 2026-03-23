@@ -114,7 +114,7 @@ impl BreezSdk {
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
-            lnurl_private_mode_enabled: !self.config.support_lnurl_verify,
+            lnurl_private_mode_enabled: false,
         };
 
         let response = client.register_lightning_address(&params).await?;

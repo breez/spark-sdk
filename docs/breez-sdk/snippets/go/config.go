@@ -67,12 +67,3 @@ func ConfigureStableBalance() {
 	// ANCHOR_END: stable-balance-config
 	log.Printf("Config: %+v", config)
 }
-
-func ConfigureSupportLnurlVerify() {
-	// ANCHOR: support-lnurl-verify
-	// Enable LNURL verify support (LUD-21 and NIP-57)
-	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
-	config.SupportLnurlVerify = true
-	// ANCHOR_END: support-lnurl-verify
-	log.Printf("Config: %+v", config)
-}
