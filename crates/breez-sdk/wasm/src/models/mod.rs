@@ -656,6 +656,7 @@ pub struct SparkSigningOperator {
 pub struct SparkSspConfig {
     pub base_url: String,
     pub identity_public_key: String,
+    pub schema_endpoint: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]

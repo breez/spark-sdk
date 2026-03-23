@@ -66,6 +66,7 @@ pub struct _SparkSigningOperator {
 pub struct _SparkSspConfig {
     pub base_url: String,
     pub identity_public_key: String,
+    pub schema_endpoint: Option<String>,
 }
 
 #[frb(mirror(OptimizationConfig))]

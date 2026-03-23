@@ -73,6 +73,7 @@ func ConfigureSparkConfig() {
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 
 	// Connect to a custom Spark environment
+	schemaEndpoint := "graphql/spark/rc"
 	sparkConfig := breez_sdk_spark.SparkConfig{
 		CoordinatorIdentifier: "0000000000000000000000000000000000000000000000000000000000000001",
 		Threshold:             2,
@@ -99,6 +100,7 @@ func ConfigureSparkConfig() {
 		SspConfig: breez_sdk_spark.SparkSspConfig{
 			BaseUrl:           "https://api.example.com",
 			IdentityPublicKey: "02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5",
+			SchemaEndpoint:    &schemaEndpoint,
 		},
 		ExpectedWithdrawBondSats:              10_000,
 		ExpectedWithdrawRelativeBlockLocktime: 1_000,

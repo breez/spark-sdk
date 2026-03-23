@@ -100,6 +100,7 @@ async def configure_spark_config():
             identity_public_key=(
                 "02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5"
             ),
+            schema_endpoint="graphql/spark/rc",
         ),
         expected_withdraw_bond_sats=10_000,
         expected_withdraw_relative_block_locktime=1_000,

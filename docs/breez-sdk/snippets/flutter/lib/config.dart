@@ -93,7 +93,8 @@ Future<void> configureSparkConfig() async {
           sspConfig: SparkSspConfig(
               baseUrl: 'https://api.example.com',
               identityPublicKey:
-                  '02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5'),
+                  '02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5',
+              schemaEndpoint: 'graphql/spark/rc'),
           expectedWithdrawBondSats: BigInt.from(10000),
           expectedWithdrawRelativeBlockLocktime: BigInt.from(1000)));
   // ANCHOR_END: spark-config

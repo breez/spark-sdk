@@ -328,7 +328,7 @@ impl SdkBuilder {
         let service_provider_config = SparkWalletConfig::create_service_provider_config(
             &env_config.ssp_config.base_url,
             &env_config.ssp_config.identity_public_key,
-            None,
+            env_config.ssp_config.schema_endpoint.clone(),
         )
         .map_err(|e| SdkError::InvalidInput(e.to_string()))?;
 

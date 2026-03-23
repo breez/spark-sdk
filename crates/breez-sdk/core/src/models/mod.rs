@@ -686,6 +686,9 @@ pub struct SparkSspConfig {
     pub base_url: String,
     /// Hex-encoded compressed public key of the SSP.
     pub identity_public_key: String,
+    /// Optional GraphQL schema endpoint path (e.g. "graphql/spark/rc").
+    /// Defaults to the hardcoded schema endpoint if not set.
+    pub schema_endpoint: Option<String>,
 }
 
 impl Config {

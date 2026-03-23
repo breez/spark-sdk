@@ -80,7 +80,7 @@ The configuration requires:
 - **Signing operators**: The set of Spark operators with their identifiers, gRPC addresses, and identity public keys.
 - **Coordinator identifier**: Which operator acts as the coordinator.
 - **Threshold**: The FROST signing threshold (e.g. 2-of-3).
-- **SSP configuration**: The Service Provider's base URL and identity public key.
+- **SSP configuration**: The Service Provider's base URL, identity public key, and optionally a custom GraphQL schema endpoint path.
 - **Token withdrawal settings**: Expected bond amount and relative block locktime for token withdrawals.
 
 {{#tabs config:spark-config}}
