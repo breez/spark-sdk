@@ -71,6 +71,27 @@ See [Custom leaf optimization](./optimize.md) for more information and recommend
 
 {{#tabs config:optimization-configuration}}
 
+## Spark environment configuration
+
+The SDK comes pre-configured for the default Spark operator network. For advanced use cases such as connecting to alternative Spark deployments (e.g. dev or staging environments), you can override the operator pool, service provider, threshold, and token withdrawal settings by providing a custom Spark configuration.
+
+The configuration requires:
+
+- **Signing operators**: The set of Spark operators with their identifiers, gRPC addresses, and identity public keys.
+- **Coordinator identifier**: Which operator acts as the coordinator.
+- **Threshold**: The FROST signing threshold (e.g. 2-of-3).
+- **SSP configuration**: The Service Provider's base URL and identity public key.
+- **Token withdrawal settings**: Expected bond amount and relative block locktime for token withdrawals.
+
+{{#tabs config:spark-config}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+This is an advanced configuration option intended for Spark operators and developers working with custom Spark deployments. Most integrators should use the default configuration.
+
+</div>
+
 ## Maximum concurrent claims
 
 Controls how many pending Spark transfers can be claimed in parallel. The default value of 4 provides a good balance between throughput and resource usage for most applications.

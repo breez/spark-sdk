@@ -4,6 +4,9 @@ from breez_sdk_spark import (
     Network,
     MaxFee,
     OptimizationConfig,
+    SparkConfig,
+    SparkSigningOperator,
+    SparkSspConfig,
     StableBalanceConfig,
 )
 
@@ -56,4 +59,50 @@ async def configure_stable_balance():
         reserved_sats=1_000
     )
     # ANCHOR_END: stable-balance-config
+    logging.info(f"Config: {config}")
+
+async def configure_spark_config():
+    # ANCHOR: spark-config
+    config = default_config(network=Network.MAINNET)
+
+    # Connect to a custom Spark environment
+    config.spark_config = SparkConfig(
+        coordinator_identifier="0000000000000000000000000000000000000000000000000000000000000001",
+        threshold=2,
+        signing_operators=[
+            SparkSigningOperator(
+                id=0,
+                identifier="0000000000000000000000000000000000000000000000000000000000000001",
+                address="https://0.spark.example.com",
+                identity_public_key=(
+                    "03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651"
+                ),
+            ),
+            SparkSigningOperator(
+                id=1,
+                identifier="0000000000000000000000000000000000000000000000000000000000000002",
+                address="https://1.spark.example.com",
+                identity_public_key=(
+                    "02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23"
+                ),
+            ),
+            SparkSigningOperator(
+                id=2,
+                identifier="0000000000000000000000000000000000000000000000000000000000000003",
+                address="https://2.spark.example.com",
+                identity_public_key=(
+                    "0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853"
+                ),
+            ),
+        ],
+        ssp_config=SparkSspConfig(
+            base_url="https://api.example.com",
+            identity_public_key=(
+                "02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5"
+            ),
+        ),
+        expected_withdraw_bond_sats=10_000,
+        expected_withdraw_relative_block_locktime=1_000,
+    )
+    # ANCHOR_END: spark-config
     logging.info(f"Config: {config}")
