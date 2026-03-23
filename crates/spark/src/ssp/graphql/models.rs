@@ -249,15 +249,31 @@ pub enum ClaimStaticDepositRequestType {
 }
 
 /// Webhook event type for SSP wallet webhooks
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SparkWalletWebhookEventType {
     SparkLightningReceiveFinished,
     SparkLightningSendFinished,
     SparkCoopExitFinished,
     SparkStaticDepositFinished,
-    #[serde(other, skip_serializing)]
-    Unknown,
+    #[serde(skip_serializing)]
+    Unknown(String),
+}
+
+impl<'de> serde::Deserialize<'de> for SparkWalletWebhookEventType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "SPARK_LIGHTNING_RECEIVE_FINISHED" => Ok(Self::SparkLightningReceiveFinished),
+            "SPARK_LIGHTNING_SEND_FINISHED" => Ok(Self::SparkLightningSendFinished),
+            "SPARK_COOP_EXIT_FINISHED" => Ok(Self::SparkCoopExitFinished),
+            "SPARK_STATIC_DEPOSIT_FINISHED" => Ok(Self::SparkStaticDepositFinished),
+            other => Ok(Self::Unknown(other.to_string())),
+        }
+    }
 }
 
 /// Webhook entry from the SSP

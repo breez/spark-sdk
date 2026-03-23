@@ -1584,6 +1584,8 @@ pub enum WebhookEventType {
     CoopExitFinished,
     /// Triggered when a static deposit completes.
     StaticDepositFinished,
+    /// An event type not yet recognized by this version of the SDK.
+    Unknown(String),
 }
 
 /// A registered webhook entry.

@@ -534,6 +534,7 @@ impl From<crate::WebhookEventType> for spark_wallet::SparkWalletWebhookEventType
             crate::WebhookEventType::LightningSendFinished => Self::SparkLightningSendFinished,
             crate::WebhookEventType::CoopExitFinished => Self::SparkCoopExitFinished,
             crate::WebhookEventType::StaticDepositFinished => Self::SparkStaticDepositFinished,
+            crate::WebhookEventType::Unknown(s) => Self::Unknown(s),
         }
     }
 }
@@ -553,7 +554,7 @@ impl From<spark_wallet::SparkWalletWebhookEventType> for crate::WebhookEventType
             spark_wallet::SparkWalletWebhookEventType::SparkStaticDepositFinished => {
                 Self::StaticDepositFinished
             }
-            spark_wallet::SparkWalletWebhookEventType::Unknown => Self::LightningReceiveFinished,
+            spark_wallet::SparkWalletWebhookEventType::Unknown(s) => Self::Unknown(s),
         }
     }
 }

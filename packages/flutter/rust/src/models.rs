@@ -1191,6 +1191,7 @@ pub enum _WebhookEventType {
     LightningSendFinished,
     CoopExitFinished,
     StaticDepositFinished,
+    Unknown(String),
 }
 
 #[frb(mirror(Webhook))]
