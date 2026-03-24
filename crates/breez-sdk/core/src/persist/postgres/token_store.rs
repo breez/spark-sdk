@@ -293,7 +293,9 @@ impl TokenOutputStore for PostgresTokenStore {
                     },
                 );
             }
-            let entry = map.get_mut(&identifier).expect("just inserted");
+            let Some(entry) = map.get_mut(&identifier) else {
+                continue;
+            };
 
             let output_id: Option<String> = row.get("output_id");
             if output_id.is_none() {
