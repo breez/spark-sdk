@@ -10,6 +10,7 @@ async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
     let optional_redirect_url = Some("https://example.com/purchase-complete".to_string());
 
     let request = BuyBitcoinRequest {
+        provider: Some(BuyBitcoinProvider::Moonpay),
         locked_amount_sat: optional_locked_amount_sat,
         redirect_url: optional_redirect_url,
     };
@@ -18,5 +19,20 @@ async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
     info!("Open this URL in a browser to complete the purchase:");
     info!("{}", response.url);
     // ANCHOR_END: buy-bitcoin
+    Ok(())
+}
+
+async fn buy_bitcoin_via_cashapp(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: buy-bitcoin-cashapp
+    let request = BuyBitcoinRequest {
+        provider: Some(BuyBitcoinProvider::CashApp),
+        locked_amount_sat: None,
+        redirect_url: None,
+    };
+
+    let response = sdk.buy_bitcoin(request).await?;
+    info!("Open this URL in Cash App to complete the purchase:");
+    info!("{}", response.url);
+    // ANCHOR_END: buy-bitcoin-cashapp
     Ok(())
 }

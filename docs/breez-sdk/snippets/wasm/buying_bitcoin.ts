@@ -11,6 +11,7 @@ const buyBitcoin = async (sdk: BreezSdk) => {
   const optionalRedirectUrl = 'https://example.com/purchase-complete'
 
   const request: BuyBitcoinRequest = {
+    provider: 'moonpay',
     lockedAmountSat: optionalLockedAmountSat,
     redirectUrl: optionalRedirectUrl
   }
@@ -19,4 +20,16 @@ const buyBitcoin = async (sdk: BreezSdk) => {
   console.log('Open this URL in a browser to complete the purchase:')
   console.log(response.url)
   // ANCHOR_END: buy-bitcoin
+}
+
+const buyBitcoinViaCashapp = async (sdk: BreezSdk) => {
+  // ANCHOR: buy-bitcoin-cashapp
+  const request: BuyBitcoinRequest = {
+    provider: 'cashApp'
+  }
+
+  const response = await sdk.buyBitcoin(request)
+  console.log('Open this URL in Cash App to complete the purchase:')
+  console.log(response.url)
+  // ANCHOR_END: buy-bitcoin-cashapp
 }

@@ -8,6 +8,7 @@ Future<void> buyBitcoin(BreezSdk sdk) async {
   final optionalRedirectUrl = "https://example.com/purchase-complete";
 
   final request = BuyBitcoinRequest(
+      provider: BuyBitcoinProvider.moonpay,
       lockedAmountSat: optionalLockedAmountSat,
       redirectUrl: optionalRedirectUrl);
 
@@ -15,4 +16,15 @@ Future<void> buyBitcoin(BreezSdk sdk) async {
   print("Open this URL in a browser to complete the purchase:");
   print(response.url);
   // ANCHOR_END: buy-bitcoin
+}
+
+Future<void> buyBitcoinViaCashapp(BreezSdk sdk) async {
+  // ANCHOR: buy-bitcoin-cashapp
+  final request = BuyBitcoinRequest(
+      provider: BuyBitcoinProvider.cashApp);
+
+  final response = await sdk.buyBitcoin(request: request);
+  print("Open this URL in Cash App to complete the purchase:");
+  print(response.url);
+  // ANCHOR_END: buy-bitcoin-cashapp
 }

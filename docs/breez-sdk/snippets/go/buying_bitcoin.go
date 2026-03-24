@@ -13,7 +13,9 @@ func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	// Optionally, set a redirect URL for after the purchase is completed
 	optionalRedirectUrl := "https://example.com/purchase-complete"
 
+	moonpayProvider := breez_sdk_spark.BuyBitcoinProviderMoonpay
 	request := breez_sdk_spark.BuyBitcoinRequest{
+		Provider:        &moonpayProvider,
 		LockedAmountSat: &optionalLockedAmountSat,
 		RedirectUrl:     &optionalRedirectUrl,
 	}
@@ -26,5 +28,23 @@ func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	log.Printf("Open this URL in a browser to complete the purchase:")
 	log.Printf("%v", response.Url)
 	// ANCHOR_END: buy-bitcoin
+	return nil
+}
+
+func BuyBitcoinViaCashapp(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: buy-bitcoin-cashapp
+	cashAppProvider := breez_sdk_spark.BuyBitcoinProviderCashApp
+	request := breez_sdk_spark.BuyBitcoinRequest{
+		Provider: &cashAppProvider,
+	}
+
+	response, err := sdk.BuyBitcoin(request)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Open this URL in Cash App to complete the purchase:")
+	log.Printf("%v", response.Url)
+	// ANCHOR_END: buy-bitcoin-cashapp
 	return nil
 }
