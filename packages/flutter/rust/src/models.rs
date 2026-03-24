@@ -1159,8 +1159,15 @@ pub struct _FetchConversionLimitsResponse {
     pub min_to_amount: Option<u128>,
 }
 
+#[frb(mirror(BuyBitcoinProvider))]
+pub enum _BuyBitcoinProvider {
+    Moonpay,
+    CashApp,
+}
+
 #[frb(mirror(BuyBitcoinRequest))]
 pub struct _BuyBitcoinRequest {
+    pub provider: Option<BuyBitcoinProvider>,
     pub locked_amount_sat: Option<u64>,
     pub redirect_url: Option<String>,
 }

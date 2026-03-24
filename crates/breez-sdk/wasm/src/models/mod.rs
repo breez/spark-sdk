@@ -1331,8 +1331,15 @@ pub struct SparkStatus {
     pub last_updated: u64,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinProvider)]
+pub enum BuyBitcoinProvider {
+    Moonpay,
+    CashApp,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
 pub struct BuyBitcoinRequest {
+    pub provider: Option<BuyBitcoinProvider>,
     pub locked_amount_sat: Option<u64>,
     pub redirect_url: Option<String>,
 }
