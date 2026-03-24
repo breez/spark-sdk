@@ -8,6 +8,7 @@ func buyBitcoin(sdk: BreezSdk) async throws {
     let optionalRedirectUrl = "https://example.com/purchase-complete"
 
     let request = BuyBitcoinRequest(
+        provider: .moonpay,
         lockedAmountSat: optionalLockedAmountSat,
         redirectUrl: optionalRedirectUrl
     )
@@ -16,4 +17,16 @@ func buyBitcoin(sdk: BreezSdk) async throws {
     print("Open this URL in a browser to complete the purchase:")
     print("\(response.url)")
     // ANCHOR_END: buy-bitcoin
+}
+
+func buyBitcoinViaCashapp(sdk: BreezSdk) async throws {
+    // ANCHOR: buy-bitcoin-cashapp
+    let request = BuyBitcoinRequest(
+        provider: .cashApp
+    )
+
+    let response = try await sdk.buyBitcoin(request: request)
+    print("Open this URL in Cash App to complete the purchase:")
+    print("\(response.url)")
+    // ANCHOR_END: buy-bitcoin-cashapp
 }

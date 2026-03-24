@@ -13,6 +13,7 @@ namespace BreezSdkSnippets
             var optionalRedirectUrl = "https://example.com/purchase-complete";
 
             var request = new BuyBitcoinRequest(
+                provider: BuyBitcoinProvider.Moonpay,
                 lockedAmountSat: optionalLockedAmountSat,
                 redirectUrl: optionalRedirectUrl
             );
@@ -21,6 +22,19 @@ namespace BreezSdkSnippets
             Console.WriteLine("Open this URL in a browser to complete the purchase:");
             Console.WriteLine($"{response.url}");
             // ANCHOR_END: buy-bitcoin
+        }
+
+        async Task BuyBitcoinViaCashapp(BreezSdk sdk)
+        {
+            // ANCHOR: buy-bitcoin-cashapp
+            var request = new BuyBitcoinRequest(
+                provider: BuyBitcoinProvider.CashApp
+            );
+
+            var response = await sdk.BuyBitcoin(request: request);
+            Console.WriteLine("Open this URL in Cash App to complete the purchase:");
+            Console.WriteLine($"{response.url}");
+            // ANCHOR_END: buy-bitcoin-cashapp
         }
     }
 }
