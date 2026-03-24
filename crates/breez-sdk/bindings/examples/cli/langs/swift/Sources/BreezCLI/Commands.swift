@@ -109,7 +109,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "parse":                             CommandEntry(name: "parse", description: "Parse an input (invoice, address, LNURL)", run: handleParse),
         "refund-deposit":                    CommandEntry(name: "refund-deposit", description: "Refund an on-chain deposit", run: handleRefundDeposit),
         "list-unclaimed-deposits":           CommandEntry(name: "list-unclaimed-deposits", description: "List unclaimed on-chain deposits", run: handleListUnclaimedDeposits),
-        "buy-bitcoin":                       CommandEntry(name: "buy-bitcoin", description: "Buy Bitcoin via MoonPay", run: handleBuyBitcoin),
+        "buy-bitcoin":                       CommandEntry(name: "buy-bitcoin", description: "Buy Bitcoin", run: handleBuyBitcoin),
         "check-lightning-address-available": CommandEntry(name: "check-lightning-address-available", description: "Check if a lightning address username is available", run: handleCheckLightningAddress),
         "get-lightning-address":             CommandEntry(name: "get-lightning-address", description: "Get registered lightning address", run: handleGetLightningAddress),
         "register-lightning-address":        CommandEntry(name: "register-lightning-address", description: "Register a lightning address", run: handleRegisterLightningAddress),
@@ -740,10 +740,20 @@ func handleListUnclaimedDeposits(_ sdk: BreezSdk, _ args: [String]) async throws
 
 func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
+    let providerStr = fp.get("provider") ?? "moonpay"
     let lockedAmount = fp.get("locked-amount-sat").flatMap { UInt64($0) }
     let redirectUrl = fp.get("redirect-url")
 
+    let provider: BuyBitcoinProvider
+    switch providerStr.lowercased() {
+    case "cashapp", "cash_app", "cash-app":
+        provider = .cashApp
+    default:
+        provider = .moonpay
+    }
+
     let result = try await sdk.buyBitcoin(request: BuyBitcoinRequest(
+        provider: provider,
         lockedAmountSat: lockedAmount,
         redirectUrl: redirectUrl
     ))

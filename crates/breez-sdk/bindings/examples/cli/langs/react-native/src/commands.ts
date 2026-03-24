@@ -28,6 +28,7 @@ import {
   MaxFee,
   Fee,
   SparkHtlcStatus,
+  BuyBitcoinProvider,
   getSparkStatus,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
@@ -192,7 +193,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'parse', description: 'Parse an input (invoice, address, LNURL)', run: handleParse },
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
-    { name: 'buy-bitcoin', description: 'Buy Bitcoin via MoonPay', run: handleBuyBitcoin },
+    { name: 'buy-bitcoin', description: 'Buy Bitcoin', run: handleBuyBitcoin },
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
@@ -892,12 +893,26 @@ async function handleListUnclaimedDeposits(sdk: BreezSdkInterface, _tokenIssuer:
 // --- buy-bitcoin ---
 
 async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const providerStr = parseFlag(args, '--provider') ?? 'moonpay'
   const lockedAmountSatStr = parseFlag(args, '--locked-amount-sat', '--amount')
   const redirectUrl = parseFlag(args, '--redirect-url')
+
+  let provider: BuyBitcoinProvider
+  switch (providerStr.toLowerCase()) {
+    case 'cashapp':
+    case 'cash_app':
+    case 'cash-app':
+      provider = BuyBitcoinProvider.CashApp
+      break
+    default:
+      provider = BuyBitcoinProvider.Moonpay
+      break
+  }
 
   const lockedAmountSat = lockedAmountSatStr !== undefined ? BigInt(lockedAmountSatStr) : undefined
 
   const result = await sdk.buyBitcoin({
+    provider,
     lockedAmountSat,
     redirectUrl,
   })

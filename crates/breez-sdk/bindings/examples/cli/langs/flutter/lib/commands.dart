@@ -64,7 +64,7 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'parse': CommandEntry('Parse an input (invoice, address, LNURL)', _handleParse),
     'refund-deposit': CommandEntry('Refund an on-chain deposit', _handleRefundDeposit),
     'list-unclaimed-deposits': CommandEntry('List unclaimed on-chain deposits', _handleListUnclaimedDeposits),
-    'buy-bitcoin': CommandEntry('Buy Bitcoin via MoonPay', _handleBuyBitcoin),
+    'buy-bitcoin': CommandEntry('Buy Bitcoin', _handleBuyBitcoin),
     'check-lightning-address-available': CommandEntry(
       'Check if a lightning address username is available',
       _handleCheckLightningAddressAvailable,
@@ -716,17 +716,29 @@ Future<void> _handleListUnclaimedDeposits(BreezSdk sdk, TokenIssuer tokenIssuer,
 Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
   final parser =
       _parser('buy-bitcoin')
+        ..addOption('provider', defaultsTo: 'moonpay')
         ..addOption('locked-amount-sat')
         ..addOption('redirect-url');
   final results = _parseArgs(parser, args, 'buy-bitcoin [options]');
   if (results == null) return;
+
+  final providerStr = results.option('provider')!.toLowerCase();
+  BuyBitcoinProvider provider;
+  switch (providerStr) {
+    case 'cashapp':
+    case 'cash_app':
+    case 'cash-app':
+      provider = BuyBitcoinProvider.cashApp;
+    default:
+      provider = BuyBitcoinProvider.moonpay;
+  }
 
   final lockedStr = results.option('locked-amount-sat');
   final lockedAmount = lockedStr != null ? BigInt.parse(lockedStr) : null;
   final redirectUrl = results.option('redirect-url');
 
   final result = await sdk.buyBitcoin(
-    request: BuyBitcoinRequest(lockedAmountSat: lockedAmount, redirectUrl: redirectUrl),
+    request: BuyBitcoinRequest(provider: provider, lockedAmountSat: lockedAmount, redirectUrl: redirectUrl),
   );
   print('Open this URL in a browser to complete the purchase:');
   print(result.url);

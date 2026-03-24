@@ -4,16 +4,16 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    AssetFilter, BreezSdk, BuyBitcoinProvider, BuyBitcoinRequest, CheckLightningAddressRequest,
+    ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee,
+    FeePolicy, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
+    GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    TokenTransactionType, UpdateUserSettingsRequest,
 };
 use clap::Parser;
 use rand::RngCore;
@@ -264,13 +264,17 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
-    /// Buy Bitcoin using an external provider (`MoonPay`)
+    /// Buy Bitcoin using an external provider
     BuyBitcoin {
+        /// Provider to use: "moonpay" (default) or "cashapp"
+        #[arg(long, default_value = "moonpay")]
+        provider: String,
+
         /// Lock the purchase to a specific amount in satoshis. When provided, the user cannot change the amount in the purchase flow.
         #[arg(long)]
         locked_amount_sat: Option<u64>,
 
-        /// Custom redirect URL after purchase completion
+        /// Custom redirect URL after purchase completion (`MoonPay` only)
         #[arg(long)]
         redirect_url: Option<String>,
     },
@@ -505,11 +509,17 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::BuyBitcoin {
+            provider,
             locked_amount_sat,
             redirect_url,
         } => {
+            let buy_provider = match provider.to_lowercase().as_str() {
+                "cashapp" | "cash_app" | "cash-app" => BuyBitcoinProvider::CashApp,
+                _ => BuyBitcoinProvider::Moonpay,
+            };
             let value = sdk
                 .buy_bitcoin(BuyBitcoinRequest {
+                    provider: Some(buy_provider),
                     locked_amount_sat,
                     redirect_url,
                 })

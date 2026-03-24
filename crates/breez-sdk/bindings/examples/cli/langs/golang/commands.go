@@ -71,7 +71,7 @@ func BuildCommandRegistry() map[string]Command {
 		"parse":                             {Name: "parse", Description: "Parse an input (invoice, address, LNURL)", Run: handleParse},
 		"refund-deposit":                    {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
 		"list-unclaimed-deposits":           {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
-		"buy-bitcoin":                       {Name: "buy-bitcoin", Description: "Buy Bitcoin via MoonPay", Run: handleBuyBitcoin},
+		"buy-bitcoin":                       {Name: "buy-bitcoin", Description: "Buy Bitcoin", Run: handleBuyBitcoin},
 		"check-lightning-address-available": {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
 		"get-lightning-address":             {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
 		"register-lightning-address":        {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
@@ -865,13 +865,24 @@ func handleListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk, _ *readline.Inst
 
 func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("buy-bitcoin", flag.ContinueOnError)
+	providerStr := fs.String("provider", "moonpay", "Provider to use (moonpay or cashapp)")
 	lockedAmount := fs.Uint64("amount", 0, "Lock purchase to this amount in sats")
 	redirectUrl := fs.String("redirect-url", "", "Redirect URL after purchase")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	req := breez_sdk_spark.BuyBitcoinRequest{}
+	var provider breez_sdk_spark.BuyBitcoinProvider
+	switch strings.ToLower(*providerStr) {
+	case "cashapp", "cash_app", "cash-app":
+		provider = breez_sdk_spark.BuyBitcoinProviderCashApp
+	default:
+		provider = breez_sdk_spark.BuyBitcoinProviderMoonpay
+	}
+
+	req := breez_sdk_spark.BuyBitcoinRequest{
+		Provider: &provider,
+	}
 	if *lockedAmount > 0 {
 		req.LockedAmountSat = lockedAmount
 	}

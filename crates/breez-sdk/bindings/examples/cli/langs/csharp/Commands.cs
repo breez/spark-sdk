@@ -150,7 +150,7 @@ public static class Commands
             ["buy-bitcoin"] = new()
             {
                 Name = "buy-bitcoin",
-                Description = "Buy Bitcoin via MoonPay",
+                Description = "Buy Bitcoin",
                 Run = HandleBuyBitcoin
             },
             ["check-lightning-address-available"] = new()
@@ -929,10 +929,25 @@ public static class Commands
 
     private static async Task HandleBuyBitcoin(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
+        var providerStr = GetFlag(args, "--provider") ?? "moonpay";
         var lockedAmountStr = GetFlag(args, "--locked-amount-sat");
         var redirectUrl = GetFlag(args, "--redirect-url");
 
+        BuyBitcoinProvider provider;
+        switch (providerStr.ToLower())
+        {
+            case "cashapp":
+            case "cash_app":
+            case "cash-app":
+                provider = BuyBitcoinProvider.CashApp;
+                break;
+            default:
+                provider = BuyBitcoinProvider.Moonpay;
+                break;
+        }
+
         var result = await sdk.BuyBitcoin(new BuyBitcoinRequest(
+            provider: provider,
             lockedAmountSat: ParseOptionalUlong(lockedAmountStr),
             redirectUrl: redirectUrl
         ));

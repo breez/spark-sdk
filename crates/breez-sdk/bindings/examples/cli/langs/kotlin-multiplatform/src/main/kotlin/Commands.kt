@@ -63,7 +63,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "parse" to CliCommand("parse", "Parse an input (invoice, address, LNURL)", ::handleParse),
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
-        "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via MoonPay", ::handleBuyBitcoin),
+        "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin", ::handleBuyBitcoin),
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
@@ -756,11 +756,19 @@ suspend fun handleListUnclaimedDeposits(sdk: BreezSdk, reader: LineReader, args:
 
 suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
+    val providerStr = fp.getString("provider") ?: "moonpay"
     val lockedAmount = fp.getULong("amount", "locked-amount-sat")
     val redirectUrl = fp.getString("redirect-url")
 
+    val provider = if (providerStr.lowercase() in listOf("cashapp", "cash_app", "cash-app")) {
+        BuyBitcoinProvider.CASH_APP
+    } else {
+        BuyBitcoinProvider.MOONPAY
+    }
+
     val result = sdk.buyBitcoin(
         BuyBitcoinRequest(
+            provider = provider,
             lockedAmountSat = lockedAmount,
             redirectUrl = redirectUrl,
         )

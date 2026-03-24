@@ -7,6 +7,7 @@ import time
 import breez_sdk_spark
 from breez_sdk_spark import (
     AssetFilter,
+    BuyBitcoinProvider,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
     ClaimDepositRequest,
@@ -594,13 +595,21 @@ async def _handle_list_unclaimed_deposits(sdk, _token_issuer, _session, _args):
 # --- buy-bitcoin ---
 
 def _build_buy_bitcoin_parser():
-    p = _parser("buy-bitcoin", "Buy Bitcoin via MoonPay")
+    p = _parser("buy-bitcoin", "Buy Bitcoin")
+    p.add_argument("--provider", default="moonpay", help="Provider to use (moonpay or cashapp)")
     p.add_argument("--locked-amount-sat", type=int, default=None)
     p.add_argument("--redirect-url", default=None)
     return p
 
 async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
+    provider_str = args.provider.lower()
+    if provider_str in ("cashapp", "cash_app", "cash-app"):
+        provider = BuyBitcoinProvider.CASH_APP
+    else:
+        provider = BuyBitcoinProvider.MOONPAY
+
     result = await sdk.buy_bitcoin(request=BuyBitcoinRequest(
+        provider=provider,
         locked_amount_sat=args.locked_amount_sat,
         redirect_url=args.redirect_url,
     ))
