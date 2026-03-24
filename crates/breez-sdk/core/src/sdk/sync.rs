@@ -14,8 +14,10 @@ use crate::{
     persist::{ObjectCacheRepository, UpdateDepositPayload},
     sync::SparkSyncService,
     utils::{
-        deposit_chain_syncer::DepositChainSyncer, payments::get_payment_and_emit_event,
-        run_with_shutdown, utxo_fetcher::DetailedUtxo,
+        deposit_chain_syncer::{DepositChainSyncer, TxOutput},
+        payments::get_payment_and_emit_event,
+        run_with_shutdown,
+        utxo_fetcher::DetailedUtxo,
     },
 };
 
@@ -423,13 +425,46 @@ impl BreezSdk {
 
     pub(super) async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
         self.ensure_spark_private_mode_initialized().await?;
-        let to_claim = DepositChainSyncer::new(
+        let existing_deposits = self.storage.list_deposits().await?;
+        let existing_keys: std::collections::HashSet<TxOutput> = existing_deposits
+            .iter()
+            .map(|d| TxOutput {
+                txid: d.txid.clone(),
+                vout: d.vout,
+            })
+            .collect();
+
+        let all_utxos = DepositChainSyncer::new(
             self.chain_service.clone(),
             self.storage.clone(),
             self.spark_wallet.clone(),
         )
         .sync()
         .await?;
+
+        // Emit NewDeposits for any deposits not previously known
+        let new_deposits: Vec<DepositInfo> = all_utxos
+            .iter()
+            .filter(|(u, _)| {
+                !existing_keys.contains(&TxOutput {
+                    txid: u.txid.to_string(),
+                    vout: u.vout,
+                })
+            })
+            .map(|(u, is_mature)| u.clone().into_deposit_info(*is_mature))
+            .collect();
+        if !new_deposits.is_empty() {
+            self.event_emitter
+                .emit(&SdkEvent::NewDeposits { new_deposits })
+                .await;
+        }
+
+        // Only claim UTXOs with sufficient confirmations
+        let to_claim: Vec<_> = all_utxos
+            .into_iter()
+            .filter(|(_, is_mature)| *is_mature)
+            .map(|(u, _)| u)
+            .collect();
 
         let mut claimed_deposits: Vec<DepositInfo> = Vec::new();
         let mut unclaimed_deposits: Vec<DepositInfo> = Vec::new();
@@ -443,7 +478,7 @@ impl BreezSdk {
                     self.storage
                         .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                         .await?;
-                    claimed_deposits.push(detailed_utxo.into());
+                    claimed_deposits.push(detailed_utxo.into_deposit_info(true));
                 }
                 Err(e) => {
                     warn!(
@@ -459,7 +494,7 @@ impl BreezSdk {
                             },
                         )
                         .await?;
-                    let mut unclaimed_deposit: DepositInfo = detailed_utxo.clone().into();
+                    let mut unclaimed_deposit = detailed_utxo.into_deposit_info(true);
                     unclaimed_deposit.claim_error = Some(e.into());
                     unclaimed_deposits.push(unclaimed_deposit);
                 }

@@ -73,6 +73,11 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           // it is recommended to refresh the payment list and wallet balance.
           break
         }
+        case 'newDeposits': {
+          // New deposits were detected (may be pending or confirmed)
+          const newDeposits = event.newDeposits
+          break
+        }
         case 'unclaimedDeposits': {
           // SDK was unable to claim some deposits automatically
           const unclaimedDeposits = event.unclaimedDeposits

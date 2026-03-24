@@ -37,6 +37,20 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
     // ANCHOR_END: list-unclaimed-deposits
 }
 
+func listPendingDeposits(sdk: BreezSdk) async throws {
+    // ANCHOR: list-pending-deposits
+    let request = ListUnclaimedDepositsRequest()
+    let response = try await sdk.listUnclaimedDeposits(request: request)
+
+    let pendingDeposits = response.deposits.filter { !$0.isMature }
+
+    for deposit in pendingDeposits {
+        print("Pending deposit: \(deposit.txid):\(deposit.vout)")
+        print("Amount: \(deposit.amountSats) sats")
+    }
+    // ANCHOR_END: list-pending-deposits
+}
+
 func handleFeeExceeded(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: handle-fee-exceeded
     if case .maxDepositClaimFeeExceeded(_, _, _, let requiredFeeSats, _) = deposit.claimError {

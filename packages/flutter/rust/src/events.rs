@@ -27,6 +27,9 @@ pub enum _SdkEvent {
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
     },
+    NewDeposits {
+        new_deposits: Vec<DepositInfo>,
+    },
 }
 
 #[frb(mirror(OptimizationEvent))]

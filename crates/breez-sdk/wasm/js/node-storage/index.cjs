@@ -580,14 +580,15 @@ class SqliteStorage {
 
   // ===== Deposit Operations =====
 
-  addDeposit(txid, vout, amountSats) {
+  addDeposit(txid, vout, amountSats, isMature) {
     try {
       const stmt = this.db.prepare(`
-                 INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
-                 VALUES (?, ?, ?)
+                 INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(txid, vout) DO UPDATE SET is_mature = excluded.is_mature, amount_sats = excluded.amount_sats
              `);
 
-      stmt.run(txid, vout, amountSats);
+      stmt.run(txid, vout, amountSats, isMature ? 1 : 0);
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(
@@ -620,7 +621,7 @@ class SqliteStorage {
   listDeposits() {
     try {
       const stmt = this.db.prepare(`
-                SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id 
+                SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id
                 FROM unclaimed_deposits
             `);
 
@@ -630,6 +631,7 @@ class SqliteStorage {
           txid: row.txid,
           vout: row.vout,
           amountSats: row.amount_sats,
+          isMature: Boolean(row.is_mature ?? 1),
           claimError: row.claim_error ? JSON.parse(row.claim_error) : null,
           refundTx: row.refund_tx,
           refundTxId: row.refund_tx_id,

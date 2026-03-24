@@ -64,6 +64,11 @@ namespace BreezSdkSnippets
                         // it is recommended to refresh the payment list and wallet balance.
                         break;
 
+                    case SdkEvent.NewDeposits newDepositsEvent:
+                        // New deposits were detected (may be pending or confirmed)
+                        var newDeposits = newDepositsEvent.newDeposits;
+                        break;
+
                     case SdkEvent.UnclaimedDeposits unclaimedDepositsEvent:
                         // SDK was unable to claim some deposits automatically
                         var unclaimedDeposits = unclaimedDepositsEvent.unclaimedDeposits;

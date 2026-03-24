@@ -15,12 +15,13 @@ pub(crate) struct DetailedUtxo {
     pub value: u64,
 }
 
-impl From<DetailedUtxo> for DepositInfo {
-    fn from(detailed_utxo: DetailedUtxo) -> Self {
+impl DetailedUtxo {
+    pub fn into_deposit_info(self, is_mature: bool) -> DepositInfo {
         DepositInfo {
-            txid: detailed_utxo.txid.to_string(),
-            vout: detailed_utxo.vout,
-            amount_sats: detailed_utxo.value,
+            txid: self.txid.to_string(),
+            vout: self.vout,
+            amount_sats: self.value,
+            is_mature,
             refund_tx: None,
             refund_tx_id: None,
             claim_error: None,

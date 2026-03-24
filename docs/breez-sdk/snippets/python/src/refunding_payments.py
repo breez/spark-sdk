@@ -47,6 +47,23 @@ async def list_unclaimed_deposits(sdk: BreezSdk):
     # ANCHOR_END: list-unclaimed-deposits
 
 
+async def list_pending_deposits(sdk: BreezSdk):
+    # ANCHOR: list-pending-deposits
+    try:
+        request = ListUnclaimedDepositsRequest()
+        response = await sdk.list_unclaimed_deposits(request=request)
+
+        pending_deposits = [d for d in response.deposits if not d.is_mature]
+
+        for deposit in pending_deposits:
+            logging.info(f"Pending deposit: {deposit.txid}:{deposit.vout}")
+            logging.info(f"Amount: {deposit.amount_sats} sats")
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: list-pending-deposits
+
+
 async def handle_fee_exceeded(sdk: BreezSdk, deposit):
     # ANCHOR: handle-fee-exceeded
     try:

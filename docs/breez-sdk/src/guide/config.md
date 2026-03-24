@@ -17,7 +17,7 @@ You can also disable automatic claiming entirely. Deposits that are not automati
 
 By default, automatic claiming is enabled with a maximum feerate of 1 sats/vbyte.
 
-More information can be found in the [Handling unclaimed deposits](./unclaimed_deposits.md) page.
+More information can be found in the [Claiming on-chain deposits](./onchain_claims.md) page.
 
 {{#tabs config:max-deposit-claim-fee}}
 

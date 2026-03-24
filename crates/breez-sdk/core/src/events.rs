@@ -40,6 +40,9 @@ pub enum SdkEvent {
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
     },
+    NewDeposits {
+        new_deposits: Vec<DepositInfo>,
+    },
 }
 
 impl SdkEvent {
@@ -78,6 +81,9 @@ impl fmt::Display for SdkEvent {
             }
             SdkEvent::LightningAddressChanged { lightning_address } => {
                 write!(f, "LightningAddressChanged: {lightning_address:?}")
+            }
+            SdkEvent::NewDeposits { new_deposits } => {
+                write!(f, "NewDeposits: {new_deposits:?}")
             }
         }
     }

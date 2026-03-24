@@ -47,6 +47,22 @@ namespace BreezSdkSnippets
             // ANCHOR_END: list-unclaimed-deposits
         }
 
+        async Task ListPendingDeposits(BreezSdk sdk)
+        {
+            // ANCHOR: list-pending-deposits
+            var request = new ListUnclaimedDepositsRequest();
+            var response = await sdk.ListUnclaimedDeposits(request: request);
+
+            var pendingDeposits = response.deposits.Where(d => !d.isMature).ToList();
+
+            foreach (var deposit in pendingDeposits)
+            {
+                Console.WriteLine($"Pending deposit: {deposit.txid}:{deposit.vout}");
+                Console.WriteLine($"Amount: {deposit.amountSats} sats");
+            }
+            // ANCHOR_END: list-pending-deposits
+        }
+
         async Task HandleFeeExceeded(BreezSdk sdk, DepositInfo deposit)
         {
             // ANCHOR: handle-fee-exceeded

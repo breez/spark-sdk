@@ -2,7 +2,7 @@ use bitcoin::{consensus::serialize, hex::DisplayHex};
 use tracing::error;
 
 use crate::{
-    ClaimDepositRequest, ClaimDepositResponse, DepositInfo, ListUnclaimedDepositsRequest,
+    ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse, error::SdkError,
     persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
 };
@@ -70,15 +70,14 @@ impl BreezSdk {
                 request.fee.into(),
             )
             .await?;
-        let deposit: DepositInfo = detailed_utxo.into();
         let tx_hex = serialize(&tx).as_hex().to_string();
         let tx_id = tx.compute_txid().as_raw_hash().to_string();
 
         // Store the refund transaction details separately
         self.storage
             .update_deposit(
-                deposit.txid.clone(),
-                deposit.vout,
+                detailed_utxo.txid.to_string(),
+                detailed_utxo.vout,
                 UpdateDepositPayload::Refund {
                     refund_tx: tx_hex.clone(),
                     refund_txid: tx_id.clone(),

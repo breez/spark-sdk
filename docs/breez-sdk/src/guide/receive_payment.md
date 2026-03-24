@@ -25,11 +25,17 @@ To receive via LNURL-Pay and/or a Lightning address, follow [these instructions]
 
 For on-chain payments you can generate a Bitcoin deposit address to receive payments. By default the existing address is returned; you can optionally request a new address to rotate to a fresh one for improved privacy. All previously generated addresses remain monitored.
 
-> **Note:** Spark currently requires **3 on-chain confirmations** for Bitcoin transactions before they can be claimed.
+On-chain deposits go through the following lifecycle:
 
-The SDK monitors your deposit addresses for new UTXOs and automatically initiates the claim process when funds are detected. If the Config's maximum deposit claim fee is not set or below the current Spark fee to claim the Bitcoin deposit, the deposit will need to be claimed or refunded manually. See [Claiming on-chain deposits](/guide/onchain_claims.md) for more details on this process.
+1. **Detected** — The SDK detects the deposit and emits a {{#enum SdkEvent::NewDeposits}} event. The deposit may or may not have sufficient confirmations to be claimed yet.
+2. **Sufficient confirmations** — After **3 on-chain confirmations**, the deposit has sufficient confirmations and the SDK automatically attempts to claim it.
+3. **Claimed or unclaimed** — If claiming succeeds, the funds are added to your balance. If it fails (e.g. fees too high), the deposit remains unclaimed and can be [manually claimed or refunded](/guide/onchain_claims.md).
 
 {{#tabs receive_payment:receive-payment-onchain}}
+
+To track pending deposits, use {{#name list_unclaimed_deposits}} and filter by the {{#name is_mature}} field:
+
+{{#tabs refunding_payments:list-pending-deposits}}
 
 ## Spark
 
@@ -64,12 +70,15 @@ Once a receive payment is initiated, you can follow and react to the different p
 
 #### Bitcoin
 
-| Event                 | Description                                                                                                                                                                                               | UX Suggestion                                                                                                    |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **UnclaimedDeposits** | The SDK attempted to claim static address deposits but they failed from one of several reasons. Either the claim fee exceeded the maximum allowed limit or there was an issue finding the available UTXO. | Allow the user to refund these failed deposits. See [Handling unclaimed deposits](/guide/unclaimed_deposits.md). |
-| **ClaimedDeposits**   | The SDK successfully claimed static address deposits.                                                                                                                                                     |                                                                                                                  |
-| **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                                                                                         | Show payment as pending.                                                                                         |
-| **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                                                                                                | Update the balance and show payment as complete.                                                                 |
+The following events are emitted in order during the deposit lifecycle. See [Listening to events](/guide/events.md) for how to subscribe.
+
+| Event                 | Description                                                                                                                              | UX Suggestion                                                                                               |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **NewDeposits**       | New deposits were detected. Each deposit includes a {{#name is_mature}} field indicating whether it has enough confirmations to be claimed. | Show the deposit to the user. If it does not yet have sufficient confirmations, show it as pending.          |
+| **ClaimedDeposits**   | The SDK successfully claimed confirmed deposits.                                                                                         |                                                                                                             |
+| **UnclaimedDeposits** | Claiming failed (e.g. fee exceeded the configured maximum or the UTXO could not be found).                                               | Allow the user to manually claim or refund. See [Claiming on-chain deposits](/guide/onchain_claims.md). |
+| **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                        | Show payment as pending.                                                                                    |
+| **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                               | Update the balance and show payment as complete.                                                            |
 
 #### Spark
 

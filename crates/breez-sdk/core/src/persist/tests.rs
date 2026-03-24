@@ -1274,9 +1274,9 @@ pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
     let deposits = storage.list_deposits().await.unwrap();
     assert_eq!(deposits.len(), 0);
 
-    // Add first deposit
+    // Add first deposit (pending)
     storage
-        .add_deposit("tx123".to_string(), 0, 50000)
+        .add_deposit("tx123".to_string(), 0, 50000, false)
         .await
         .unwrap();
     let deposits = storage.list_deposits().await.unwrap();
@@ -1284,11 +1284,21 @@ pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
     assert_eq!(deposits[0].txid, "tx123");
     assert_eq!(deposits[0].vout, 0);
     assert_eq!(deposits[0].amount_sats, 50000);
+    assert!(!deposits[0].is_mature);
     assert!(deposits[0].claim_error.is_none());
 
-    // Add second deposit
+    // Upsert: mark as confirmed
     storage
-        .add_deposit("tx456".to_string(), 1, 75000)
+        .add_deposit("tx123".to_string(), 0, 50000, true)
+        .await
+        .unwrap();
+    let deposits = storage.list_deposits().await.unwrap();
+    assert_eq!(deposits.len(), 1);
+    assert!(deposits[0].is_mature);
+
+    // Add second deposit (confirmed)
+    storage
+        .add_deposit("tx456".to_string(), 1, 75000, true)
         .await
         .unwrap();
     storage
@@ -1310,6 +1320,7 @@ pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
     let deposit2_found = deposits.iter().find(|d| d.txid == "tx456").unwrap();
     assert_eq!(deposit2_found.vout, 1);
     assert_eq!(deposit2_found.amount_sats, 75000);
+    assert!(deposit2_found.is_mature);
     assert!(deposit2_found.claim_error.is_some());
 
     // Remove first deposit
@@ -1333,7 +1344,7 @@ pub async fn test_unclaimed_deposits_crud(storage: Box<dyn Storage>) {
 pub async fn test_deposit_refunds(storage: Box<dyn Storage>) {
     // Add the initial deposit
     storage
-        .add_deposit("test_tx_123".to_string(), 0, 100_000)
+        .add_deposit("test_tx_123".to_string(), 0, 100_000, true)
         .await
         .unwrap();
     let deposits = storage.list_deposits().await.unwrap();

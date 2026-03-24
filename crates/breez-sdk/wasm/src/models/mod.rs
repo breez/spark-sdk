@@ -82,6 +82,9 @@ pub enum SdkEvent {
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
     },
+    NewDeposits {
+        new_deposits: Vec<DepositInfo>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]
@@ -144,6 +147,7 @@ pub struct DepositInfo {
     pub txid: String,
     pub vout: u32,
     pub amount_sats: u64,
+    pub is_mature: bool,
     pub refund_tx: Option<String>,
     pub refund_tx_id: Option<String>,
     pub claim_error: Option<DepositClaimError>,

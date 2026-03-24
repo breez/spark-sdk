@@ -325,6 +325,7 @@ impl SqliteStorage {
             "ALTER TABLE lnurl_receive_metadata DROP COLUMN preimage;",
             // Clear cached lightning address - format changed to CachedLightningAddress wrapper
             "DELETE FROM settings WHERE key = 'lightning_address';",
+            "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1;",
         ]
     }
 }
@@ -817,12 +818,14 @@ impl Storage for SqliteStorage {
         txid: String,
         vout: u32,
         amount_sats: u64,
+        is_mature: bool,
     ) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
         connection.execute(
-            "INSERT OR IGNORE INTO unclaimed_deposits (txid, vout, amount_sats) 
-             VALUES (?, ?, ?)",
-            params![txid, vout, amount_sats,],
+            "INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(txid, vout) DO UPDATE SET is_mature = excluded.is_mature, amount_sats = excluded.amount_sats",
+            params![txid, vout, amount_sats, is_mature],
         )?;
         Ok(())
     }
@@ -839,15 +842,16 @@ impl Storage for SqliteStorage {
     async fn list_deposits(&self) -> Result<Vec<DepositInfo>, StorageError> {
         let connection = self.get_connection()?;
         let mut stmt =
-            connection.prepare("SELECT txid, vout, amount_sats, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
+            connection.prepare("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits")?;
         let rows = stmt.query_map(params![], |row| {
             Ok(DepositInfo {
                 txid: row.get(0)?,
                 vout: row.get(1)?,
                 amount_sats: row.get(2)?,
-                claim_error: row.get(3)?,
-                refund_tx: row.get(4)?,
-                refund_tx_id: row.get(5)?,
+                is_mature: row.get(3)?,
+                claim_error: row.get(4)?,
+                refund_tx: row.get(5)?,
+                refund_tx_id: row.get(6)?,
             })
         })?;
         let mut deposits = Vec::new();
