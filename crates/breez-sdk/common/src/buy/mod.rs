@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+pub mod cashapp;
 pub mod moonpay;
 
 #[macros::async_trait]

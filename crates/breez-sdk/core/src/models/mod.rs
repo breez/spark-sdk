@@ -826,15 +826,31 @@ pub struct ListUnclaimedDepositsResponse {
     pub deposits: Vec<DepositInfo>,
 }
 
-/// Request to buy Bitcoin using an external provider (`MoonPay`)
+/// The available providers for buying Bitcoin
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum BuyBitcoinProvider {
+    /// `MoonPay`: Uses on-chain Bitcoin deposit addresses.
+    /// Supports fiat-to-Bitcoin purchases via credit card, Apple Pay, etc.
+    #[default]
+    Moonpay,
+    /// `CashApp`: Uses Lightning bolt11 invoices.
+    /// Redirects to `CashApp` for payment via the `cash.app/launch/lightning/` URL.
+    CashApp,
+}
+
+/// Request to buy Bitcoin using an external provider
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct BuyBitcoinRequest {
+    /// The provider to use for purchasing Bitcoin. Defaults to `MoonPay` if not specified.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub provider: Option<BuyBitcoinProvider>,
     /// Optional: Lock the purchase to a specific amount in satoshis.
     /// When provided, the user cannot change the amount in the purchase flow.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub locked_amount_sat: Option<u64>,
-    /// Optional: Custom redirect URL after purchase completion
+    /// Optional: Custom redirect URL after purchase completion (`MoonPay` only)
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub redirect_url: Option<String>,
 }
