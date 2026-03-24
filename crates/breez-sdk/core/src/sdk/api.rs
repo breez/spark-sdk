@@ -2,12 +2,14 @@ use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
 use tracing::info;
 
+use breez_sdk_common::buy::{BuyBitcoinProviderApi, cashapp::CashAppProvider};
+
 use crate::{
-    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
-    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
-    UserSettings, Webhook,
+    BuyBitcoinProvider, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest,
+    CheckMessageResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
+    ListFiatCurrenciesResponse, ListFiatRatesResponse, Network, OptimizationProgress,
+    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
+    UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -320,15 +322,17 @@ impl BreezSdk {
         Ok(webhooks.into_iter().map(Into::into).collect())
     }
 
-    /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).
+    /// Initiates a Bitcoin purchase flow via an external provider.
     ///
     /// This method generates a URL that the user can open in a browser to complete
-    /// the Bitcoin purchase. The purchased Bitcoin will be sent to an automatically
-    /// generated deposit address.
+    /// the Bitcoin purchase. The provider determines the purchase flow:
+    /// - **`MoonPay`** (default): Uses an on-chain deposit address for fiat-to-Bitcoin purchases.
+    /// - **`CashApp`**: Generates a Lightning invoice and returns a `CashApp` deep link.
     ///
     /// # Arguments
     ///
-    /// * `request` - The purchase request containing optional amount and redirect URL
+    /// * `request` - The purchase request containing provider selection, optional amount,
+    ///   and redirect URL
     ///
     /// # Returns
     ///
@@ -337,13 +341,40 @@ impl BreezSdk {
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let address = get_deposit_address(&self.spark_wallet, true).await?;
+        let provider = request.provider.unwrap_or_default();
 
-        let url = self
-            .buy_bitcoin_provider
-            .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
+        let url = match provider {
+            BuyBitcoinProvider::Moonpay => {
+                let address = get_deposit_address(&self.spark_wallet, true).await?;
+                self.buy_bitcoin_provider
+                    .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
+                    .await
+                    .map_err(|e| {
+                        SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
+                    })?
+            }
+            BuyBitcoinProvider::CashApp => {
+                if !matches!(self.config.network, Network::Mainnet) {
+                    return Err(SdkError::Generic(
+                        "CashApp is only available on mainnet".to_string(),
+                    ));
+                }
+                let receive_response = self
+                    .receive_bolt11_invoice(
+                        "Buy Bitcoin via CashApp".to_string(),
+                        request.locked_amount_sat,
+                        None,
+                        None,
+                    )
+                    .await?;
+                CashAppProvider::new()
+                    .buy_bitcoin(receive_response.payment_request, None, None)
+                    .await
+                    .map_err(|e| {
+                        SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
+                    })?
+            }
+        };
 
         Ok(BuyBitcoinResponse { url })
     }
