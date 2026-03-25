@@ -316,8 +316,8 @@ impl BreezSdk {
     }
 
     #[wasm_bindgen(js_name = "startLeafOptimization")]
-    pub fn start_leaf_optimization(&self) {
-        self.sdk.start_leaf_optimization();
+    pub async fn start_leaf_optimization(&self) {
+        self.sdk.start_leaf_optimization().await;
     }
 
     #[wasm_bindgen(js_name = "cancelLeafOptimization")]

@@ -655,7 +655,7 @@ async fn run_pre_optimization(sdk: &BreezSdk) -> Result<()> {
 /// Run leaf optimization with a label and wait for completion
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
     info!("Starting {}...", label.to_lowercase());
-    sdk.start_leaf_optimization();
+    sdk.start_leaf_optimization().await;
 
     // Poll until optimization completes
     let start = Instant::now();

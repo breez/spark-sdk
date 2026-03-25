@@ -7,11 +7,10 @@ import (
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
 
-func StartOptimization(sdk *breez_sdk_spark.BreezSdk) error {
+func StartOptimization(sdk *breez_sdk_spark.BreezSdk) {
 	// ANCHOR: start-optimization
 	sdk.StartLeafOptimization()
 	// ANCHOR_END: start-optimization
-	return nil
 }
 
 func CancelOptimization(sdk *breez_sdk_spark.BreezSdk) error {

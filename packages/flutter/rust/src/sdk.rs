@@ -229,9 +229,8 @@ impl BreezSdk {
         }
     }
 
-    #[frb(sync)]
-    pub fn start_leaf_optimization(&self) {
-        self.inner.start_leaf_optimization();
+    pub async fn start_leaf_optimization(&self) {
+        self.inner.start_leaf_optimization().await;
     }
 
     pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {

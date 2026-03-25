@@ -2,7 +2,7 @@ import { type OptimizationEvent, OptimizationEvent_Tags, type BreezSdk } from '@
 
 const exampleStartOptimization = async (sdk: BreezSdk) => {
   // ANCHOR: start-optimization
-  sdk.startLeafOptimization()
+  await sdk.startLeafOptimization()
   // ANCHOR_END: start-optimization
 }
 

@@ -4,10 +4,10 @@ namespace BreezSdkSnippets
 {
     class Optimize
     {
-        void StartOptimization(BreezSdk sdk)
+        async Task StartOptimization(BreezSdk sdk)
         {
             // ANCHOR: start-optimization
-            sdk.StartLeafOptimization();
+            await sdk.StartLeafOptimization();
             // ANCHOR_END: start-optimization
         }
 

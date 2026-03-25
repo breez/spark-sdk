@@ -403,9 +403,9 @@ impl SparkWallet {
     }
 
     /// Starts leaf optimization if auto-optimization is enabled.
-    fn maybe_start_optimization(&self) {
+    async fn maybe_start_optimization(&self) {
         if self.config.leaf_auto_optimize_enabled {
-            self.leaf_optimizer.start();
+            self.leaf_optimizer.start().await;
         }
     }
 
@@ -502,7 +502,7 @@ impl SparkWallet {
             }
         };
 
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         Ok(PayLightningInvoiceResult {
             transfer: wallet_transfer,
@@ -654,7 +654,7 @@ impl SparkWallet {
             .await?;
         info!("Claimed deposit root node: {:?}", deposit_nodes);
 
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
@@ -665,7 +665,7 @@ impl SparkWallet {
     ) -> Result<WalletTransfer, SparkWalletError> {
         let transfer = self.deposit_service.claim_static_deposit(quote).await?;
 
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -814,7 +814,7 @@ impl SparkWallet {
             )
         )?;
 
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         Ok(WalletTransfer::from_transfer(
             transfer,
@@ -838,7 +838,7 @@ impl SparkWallet {
         .await?;
 
         if !transfers.is_empty() {
-            self.maybe_start_optimization();
+            self.maybe_start_optimization().await;
         }
 
         for transfer in &transfers {
@@ -1193,7 +1193,7 @@ impl SparkWallet {
             })
         )?;
 
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         create_transfer(
             transfer,
@@ -1598,8 +1598,8 @@ impl SparkWallet {
     }
 
     /// Starts leaf optimization in the background.
-    pub fn start_leaf_optimization(&self) {
-        self.leaf_optimizer.start();
+    pub async fn start_leaf_optimization(&self) {
+        self.leaf_optimizer.start().await;
     }
 
     /// Cancels the ongoing leaf optimization.
@@ -2025,9 +2025,9 @@ impl BackgroundProcessor {
         }
     }
 
-    fn maybe_start_optimization(&self) {
+    async fn maybe_start_optimization(&self) {
         if self.auto_optimize_enabled {
-            self.leaf_optimizer.start();
+            self.leaf_optimizer.start().await;
         }
     }
 
@@ -2136,7 +2136,7 @@ impl BackgroundProcessor {
         self.tree_service.insert_leaves(vec![deposit]).await?;
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
         Ok(())
     }
 
@@ -2218,7 +2218,7 @@ impl BackgroundProcessor {
                 self.identity_public_key,
                 self.ssp_client.identity_public_key(),
             )));
-        self.maybe_start_optimization();
+        self.maybe_start_optimization().await;
 
         Ok(())
     }
@@ -2243,7 +2243,7 @@ impl BackgroundProcessor {
                     transfers.len()
                 );
                 if !transfers.is_empty() {
-                    self.maybe_start_optimization();
+                    self.maybe_start_optimization().await;
                 }
                 for transfer in &transfers {
                     self.event_manager

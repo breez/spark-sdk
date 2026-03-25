@@ -239,8 +239,8 @@ impl BreezSdk {
     /// This method spawns the optimization work in a background task and returns
     /// immediately. Progress is reported via events.
     /// If optimization is already running, no new task will be started.
-    pub fn start_leaf_optimization(&self) {
-        self.spark_wallet.start_leaf_optimization();
+    pub async fn start_leaf_optimization(&self) {
+        self.spark_wallet.start_leaf_optimization().await;
     }
 
     /// Cancels the ongoing leaf optimization.

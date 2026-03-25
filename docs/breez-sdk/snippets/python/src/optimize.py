@@ -3,7 +3,7 @@ from breez_sdk_spark import BreezSdk, OptimizationEvent
 
 async def start_optimization(sdk: BreezSdk):
     # ANCHOR: start-optimization
-    sdk.start_leaf_optimization()
+    await sdk.start_leaf_optimization()
     # ANCHOR_END: start-optimization
 
 async def cancel_optimization(sdk: BreezSdk):

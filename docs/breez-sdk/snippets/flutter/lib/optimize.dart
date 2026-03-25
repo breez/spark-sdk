@@ -2,7 +2,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> startOptimization(BreezSdk sdk) async {
   // ANCHOR: start-optimization
-  sdk.startLeafOptimization();
+  await sdk.startLeafOptimization();
   // ANCHOR_END: start-optimization
 }
 
