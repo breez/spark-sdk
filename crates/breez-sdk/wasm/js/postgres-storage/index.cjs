@@ -1349,16 +1349,37 @@ function defaultPostgresStorageConfig(connectionString) {
  * @returns {Promise<PostgresStorage>}
  */
 async function createPostgresStorage(config, logger = null) {
-  const pool = new pg.Pool({
+  const pool = createPostgresPool(config);
+  return createPostgresStorageWithPool(pool, logger);
+}
+
+/**
+ * Create a pg.Pool from a config object.
+ * The returned pool can be shared across multiple store implementations.
+ *
+ * @param {object} config - PostgreSQL configuration (from defaultPostgresStorageConfig)
+ * @returns {pg.Pool}
+ */
+function createPostgresPool(config) {
+  return new pg.Pool({
     connectionString: config.connectionString,
     max: config.maxPoolSize,
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
+}
 
+/**
+ * Create a PostgresStorage instance from an existing pg.Pool.
+ *
+ * @param {pg.Pool} pool - An existing connection pool
+ * @param {object} [logger] - Optional logger
+ * @returns {Promise<PostgresStorage>}
+ */
+async function createPostgresStorageWithPool(pool, logger = null) {
   const storage = new PostgresStorage(pool, logger);
   await storage.initialize();
   return storage;
 }
 
-module.exports = { PostgresStorage, createPostgresStorage, defaultPostgresStorageConfig, StorageError };
+module.exports = { PostgresStorage, createPostgresStorage, createPostgresPool, createPostgresStorageWithPool, defaultPostgresStorageConfig, StorageError };

@@ -2,6 +2,9 @@ mod error;
 mod service;
 mod store;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod tests;
+
 use std::collections::HashSet;
 
 pub use error::TokenOutputServiceError;
@@ -9,6 +12,7 @@ pub use service::SynchronousTokenOutputService;
 pub use store::InMemoryTokenOutputStore;
 
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -160,6 +164,7 @@ pub trait TokenOutputStore: Send + Sync {
     async fn set_tokens_outputs(
         &self,
         token_outputs: &[TokenOutputs],
+        refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn list_tokens_outputs(
@@ -194,6 +199,13 @@ pub trait TokenOutputStore: Send + Sync {
         &self,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError>;
+
+    /// Returns the current time from the store's clock.
+    ///
+    /// For in-memory stores this returns `SystemTime::now()`. For database-backed
+    /// stores this queries the database server time, avoiding clock skew between
+    /// the application and database servers.
+    async fn now(&self) -> Result<SystemTime, TokenOutputServiceError>;
 }
 
 #[macros::async_trait]

@@ -262,7 +262,7 @@ static async Task RunInteractiveMode(
     if (postgresConnectionString != null)
     {
         var pgConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString);
-        await builder.WithPostgresStorage(config: pgConfig);
+        await builder.WithPostgresBackend(config: pgConfig);
     }
     else
     {

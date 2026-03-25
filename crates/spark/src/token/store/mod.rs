@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use platform_utils::time::SystemTime;
 use tokio::sync::Mutex;
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::token::{
@@ -17,14 +18,47 @@ pub struct InMemoryTokenOutputStore {
 
 #[derive(Clone)]
 struct TokenOutputsEntry {
-    token_outputs: TokenOutputs,
+    metadata: crate::token::TokenMetadata,
+    stored_outputs: Vec<StoredTokenOutput>,
     purpose: ReservationPurpose,
 }
 
+/// A token output bundled with the timestamp it was added to the pool.
+#[derive(Clone)]
+struct StoredTokenOutput {
+    output: TokenOutputWithPrevOut,
+    added_at: SystemTime,
+}
+
 #[derive(Default)]
-struct TokenOutputsState {
-    available_token_outputs: HashMap<String, TokenOutputs>,
+pub(crate) struct TokenOutputsState {
+    /// Available (unreserved) token outputs, keyed by token identifier.
+    /// Each value maps output ID to StoredTokenOutput for timestamp tracking.
+    available_token_outputs: HashMap<String, AvailableTokenOutputs>,
     reservations: HashMap<TokenOutputsReservationId, TokenOutputsEntry>,
+    /// Output IDs that have been finalized (spent) with their spent timestamp.
+    /// Prevents re-adding during refresh. Cleaned up when entry is older than refresh_started_at.
+    spent_output_ids: HashMap<String, SystemTime>,
+    /// Timestamp of when the most recent swap finalization completed.
+    /// Used to detect if a refresh started before a swap finished.
+    last_swap_completed_at: Option<SystemTime>,
+}
+
+/// Available outputs for a specific token, with per-output timestamps.
+#[derive(Clone)]
+struct AvailableTokenOutputs {
+    metadata: crate::token::TokenMetadata,
+    outputs: HashMap<String, StoredTokenOutput>,
+}
+
+impl AvailableTokenOutputs {
+    fn ids(&self) -> HashSet<String> {
+        self.outputs.keys().cloned().collect()
+    }
+
+    fn output_vec(&self) -> Vec<TokenOutputWithPrevOut> {
+        self.outputs.values().map(|s| s.output.clone()).collect()
+    }
 }
 
 #[macros::async_trait]
@@ -32,65 +66,131 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
     async fn set_tokens_outputs(
         &self,
         token_outputs: &[TokenOutputs],
+        refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
-        let mut token_outputs_state = self.token_outputs.lock().await;
-        // Update the pool of available token outputs
-        token_outputs_state.available_token_outputs = token_outputs
-            .iter()
-            .map(|to| (to.metadata.identifier.clone(), to.clone()))
-            .collect();
+        let mut state = self.token_outputs.lock().await;
+
+        // Skip if swap is active or completed during this refresh
+        let has_active_swap = state
+            .reservations
+            .values()
+            .any(|entry| matches!(entry.purpose, ReservationPurpose::Swap));
+        let swap_completed_during_refresh = state
+            .last_swap_completed_at
+            .is_some_and(|completed_at| completed_at >= refresh_started_at);
+        if has_active_swap || swap_completed_during_refresh {
+            debug!(
+                "Skipping set_tokens_outputs: active_swap={has_active_swap}, \
+                 swap_completed_during_refresh={swap_completed_during_refresh}"
+            );
+            return Ok(());
+        }
+
+        // Remove spent entries that operators have had time to process
+        state
+            .spent_output_ids
+            .retain(|_, spent_at| *spent_at >= refresh_started_at);
+
+        // Save old pools before replacing
+        let old_available = std::mem::take(&mut state.available_token_outputs);
+
+        // Build new pools from refresh data, excluding spent outputs
+        let now = SystemTime::now();
+        let spent_ids: HashSet<String> = state.spent_output_ids.keys().cloned().collect();
+        for to in token_outputs {
+            let identifier = to.metadata.identifier.clone();
+            let entry = state
+                .available_token_outputs
+                .entry(identifier)
+                .or_insert_with(|| AvailableTokenOutputs {
+                    metadata: to.metadata.clone(),
+                    outputs: HashMap::new(),
+                });
+            entry.metadata = to.metadata.clone();
+            for output in &to.outputs {
+                if !spent_ids.contains(&output.output.id) {
+                    entry.outputs.insert(
+                        output.output.id.clone(),
+                        StoredTokenOutput {
+                            output: output.clone(),
+                            added_at: now,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Re-add outputs from old state that were added after the refresh started
+        // and aren't in the refresh data (they weren't available when refresh collected data).
+        let mut preserved_count = 0u32;
+        for old_token_outputs in old_available.values() {
+            for (output_id, stored) in &old_token_outputs.outputs {
+                if stored.added_at >= refresh_started_at {
+                    // Check if this output already exists in the new data
+                    let already_exists = state
+                        .available_token_outputs
+                        .values()
+                        .any(|ato| ato.outputs.contains_key(output_id));
+                    if !already_exists {
+                        let entry = state
+                            .available_token_outputs
+                            .entry(old_token_outputs.metadata.identifier.clone())
+                            .or_insert_with(|| AvailableTokenOutputs {
+                                metadata: old_token_outputs.metadata.clone(),
+                                outputs: HashMap::new(),
+                            });
+                        entry.outputs.insert(output_id.clone(), stored.clone());
+                        preserved_count += 1;
+                    }
+                }
+            }
+        }
 
         // Reconcile reservations with the updated pool of token outputs
-        for (id, reserved_token_outputs) in token_outputs_state.reservations.clone().iter() {
-            // Get the token outputs for the reserved token identifier
-            let Some(token_outputs) = token_outputs_state
+        for (id, reserved_entry) in state.reservations.clone().iter() {
+            let Some(token_outputs) = state
                 .available_token_outputs
-                .get_mut(&reserved_token_outputs.token_outputs.metadata.identifier)
+                .get_mut(&reserved_entry.metadata.identifier)
             else {
-                // If the token outputs no longer exist, remove the reservation
-                token_outputs_state.reservations.remove(id);
+                state.reservations.remove(id);
                 continue;
             };
-            // Filter out any reserved outputs no longer in the pool
             let output_ids = token_outputs.ids();
-            let reserved_outputs = reserved_token_outputs
-                .token_outputs
-                .outputs
+            let reserved_stored = reserved_entry
+                .stored_outputs
                 .iter()
-                .filter(|o| output_ids.contains(&o.output.id))
+                .filter(|s| output_ids.contains(&s.output.output.id))
                 .cloned()
                 .collect::<Vec<_>>();
-            if reserved_outputs.is_empty() {
-                // If no reserved outputs exist anymore, remove the reservation
-                token_outputs_state.reservations.remove(id);
+            if reserved_stored.is_empty() {
+                state.reservations.remove(id);
                 continue;
             }
 
-            // Remove the reserved outputs from the pool outputs
-            let reserved_output_ids = reserved_outputs
+            // Remove the reserved outputs from the pool
+            let reserved_output_ids = reserved_stored
                 .iter()
-                .map(|o| o.output.id.clone())
+                .map(|s| s.output.output.id.clone())
                 .collect::<HashSet<_>>();
             token_outputs
                 .outputs
-                .retain(|o| !reserved_output_ids.contains(&o.output.id));
+                .retain(|id, _| !reserved_output_ids.contains(id));
 
             // Update the reservation with the reconciled outputs
-            token_outputs_state.reservations.insert(
+            state.reservations.insert(
                 id.clone(),
                 TokenOutputsEntry {
-                    token_outputs: TokenOutputs {
-                        metadata: reserved_token_outputs.token_outputs.metadata.clone(),
-                        outputs: reserved_outputs,
-                    },
-                    purpose: reserved_token_outputs.purpose,
+                    metadata: reserved_entry.metadata.clone(),
+                    stored_outputs: reserved_stored,
+                    purpose: reserved_entry.purpose,
                 },
             );
         }
 
         trace!(
-            "Updated {} token outputs in the local state",
-            token_outputs.len()
+            "Updated {} token outputs in the local state ({} preserved from previous state)",
+            token_outputs.len(),
+            preserved_count
         );
         Ok(())
     }
@@ -111,34 +211,34 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                     reserved_for_payment: Vec::new(),
                     reserved_for_swap: Vec::new(),
                 });
-            entry.available = token_outputs.outputs.clone();
+            entry.available = token_outputs.output_vec();
         }
 
         for token_outputs_entry in token_outputs_state.reservations.values() {
             let entry = map
-                .entry(
-                    token_outputs_entry
-                        .token_outputs
-                        .metadata
-                        .identifier
-                        .clone(),
-                )
+                .entry(token_outputs_entry.metadata.identifier.clone())
                 .or_insert(TokenOutputsPerStatus {
-                    metadata: token_outputs_entry.token_outputs.metadata.clone(),
+                    metadata: token_outputs_entry.metadata.clone(),
                     available: Vec::new(),
                     reserved_for_payment: Vec::new(),
                     reserved_for_swap: Vec::new(),
                 });
             match token_outputs_entry.purpose {
                 ReservationPurpose::Payment => {
-                    entry
-                        .reserved_for_payment
-                        .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                    entry.reserved_for_payment.extend(
+                        token_outputs_entry
+                            .stored_outputs
+                            .iter()
+                            .map(|s| s.output.clone()),
+                    );
                 }
                 ReservationPurpose::Swap => {
-                    entry
-                        .reserved_for_swap
-                        .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                    entry.reserved_for_swap.extend(
+                        token_outputs_entry
+                            .stored_outputs
+                            .iter()
+                            .map(|s| s.output.clone()),
+                    );
                 }
             }
         }
@@ -153,28 +253,24 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         let token_outputs_state = self.token_outputs.lock().await;
 
         // Find the matching token identifier and metadata
-        // Check both available_token_outputs and reservations
         let (token_id, metadata) = match filter {
             GetTokenOutputsFilter::Identifier(token_id) => {
-                // Try available outputs first
                 if let Some(token_outputs) =
                     token_outputs_state.available_token_outputs.get(token_id)
                 {
                     (token_id, token_outputs.metadata.clone())
                 } else {
-                    // If not in available, check reservations
                     let reservation = token_outputs_state
                         .reservations
                         .values()
-                        .find(|r| r.token_outputs.metadata.identifier == token_id)
+                        .find(|r| r.metadata.identifier == token_id)
                         .ok_or(TokenOutputServiceError::Generic(
                             "Token outputs not found".to_string(),
                         ))?;
-                    (token_id, reservation.token_outputs.metadata.clone())
+                    (token_id, reservation.metadata.clone())
                 }
             }
             GetTokenOutputsFilter::IssuerPublicKey(issuer_pk) => {
-                // Try available outputs first
                 if let Some(token_outputs) = token_outputs_state
                     .available_token_outputs
                     .values()
@@ -185,17 +281,16 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                         token_outputs.metadata.clone(),
                     )
                 } else {
-                    // If not in available, check reservations
                     let reservation = token_outputs_state
                         .reservations
                         .values()
-                        .find(|r| &r.token_outputs.metadata.issuer_public_key == issuer_pk)
+                        .find(|r| &r.metadata.issuer_public_key == issuer_pk)
                         .ok_or(TokenOutputServiceError::Generic(
                             "Token outputs not found".to_string(),
                         ))?;
                     (
-                        reservation.token_outputs.metadata.identifier.as_str(),
-                        reservation.token_outputs.metadata.clone(),
+                        reservation.metadata.identifier.as_str(),
+                        reservation.metadata.clone(),
                     )
                 }
             }
@@ -209,21 +304,27 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         };
 
         if let Some(token_outputs) = token_outputs_state.available_token_outputs.get(token_id) {
-            result.available = token_outputs.outputs.clone();
+            result.available = token_outputs.output_vec();
         }
 
         for token_outputs_entry in token_outputs_state.reservations.values() {
-            if token_outputs_entry.token_outputs.metadata.identifier == token_id {
+            if token_outputs_entry.metadata.identifier == token_id {
                 match token_outputs_entry.purpose {
                     ReservationPurpose::Payment => {
-                        result
-                            .reserved_for_payment
-                            .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                        result.reserved_for_payment.extend(
+                            token_outputs_entry
+                                .stored_outputs
+                                .iter()
+                                .map(|s| s.output.clone()),
+                        );
                     }
                     ReservationPurpose::Swap => {
-                        result
-                            .reserved_for_swap
-                            .extend(token_outputs_entry.token_outputs.outputs.iter().cloned());
+                        result.reserved_for_swap.extend(
+                            token_outputs_entry
+                                .stored_outputs
+                                .iter()
+                                .map(|s| s.output.clone()),
+                        );
                     }
                 }
             }
@@ -237,27 +338,56 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         token_outputs: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let mut token_outputs_state = self.token_outputs.lock().await;
+        let now = SystemTime::now();
+
+        // Remove inserted output IDs from spent_output_ids (output returned to us)
+        for output in &token_outputs.outputs {
+            if token_outputs_state
+                .spent_output_ids
+                .remove(&output.output.id)
+                .is_some()
+            {
+                trace!(
+                    "Removed output {} from spent_output_ids (receiving it back)",
+                    output.output.id
+                );
+            }
+        }
 
         match token_outputs_state
             .available_token_outputs
             .get_mut(&token_outputs.metadata.identifier)
         {
             Some(existing_token_outputs) => {
-                // Add only new outputs to the existing token outputs
-                let existing_output_ids = existing_token_outputs.ids();
-                token_outputs
-                    .outputs
-                    .iter()
-                    .filter(|o| !existing_output_ids.contains(&o.output.id))
-                    .for_each(|o| {
-                        existing_token_outputs.outputs.push(o.clone());
-                    });
+                for o in &token_outputs.outputs {
+                    if !existing_token_outputs.outputs.contains_key(&o.output.id) {
+                        existing_token_outputs.outputs.insert(
+                            o.output.id.clone(),
+                            StoredTokenOutput {
+                                output: o.clone(),
+                                added_at: now,
+                            },
+                        );
+                    }
+                }
             }
             None => {
-                // Insert new token outputs
+                let mut outputs_map = HashMap::new();
+                for o in &token_outputs.outputs {
+                    outputs_map.insert(
+                        o.output.id.clone(),
+                        StoredTokenOutput {
+                            output: o.clone(),
+                            added_at: now,
+                        },
+                    );
+                }
                 token_outputs_state.available_token_outputs.insert(
                     token_outputs.metadata.identifier.clone(),
-                    token_outputs.clone(),
+                    AvailableTokenOutputs {
+                        metadata: token_outputs.metadata.clone(),
+                        outputs: outputs_map,
+                    },
                 );
             }
         }
@@ -304,16 +434,15 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 token_identifier
             )));
         };
+
         let mut outputs = if let Some(preferred_outputs) = preferred_outputs {
-            // Filter available outputs to only include preferred ones
             token_outputs
-                .outputs
-                .iter()
+                .output_vec()
+                .into_iter()
                 .filter(|o| preferred_outputs.iter().any(|p| o.output.id == p.output.id))
-                .cloned()
                 .collect::<Vec<_>>()
         } else {
-            token_outputs.outputs.clone()
+            token_outputs.output_vec()
         };
 
         if let ReservationTarget::MinTotalValue(amount) = target
@@ -325,23 +454,19 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         let selected_outputs = if let ReservationTarget::MinTotalValue(amount) = target
             && let Some(output) = outputs.iter().find(|o| o.output.token_amount == amount)
         {
-            // If there's an exact match, return it
             vec![output.clone()]
         } else {
             match selection_strategy {
                 None | Some(SelectionStrategy::SmallestFirst) => {
-                    // Sort outputs by amount, smallest first
                     outputs.sort_by_key(|o| o.output.token_amount);
                 }
                 Some(SelectionStrategy::LargestFirst) => {
-                    // Sort outputs by amount, largest first
                     outputs.sort_by_key(|o| std::cmp::Reverse(o.output.token_amount));
                 }
             }
 
             match target {
                 ReservationTarget::MinTotalValue(amount) => {
-                    // Select outputs to match the amount
                     let mut selected_outputs = Vec::new();
                     let mut remaining_amount = amount;
                     for output in outputs {
@@ -353,7 +478,6 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                             remaining_amount.saturating_sub(output.output.token_amount);
                     }
 
-                    // We should never get here, but just in case
                     if remaining_amount > 0 {
                         return Err(TokenOutputServiceError::InsufficientFunds);
                     }
@@ -368,8 +492,16 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         };
 
         let reservation_id = Uuid::now_v7().to_string();
+
+        // Collect stored outputs with their original added_at timestamps
+        let stored_selected: Vec<StoredTokenOutput> = selected_outputs
+            .iter()
+            .filter_map(|o| token_outputs.outputs.get(&o.output.id).cloned())
+            .collect();
+
+        let metadata = token_outputs.metadata.clone();
         let reservation_token_outputs = TokenOutputs {
-            metadata: token_outputs.metadata.clone(),
+            metadata: metadata.clone(),
             outputs: selected_outputs.clone(),
         };
 
@@ -380,13 +512,14 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             .collect::<HashSet<_>>();
         token_outputs
             .outputs
-            .retain(|to| !selected_output_ids.contains(&to.output.id));
+            .retain(|id, _| !selected_output_ids.contains(id));
 
-        // Insert the reservation
+        // Insert the reservation (with original timestamps preserved)
         token_outputs_state.reservations.insert(
             reservation_id.clone(),
             TokenOutputsEntry {
-                token_outputs: reservation_token_outputs.clone(),
+                metadata,
+                stored_outputs: stored_selected,
                 purpose,
             },
         );
@@ -402,13 +535,15 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
         let mut token_outputs_state = self.token_outputs.lock().await;
-        if let Some(reserved_token_outputs) = token_outputs_state.reservations.remove(id)
+        if let Some(reserved_entry) = token_outputs_state.reservations.remove(id)
             && let Some(token_outputs) = token_outputs_state
                 .available_token_outputs
-                .get_mut(&reserved_token_outputs.token_outputs.metadata.identifier)
+                .get_mut(&reserved_entry.metadata.identifier)
         {
-            for output in reserved_token_outputs.token_outputs.outputs {
-                token_outputs.outputs.push(output);
+            for stored in reserved_entry.stored_outputs {
+                token_outputs
+                    .outputs
+                    .insert(stored.output.output.id.clone(), stored);
             }
         }
         trace!("Canceled token outputs reservation: {}", id);
@@ -420,11 +555,28 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
         let mut token_outputs_state = self.token_outputs.lock().await;
-        if token_outputs_state.reservations.remove(id).is_none() {
+        if let Some(entry) = token_outputs_state.reservations.remove(id) {
+            // Mark all outputs from this reservation as spent to prevent re-adding during refresh
+            let now = SystemTime::now();
+            for stored in &entry.stored_outputs {
+                token_outputs_state
+                    .spent_output_ids
+                    .insert(stored.output.output.id.clone(), now);
+            }
+
+            // If this was a swap reservation, record completion time.
+            if matches!(entry.purpose, ReservationPurpose::Swap) {
+                token_outputs_state.last_swap_completed_at = Some(now);
+            }
+        } else {
             warn!("Tried to finalize a non existing reservation");
         }
         trace!("Finalized token outputs reservation: {}", id);
         Ok(())
+    }
+
+    async fn now(&self) -> Result<SystemTime, TokenOutputServiceError> {
+        Ok(SystemTime::now())
     }
 }
 

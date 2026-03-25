@@ -170,7 +170,7 @@ async fn run_interactive_mode(
     let mut sdk_builder = SdkBuilder::new(config, seed);
     if let Some(connection_string) = postgres_connection_string {
         sdk_builder =
-            sdk_builder.with_postgres_storage(default_postgres_storage_config(connection_string));
+            sdk_builder.with_postgres_backend(default_postgres_storage_config(connection_string));
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }

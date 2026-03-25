@@ -236,7 +236,7 @@ if let passkeyStr = opts.passkey {
 // Build SDK
 let builder = SdkBuilder(config: config, seed: seed)
 if let connectionString = opts.postgresConnectionString {
-    await builder.withPostgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
+    await builder.withPostgresBackend(config: defaultPostgresStorageConfig(connectionString: connectionString))
 } else {
     await builder.withDefaultStorage(storageDir: resolvedDir)
 }

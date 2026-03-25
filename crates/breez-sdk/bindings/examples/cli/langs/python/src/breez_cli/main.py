@@ -114,7 +114,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     if postgres_connection_string:
         pg_config = default_postgres_storage_config(connection_string=postgres_connection_string)
-        await builder.with_postgres_storage(config=pg_config)
+        await builder.with_postgres_backend(config=pg_config)
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 

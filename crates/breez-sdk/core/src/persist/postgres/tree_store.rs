@@ -22,7 +22,9 @@ use uuid::Uuid;
 
 use crate::persist::StorageError;
 
-use super::base::{PostgresStorageConfig, create_pool, run_migrations};
+use super::base::run_migrations;
+#[cfg(test)]
+use super::base::{PostgresStorageConfig, create_pool};
 
 /// Name of the schema migrations table for `PostgresTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
@@ -581,9 +583,16 @@ impl TreeStore for PostgresTreeStore {
 
 impl PostgresTreeStore {
     /// Creates a new `PostgresTreeStore`.
+    #[cfg(test)]
     pub async fn new(config: PostgresStorageConfig) -> Result<Self, StorageError> {
         let pool = create_pool(&config)?;
+        Self::new_with_pool(pool).await
+    }
 
+    /// Creates a new `PostgresTreeStore` using an existing connection pool.
+    ///
+    /// This allows sharing a single pool across multiple store implementations.
+    pub async fn new_with_pool(pool: Pool) -> Result<Self, StorageError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
@@ -914,15 +923,9 @@ fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
 }
 
-/// Creates a `PostgresTreeStore` instance for use with the SDK.
-///
-/// # Arguments
-///
-/// * `config` - Configuration for the `PostgreSQL` connection pool
-pub async fn create_postgres_tree_store(
-    config: PostgresStorageConfig,
-) -> Result<Arc<dyn TreeStore>, StorageError> {
-    Ok(Arc::new(PostgresTreeStore::new(config).await?))
+/// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
+pub async fn create_postgres_tree_store(pool: Pool) -> Result<Arc<dyn TreeStore>, StorageError> {
+    Ok(Arc::new(PostgresTreeStore::new_with_pool(pool).await?))
 }
 
 #[cfg(test)]

@@ -60,8 +60,7 @@ const initSdk = async () => {
 
     let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic })
     if (postgresConnectionString) {
-        sdkBuilder = sdkBuilder.withPostgresStorage(defaultPostgresStorageConfig(postgresConnectionString))
-        sdkBuilder = sdkBuilder.withPostgresTreeStore(defaultPostgresStorageConfig(postgresConnectionString))
+        sdkBuilder = sdkBuilder.withPostgresBackend(defaultPostgresStorageConfig(postgresConnectionString))
     } else {
         sdkBuilder = await sdkBuilder.withDefaultStorage('./.data')
     }

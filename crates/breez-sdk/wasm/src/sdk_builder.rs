@@ -12,6 +12,7 @@ use crate::{
     },
     persist::{Storage, WasmStorage},
     sdk::BreezSdk,
+    token_store::{TokenStoreJs, WasmTokenStore},
     tree_store::{TreeStoreJs, WasmTreeStore},
 };
 use bitcoin::secp256k1::PublicKey;
@@ -19,7 +20,7 @@ use breez_sdk_spark::KeySet;
 use wasm_bindgen::prelude::*;
 
 /// Configuration for PostgreSQL storage connection pool.
-#[derive(serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub struct PostgresStorageConfig {
@@ -56,8 +57,7 @@ pub struct SdkBuilder {
     seed: breez_sdk_spark::Seed,
     default_storage_dir: Option<String>,
     storage: Option<Storage>,
-    postgres_config: Option<PostgresStorageConfig>,
-    postgres_tree_store_config: Option<PostgresStorageConfig>,
+    postgres_backend_config: Option<PostgresStorageConfig>,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -76,8 +76,7 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
             default_storage_dir: None,
             storage: None,
-            postgres_config: None,
-            postgres_tree_store_config: None,
+            postgres_backend_config: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -99,8 +98,7 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
             default_storage_dir: None,
             storage: None,
-            postgres_config: None,
-            postgres_tree_store_config: None,
+            postgres_backend_config: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -119,15 +117,9 @@ impl SdkBuilder {
         self
     }
 
-    #[wasm_bindgen(js_name = "withPostgresStorage")]
-    pub fn with_postgres_storage(mut self, config: PostgresStorageConfig) -> Self {
-        self.postgres_config = Some(config);
-        self
-    }
-
-    #[wasm_bindgen(js_name = "withPostgresTreeStore")]
-    pub fn with_postgres_tree_store(mut self, config: PostgresStorageConfig) -> Self {
-        self.postgres_tree_store_config = Some(config);
+    #[wasm_bindgen(js_name = "withPostgresBackend")]
+    pub fn with_postgres_backend(mut self, config: PostgresStorageConfig) -> Self {
+        self.postgres_backend_config = Some(config);
         self
     }
 
@@ -196,7 +188,11 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
-        match (self.default_storage_dir, self.storage, self.postgres_config) {
+        match (
+            self.default_storage_dir,
+            self.storage,
+            &self.postgres_backend_config,
+        ) {
             (Some(storage_dir), None, None) => {
                 // Create key set to get identity_pub_key for WASM-compatible storage
                 let key_set = KeySet::new(
@@ -222,23 +218,29 @@ impl SdkBuilder {
             }
             (None, None, Some(config)) => {
                 let logger_ref = get_wasm_logger_ref();
+
+                // Create a single shared pool for all postgres stores
+                let pool = create_postgres_pool(config.clone())?;
+
                 let storage = Arc::new(WasmStorage {
-                    storage: create_postgres_storage(config, logger_ref).await?,
+                    storage: create_postgres_storage_with_pool(&pool, logger_ref).await?,
                 });
                 self.builder = self.builder.with_storage(storage);
+
+                let tree_store_js = create_postgres_tree_store_with_pool(&pool, logger_ref).await?;
+                let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
+                self.builder = self.builder.with_tree_store(tree_store);
+
+                let token_store_js =
+                    create_postgres_token_store_with_pool(&pool, logger_ref).await?;
+                let token_store = Arc::new(WasmTokenStore::new(token_store_js));
+                self.builder = self.builder.with_token_output_store(token_store);
             }
             _ => {
                 return Err(WasmError::new(
                     "Exactly one of default storage directory, storage, or postgres config must be set",
                 ));
             }
-        }
-
-        if let Some(tree_store_config) = self.postgres_tree_store_config {
-            let logger_ref = get_wasm_logger_ref();
-            let tree_store_js = create_postgres_tree_store(tree_store_config, logger_ref).await?;
-            let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
-            self.builder = self.builder.with_tree_store(tree_store);
         }
 
         let sdk = self.builder.build().await?;
@@ -275,21 +277,33 @@ async fn default_storage(
 
 #[wasm_bindgen]
 extern "C" {
+    /// JS type representing a `pg.Pool` instance.
+    type JsPool;
+
     #[wasm_bindgen(js_name = "createDefaultStorage", catch)]
     async fn create_default_storage(
         data_dir: &str,
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
 
-    #[wasm_bindgen(js_name = "createPostgresStorage", catch)]
-    async fn create_postgres_storage(
-        config: PostgresStorageConfig,
+    #[wasm_bindgen(js_name = "createPostgresPool", catch)]
+    fn create_postgres_pool(config: PostgresStorageConfig) -> Result<JsPool, JsValue>;
+
+    #[wasm_bindgen(js_name = "createPostgresStorageWithPool", catch)]
+    async fn create_postgres_storage_with_pool(
+        pool: &JsPool,
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
 
-    #[wasm_bindgen(js_name = "createPostgresTreeStore", catch)]
-    async fn create_postgres_tree_store(
-        config: PostgresStorageConfig,
+    #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
+    async fn create_postgres_tree_store_with_pool(
+        pool: &JsPool,
         logger: Option<&Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
+
+    #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
+    async fn create_postgres_token_store_with_pool(
+        pool: &JsPool,
+        logger: Option<&Logger>,
+    ) -> Result<TokenStoreJs, JsValue>;
 }

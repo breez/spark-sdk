@@ -53,16 +53,17 @@ async fn get_postgres_tree_store_base_url() -> Option<&'static str> {
 }
 
 /// If USE_POSTGRES_TREE_STORE is set, creates a unique database and attaches
-/// a PostgreSQL tree store to the builder. Otherwise returns builder unchanged.
-async fn apply_postgres_tree_store(builder: SdkBuilder) -> Result<SdkBuilder> {
+/// a PostgreSQL backend to the builder. Otherwise sets default storage with the
+/// given directory. Exactly one storage configuration is applied.
+async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
     let Some(base_url) = get_postgres_tree_store_base_url().await else {
-        return Ok(builder);
+        return Ok(builder.with_default_storage(storage_dir));
     };
     let counter = TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
     let conn_str = format!("{base_url} dbname=ts_{counter}");
     ensure_postgres_database_exists(&conn_str).await?;
     let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
-    Ok(builder.with_postgres_tree_store(pg_config))
+    Ok(builder.with_postgres_backend(pg_config))
 }
 
 /// Event listener that forwards events to a channel
@@ -100,8 +101,8 @@ pub async fn build_sdk_with_dir(
     config.real_time_sync_server_url = None; // Disable real-time sync for tests
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
-    let builder = apply_postgres_tree_store(builder).await?;
+    let builder = SdkBuilder::new(config, seed);
+    let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -165,8 +166,8 @@ pub async fn build_sdk_with_custom_config(
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
-    let builder = apply_postgres_tree_store(builder).await?;
+    let builder = SdkBuilder::new(config, seed);
+    let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -400,7 +401,7 @@ pub async fn build_sdk_with_tree_store_config(
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
-    let mut builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
+    let mut builder = SdkBuilder::new(config, seed);
 
     // Add postgres tree store if connection string provided, otherwise fall through
     // to the env-var-based shared container
@@ -412,9 +413,9 @@ pub async fn build_sdk_with_tree_store_config(
         let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
         pg_config.max_pool_size = 30;
 
-        builder = builder.with_postgres_tree_store(pg_config);
+        builder = builder.with_postgres_backend(pg_config);
     } else {
-        builder = apply_postgres_tree_store(builder).await?;
+        builder = apply_storage(builder, storage_dir).await?;
     }
 
     let sdk = builder.build().await?;
@@ -471,8 +472,8 @@ pub async fn build_sdk_from_mnemonic(
         mnemonic,
         passphrase,
     };
-    let builder = SdkBuilder::new(config, seed).with_default_storage(storage_dir);
-    let builder = apply_postgres_tree_store(builder).await?;
+    let builder = SdkBuilder::new(config, seed);
+    let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -530,9 +531,9 @@ pub async fn build_sdk_with_external_signer(
         }),
     )?;
 
-    // Use SdkBuilder directly so we can apply postgres tree store
-    let builder = SdkBuilder::new_with_signer(config, signer).with_default_storage(storage_dir);
-    let builder = apply_postgres_tree_store(builder).await?;
+    // Use SdkBuilder directly so we can apply storage
+    let builder = SdkBuilder::new_with_signer(config, signer);
+    let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 
     // Set up event listener
@@ -699,6 +700,58 @@ pub async fn wait_for_token_balance_increase(
                         "Token balance not yet increased: {} (was {})",
                         token_balance,
                         previous_balance
+                    )
+                }
+            }
+        },
+        timeout_secs,
+    )
+    .await
+}
+
+/// Wait for a token balance to reach an exact expected value.
+///
+/// Polls the SDK until the token balance for the given identifier equals `expected_balance`.
+/// Syncs the wallet on each poll iteration.
+///
+/// # Arguments
+/// * `sdk` - The SDK instance to query
+/// * `token_identifier` - The token identifier to check balance for
+/// * `expected_balance` - The exact balance to wait for
+/// * `timeout_secs` - Maximum time to wait in seconds
+///
+/// # Returns
+/// The token balance once it equals `expected_balance`, or error if timeout
+pub async fn wait_for_token_balance(
+    sdk: &BreezSdk,
+    token_identifier: &str,
+    expected_balance: u128,
+    timeout_secs: u64,
+) -> Result<u128> {
+    let token_id = token_identifier.to_string();
+    wait_for(
+        || {
+            let sdk = sdk.clone();
+            let token_id = token_id.clone();
+            async move {
+                sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let info = sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                let token_balance = info
+                    .token_balances
+                    .get(&token_id)
+                    .map(|b| b.balance)
+                    .unwrap_or(0);
+                if token_balance == expected_balance {
+                    Ok(token_balance)
+                } else {
+                    anyhow::bail!(
+                        "Token balance not yet reached: {} (expected {})",
+                        token_balance,
+                        expected_balance
                     )
                 }
             }
@@ -1268,9 +1321,7 @@ pub async fn build_sdk_with_postgres(
         breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_postgres_storage(postgres_config.clone())
-        // Use PostgresTreeStore for tree state sharing across instances
-        .with_postgres_tree_store(postgres_config)
+        .with_postgres_backend(postgres_config)
         .build()
         .await?;
 

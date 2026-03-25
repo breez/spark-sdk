@@ -28,7 +28,7 @@ const { TreeStoreMigrationManager } = require("./migrations.cjs");
  * Advisory lock key for serializing tree store write operations.
  * Matches the Rust constant TREE_STORE_WRITE_LOCK_KEY = 0x7472_6565_5354_4f52
  */
-const TREE_STORE_WRITE_LOCK_KEY = "8391086132283252818"; // 0x7472656553544f52 as decimal string
+const TREE_STORE_WRITE_LOCK_KEY = "8390880541608791890"; // 0x7472656553544f52 as decimal string
 
 /**
  * Timeout for reservations in seconds. Reservations older than this are stale.
@@ -789,10 +789,20 @@ async function createPostgresTreeStore(config, logger = null) {
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
+  return createPostgresTreeStoreWithPool(pool, logger);
+}
 
+/**
+ * Create a PostgresTreeStore instance from an existing pg.Pool.
+ *
+ * @param {pg.Pool} pool - An existing connection pool
+ * @param {object} [logger] - Optional logger
+ * @returns {Promise<PostgresTreeStore>}
+ */
+async function createPostgresTreeStoreWithPool(pool, logger = null) {
   const store = new PostgresTreeStore(pool, logger);
   await store.initialize();
   return store;
 }
 
-module.exports = { PostgresTreeStore, createPostgresTreeStore, TreeStoreError };
+module.exports = { PostgresTreeStore, createPostgresTreeStore, createPostgresTreeStoreWithPool, TreeStoreError };

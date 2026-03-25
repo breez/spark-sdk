@@ -12,7 +12,7 @@ use platform_utils::DefaultHttpClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-use spark_wallet::{SparkWalletConfig, TreeStore};
+use spark_wallet::{SparkWalletConfig, TokenOutputStore, TreeStore};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -55,19 +55,15 @@ pub struct SdkBuilder {
 
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
-    #[cfg(all(
-        feature = "postgres",
-        not(all(target_family = "wasm", target_os = "unknown"))
-    ))]
-    postgres_config: Option<crate::persist::postgres::PostgresStorageConfig>,
+    #[cfg(feature = "postgres")]
+    postgres_backend_config: Option<crate::persist::postgres::PostgresStorageConfig>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     tree_store: Option<Arc<dyn TreeStore>>,
-    #[cfg(feature = "postgres")]
-    postgres_tree_store_config: Option<crate::persist::postgres::PostgresStorageConfig>,
+    token_output_store: Option<Arc<dyn TokenOutputStore>>,
 }
 
 impl SdkBuilder {
@@ -90,19 +86,15 @@ impl SdkBuilder {
             },
             storage_dir: None,
             storage: None,
-            #[cfg(all(
-                feature = "postgres",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            postgres_config: None,
+            #[cfg(feature = "postgres")]
+            postgres_backend_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
             tree_store: None,
-            #[cfg(feature = "postgres")]
-            postgres_tree_store_config: None,
+            token_output_store: None,
         }
     }
 
@@ -118,19 +110,15 @@ impl SdkBuilder {
             signer_source: SignerSource::External(signer),
             storage_dir: None,
             storage: None,
-            #[cfg(all(
-                feature = "postgres",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            postgres_config: None,
+            #[cfg(feature = "postgres")]
+            postgres_backend_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
             tree_store: None,
-            #[cfg(feature = "postgres")]
-            postgres_tree_store_config: None,
+            token_output_store: None,
         }
     }
 
@@ -177,20 +165,17 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets `PostgreSQL` storage to be used by the SDK.
-    /// The storage instance will be created during `build()`.
+    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
     /// Arguments:
     /// - `config`: The `PostgreSQL` storage configuration.
     #[must_use]
-    #[cfg(all(
-        feature = "postgres",
-        not(all(target_family = "wasm", target_os = "unknown"))
-    ))]
-    pub fn with_postgres_storage(
+    #[cfg(feature = "postgres")]
+    pub fn with_postgres_backend(
         mut self,
         config: crate::persist::postgres::PostgresStorageConfig,
     ) -> Self {
-        self.postgres_config = Some(config);
+        self.postgres_backend_config = Some(config);
         self
     }
 
@@ -274,20 +259,16 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets a `PostgreSQL`-backed tree store.
-    ///
-    /// This creates a `PostgresTreeStore` for persistent tree storage,
-    /// suitable for server-side deployments.
+    /// Sets a custom token output store implementation.
     ///
     /// # Arguments
-    /// - `config`: Configuration for the `PostgreSQL` connection pool.
-    #[cfg(feature = "postgres")]
+    /// - `token_output_store`: The token output store implementation to use.
     #[must_use]
-    pub fn with_postgres_tree_store(
+    pub fn with_token_output_store(
         mut self,
-        config: crate::persist::postgres::PostgresStorageConfig,
+        token_output_store: Arc<dyn TokenOutputStore>,
     ) -> Self {
-        self.postgres_tree_store_config = Some(config);
+        self.token_output_store = Some(token_output_store);
         self
     }
 
@@ -416,15 +397,9 @@ impl SdkBuilder {
         };
 
         // Validate storage configuration
-        #[cfg(all(
-            feature = "postgres",
-            not(all(target_family = "wasm", target_os = "unknown"))
-        ))]
-        let has_postgres = self.postgres_config.is_some();
-        #[cfg(not(all(
-            feature = "postgres",
-            not(all(target_family = "wasm", target_os = "unknown"))
-        )))]
+        #[cfg(feature = "postgres")]
+        let has_postgres = self.postgres_backend_config.is_some();
+        #[cfg(not(feature = "postgres"))]
         let has_postgres = false;
 
         let storage_count = [
@@ -444,6 +419,18 @@ impl SdkBuilder {
             }
             _ => {}
         }
+
+        // Create a shared PostgreSQL pool if postgres backend is configured.
+        // This single pool is reused for storage, tree store, and token store.
+        #[cfg(feature = "postgres")]
+        let postgres_pool = if let Some(ref postgres_config) = self.postgres_backend_config {
+            Some(
+                crate::persist::postgres::create_pool(postgres_config)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         // Initialize storage
         let storage: Arc<dyn Storage> = if let Some(storage) = self.storage {
@@ -469,9 +456,9 @@ impl SdkBuilder {
                 feature = "postgres",
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
-            if let Some(postgres_config) = self.postgres_config {
+            if let Some(ref pool) = postgres_pool {
                 Arc::new(
-                    crate::persist::postgres::PostgresStorage::new(postgres_config)
+                    crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
                         .await
                         .map_err(|e| SdkError::Generic(e.to_string()))?,
                 )
@@ -530,9 +517,22 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if tree_store.is_none()
-            && let Some(config) = self.postgres_tree_store_config
+            && let Some(ref pool) = postgres_pool
         {
-            tree_store = Some(crate::persist::postgres::create_postgres_tree_store(config).await?);
+            tree_store =
+                Some(crate::persist::postgres::create_postgres_tree_store(pool.clone()).await?);
+        }
+
+        // Create token output store if configured
+        #[allow(unused_mut)]
+        let mut token_output_store: Option<Arc<dyn TokenOutputStore>> = self.token_output_store;
+
+        #[cfg(feature = "postgres")]
+        if token_output_store.is_none()
+            && let Some(ref pool) = postgres_pool
+        {
+            token_output_store =
+                Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
         }
 
         let mut wallet_builder =
@@ -545,6 +545,9 @@ impl SdkBuilder {
         }
         if let Some(tree_store) = tree_store {
             wallet_builder = wallet_builder.with_tree_store(tree_store);
+        }
+        if let Some(token_output_store) = token_output_store {
+            wallet_builder = wallet_builder.with_token_output_store(token_output_store);
         }
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 

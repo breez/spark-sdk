@@ -187,6 +187,7 @@ fn package_wasm_target(
         copy_nodejs_storage_files(crate_dir, &out_path)?;
         copy_postgres_storage_files(crate_dir, &out_path)?;
         copy_postgres_tree_store_files(crate_dir, &out_path)?;
+        copy_postgres_token_store_files(crate_dir, &out_path)?;
     }
 
     if target == "web" || target == "bundler" {
@@ -401,6 +402,72 @@ fn copy_postgres_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<(
     Ok(())
 }
 
+fn copy_postgres_token_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_token_store_src = crate_dir.join("js/postgres-token-store");
+
+    if !js_token_store_src.exists() {
+        println!(
+            "Warning: PostgreSQL token store source directory not found at {:?}",
+            js_token_store_src
+        );
+        return Ok(());
+    }
+
+    let token_store_dest = out_path.join("postgres-token-store");
+
+    // Create token store directory in output
+    std::fs::create_dir_all(&token_store_dest)?;
+
+    // Copy the CommonJS token store implementation files (keeping .cjs extensions)
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+
+    for file_name in files_to_copy {
+        let src_file = js_token_store_src.join(file_name);
+        let dest_file = token_store_dest.join(file_name);
+
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied PostgreSQL token store file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "PostgreSQL token store file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    // Create a CommonJS package.json for the postgres token store module
+    let token_store_package_json = serde_json::json!({
+        "name": "@breez-sdk/postgres-token-store",
+        "version": "1.0.0",
+        "description": "Node.js PostgreSQL token store implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "pg": "^8.18.0"
+        }
+    });
+
+    let dest_package_json = token_store_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&token_store_package_json)
+        .with_context(|| "Failed to serialize postgres token store package.json")?;
+
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write postgres token store package.json".to_string())?;
+    println!("Created PostgreSQL token store package.json");
+
+    println!(
+        "Successfully copied PostgreSQL token store files to {}",
+        token_store_dest.display()
+    );
+    Ok(())
+}
+
 fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
@@ -420,8 +487,10 @@ try {
 
 // Automatically import and set up the PostgreSQL storage for Node.js
 try {
-    const { createPostgresStorage } = require('./postgres-storage/index.cjs');
+    const { createPostgresStorage, createPostgresPool, createPostgresStorageWithPool } = require('./postgres-storage/index.cjs');
     global.createPostgresStorage = createPostgresStorage;
+    global.createPostgresPool = createPostgresPool;
+    global.createPostgresStorageWithPool = createPostgresStorageWithPool;
 } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load PostgreSQL storage:', error.message);
@@ -430,11 +499,23 @@ try {
 
 // Automatically import and set up the PostgreSQL tree store for Node.js
 try {
-    const { createPostgresTreeStore } = require('./postgres-tree-store/index.cjs');
+    const { createPostgresTreeStore, createPostgresTreeStoreWithPool } = require('./postgres-tree-store/index.cjs');
     global.createPostgresTreeStore = createPostgresTreeStore;
+    global.createPostgresTreeStoreWithPool = createPostgresTreeStoreWithPool;
 } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load PostgreSQL tree store:', error.message);
+    }
+}
+
+// Automatically import and set up the PostgreSQL token store for Node.js
+try {
+    const { createPostgresTokenStore, createPostgresTokenStoreWithPool } = require('./postgres-token-store/index.cjs');
+    global.createPostgresTokenStore = createPostgresTokenStore;
+    global.createPostgresTokenStoreWithPool = createPostgresTokenStoreWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load PostgreSQL token store:', error.message);
     }
 }
 
@@ -492,6 +573,9 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             files_array.push(serde_json::Value::String(
                 "postgres-tree-store/".to_string(),
             ));
+            files_array.push(serde_json::Value::String(
+                "postgres-token-store/".to_string(),
+            ));
             files_array.push(serde_json::Value::String("index.js".to_string()));
         }
     } else {
@@ -502,6 +586,7 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             "storage/",
             "postgres-storage/",
             "postgres-tree-store/",
+            "postgres-token-store/",
             "index.js"
         ]);
     }

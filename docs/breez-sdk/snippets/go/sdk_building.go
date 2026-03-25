@@ -94,7 +94,7 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	config.ApiKey = &apiKey
 
-	// Configure PostgreSQL storage
+	// Configure PostgreSQL backend
 	// Connection string format: "host=localhost user=postgres password=secret dbname=spark"
 	// Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
 	postgresConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
@@ -103,14 +103,9 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
-	// Configure PostgreSQL tree store
-	// Can use the same or a different PostgreSQL database
-	treeStoreConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
-
-	// Build the SDK with PostgreSQL storage and tree store
+	// Build the SDK with PostgreSQL backend (storage, tree store, and token store)
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithPostgresStorage(postgresConfig)
-	builder.WithPostgresTreeStore(treeStoreConfig)
+	builder.WithPostgresBackend(postgresConfig)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err
