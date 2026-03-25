@@ -266,7 +266,7 @@ class PostgresTokenStore {
          FROM token_metadata m
          LEFT JOIN token_outputs o ON o.token_identifier = m.identifier
          LEFT JOIN token_reservations r ON o.reservation_id = r.id
-         ORDER BY m.identifier, o.token_amount ASC`
+         ORDER BY m.identifier, o.token_amount::NUMERIC ASC`
       );
 
       const map = new Map();
@@ -339,7 +339,8 @@ class PostgresTokenStore {
          FROM token_metadata m
          LEFT JOIN token_outputs o ON o.token_identifier = m.identifier
          LEFT JOIN token_reservations r ON o.reservation_id = r.id
-         WHERE ${whereClause}`,
+         WHERE ${whereClause}
+         ORDER BY o.token_amount::NUMERIC ASC`,
         [param]
       );
 

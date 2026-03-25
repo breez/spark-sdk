@@ -74,7 +74,7 @@ async fn test_reserve_token_outputs_and_set_add_output() {
         .reservations
         .get(&reservation.id)
         .unwrap();
-    assert_eq!(reserved_token_outputs.token_outputs.outputs.len(), 1);
+    assert_eq!(reserved_token_outputs.stored_outputs.len(), 1);
     drop(token_outputs_state);
 
     let stored_token1 = store
@@ -164,7 +164,7 @@ async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
         .reservations
         .get(&reservation.id)
         .unwrap();
-    assert_eq!(reserved_token_outputs.token_outputs.outputs.len(), 1);
+    assert_eq!(reserved_token_outputs.stored_outputs.len(), 1);
     drop(token_outputs_state);
 
     let stored_token1 = store

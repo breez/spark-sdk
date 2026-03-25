@@ -131,10 +131,11 @@ async fn test_concurrent_token_operations() -> Result<()> {
     info!("Setting up test fixture with PostgreSQL container...");
     let fixture = ConcurrentTestFixture::new().await?;
 
-    // Create first instance and fund with sats (needed for token operations)
-    info!("Creating instance_0 and funding with sats...");
-    let mut instance_0 = fixture.build_postgres_instance().await?;
-    ensure_funded(&mut instance_0, 4_000).await?;
+    // Create instances with shared seed
+    info!("Creating SDK instances with shared seed...");
+    let instance_0 = fixture.build_postgres_instance().await?;
+    let instance_1 = fixture.build_postgres_instance().await?;
+    let instance_2 = fixture.build_postgres_instance().await?;
 
     // Create and mint token via instance_0
     info!("Creating and minting test token...");
@@ -166,19 +167,13 @@ async fn test_concurrent_token_operations() -> Result<()> {
         "Alice should have 1,000,000 tokens after minting"
     );
 
-    // Now create instances 1 and 2 (after funding + minting to avoid claim race)
-    info!("Creating additional SDK instances with shared seed...");
-    let instance_1 = fixture.build_postgres_instance().await?;
-    let instance_2 = fixture.build_postgres_instance().await?;
-
-    // Create Bob (SQLite, different seed) and fund with sats
+    // Create Bob (SQLite, different seed)
     info!("Creating Bob with SQLite storage...");
     let bob_dir = tempdir::TempDir::new("breez-sdk-bob-tokens")?;
     let bob_path = bob_dir.path().to_string_lossy().to_string();
     let mut bob_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bob_seed);
-    let mut bob = build_sdk_with_dir(bob_path, bob_seed, Some(bob_dir)).await?;
-    ensure_funded(&mut bob, 4_000).await?;
+    let bob = build_sdk_with_dir(bob_path, bob_seed, Some(bob_dir)).await?;
 
     // Send initial tokens to Bob (500,000) so both sides have tokens
     info!("Sending 500,000 tokens to Bob...");
