@@ -2,9 +2,9 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-fn start_optimization(sdk: &BreezSdk) {
+async fn start_optimization(sdk: &BreezSdk) {
     // ANCHOR: start-optimization
-    sdk.start_leaf_optimization();
+    sdk.start_leaf_optimization().await;
     // ANCHOR_END: start-optimization
 }
 

@@ -3,7 +3,7 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class Optimize {
-    fun startOptimization(sdk: BreezSdk) {
+    suspend fun startOptimization(sdk: BreezSdk) {
         // ANCHOR: start-optimization
         sdk.startLeafOptimization()
         // ANCHOR_END: start-optimization

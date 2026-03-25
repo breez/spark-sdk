@@ -1,8 +1,8 @@
 import BreezSdkSpark
 
-func startOptimization(sdk: BreezSdk) {
+func startOptimization(sdk: BreezSdk) async {
     // ANCHOR: start-optimization
-    sdk.startLeafOptimization()
+    await sdk.startLeafOptimization()
     // ANCHOR_END: start-optimization
 }
 

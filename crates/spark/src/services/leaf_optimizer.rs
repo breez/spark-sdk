@@ -193,7 +193,7 @@ impl LeafOptimizer {
     ///
     /// Returns early (without spawning) if:
     /// - Optimization is already running
-    pub fn start(self: &Arc<Self>) {
+    pub async fn start(self: &Arc<Self>) {
         let mut progress = self.progress.lock().unwrap();
 
         // Check if already running
