@@ -181,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &mempool_config,
                     &wallet,
                     command_res.unwrap(),
+                    &seed,
                 )
                 .await
                 {
