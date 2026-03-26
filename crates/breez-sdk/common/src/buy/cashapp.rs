@@ -3,7 +3,7 @@ const CASHAPP_LIGHTNING_BASE_URL: &str = "https://cash.app/launch/lightning/";
 pub struct CashAppProvider;
 
 impl CashAppProvider {
-    /// Build a CashApp deep link URL from a bolt11 Lightning invoice.
+    /// Build a `CashApp` deep link URL from a bolt11 Lightning invoice.
     pub fn build_url(invoice: &str) -> String {
         format!("{CASHAPP_LIGHTNING_BASE_URL}{invoice}")
     }
