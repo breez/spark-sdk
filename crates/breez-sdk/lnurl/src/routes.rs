@@ -42,6 +42,10 @@ use crate::{
 const ACCEPTABLE_TIME_DIFF_SECS: u64 = 600;
 const DEFAULT_METADATA_OFFSET: u32 = 0;
 const DEFAULT_METADATA_LIMIT: u32 = 100;
+/// Maximum number of nostr relays to connect to when publishing zap receipts.
+const MAX_NOSTR_RELAYS: usize = 10;
+/// Maximum size (bytes) of a nostr event JSON (zap request or zap receipt).
+const MAX_NOSTR_EVENT_SIZE: usize = 32_768;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
@@ -301,6 +305,13 @@ where
         )
         .await?;
 
+        if payload.zap_receipt.len() > MAX_NOSTR_EVENT_SIZE {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "zap receipt too large"})),
+            ));
+        }
+
         // Parse and validate the zap receipt
         let zap_receipt = Event::from_json(&payload.zap_receipt).map_err(|e| {
             trace!("invalid zap receipt, could not parse: {}", e);
@@ -483,7 +494,7 @@ where
             }
         };
 
-        let relays = zap_request
+        let relays: Vec<_> = zap_request
             .tags
             .iter()
             .filter_map(|t| {
@@ -494,7 +505,8 @@ where
                 }
             })
             .flatten()
-            .collect::<Vec<_>>();
+            .take(MAX_NOSTR_RELAYS)
+            .collect();
 
         if !relays.is_empty() {
             // The nostr keys are not really needed here, but we use them to create the client
@@ -647,6 +659,10 @@ where
             if nostr_pubkey.is_none() {
                 trace!("nostr zap not supported");
                 return Err(lnurl_error("nostr zap not supported"));
+            }
+
+            if event.len() > MAX_NOSTR_EVENT_SIZE {
+                return Err(lnurl_error("nostr event too large"));
             }
 
             let event = Event::from_json(event).map_err(|e| {
