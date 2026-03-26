@@ -871,7 +871,7 @@ func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args 
 		return err
 	}
 
-	req := breez_sdk_spark.BuyBitcoinRequest{}
+	req := breez_sdk_spark.BuyBitcoinRequestMoonpay{}
 	if *lockedAmount > 0 {
 		req.LockedAmountSat = lockedAmount
 	}

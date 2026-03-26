@@ -760,7 +760,7 @@ suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<Strin
     val redirectUrl = fp.getString("redirect-url")
 
     val result = sdk.buyBitcoin(
-        BuyBitcoinRequest(
+        BuyBitcoinRequest.Moonpay(
             lockedAmountSat = lockedAmount,
             redirectUrl = redirectUrl,
         )

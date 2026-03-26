@@ -726,7 +726,7 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   final redirectUrl = results.option('redirect-url');
 
   final result = await sdk.buyBitcoin(
-    request: BuyBitcoinRequest(lockedAmountSat: lockedAmount, redirectUrl: redirectUrl),
+    request: BuyBitcoinRequest_Moonpay(lockedAmountSat: lockedAmount, redirectUrl: redirectUrl),
   );
   print('Open this URL in a browser to complete the purchase:');
   print(result.url);

@@ -932,7 +932,7 @@ public static class Commands
         var lockedAmountStr = GetFlag(args, "--locked-amount-sat");
         var redirectUrl = GetFlag(args, "--redirect-url");
 
-        var result = await sdk.BuyBitcoin(new BuyBitcoinRequest(
+        var result = await sdk.BuyBitcoin(new BuyBitcoinRequest.Moonpay(
             lockedAmountSat: ParseOptionalUlong(lockedAmountStr),
             redirectUrl: redirectUrl
         ));
