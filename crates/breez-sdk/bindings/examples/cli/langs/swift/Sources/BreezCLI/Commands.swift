@@ -743,7 +743,7 @@ func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     let lockedAmount = fp.get("locked-amount-sat").flatMap { UInt64($0) }
     let redirectUrl = fp.get("redirect-url")
 
-    let result = try await sdk.buyBitcoin(request: BuyBitcoinRequest(
+    let result = try await sdk.buyBitcoin(request: .moonpay(
         lockedAmountSat: lockedAmount,
         redirectUrl: redirectUrl
     ))

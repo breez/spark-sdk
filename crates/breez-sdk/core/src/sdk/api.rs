@@ -2,12 +2,14 @@ use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
 use tracing::info;
 
+use breez_sdk_common::buy::cashapp::CashAppProvider;
+
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
-    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
-    UserSettings, Webhook,
+    ListFiatRatesResponse, Network, OptimizationProgress, RegisterWebhookRequest,
+    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest,
+    UpdateUserSettingsRequest, UserSettings, Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -320,30 +322,47 @@ impl BreezSdk {
         Ok(webhooks.into_iter().map(Into::into).collect())
     }
 
-    /// Initiates a Bitcoin purchase flow via an external provider (`MoonPay`).
+    /// Initiates a Bitcoin purchase flow via an external provider.
     ///
-    /// This method generates a URL that the user can open in a browser to complete
-    /// the Bitcoin purchase. The purchased Bitcoin will be sent to an automatically
-    /// generated deposit address.
+    /// Returns a URL the user should open to complete the purchase.
+    /// The request variant determines the provider and its parameters:
     ///
-    /// # Arguments
-    ///
-    /// * `request` - The purchase request containing optional amount and redirect URL
-    ///
-    /// # Returns
-    ///
-    /// A response containing the URL to open in a browser to complete the purchase
+    /// - [`BuyBitcoinRequest::Moonpay`]: Fiat-to-Bitcoin via on-chain deposit.
+    /// - [`BuyBitcoinRequest::CashApp`]: Lightning invoice + `cash.app` deep link (mainnet only).
     pub async fn buy_bitcoin(
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let address = get_deposit_address(&self.spark_wallet, true).await?;
-
-        let url = self
-            .buy_bitcoin_provider
-            .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}")))?;
+        let url = match request {
+            BuyBitcoinRequest::Moonpay {
+                locked_amount_sat,
+                redirect_url,
+            } => {
+                let address = get_deposit_address(&self.spark_wallet, true).await?;
+                self.buy_bitcoin_provider
+                    .buy_bitcoin(address, locked_amount_sat, redirect_url)
+                    .await
+                    .map_err(|e| {
+                        SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
+                    })?
+            }
+            BuyBitcoinRequest::CashApp { amount_sats } => {
+                if !matches!(self.config.network, Network::Mainnet) {
+                    return Err(SdkError::Generic(
+                        "CashApp is only available on mainnet".to_string(),
+                    ));
+                }
+                let receive_response = self
+                    .receive_bolt11_invoice(
+                        "Buy Bitcoin via CashApp".to_string(),
+                        amount_sats,
+                        None,
+                        None,
+                    )
+                    .await?;
+                CashAppProvider::build_url(&receive_response.payment_request)
+            }
+        };
 
         Ok(BuyBitcoinResponse { url })
     }

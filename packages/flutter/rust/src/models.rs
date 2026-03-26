@@ -1160,9 +1160,14 @@ pub struct _FetchConversionLimitsResponse {
 }
 
 #[frb(mirror(BuyBitcoinRequest))]
-pub struct _BuyBitcoinRequest {
-    pub locked_amount_sat: Option<u64>,
-    pub redirect_url: Option<String>,
+pub enum _BuyBitcoinRequest {
+    Moonpay {
+        locked_amount_sat: Option<u64>,
+        redirect_url: Option<String>,
+    },
+    CashApp {
+        amount_sats: Option<u64>,
+    },
 }
 
 #[frb(mirror(BuyBitcoinResponse))]

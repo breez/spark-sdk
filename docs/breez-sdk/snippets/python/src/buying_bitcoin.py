@@ -14,7 +14,7 @@ async def buy_bitcoin(sdk: BreezSdk):
     optional_redirect_url = "https://example.com/purchase-complete"
 
     try:
-        request = BuyBitcoinRequest(
+        request = BuyBitcoinRequest.MOONPAY(
             locked_amount_sat=optional_locked_amount_sat,
             redirect_url=optional_redirect_url,
         )
@@ -26,3 +26,19 @@ async def buy_bitcoin(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: buy-bitcoin
+
+
+async def buy_bitcoin_via_cashapp(sdk: BreezSdk):
+    # ANCHOR: buy-bitcoin-cashapp
+    try:
+        request = BuyBitcoinRequest.CASH_APP(
+            amount_sats=None,
+        )
+
+        response = await sdk.buy_bitcoin(request=request)
+        logging.debug("Open this URL in Cash App to complete the purchase:")
+        logging.debug(response.url)
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: buy-bitcoin-cashapp

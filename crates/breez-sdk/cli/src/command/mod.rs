@@ -264,13 +264,17 @@ pub enum Command {
         sat_per_vbyte: Option<u64>,
     },
     ListUnclaimedDeposits,
-    /// Buy Bitcoin using an external provider (`MoonPay`)
+    /// Buy Bitcoin using an external provider
     BuyBitcoin {
-        /// Lock the purchase to a specific amount in satoshis. When provided, the user cannot change the amount in the purchase flow.
-        #[arg(long)]
-        locked_amount_sat: Option<u64>,
+        /// Provider to use: "moonpay" (default) or "cashapp"
+        #[arg(long, default_value = "moonpay")]
+        provider: String,
 
-        /// Custom redirect URL after purchase completion
+        /// Amount in satoshis (meaning depends on provider)
+        #[arg(long)]
+        amount_sat: Option<u64>,
+
+        /// Custom redirect URL after purchase completion (`MoonPay` only)
         #[arg(long)]
         redirect_url: Option<String>,
     },
@@ -505,15 +509,20 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::BuyBitcoin {
-            locked_amount_sat,
+            provider,
+            amount_sat,
             redirect_url,
         } => {
-            let value = sdk
-                .buy_bitcoin(BuyBitcoinRequest {
-                    locked_amount_sat,
+            let request = match provider.to_lowercase().as_str() {
+                "cashapp" | "cash_app" | "cash-app" => BuyBitcoinRequest::CashApp {
+                    amount_sats: amount_sat,
+                },
+                _ => BuyBitcoinRequest::Moonpay {
+                    locked_amount_sat: amount_sat,
                     redirect_url,
-                })
-                .await?;
+                },
+            };
+            let value = sdk.buy_bitcoin(request).await?;
             println!("Open this URL in a browser to complete the purchase:");
             println!("{}", value.url);
             Ok(true)

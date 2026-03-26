@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use super::BuyBitcoinProviderApi;
 use crate::{breez_server::BreezServer, grpc::SignUrlRequest};
 use anyhow::Result;
 use bitreq::Url;
@@ -70,11 +69,8 @@ impl MoonpayProvider {
     pub fn new(breez_server: Arc<BreezServer>) -> Self {
         Self { breez_server }
     }
-}
 
-#[macros::async_trait]
-impl BuyBitcoinProviderApi for MoonpayProvider {
-    async fn buy_bitcoin(
+    pub async fn buy_bitcoin(
         &self,
         address: String,
         locked_amount_sat: Option<u64>,

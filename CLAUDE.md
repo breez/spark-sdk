@@ -138,12 +138,12 @@ See [snippets-processor/src/main.rs](docs/breez-sdk/snippets-processor/src/main.
 ## CLI Modification Policy
 
 **Do not modify language-specific CLIs** (`crates/breez-sdk/bindings/examples/cli/langs/`) unless:
-- Fixing issues caught by static analysis (clippy, linting, build errors) in those CLIs
-- Explicitly requested by the user (e.g. porting a new feature for testing)
+- Fixing failures in the **CLI matrix** or **Flutter** (which includes Flutter/Dart CLI static analysis) CI jobs. Always fix those CI failures, as this gives the Sync CLI Languages workflow (`sync-cli.yml`) better context when propagating future Rust CLI changes. Keep fixes minimal: only make changes needed to pass the build. Do not add new features, flags, or update descriptions; leave full feature propagation to the sync workflow.
+- Explicitly requested by the user (e.g. porting a new feature for testing).
 
-The **Sync CLI Languages** workflow (`sync-cli.yml`) handles propagating Rust CLI changes to all language CLIs automatically. Modifying language CLIs directly on PRs creates noise and conflicts with the sync agent.
+The **Sync CLI Languages** workflow (`sync-cli.yml`) automatically propagates Rust CLI changes to all language CLIs. Unnecessary modifications to language CLIs create PR noise.
 
-The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely — it is the source of truth that the sync workflow reads from.
+The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely as it is the source of truth that the sync workflow reads from.
 
 ## Workspace Configuration
 
