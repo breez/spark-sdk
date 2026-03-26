@@ -101,3 +101,12 @@ For server environments or applications that receive a high volume of incoming p
 **Default**: 4
 
 **Recommendation**: The default value works well for most applications. Server applications handling many simultaneous incoming payments may benefit from higher values (e.g., 8-16), depending on their infrastructure capacity. End-user wallets with limited resources may reduce this to 1-2.
+
+<h2 id="stable-balance-configuration">
+    <a class="header" href="#stable-balance-configuration">Stable balance configuration</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.StableBalanceConfig.html">API docs</a>
+</h2>
+
+The SDK can automatically convert received Bitcoin to a stable token, protecting against price volatility. Configure the available tokens, default behavior, conversion threshold, and slippage tolerance. See the [Stable balance](./stable_balance.md) guide for full details.
+
+{{#tabs config:stable-balance-config}}

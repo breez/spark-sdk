@@ -1,3 +1,6 @@
+use std::fmt;
+use std::str::FromStr;
+
 use flashnet::{BTC_ASSET_ADDRESS, Pool};
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +16,16 @@ pub const DEFAULT_INTEGRATOR_PUBKEY: &str =
 /// Default integrator fee BPS used when simulating/executing conversions
 pub const DEFAULT_INTEGRATOR_FEE_BPS: u32 = 5;
 
+/// Fee attribution for a conversion, indicating which side of the conversion
+/// (sent or received) the pool fee is denominated in. The two variants are
+/// mutually exclusive — a pool fee is always denominated in one asset.
+pub(crate) enum FeeSplit {
+    /// Fee is on the sent (outbound/`asset_in`) payment, denominated in `asset_in`.
+    Sent(u128),
+    /// Fee is on the received (inbound/`asset_out`) payment, denominated in `asset_out`.
+    Received(u128),
+}
+
 /// Response from estimating a conversion, used when preparing a payment that requires conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +38,8 @@ pub struct ConversionEstimate {
     /// The fee estimated for the conversion
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
+    /// The reason the conversion amount was adjusted, if applicable.
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 /// The purpose of the conversion, which is used to provide context for the conversion
@@ -53,17 +68,59 @@ pub(crate) enum ConversionAmount {
     AmountIn(u128),
 }
 
+/// The reason why a conversion amount was adjusted from the originally requested value.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AmountAdjustmentReason {
+    /// The amount was increased to meet the minimum conversion limit.
+    FlooredToMinLimit,
+    /// The amount was increased to convert the full token balance,
+    /// avoiding a remaining balance below the minimum conversion limit (token dust).
+    IncreasedToAvoidDust,
+}
+
 /// The status of the conversion
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConversionStatus {
+    /// Conversion is in-flight (queued or started, not yet completed)
+    Pending,
     /// The conversion was successful
     Completed,
+    /// The conversion failed (e.g., the initial send payment failed)
+    Failed,
     /// The conversion failed and no refund was made yet, which requires action by the SDK to
     /// perform the refund. This can happen if there was a failure during the conversion process.
     RefundNeeded,
     /// The conversion failed and a refund was made
     Refunded,
+}
+
+impl fmt::Display for ConversionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConversionStatus::Pending => write!(f, "pending"),
+            ConversionStatus::Completed => write!(f, "completed"),
+            ConversionStatus::Failed => write!(f, "failed"),
+            ConversionStatus::RefundNeeded => write!(f, "refund_needed"),
+            ConversionStatus::Refunded => write!(f, "refunded"),
+        }
+    }
+}
+
+impl FromStr for ConversionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(ConversionStatus::Pending),
+            "completed" => Ok(ConversionStatus::Completed),
+            "failed" => Ok(ConversionStatus::Failed),
+            "refund_needed" => Ok(ConversionStatus::RefundNeeded),
+            "refunded" => Ok(ConversionStatus::Refunded),
+            _ => Err(format!("Invalid conversion status '{s}'")),
+        }
+    }
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -80,6 +137,9 @@ pub struct ConversionInfo {
     pub fee: Option<u128>,
     /// The purpose of the conversion
     pub purpose: Option<ConversionPurpose>,
+    /// The reason the conversion amount was adjusted, if applicable.
+    #[serde(default)]
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 pub(crate) struct TokenConversionPool {

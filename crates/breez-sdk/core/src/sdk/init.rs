@@ -1,21 +1,11 @@
-use flashnet::{FlashnetConfig, IntegratorConfig};
 use platform_utils::tokio;
 use std::sync::Arc;
 use tokio::sync::{OnceCell, watch};
 use tracing::{Instrument, error, info};
 
-use crate::{
-    Network,
-    error::SdkError,
-    persist::ObjectCacheRepository,
-    stable_balance::StableBalance,
-    token_conversion::{
-        DEFAULT_INTEGRATOR_FEE_BPS, DEFAULT_INTEGRATOR_PUBKEY, FlashnetTokenConverter,
-        TokenConverter,
-    },
-};
+use crate::{Network, error::SdkError, persist::ObjectCacheRepository};
 
-use super::{BreezSdk, BreezSdkParams, SyncCoordinator, helpers::validate_breez_api_key};
+use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -31,37 +21,6 @@ impl BreezSdk {
         let (initial_synced_sender, initial_synced_watcher) = watch::channel(false);
         let external_input_parsers = params.config.get_all_external_input_parsers();
 
-        // Create the FlashnetTokenConverter (spawns its own refunder background task)
-        let flashnet_config = FlashnetConfig::default_config(
-            params.config.network.into(),
-            DEFAULT_INTEGRATOR_PUBKEY
-                .parse()
-                .ok()
-                .map(|pubkey| IntegratorConfig {
-                    pubkey,
-                    fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
-                }),
-        );
-        let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
-            flashnet_config,
-            Arc::clone(&params.storage),
-            Arc::clone(&params.spark_wallet),
-            params.config.network,
-            params.shutdown_sender.subscribe(),
-        ));
-
-        // Create StableBalance if configured (spawns its own auto-convert background task)
-        let stable_balance = params.config.stable_balance_config.as_ref().map(|config| {
-            Arc::new(StableBalance::new(
-                config.clone(),
-                Arc::clone(&token_converter),
-                Arc::clone(&params.spark_wallet),
-                params.shutdown_sender.subscribe(),
-                params.sync_signing_client.clone(),
-            ))
-        });
-        let sync_coordinator = SyncCoordinator::new();
-
         let sdk = Self {
             config: params.config,
             spark_wallet: params.spark_wallet,
@@ -73,12 +32,12 @@ impl BreezSdk {
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
-            sync_coordinator,
+            sync_coordinator: params.sync_coordinator,
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
-            token_converter,
-            stable_balance,
+            token_converter: params.token_converter,
+            stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
         };
 
@@ -162,6 +121,7 @@ impl BreezSdk {
         // Enable spark private mode
         self.update_user_settings(crate::UpdateUserSettingsRequest {
             spark_private_mode_enabled: Some(true),
+            stable_balance_active_label: None,
         })
         .await?;
         ObjectCacheRepository::new(self.storage.clone())

@@ -119,8 +119,12 @@ func main() {
 
 	// Stable balance config
 	if *stableBalanceTokenIdentifier != "" {
+		defaultActiveLabel := "USDB"
 		sbc := breez_sdk_spark.StableBalanceConfig{
-			TokenIdentifier: *stableBalanceTokenIdentifier,
+			Tokens: []breez_sdk_spark.StableBalanceToken{
+				{Label: "USDB", TokenIdentifier: *stableBalanceTokenIdentifier},
+			},
+			DefaultActiveLabel: &defaultActiveLabel,
 		}
 		if *stableBalanceThreshold > 0 {
 			sbc.ThresholdSats = stableBalanceThreshold

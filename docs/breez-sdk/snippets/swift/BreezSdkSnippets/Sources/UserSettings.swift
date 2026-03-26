@@ -16,3 +16,23 @@ func updateUserSettings(sdk: BreezSdk) async throws {
         ))
     // ANCHOR_END: update-user-settings
 }
+
+func activateStableBalance(sdk: BreezSdk) async throws {
+    // ANCHOR: activate-stable-balance
+    try await sdk.updateUserSettings(
+        request: UpdateUserSettingsRequest(
+            sparkPrivateModeEnabled: nil,
+            stableBalanceActiveLabel: .set(label: "USDB")
+        ))
+    // ANCHOR_END: activate-stable-balance
+}
+
+func deactivateStableBalance(sdk: BreezSdk) async throws {
+    // ANCHOR: deactivate-stable-balance
+    try await sdk.updateUserSettings(
+        request: UpdateUserSettingsRequest(
+            sparkPrivateModeEnabled: nil,
+            stableBalanceActiveLabel: .unset
+        ))
+    // ANCHOR_END: deactivate-stable-balance
+}

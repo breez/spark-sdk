@@ -406,6 +406,10 @@ class MigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1`,
         ]
       },
+      {
+        name: "Add conversion_status to payment_metadata",
+        sql: `ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT`,
+      },
     ];
   }
 }

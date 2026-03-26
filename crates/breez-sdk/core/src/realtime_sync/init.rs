@@ -19,14 +19,9 @@ pub struct RealTimeSyncParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
-pub struct RealTimeSyncResult {
-    pub storage: Arc<dyn Storage>,
-    pub signing_client: SigningClient,
-}
-
 pub async fn init_and_start_real_time_sync(
     params: RealTimeSyncParams,
-) -> Result<RealTimeSyncResult, SdkError> {
+) -> Result<Arc<dyn Storage>, SdkError> {
     debug!("Real-time sync is enabled.");
     let sync_storage: Arc<dyn breez_sdk_common::sync::storage::SyncStorage> =
         Arc::new(SyncStorageWrapper::new(Arc::clone(&params.storage)));
@@ -62,8 +57,5 @@ pub async fn init_and_start_real_time_sync(
         .start(params.shutdown_receiver)
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to start real-time sync processor: {e}")))?;
-    Ok(RealTimeSyncResult {
-        storage,
-        signing_client,
-    })
+    Ok(storage)
 }

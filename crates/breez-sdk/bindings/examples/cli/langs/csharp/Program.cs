@@ -128,10 +128,15 @@ StableBalanceConfig? stableBalanceConfig = null;
 if (stableBalanceTokenIdentifier != null)
 {
     stableBalanceConfig = new StableBalanceConfig(
-        tokenIdentifier: stableBalanceTokenIdentifier,
+        tokens: new StableBalanceToken[] {
+            new StableBalanceToken(
+                label: "USDB",
+                tokenIdentifier: stableBalanceTokenIdentifier
+            )
+        },
+        defaultActiveLabel: "USDB",
         thresholdSats: stableBalanceThreshold,
-        maxSlippageBps: null,
-        reservedSats: null
+        maxSlippageBps: null
     );
 }
 

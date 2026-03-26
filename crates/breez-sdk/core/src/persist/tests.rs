@@ -641,6 +641,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Completed,
             fee: Some(21),
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -708,6 +709,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Refunded,
             fee: None,
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -737,6 +739,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::RefundNeeded,
             fee: None,
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -1887,6 +1890,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Refunded,
             fee: None,
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -1923,6 +1927,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Completed,
             fee: Some(100),
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -1949,6 +1954,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::RefundNeeded,
             fee: None,
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -2669,6 +2675,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
             status: crate::ConversionStatus::Completed,
             fee: Some(100),
             purpose: None,
+            amount_adjustment: None,
         }),
         ..Default::default()
     };
@@ -3020,4 +3027,135 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
         .unwrap();
     assert_eq!(page2.len(), 2);
     assert_ne!(page1[0].id, page2[0].id);
+}
+
+/// Tests that `conversion_status` in `PaymentMetadata` is correctly persisted and
+/// read back as `conversion_details` on the `Payment`. Also verifies COALESCE
+/// behavior preserves it across partial metadata updates, and that all
+/// `ConversionStatus` variants round-trip correctly.
+#[allow(clippy::too_many_lines)]
+pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
+    // Helper: create a simple Spark payment
+    let make_payment = |id: &str| Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 1000,
+        fees: 10,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+
+    // --- Test 1: All ConversionStatus variants round-trip ---
+    let variants = vec![
+        ("cs_pending", crate::ConversionStatus::Pending),
+        ("cs_completed", crate::ConversionStatus::Completed),
+        ("cs_failed", crate::ConversionStatus::Failed),
+        ("cs_refund_needed", crate::ConversionStatus::RefundNeeded),
+        ("cs_refunded", crate::ConversionStatus::Refunded),
+    ];
+
+    for (id, status) in &variants {
+        let payment = make_payment(id);
+        storage.insert_payment(payment).await.unwrap();
+
+        let metadata = PaymentMetadata {
+            conversion_status: Some(status.clone()),
+            ..Default::default()
+        };
+        storage
+            .insert_payment_metadata(id.to_string(), metadata)
+            .await
+            .unwrap();
+
+        let fetched = storage.get_payment_by_id(id.to_string()).await.unwrap();
+        assert!(
+            fetched.conversion_details.is_some(),
+            "conversion_details should be set for payment {id}"
+        );
+        assert_eq!(
+            fetched.conversion_details.as_ref().unwrap().status,
+            *status,
+            "conversion_status mismatch for payment {id}"
+        );
+        // from/to are not populated at storage layer
+        assert!(fetched.conversion_details.as_ref().unwrap().from.is_none());
+        assert!(fetched.conversion_details.as_ref().unwrap().to.is_none());
+    }
+
+    // --- Test 2: Payment without conversion_status has no conversion_details ---
+    let no_status_payment = make_payment("cs_none");
+    storage.insert_payment(no_status_payment).await.unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("cs_none".to_string())
+        .await
+        .unwrap();
+    assert!(
+        fetched.conversion_details.is_none(),
+        "conversion_details should be None when no conversion_status is set"
+    );
+
+    // --- Test 3: COALESCE — conversion_status preserved across partial metadata updates ---
+    let coalesce_payment = make_payment("cs_coalesce");
+    storage.insert_payment(coalesce_payment).await.unwrap();
+
+    // Set conversion_status
+    let metadata1 = PaymentMetadata {
+        conversion_status: Some(crate::ConversionStatus::Pending),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata("cs_coalesce".to_string(), metadata1)
+        .await
+        .unwrap();
+
+    // Update with unrelated field only (conversion_status is None in this update)
+    let metadata2 = PaymentMetadata {
+        lnurl_description: Some("test description".to_string()),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata("cs_coalesce".to_string(), metadata2)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("cs_coalesce".to_string())
+        .await
+        .unwrap();
+    assert!(
+        fetched.conversion_details.is_some(),
+        "conversion_status should be preserved after partial metadata update"
+    );
+    assert_eq!(
+        fetched.conversion_details.as_ref().unwrap().status,
+        crate::ConversionStatus::Pending
+    );
+
+    // --- Test 4: conversion_status can be updated to a new value ---
+    let metadata3 = PaymentMetadata {
+        conversion_status: Some(crate::ConversionStatus::Completed),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata("cs_coalesce".to_string(), metadata3)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("cs_coalesce".to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        fetched.conversion_details.as_ref().unwrap().status,
+        crate::ConversionStatus::Completed,
+        "conversion_status should be updated to Completed"
+    );
 }

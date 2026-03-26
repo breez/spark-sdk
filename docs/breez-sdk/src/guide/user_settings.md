@@ -13,6 +13,8 @@ The following user settings are available:
 
 > **Note:** Spark private mode only applies to Bitcoin payments. Token payments are not affected by the private mode and will still be publicly available.
 
+- **Stable balance active label**: Controls which stable token is active for automatic Bitcoin-to-token conversion. Set to a label from your [stable balance configuration](./config.md#stable-balance-configuration) to activate, or unset to deactivate. See the [Stable balance](./stable_balance.md) guide for details.
+
 <h2 id="getting-the-current-user-settings">
     <a class="header" href="#getting-the-current-user-settings">Getting the current user settings</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_user_settings">API docs</a>

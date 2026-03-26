@@ -252,6 +252,12 @@ class PostgresMigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE`,
         ],
       },
+      { 
+        name: "Add conversion_status to payment_metadata",
+        sql: [
+          `ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT`,
+        ],
+      },
     ];
   }
 }

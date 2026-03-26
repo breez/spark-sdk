@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use bitcoin::hashes::{Hash, sha256};
 use spark::bech32m_encode_token_id;
 use spark_wallet::{PublicKey, SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::utils::generate_nonce;
@@ -36,6 +37,8 @@ pub struct FlashnetClient {
     pub(crate) cache_store: Arc<CacheStore>,
     pub(crate) spark_wallet: Arc<SparkWallet>,
     pub(crate) http_client: platform_utils::DefaultHttpClient,
+    /// Mutex to serialize authentication attempts and prevent race conditions
+    pub(crate) auth_mutex: Mutex<()>,
 }
 
 impl FlashnetClient {
@@ -49,6 +52,7 @@ impl FlashnetClient {
             cache_store,
             spark_wallet,
             http_client: platform_utils::DefaultHttpClient::default(),
+            auth_mutex: Mutex::new(()),
         }
     }
 
@@ -182,9 +186,10 @@ impl FlashnetClient {
                 request.amount_in,
                 &request.asset_in_address,
                 &request.pool_id,
-                None,
+                request.transfer_id.clone(),
             )
             .await?;
+        debug!("Signing swap execution for: {transaction_identifier}");
 
         // Sign and send the execute swap request
         let swap_response_res = self

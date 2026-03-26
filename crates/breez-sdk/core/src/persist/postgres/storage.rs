@@ -11,9 +11,9 @@ use tokio_postgres::{Row, types::ToSql};
 use tracing::warn;
 
 use crate::{
-    AssetFilter, Contact, ConversionInfo, DepositInfo, ListContactsRequest, LnurlPayInfo,
-    LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails, PaymentMethod, SparkHtlcDetails,
-    SparkHtlcStatus,
+    AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
+    ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
+    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
@@ -251,6 +251,8 @@ impl PostgresStorage {
             &[
                 "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE",
             ],
+            // Migration 15: Add conversion_status to payment_metadata
+            &["ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT"],
         ]
     }
 }
@@ -628,17 +630,22 @@ impl Storage for PostgresStorage {
         let lnurl_pay_info_json = to_json_opt(metadata.lnurl_pay_info.as_ref())?;
         let lnurl_withdraw_info_json = to_json_opt(metadata.lnurl_withdraw_info.as_ref())?;
         let conversion_info_json = to_json_opt(metadata.conversion_info.as_ref())?;
+        let conversion_status_str = metadata
+            .conversion_status
+            .as_ref()
+            .map(std::string::ToString::to_string);
 
         client
             .execute(
-                "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info)
-                 VALUES ($1, $2, $3, $4, $5, $6)
+                "INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT(payment_id) DO UPDATE SET
                     parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
                     lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
                     lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
                     lnurl_description = COALESCE(EXCLUDED.lnurl_description, payment_metadata.lnurl_description),
-                    conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info)",
+                    conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info),
+                    conversion_status = COALESCE(EXCLUDED.conversion_status, payment_metadata.conversion_status)",
                 &[
                     &payment_id,
                     &metadata.parent_payment_id,
@@ -646,6 +653,7 @@ impl Storage for PostgresStorage {
                     &lnurl_withdraw_info_json,
                     &metadata.lnurl_description,
                     &conversion_info_json,
+                    &conversion_status_str,
                 ],
             )
             .await?;
@@ -758,7 +766,7 @@ impl Storage for PostgresStorage {
         let mut result: HashMap<String, Vec<Payment>> = HashMap::new();
         for row in rows {
             let payment = map_payment(&row)?;
-            let parent_payment_id: String = row.get(30);
+            let parent_payment_id: String = row.get(31);
             result.entry(parent_payment_id).or_default().push(payment);
         }
 
@@ -1330,7 +1338,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-29 are used by `map_payment`, index 30 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-30 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1362,6 +1370,7 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
+           pm.conversion_status,
            pm.parent_payment_id
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
@@ -1502,7 +1511,20 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 .parse()
                 .unwrap_or(PaymentMethod::Lightning)
         }),
-        conversion_details: None,
+        conversion_details: {
+            let conversion_status_str: Option<String> = row.get(30);
+            conversion_status_str
+                .map(|s| {
+                    s.parse::<ConversionStatus>()
+                        .map(|status| ConversionDetails {
+                            status,
+                            from: None,
+                            to: None,
+                        })
+                        .map_err(StorageError::Serialization)
+                })
+                .transpose()?
+        },
     })
 }
 
@@ -1664,6 +1686,12 @@ mod tests {
     async fn test_contacts_crud() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_contacts_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_conversion_status_persistence() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.

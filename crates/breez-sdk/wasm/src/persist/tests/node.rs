@@ -178,6 +178,13 @@ async fn test_contacts_crud() {
 }
 
 #[wasm_bindgen_test]
+async fn test_conversion_status_persistence() {
+    let storage = create_test_storage("conversion_status_persistence").await;
+
+    breez_sdk_spark::storage_tests::test_conversion_status_persistence(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_migration_from_v17_to_v18() {
     let data_dir = "/tmp/breez-sdk-node-migration-v17-to-v18-test";
     let db_path = format!("{}/storage.sql", data_dir);

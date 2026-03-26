@@ -16,3 +16,19 @@ Future<void> updateUserSettings(BreezSdk sdk) async {
           sparkPrivateModeEnabled: sparkPrivateModeEnabled));
   // ANCHOR_END: update-user-settings
 }
+
+Future<void> activateStableBalance(BreezSdk sdk) async {
+  // ANCHOR: activate-stable-balance
+  await sdk.updateUserSettings(
+      request: UpdateUserSettingsRequest(
+          stableBalanceActiveLabel: StableBalanceActiveLabel_Set(label: "USDB")));
+  // ANCHOR_END: activate-stable-balance
+}
+
+Future<void> deactivateStableBalance(BreezSdk sdk) async {
+  // ANCHOR: deactivate-stable-balance
+  await sdk.updateUserSettings(
+      request: UpdateUserSettingsRequest(
+          stableBalanceActiveLabel: StableBalanceActiveLabel_Unset()));
+  // ANCHOR_END: deactivate-stable-balance
+}

@@ -43,3 +43,35 @@ func UpdateUserSettings(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR_END: update-user-settings
 	return nil
 }
+
+func ActivateStableBalance(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: activate-stable-balance
+	activeLabel := breez_sdk_spark.StableBalanceActiveLabel(
+		breez_sdk_spark.StableBalanceActiveLabelSet{Label: "USDB"},
+	)
+	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
+		StableBalanceActiveLabel: &activeLabel,
+	})
+
+	if err != nil {
+		return err
+	}
+	// ANCHOR_END: activate-stable-balance
+	return nil
+}
+
+func DeactivateStableBalance(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: deactivate-stable-balance
+	activeLabel := breez_sdk_spark.StableBalanceActiveLabel(
+		breez_sdk_spark.StableBalanceActiveLabelUnset{},
+	)
+	err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
+		StableBalanceActiveLabel: &activeLabel,
+	})
+
+	if err != nil {
+		return err
+	}
+	// ANCHOR_END: deactivate-stable-balance
+	return nil
+}

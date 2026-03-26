@@ -17,9 +17,10 @@ use crate::{
     error::SdkError,
     events::SdkEvent,
     models::{
-        ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
+        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
         PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
+        conversion_steps_from_payments,
     },
     persist::PaymentMetadata,
     token_conversion::{
@@ -162,25 +163,14 @@ impl BreezSdk {
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-                // FeesIncluded doesn't support conversion (validated earlier)
-                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
-                    None
-                } else {
-                    let conversion_options = self
-                        .get_conversion_options_for_payment(
-                            request.conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            amount,
-                        )
-                        .await?;
-                    self.token_converter
-                        .validate(
-                            conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            amount,
-                        )
-                        .await?
-                };
+                let conversion_estimate = self
+                    .estimate_conversion(
+                        request.conversion_options.as_ref(),
+                        token_identifier.as_ref(),
+                        amount,
+                        fee_policy,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
@@ -204,25 +194,14 @@ impl BreezSdk {
                     .or(request.amount)
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-                // FeesIncluded doesn't support conversion (validated earlier)
-                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
-                    None
-                } else {
-                    let conversion_options = self
-                        .get_conversion_options_for_payment(
-                            request.conversion_options.as_ref(),
-                            effective_token_identifier.as_ref(),
-                            amount,
-                        )
-                        .await?;
-                    self.token_converter
-                        .validate(
-                            conversion_options.as_ref(),
-                            effective_token_identifier.as_ref(),
-                            amount,
-                        )
-                        .await?
-                };
+                let conversion_estimate = self
+                    .estimate_conversion(
+                        request.conversion_options.as_ref(),
+                        effective_token_identifier.as_ref(),
+                        amount,
+                        fee_policy,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
@@ -275,26 +254,14 @@ impl BreezSdk {
                     }
                 }
 
-                // FeesIncluded doesn't support conversion (validated earlier)
-                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
-                    None
-                } else {
-                    let total_amount = amount.saturating_add(u128::from(lightning_fee_sats));
-                    let conversion_options = self
-                        .get_conversion_options_for_payment(
-                            request.conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            total_amount,
-                        )
-                        .await?;
-                    self.token_converter
-                        .validate(
-                            conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            total_amount,
-                        )
-                        .await?
-                };
+                let conversion_estimate = self
+                    .estimate_conversion(
+                        request.conversion_options.as_ref(),
+                        token_identifier.as_ref(),
+                        amount.saturating_add(u128::from(lightning_fee_sats)),
+                        fee_policy,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::Bolt11Invoice {
@@ -345,28 +312,15 @@ impl BreezSdk {
                     }
                 }
 
-                // FeesIncluded doesn't support conversion (validated earlier)
-                let conversion_estimate = if fee_policy == FeePolicy::FeesIncluded {
-                    None
-                } else {
-                    // For conversion estimate, use fast fee as worst case
-                    let total_amount =
-                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat()));
-                    let conversion_options = self
-                        .get_conversion_options_for_payment(
-                            request.conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            total_amount,
-                        )
-                        .await?;
-                    self.token_converter
-                        .validate(
-                            conversion_options.as_ref(),
-                            token_identifier.as_ref(),
-                            total_amount,
-                        )
-                        .await?
-                };
+                // For conversion estimate, use fast fee as worst case
+                let conversion_estimate = self
+                    .estimate_conversion(
+                        request.conversion_options.as_ref(),
+                        token_identifier.as_ref(),
+                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
+                        fee_policy,
+                    )
+                    .await?;
 
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::BitcoinAddress {
@@ -422,21 +376,27 @@ impl BreezSdk {
     ) -> Result<ListPaymentsResponse, SdkError> {
         let mut payments = self.storage.list_payments(request.into()).await?;
 
-        // Collect all parent IDs and batch query for related payments
-        let parent_ids: Vec<String> = payments.iter().map(|p| p.id.clone()).collect();
+        // Only query child payments for payments that have conversion_details set
+        let parent_ids: Vec<String> = payments
+            .iter()
+            .filter(|p| p.conversion_details.is_some())
+            .map(|p| p.id.clone())
+            .collect();
 
         if !parent_ids.is_empty() {
             let related_payments_map = self.storage.get_payments_by_parent_ids(parent_ids).await?;
 
-            // Add conversion details of each payments
             for payment in &mut payments {
                 if let Some(related_payments) = related_payments_map.get(&payment.id) {
-                    match related_payments.try_into() {
-                        Ok(conversion_details) => {
-                            payment.conversion_details = Some(conversion_details);
+                    match conversion_steps_from_payments(related_payments) {
+                        Ok((from, to)) => {
+                            if let Some(ref mut cd) = payment.conversion_details {
+                                cd.from = from;
+                                cd.to = to;
+                            }
                         }
                         Err(e) => {
-                            warn!("Found payments couldn't be converted to ConversionDetails: {e}");
+                            warn!("Failed to build conversion steps: {e}");
                         }
                     }
                 }
@@ -521,11 +481,12 @@ impl BreezSdk {
                 return Ok(SendPaymentResponse { payment });
             }
         }
+        let conversion_estimate = request.prepare_response.conversion_estimate.clone();
         // Perform the send payment, with conversion if requested
         let res = if let Some(ConversionEstimate {
             options: conversion_options,
             ..
-        }) = &request.prepare_response.conversion_estimate
+        }) = &conversion_estimate
         {
             Box::pin(self.convert_token_send_payment_internal(
                 conversion_options,
@@ -551,7 +512,6 @@ impl BreezSdk {
         res
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn convert_token_send_payment_internal(
         &self,
         conversion_options: &ConversionOptions,
@@ -565,113 +525,170 @@ impl BreezSdk {
             ));
         }
 
-        // Prevent auto-convert from running while this payment is in progress.
-        let _lock_guard = match (
-            &request.prepare_response.token_identifier,
-            &self.stable_balance,
-        ) {
-            (None, Some(sb)) => Some(sb.create_payment_lock_guard()),
-            _ => None,
-        };
+        // Step 1: Execute the token conversion
+        let (conversion_response, conversion_purpose) = self
+            .execute_pre_send_conversion(conversion_options, request)
+            .await?;
 
+        // Step 2: Early-link conversion children (self-transfer only)
+        self.pre_link_conversion_children(&conversion_response, &conversion_purpose)
+            .await?;
+
+        // Step 3: Trigger sync, wait for conversion, then send
+        self.complete_conversion_and_send(
+            conversion_options,
+            &conversion_response,
+            &conversion_purpose,
+            request,
+            suppress_payment_event,
+        )
+        .await
+        // _lock_guard drops here, releasing the distributed lock if no other payments are in-flight
+    }
+
+    /// Executes the token conversion for the given payment method.
+    ///
+    /// Returns the conversion response and purpose (self-transfer vs ongoing payment).
+    async fn execute_pre_send_conversion(
+        &self,
+        conversion_options: &ConversionOptions,
+        request: &SendPaymentRequest,
+    ) -> Result<(TokenConversionResponse, ConversionPurpose), SdkError> {
         let amount = request.prepare_response.amount;
         let token_identifier = request.prepare_response.token_identifier.clone();
 
-        // Perform a conversion before sending the payment
-        let (conversion_response, conversion_purpose) =
-            match &request.prepare_response.payment_method {
-                SendPaymentMethod::SparkAddress { address, .. } => {
-                    let spark_address = address
-                        .parse::<SparkAddress>()
-                        .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-                    let conversion_purpose = if spark_address.identity_public_key
-                        == self.spark_wallet.get_identity_public_key()
-                    {
-                        ConversionPurpose::SelfTransfer
-                    } else {
-                        ConversionPurpose::OngoingPayment {
-                            payment_request: address.clone(),
-                        }
-                    };
-                    let conversion_response = self
-                        .token_converter
-                        .convert(
-                            conversion_options,
-                            &conversion_purpose,
-                            token_identifier.as_ref(),
-                            ConversionAmount::MinAmountOut(amount),
-                        )
-                        .await?;
-                    (conversion_response, conversion_purpose)
-                }
-                SendPaymentMethod::SparkInvoice {
-                    spark_invoice_details:
-                        SparkInvoiceDetails {
-                            identity_public_key,
-                            invoice,
-                            ..
-                        },
-                    ..
-                } => {
-                    let own_identity_public_key =
-                        self.spark_wallet.get_identity_public_key().to_string();
-                    let conversion_purpose = if identity_public_key == &own_identity_public_key {
-                        ConversionPurpose::SelfTransfer
-                    } else {
-                        ConversionPurpose::OngoingPayment {
-                            payment_request: invoice.clone(),
-                        }
-                    };
-                    let conversion_response = self
-                        .token_converter
-                        .convert(
-                            conversion_options,
-                            &conversion_purpose,
-                            token_identifier.as_ref(),
-                            ConversionAmount::MinAmountOut(amount),
-                        )
-                        .await?;
-                    (conversion_response, conversion_purpose)
-                }
-                SendPaymentMethod::Bolt11Invoice {
-                    spark_transfer_fee_sats,
-                    lightning_fee_sats,
-                    invoice_details,
-                    ..
-                } => {
-                    let conversion_purpose = ConversionPurpose::OngoingPayment {
-                        payment_request: invoice_details.invoice.bolt11.clone(),
-                    };
-                    let conversion_response = self
-                        .convert_token_for_bolt11_invoice(
-                            conversion_options,
-                            *spark_transfer_fee_sats,
-                            *lightning_fee_sats,
-                            request,
-                            &conversion_purpose,
-                            amount,
-                            token_identifier.as_ref(),
-                        )
-                        .await?;
-                    (conversion_response, conversion_purpose)
-                }
-                SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-                    let conversion_purpose = ConversionPurpose::OngoingPayment {
-                        payment_request: address.address.clone(),
-                    };
-                    let conversion_response = self
-                        .convert_token_for_bitcoin_address(
-                            conversion_options,
-                            fee_quote,
-                            request,
-                            &conversion_purpose,
-                            amount,
-                            token_identifier.as_ref(),
-                        )
-                        .await?;
-                    (conversion_response, conversion_purpose)
-                }
-            };
+        match &request.prepare_response.payment_method {
+            SendPaymentMethod::SparkAddress { address, .. } => {
+                let spark_address = address
+                    .parse::<SparkAddress>()
+                    .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
+                let purpose = if spark_address.identity_public_key
+                    == self.spark_wallet.get_identity_public_key()
+                {
+                    ConversionPurpose::SelfTransfer
+                } else {
+                    ConversionPurpose::OngoingPayment {
+                        payment_request: address.clone(),
+                    }
+                };
+                let response = self
+                    .token_converter
+                    .convert(
+                        conversion_options,
+                        &purpose,
+                        token_identifier.as_ref(),
+                        ConversionAmount::MinAmountOut(amount),
+                        None,
+                    )
+                    .await?;
+                Ok((response, purpose))
+            }
+            SendPaymentMethod::SparkInvoice {
+                spark_invoice_details:
+                    SparkInvoiceDetails {
+                        identity_public_key,
+                        invoice,
+                        ..
+                    },
+                ..
+            } => {
+                let own_identity_public_key =
+                    self.spark_wallet.get_identity_public_key().to_string();
+                let purpose = if identity_public_key == &own_identity_public_key {
+                    ConversionPurpose::SelfTransfer
+                } else {
+                    ConversionPurpose::OngoingPayment {
+                        payment_request: invoice.clone(),
+                    }
+                };
+                let response = self
+                    .token_converter
+                    .convert(
+                        conversion_options,
+                        &purpose,
+                        token_identifier.as_ref(),
+                        ConversionAmount::MinAmountOut(amount),
+                        None,
+                    )
+                    .await?;
+                Ok((response, purpose))
+            }
+            SendPaymentMethod::Bolt11Invoice {
+                spark_transfer_fee_sats,
+                lightning_fee_sats,
+                invoice_details,
+                ..
+            } => {
+                let purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: invoice_details.invoice.bolt11.clone(),
+                };
+                let response = self
+                    .convert_token_for_bolt11_invoice(
+                        conversion_options,
+                        *spark_transfer_fee_sats,
+                        *lightning_fee_sats,
+                        request,
+                        &purpose,
+                        amount,
+                        token_identifier.as_ref(),
+                    )
+                    .await?;
+                Ok((response, purpose))
+            }
+            SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
+                let purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: address.address.clone(),
+                };
+                let response = self
+                    .convert_token_for_bitcoin_address(
+                        conversion_options,
+                        fee_quote,
+                        request,
+                        &purpose,
+                        amount,
+                        token_identifier.as_ref(),
+                    )
+                    .await?;
+                Ok((response, purpose))
+            }
+        }
+    }
+
+    /// Links conversion child payments to their parent to hide them from `list_payments`.
+    ///
+    /// Only self-transfers are linked immediately (parent is the conversion receive, known upfront).
+    /// All other cases are deferred until after the actual send completes.
+    async fn pre_link_conversion_children(
+        &self,
+        conversion_response: &TokenConversionResponse,
+        conversion_purpose: &ConversionPurpose,
+    ) -> Result<(), SdkError> {
+        if *conversion_purpose == ConversionPurpose::SelfTransfer {
+            self.storage
+                .insert_payment_metadata(
+                    conversion_response.sent_payment_id.clone(),
+                    PaymentMetadata {
+                        parent_payment_id: Some(conversion_response.received_payment_id.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Waits for conversion to complete, then sends the actual payment.
+    ///
+    /// For self-transfers, returns immediately after conversion completes.
+    /// For ongoing payments, sends the actual payment and links any remaining children.
+    async fn complete_conversion_and_send(
+        &self,
+        conversion_options: &ConversionOptions,
+        conversion_response: &TokenConversionResponse,
+        conversion_purpose: &ConversionPurpose,
+        request: &SendPaymentRequest,
+        suppress_payment_event: &mut bool,
+    ) -> Result<SendPaymentResponse, SdkError> {
         // Trigger a wallet state sync if converting from Bitcoin to token
         if matches!(
             conversion_options.conversion_type,
@@ -681,6 +698,7 @@ impl BreezSdk {
                 .trigger_sync_no_wait(SyncType::WalletState, true)
                 .await;
         }
+
         // Wait for the received conversion payment to complete
         let payment = self
             .wait_for_payment(
@@ -695,17 +713,20 @@ impl BreezSdk {
             .map_err(|e| {
                 SdkError::Generic(format!("Timeout waiting for conversion to complete: {e}"))
             })?;
-        // For self-payments, we can skip sending the actual payment
-        if conversion_purpose == ConversionPurpose::SelfTransfer {
+
+        // For self-transfers, suppress the event and return
+        if *conversion_purpose == ConversionPurpose::SelfTransfer {
             *suppress_payment_event = true;
             return Ok(SendPaymentResponse { payment });
         }
+
         // Now send the actual payment
         let response = Box::pin(self.send_payment_internal(request, None)).await?;
-        // Set payment metadata to link the payments
+
+        // Link conversion children to the send payment (deferred linking)
         self.storage
             .insert_payment_metadata(
-                conversion_response.sent_payment_id,
+                conversion_response.sent_payment_id.clone(),
                 PaymentMetadata {
                     parent_payment_id: Some(response.payment.id.clone()),
                     ..Default::default()
@@ -714,18 +735,29 @@ impl BreezSdk {
             .await?;
         self.storage
             .insert_payment_metadata(
-                conversion_response.received_payment_id,
+                conversion_response.received_payment_id.clone(),
                 PaymentMetadata {
                     parent_payment_id: Some(response.payment.id.clone()),
                     ..Default::default()
                 },
             )
             .await?;
+
+        // Persist Completed status on the actual send payment
+        self.storage
+            .insert_payment_metadata(
+                response.payment.id.clone(),
+                PaymentMetadata {
+                    conversion_status: Some(ConversionStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
         // Fetch the updated payment with conversion details
         get_payment_with_conversion_details(response.payment.id, self.storage.clone())
             .await
             .map(|payment| SendPaymentResponse { payment })
-        // _lock_guard drops here, releasing the distributed lock if no other payments are in-flight
     }
 
     pub(super) async fn send_payment_internal(
@@ -1164,50 +1196,58 @@ impl BreezSdk {
         completion_timeout_secs: u32,
     ) -> Result<Payment, SdkError> {
         let (tx, mut rx) = mpsc::channel(20);
+        // Use internal listener to see raw events before middleware processing.
+        // This is critical because TokenConversionMiddleware suppresses conversion
+        // child events, but wait_for_payment needs to see them.
         let id = self
-            .add_event_listener(Box::new(InternalEventListener::new(tx)))
+            .event_emitter
+            .add_internal_listener(Box::new(InternalEventListener::new(tx)))
             .await;
 
-        // First check if we already have the completed payment in storage
-        let payment = match &identifier {
-            WaitForPaymentIdentifier::PaymentId(payment_id) => self
-                .storage
-                .get_payment_by_id(payment_id.clone())
-                .await
-                .ok(),
-            WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-                self.storage
-                    .get_payment_by_invoice(payment_request.clone())
-                    .await?
-            }
-        };
-        if let Some(payment) = payment
-            && payment.status == PaymentStatus::Completed
-        {
-            self.remove_event_listener(&id).await;
-            return Ok(payment);
-        }
-
-        let timeout_res = timeout(Duration::from_secs(completion_timeout_secs.into()), async {
-            loop {
-                let Some(event) = rx.recv().await else {
-                    return Err(SdkError::Generic("Event channel closed".to_string()));
-                };
-
-                let SdkEvent::PaymentSucceeded { payment } = event else {
-                    continue;
-                };
-
-                if is_payment_match(&payment, &identifier) {
-                    return Ok(payment);
+        // Run the main logic in a closure so cleanup always happens,
+        // even if an early `?` exits (e.g. get_payment_by_invoice failure).
+        let result = async {
+            // First check if we already have the completed payment in storage
+            let payment = match &identifier {
+                WaitForPaymentIdentifier::PaymentId(payment_id) => self
+                    .storage
+                    .get_payment_by_id(payment_id.clone())
+                    .await
+                    .ok(),
+                WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
+                    self.storage
+                        .get_payment_by_invoice(payment_request.clone())
+                        .await?
                 }
+            };
+            if let Some(payment) = payment
+                && payment.status == PaymentStatus::Completed
+            {
+                return Ok(payment);
             }
-        })
-        .await
-        .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()));
 
-        self.remove_event_listener(&id).await;
-        timeout_res?
+            timeout(Duration::from_secs(completion_timeout_secs.into()), async {
+                loop {
+                    let Some(event) = rx.recv().await else {
+                        return Err(SdkError::Generic("Event channel closed".to_string()));
+                    };
+
+                    let SdkEvent::PaymentSucceeded { payment } = event else {
+                        continue;
+                    };
+
+                    if is_payment_match(&payment, &identifier) {
+                        return Ok(payment);
+                    }
+                }
+            })
+            .await
+            .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
+        }
+        .await;
+
+        self.event_emitter.remove_internal_listener(&id).await;
+        result
     }
 
     // Pools the lightning send payment until it is in completed state.
@@ -1306,6 +1346,7 @@ impl BreezSdk {
                 conversion_purpose,
                 token_identifier,
                 ConversionAmount::MinAmountOut(min_amount_out),
+                None,
             )
             .await
             .map_err(Into::into)
@@ -1329,6 +1370,33 @@ impl BreezSdk {
         } else {
             Ok(options.cloned())
         }
+    }
+
+    /// Estimates a conversion for a payment, returning `None` when no conversion is needed.
+    ///
+    /// Skips conversion for `FeesIncluded` fee policy (validated earlier).
+    /// Auto-populates conversion options from stable balance config when applicable.
+    async fn estimate_conversion(
+        &self,
+        request_options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        amount: u128,
+        fee_policy: FeePolicy,
+    ) -> Result<Option<ConversionEstimate>, SdkError> {
+        if fee_policy == FeePolicy::FeesIncluded {
+            return Ok(None);
+        }
+        let options = self
+            .get_conversion_options_for_payment(request_options, token_identifier, amount)
+            .await?;
+        self.token_converter
+            .validate(
+                options.as_ref(),
+                token_identifier,
+                ConversionAmount::MinAmountOut(amount),
+            )
+            .await
+            .map_err(Into::into)
     }
 
     async fn convert_token_for_bitcoin_address(
@@ -1361,6 +1429,7 @@ impl BreezSdk {
                 conversion_purpose,
                 token_identifier,
                 ConversionAmount::MinAmountOut(min_amount_out),
+                None,
             )
             .await
             .map_err(Into::into)
