@@ -459,7 +459,7 @@ impl BreezSdk {
 
 // Private payment methods
 impl BreezSdk {
-    async fn receive_bolt11_invoice(
+    pub(crate) async fn receive_bolt11_invoice(
         &self,
         description: String,
         amount_sats: Option<u64>,
