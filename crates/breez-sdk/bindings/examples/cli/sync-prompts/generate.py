@@ -131,8 +131,39 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     Only replaces variables wrapped in double curly braces ({{VAR}}).
     GitHub Actions expressions (${{ ... }}) are left untouched because
     they use a different prefix ($).
+
+    Also handles conditional blocks for build check skipping:
+    {{#IF_BUILD_CHECK}} ... {{/IF_BUILD_CHECK}} is kept when the build
+    check should run, or removed when skip_build_in_sync is set.
+    {{#IF_SKIP_BUILD}} ... {{/IF_SKIP_BUILD}} is the inverse.
     """
-    result = template
+    skip_build = variables.get("skip_build_in_sync", "").lower() == "true"
+
+    import re
+
+    if skip_build:
+        # Remove the build-check block, keep the skip-build block
+        result = re.sub(
+            r"\{\{#IF_BUILD_CHECK\}\}.*?\{\{/IF_BUILD_CHECK\}\}",
+            "",
+            template,
+            flags=re.DOTALL,
+        )
+        result = result.replace("{{#IF_SKIP_BUILD}}", "").replace(
+            "{{/IF_SKIP_BUILD}}", ""
+        )
+    else:
+        # Keep the build-check block, remove the skip-build block
+        result = re.sub(
+            r"\{\{#IF_SKIP_BUILD\}\}.*?\{\{/IF_SKIP_BUILD\}\}",
+            "",
+            template,
+            flags=re.DOTALL,
+        )
+        result = result.replace("{{#IF_BUILD_CHECK}}", "").replace(
+            "{{/IF_BUILD_CHECK}}", ""
+        )
+
     for key, value in variables.items():
         placeholder = "{{" + key.upper() + "}}"
         result = result.replace(placeholder, value)

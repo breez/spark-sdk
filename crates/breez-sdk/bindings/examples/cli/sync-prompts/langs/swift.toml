@@ -29,16 +29,20 @@ doc_build_instructions = "build and run commands (`make run` instead of `cargo r
 # Documentation: what language-specific content to preserve
 doc_preserve_items = "Swift build instructions, SPM setup, or Swift-specific notes"
 
-# Build check command (syntax validation without SDK installed)
+# Build check command (builds with local bindings — used by cli-ci.yml)
 build_check = "make -C crates/breez-sdk/bindings/examples/cli check-swift"
+
+# Skip build check during sync (requires native Rust compilation, ~30 min).
+# The full build check runs in cli-ci.yml on the PR instead.
+skip_build_in_sync = "true"
 
 # Format instructions appended to the build check step (empty = no extra instructions)
 format_instructions = ""
 
 # Claude Code allowed tools (workflow YAML)
+# No build check tool needed — build verification deferred to cli-ci.yml
 allowed_tools = """Read,Write,Edit,Glob,Grep,
-Bash(git diff:*),
-Bash(make -C crates/breez-sdk/bindings/examples/cli check-swift:*)"""
+Bash(git diff:*)"""
 
 [file_mapping]
 content = """

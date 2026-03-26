@@ -110,6 +110,7 @@ Do NOT modify any other files. The only exception is `sync-findings.md`, which m
 ### Step 7: Verify changes
 Read back each modified file to verify correctness.
 
+{{#IF_BUILD_CHECK}}
 ### Step 8: Build check (final gate)
 **This must be the very last step.** Do NOT make any code edits after this step passes.
 Run the build check to verify the code is syntactically valid and properly formatted:
@@ -117,6 +118,18 @@ Run the build check to verify the code is syntactically valid and properly forma
 {{BUILD_CHECK}}
 ```
 If any check fails, fix the errors and re-run until it passes. {{FORMAT_INSTRUCTIONS}}
+{{/IF_BUILD_CHECK}}
+{{#IF_SKIP_BUILD}}
+### Step 8: Verify changes (no build check)
+The full build check for {{LANG_NAME}} requires native Rust compilation that runs separately in CI (`cli-ci.yml` on the PR). Do NOT attempt to run the build check — it will fail without the local bindings.
+
+Instead, carefully re-read every file you modified to verify correctness:
+- Correct syntax (matching brackets, semicolons, proper string escaping)
+- Patterns match the SDK snippets you read in Step 1
+- Proper imports for any new types or functions
+- No typos in command names, flag names, or SDK method calls
+- Consistent style with the rest of the file
+{{/IF_SKIP_BUILD}}
 
 ### Step 9: No-op check
 If the Rust and {{LANG_NAME}} CLIs are already in sync (no meaningful differences), do NOT modify any files. Output: "No {{LANG_NAME}} CLI changes needed."

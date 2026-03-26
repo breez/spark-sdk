@@ -56,10 +56,10 @@ jobs:
             {"lang":"csharp","runner":"ubuntu-latest","timeout":30},
             {"lang":"flutter","runner":"ubuntu-latest","timeout":30},
             {"lang":"golang","runner":"ubuntu-latest","timeout":30},
-            {"lang":"kotlin-multiplatform","runner":"ubuntu-latest","timeout":45},
+            {"lang":"kotlin-multiplatform","runner":"ubuntu-latest","timeout":30},
             {"lang":"python","runner":"ubuntu-latest","timeout":30},
             {"lang":"react-native","runner":"ubuntu-latest","timeout":30},
-            {"lang":"swift","runner":"macos-latest","timeout":45},
+            {"lang":"swift","runner":"macos-latest","timeout":30},
             {"lang":"wasm","runner":"ubuntu-latest","timeout":30}
           ]'
           if [ -z "$REQUESTED" ]; then
@@ -170,8 +170,10 @@ jobs:
           channel: stable
           flutter-version: 3.41.3
 
+      # Kotlin and Swift skip build checks during sync (deferred to cli-ci.yml on the PR).
+      # Only Go and C# still need setup-build for their lightweight checks.
       - name: Set up build environment
-        if: (matrix.lang == 'swift' || matrix.lang == 'golang' || matrix.lang == 'csharp' || matrix.lang == 'kotlin-multiplatform') && inputs.approve-run == ''
+        if: (matrix.lang == 'golang' || matrix.lang == 'csharp') && inputs.approve-run == ''
         uses: ./.github/actions/setup-build
         with:
           github-token: ${{ github.token }}
@@ -194,12 +196,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Set up JDK
-        if: matrix.lang == 'kotlin-multiplatform' && inputs.approve-run == ''
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+      # JDK setup skipped for Kotlin — build check deferred to cli-ci.yml
 
       # ── Generate prompt and run Claude ───────────────────────────────
       - name: Generate sync prompt
