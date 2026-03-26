@@ -10,12 +10,6 @@
 name: Sync CLI Languages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'crates/breez-sdk/cli/src/**'
-      - 'crates/breez-sdk/cli/README.md'
-
   workflow_dispatch:
     inputs:
       languages:
