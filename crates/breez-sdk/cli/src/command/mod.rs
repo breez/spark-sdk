@@ -4,7 +4,7 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, BuyBitcoinProvider, BuyBitcoinRequest, CheckLightningAddressRequest,
+    AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest,
     ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee,
     FeePolicy, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
     GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
@@ -270,11 +270,11 @@ pub enum Command {
         #[arg(long, default_value = "moonpay")]
         provider: String,
 
-        /// Lock the purchase to a specific amount in satoshis. When provided, the user cannot change the amount in the purchase flow.
+        /// Amount in satoshis (meaning depends on provider)
         #[arg(long)]
-        locked_amount_sat: Option<u64>,
+        amount_sat: Option<u64>,
 
-        /// Custom redirect URL after purchase completion (`MoonPay` only)
+        /// Custom redirect URL after purchase completion (MoonPay only)
         #[arg(long)]
         redirect_url: Option<String>,
     },
@@ -510,20 +510,19 @@ pub(crate) async fn execute_command(
         }
         Command::BuyBitcoin {
             provider,
-            locked_amount_sat,
+            amount_sat,
             redirect_url,
         } => {
-            let buy_provider = match provider.to_lowercase().as_str() {
-                "cashapp" | "cash_app" | "cash-app" => BuyBitcoinProvider::CashApp,
-                _ => BuyBitcoinProvider::Moonpay,
-            };
-            let value = sdk
-                .buy_bitcoin(BuyBitcoinRequest {
-                    provider: Some(buy_provider),
-                    locked_amount_sat,
+            let request = match provider.to_lowercase().as_str() {
+                "cashapp" | "cash_app" | "cash-app" => BuyBitcoinRequest::CashApp {
+                    amount_sats: amount_sat,
+                },
+                _ => BuyBitcoinRequest::Moonpay {
+                    locked_amount_sat: amount_sat,
                     redirect_url,
-                })
-                .await?;
+                },
+            };
+            let value = sdk.buy_bitcoin(request).await?;
             println!("Open this URL in a browser to complete the purchase:");
             println!("{}", value.url);
             Ok(true)
