@@ -26,7 +26,9 @@ const buyBitcoin = async (sdk: BreezSdk) => {
 const buyBitcoinViaCashapp = async (sdk: BreezSdk) => {
   // ANCHOR: buy-bitcoin-cashapp
   const request: BuyBitcoinRequest = {
-    provider: BuyBitcoinProvider.CashApp
+    provider: BuyBitcoinProvider.CashApp,
+    lockedAmountSat: undefined,
+    redirectUrl: undefined,
   }
 
   const response = await sdk.buyBitcoin(request)
