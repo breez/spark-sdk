@@ -5,7 +5,7 @@ use tracing::info;
 use breez_sdk_common::buy::cashapp::CashAppProvider;
 
 use crate::{
-    BuyBitcoinProvider, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest,
+    BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest,
     CheckMessageResponse, GetTokensMetadataRequest, GetTokensMetadataResponse, InputType,
     ListFiatCurrenciesResponse, ListFiatRatesResponse, Network, OptimizationProgress,
     RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
@@ -324,36 +324,29 @@ impl BreezSdk {
 
     /// Initiates a Bitcoin purchase flow via an external provider.
     ///
-    /// This method generates a URL that the user can open in a browser to complete
-    /// the Bitcoin purchase. The provider determines the purchase flow:
-    /// - **`MoonPay`** (default): Uses an on-chain deposit address for fiat-to-Bitcoin purchases.
-    /// - **`CashApp`**: Generates a Lightning invoice and returns a `CashApp` deep link.
+    /// Returns a URL the user should open to complete the purchase.
+    /// The request variant determines the provider and its parameters:
     ///
-    /// # Arguments
-    ///
-    /// * `request` - The purchase request containing provider selection, optional amount,
-    ///   and redirect URL
-    ///
-    /// # Returns
-    ///
-    /// A response containing the URL to open in a browser to complete the purchase
+    /// - [`BuyBitcoinRequest::Moonpay`]: Fiat-to-Bitcoin via on-chain deposit.
+    /// - [`BuyBitcoinRequest::CashApp`]: Lightning invoice + `cash.app` deep link (mainnet only).
     pub async fn buy_bitcoin(
         &self,
         request: BuyBitcoinRequest,
     ) -> Result<BuyBitcoinResponse, SdkError> {
-        let provider = request.provider.unwrap_or_default();
-
-        let url = match provider {
-            BuyBitcoinProvider::Moonpay => {
+        let url = match request {
+            BuyBitcoinRequest::Moonpay {
+                locked_amount_sat,
+                redirect_url,
+            } => {
                 let address = get_deposit_address(&self.spark_wallet, true).await?;
                 self.buy_bitcoin_provider
-                    .buy_bitcoin(address, request.locked_amount_sat, request.redirect_url)
+                    .buy_bitcoin(address, locked_amount_sat, redirect_url)
                     .await
                     .map_err(|e| {
                         SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
                     })?
             }
-            BuyBitcoinProvider::CashApp => {
+            BuyBitcoinRequest::CashApp { amount_sats } => {
                 if !matches!(self.config.network, Network::Mainnet) {
                     return Err(SdkError::Generic(
                         "CashApp is only available on mainnet".to_string(),
@@ -362,7 +355,7 @@ impl BreezSdk {
                 let receive_response = self
                     .receive_bolt11_invoice(
                         "Buy Bitcoin via CashApp".to_string(),
-                        request.locked_amount_sat,
+                        amount_sats,
                         None,
                         None,
                     )
