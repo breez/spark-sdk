@@ -12,7 +12,7 @@ mod sync_coordinator;
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
-use breez_sdk_common::{buy::BuyBitcoinProviderApi, fiat::FiatService, sync::SigningClient};
+use breez_sdk_common::{buy::moonpay::MoonpayProvider, fiat::FiatService, sync::SigningClient};
 use platform_utils::HttpClient;
 use platform_utils::tokio;
 use spark_wallet::SparkWallet;
@@ -92,7 +92,7 @@ pub struct BreezSdk {
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
-    pub(crate) buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -107,7 +107,7 @@ pub(crate) struct BreezSdkParams {
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub sync_signing_client: Option<SigningClient>,
-    pub buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi>,
+    pub buy_bitcoin_provider: Arc<MoonpayProvider>,
 }
 
 pub async fn parse_input(
