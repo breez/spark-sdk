@@ -10,6 +10,8 @@
 name: Sync CLI Languages
 
 on:
+  repository_dispatch:
+    types: [sync-cli]
   workflow_dispatch:
     inputs:
       languages:
@@ -225,7 +227,7 @@ jobs:
         env:
           LANG_NAME: ${{ steps.config.outputs.lang_name }}
         run: |
-          DIFF_BASE="${{ inputs.base-sha }}"
+          DIFF_BASE="${{ inputs.base-sha || github.event.client_payload['base-sha'] }}"
           if [ -n "$DIFF_BASE" ] && [ "$DIFF_BASE" != "0000000000000000000000000000000000000000" ]; then
             if ! git cat-file -e "$DIFF_BASE" 2>/dev/null; then
               echo "::error::Provided base-sha ($DIFF_BASE) not found in repository."

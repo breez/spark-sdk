@@ -1,7 +1,7 @@
 # Triggers the "Sync CLI Languages" workflow when Rust CLI files change on main.
 #
 # claude-code-action does not support push events, so this thin wrapper
-# dispatches the real workflow via workflow_dispatch instead.
+# dispatches the real workflow via repository_dispatch instead.
 
 name: Trigger Sync CLI
 
@@ -18,8 +18,14 @@ jobs:
     steps:
       - name: Dispatch Sync CLI Languages workflow
         env:
-          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run sync-cli.yml \
-            --repo "${{ github.repository }}" \
-            --field base-sha="${{ github.event.before }}"
+          gh api "repos/${{ github.repository }}/dispatches" \
+            --input - <<EOF
+          {
+            "event_type": "sync-cli",
+            "client_payload": {
+              "base-sha": "${{ github.event.before }}"
+            }
+          }
+          EOF
