@@ -46,6 +46,8 @@ const DEFAULT_METADATA_LIMIT: u32 = 100;
 const MAX_NOSTR_RELAYS: usize = 10;
 /// Maximum size (bytes) of a nostr event JSON (zap request or zap receipt).
 const MAX_NOSTR_EVENT_SIZE: usize = 32_768;
+/// Maximum length of a sender comment (LUD-12).
+const MAX_COMMENT_LENGTH: usize = 255;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
@@ -600,7 +602,7 @@ where
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
-            comment_allowed: Some(255),
+            comment_allowed: Some(MAX_COMMENT_LENGTH as u32),
             allows_nostr,
             nostr_pubkey,
         }))
@@ -741,6 +743,9 @@ where
 
         if let Some(comment) = params.comment {
             let comment = comment.trim();
+            if comment.len() > MAX_COMMENT_LENGTH {
+                return Err(lnurl_error("comment too long"));
+            }
             if !comment.is_empty()
                 && let Err(e) = state
                     .db
