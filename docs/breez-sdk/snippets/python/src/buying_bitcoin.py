@@ -2,7 +2,6 @@
 import logging
 from breez_sdk_spark import (
     BreezSdk,
-    BuyBitcoinProvider,
     BuyBitcoinRequest,
 )
 
@@ -15,8 +14,7 @@ async def buy_bitcoin(sdk: BreezSdk):
     optional_redirect_url = "https://example.com/purchase-complete"
 
     try:
-        request = BuyBitcoinRequest(
-            provider=BuyBitcoinProvider.MOONPAY,
+        request = BuyBitcoinRequest.MOONPAY(
             locked_amount_sat=optional_locked_amount_sat,
             redirect_url=optional_redirect_url,
         )
@@ -33,8 +31,8 @@ async def buy_bitcoin(sdk: BreezSdk):
 async def buy_bitcoin_via_cashapp(sdk: BreezSdk):
     # ANCHOR: buy-bitcoin-cashapp
     try:
-        request = BuyBitcoinRequest(
-            provider=BuyBitcoinProvider.CASH_APP,
+        request = BuyBitcoinRequest.CASH_APP(
+            amount_sats=None,
         )
 
         response = await sdk.buy_bitcoin(request=request)

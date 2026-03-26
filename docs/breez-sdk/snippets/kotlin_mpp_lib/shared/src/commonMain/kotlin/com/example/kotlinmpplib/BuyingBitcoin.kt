@@ -10,8 +10,7 @@ class BuyingBitcoin {
         // Optionally, set a redirect URL for after the purchase is completed
         val optionalRedirectUrl = "https://example.com/purchase-complete"
 
-        val request = BuyBitcoinRequest(
-            provider = BuyBitcoinProvider.MOONPAY,
+        val request = BuyBitcoinRequest.Moonpay(
             lockedAmountSat = optionalLockedAmountSat,
             redirectUrl = optionalRedirectUrl
         )
@@ -24,9 +23,7 @@ class BuyingBitcoin {
 
     suspend fun buyBitcoinViaCashapp(sdk: BreezSdk) {
         // ANCHOR: buy-bitcoin-cashapp
-        val request = BuyBitcoinRequest(
-            provider = BuyBitcoinProvider.CASH_APP
-        )
+        val request = BuyBitcoinRequest.CashApp(amountSats = null)
 
         val response = sdk.buyBitcoin(request)
         // Log.v("Breez", "Open this URL in Cash App to complete the purchase:")

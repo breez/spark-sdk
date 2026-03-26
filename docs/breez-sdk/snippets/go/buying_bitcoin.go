@@ -8,14 +8,10 @@ import (
 
 func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: buy-bitcoin
-	// Optionally, lock the purchase to a specific amount
 	optionalLockedAmountSat := uint64(100_000)
-	// Optionally, set a redirect URL for after the purchase is completed
 	optionalRedirectUrl := "https://example.com/purchase-complete"
 
-	moonpayProvider := breez_sdk_spark.BuyBitcoinProviderMoonpay
-	request := breez_sdk_spark.BuyBitcoinRequest{
-		Provider:        &moonpayProvider,
+	request := breez_sdk_spark.BuyBitcoinRequestMoonpay{
 		LockedAmountSat: &optionalLockedAmountSat,
 		RedirectUrl:     &optionalRedirectUrl,
 	}
@@ -33,9 +29,8 @@ func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 
 func BuyBitcoinViaCashapp(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: buy-bitcoin-cashapp
-	cashAppProvider := breez_sdk_spark.BuyBitcoinProviderCashApp
-	request := breez_sdk_spark.BuyBitcoinRequest{
-		Provider: &cashAppProvider,
+	request := breez_sdk_spark.BuyBitcoinRequestCashApp{
+		AmountSats: nil,
 	}
 
 	response, err := sdk.BuyBitcoin(request)

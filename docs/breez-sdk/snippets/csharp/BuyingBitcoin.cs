@@ -12,8 +12,7 @@ namespace BreezSdkSnippets
             // Optionally, set a redirect URL for after the purchase is completed
             var optionalRedirectUrl = "https://example.com/purchase-complete";
 
-            var request = new BuyBitcoinRequest(
-                provider: BuyBitcoinProvider.Moonpay,
+            var request = new BuyBitcoinRequest.Moonpay(
                 lockedAmountSat: optionalLockedAmountSat,
                 redirectUrl: optionalRedirectUrl
             );
@@ -27,8 +26,8 @@ namespace BreezSdkSnippets
         async Task BuyBitcoinViaCashapp(BreezSdk sdk)
         {
             // ANCHOR: buy-bitcoin-cashapp
-            var request = new BuyBitcoinRequest(
-                provider: BuyBitcoinProvider.CashApp
+            var request = new BuyBitcoinRequest.CashApp(
+                amountSats: null
             );
 
             var response = await sdk.BuyBitcoin(request: request);
