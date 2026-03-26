@@ -2,7 +2,7 @@ use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
 use tracing::info;
 
-use breez_sdk_common::buy::{BuyBitcoinProviderApi, cashapp::CashAppProvider};
+use breez_sdk_common::buy::cashapp::CashAppProvider;
 
 use crate::{
     BuyBitcoinProvider, BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest,
@@ -367,12 +367,7 @@ impl BreezSdk {
                         None,
                     )
                     .await?;
-                CashAppProvider::new()
-                    .buy_bitcoin(receive_response.payment_request, None, None)
-                    .await
-                    .map_err(|e| {
-                        SdkError::Generic(format!("Failed to create buy bitcoin URL: {e}"))
-                    })?
+                CashAppProvider::build_url(&receive_response.payment_request)
             }
         };
 
