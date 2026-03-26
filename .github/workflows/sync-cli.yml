@@ -1,7 +1,11 @@
 # Syncs language CLIs (Flutter, Go, Python, Swift, WASM, C#, Kotlin Multiplatform, React Native) with the Rust CLI.
 #
-# Uses a matrix strategy to run all languages in parallel.  Each language's
-# prompt is assembled at runtime from:
+# Two-phase approach:
+#   1. Plan  — A single Claude session analyzes the Rust CLI diff and determines which
+#              languages actually need syncing, producing a JSON manifest (sync-plan.json).
+#   2. Sync  — Only the languages identified by the planner run Claude sessions.
+#
+# Each language's prompt is assembled at runtime from:
 #   sync-prompts/prompt-template.md  +  sync-prompts/langs/<lang>.toml
 #
 # All language changes are consolidated into a single PR (instead of one per language).
@@ -34,6 +38,11 @@ on:
         description: 'Run ID of a previous dry-run to approve (set languages to match)'
         required: false
         type: string
+      skip-planning:
+        description: 'Skip the planning phase and sync all specified languages directly'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: sync-cli
@@ -74,13 +83,210 @@ jobs:
             echo "matrix={\"include\":$FILTERED}" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── Phase 1: Plan which languages need syncing ──────────────────
+  plan:
+    name: Plan
+    needs: setup
+    if: ${{ !inputs.skip-planning && inputs.approve-run == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+
+    outputs:
+      languages: ${{ steps.extract.outputs.languages }}
+      manifest: ${{ steps.extract.outputs.manifest }}
+      skipped: ${{ steps.extract.outputs.skipped }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute diff info
+        id: diff-info
+        run: |
+          DIFF_BASE="${{ inputs.base-sha || github.event.client_payload['base-sha'] }}"
+          if [ -n "$DIFF_BASE" ] && [ "$DIFF_BASE" != "0000000000000000000000000000000000000000" ]; then
+            if ! git cat-file -e "$DIFF_BASE" 2>/dev/null; then
+              echo "::error::Provided base-sha ($DIFF_BASE) not found in repository."
+              exit 1
+            fi
+            echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
+            DIFF_STAT=$(git diff --stat "$DIFF_BASE" HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md')
+            {
+              echo "diff_summary<<EODIFF"
+              echo "Rust CLI changes since $DIFF_BASE:"
+              echo "$DIFF_STAT"
+              echo "EODIFF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "diff_base=" >> "$GITHUB_OUTPUT"
+            {
+              echo "diff_summary<<EODIFF"
+              echo "No base SHA provided — perform a full comparison of the Rust CLI against all language CLIs."
+              echo "EODIFF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate planner prompt
+        id: plan-prompt
+        env:
+          DIFF_SUMMARY: ${{ steps.diff-info.outputs.diff_summary }}
+          DIFF_BASE: ${{ steps.diff-info.outputs.diff_base }}
+        run: |
+          python3 << 'PYEOF'
+          import os, sys
+          sys.path.insert(0, "crates/breez-sdk/bindings/examples/cli/sync-prompts")
+          from generate import generate_planner_prompt
+
+          prompt = generate_planner_prompt()
+
+          # Resolve runtime variables
+          replacements = {
+              "{{DIFF_SUMMARY}}": os.environ.get("DIFF_SUMMARY", ""),
+              "{{DIFF_BASE}}": os.environ.get("DIFF_BASE", ""),
+          }
+          for expr, value in replacements.items():
+              prompt = prompt.replace(expr, value)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("content<<EOPLAN_DELIM_9b2f\n")
+              f.write(prompt)
+              f.write("\nEOPLAN_DELIM_9b2f\n")
+          PYEOF
+
+      - name: Run planner
+        id: run-planner
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'github-actions[bot]'
+          claude_args: >-
+            --model claude-opus-4-6
+            --allowed-tools
+            Read,Grep,Glob,Write(sync-plan.json:*),Bash(git diff:*),Bash(git log:*)
+          prompt: ${{ steps.plan-prompt.outputs.content }}
+
+      - name: Extract plan
+        id: extract
+        env:
+          ALL_LANGS: ${{ needs.setup.outputs.matrix }}
+        run: |
+          if [ ! -f sync-plan.json ]; then
+            echo "::warning::Planner did not produce sync-plan.json — falling back to all languages"
+            # Fall back to all languages from the matrix
+            LANGS=$(echo "$ALL_LANGS" | jq -c '[.include[].lang]')
+            echo "languages=$LANGS" >> "$GITHUB_OUTPUT"
+            echo "manifest={}" >> "$GITHUB_OUTPUT"
+            echo "skipped=Planner did not produce a plan" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Validate JSON
+          if ! jq empty sync-plan.json 2>/dev/null; then
+            echo "::warning::sync-plan.json is not valid JSON — falling back to all languages"
+            LANGS=$(echo "$ALL_LANGS" | jq -c '[.include[].lang]')
+            echo "languages=$LANGS" >> "$GITHUB_OUTPUT"
+            echo "manifest={}" >> "$GITHUB_OUTPUT"
+            echo "skipped=Invalid plan JSON" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LANGS=$(jq -c '.languages // []' sync-plan.json)
+          MANIFEST=$(jq -c '.per_language // {}' sync-plan.json)
+          SKIPPED=$(jq -c '.skipped // {}' sync-plan.json)
+
+          echo "languages=$LANGS" >> "$GITHUB_OUTPUT"
+          echo "manifest=$MANIFEST" >> "$GITHUB_OUTPUT"
+          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+
+          LANG_COUNT=$(echo "$LANGS" | jq 'length')
+          echo "::notice::Planner identified $LANG_COUNT language(s) to sync: $(echo "$LANGS" | jq -r 'join(", ")')"
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-plan
+          path: sync-plan.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        env:
+          LANGS: ${{ steps.extract.outputs.languages }}
+          SKIPPED: ${{ steps.extract.outputs.skipped }}
+        run: |
+          echo "## Sync CLI Plan" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Languages to sync:** $(echo "$LANGS" | jq -r 'join(", ") // "none"')" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SKIPPED" != "{}" ] && [ -n "$SKIPPED" ]; then
+            echo "**Skipped:**" >> "$GITHUB_STEP_SUMMARY"
+            echo "$SKIPPED" | jq -r 'to_entries[] | "- **\(.key)**: \(.value)"' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # ── Phase 2: Sync identified languages ─────────────────────────
+  # Build the sync matrix from planner output (or fall back to setup matrix when planning is skipped)
+  build-sync-matrix:
+    name: Build sync matrix
+    needs: [setup, plan]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      has_languages: ${{ steps.build.outputs.has_languages }}
+    steps:
+      - name: Build filtered matrix
+        id: build
+        env:
+          FULL_MATRIX: ${{ needs.setup.outputs.matrix }}
+          PLAN_LANGS: ${{ needs.plan.outputs.languages }}
+          SKIP_PLANNING: ${{ inputs.skip-planning }}
+          PLAN_SKIPPED: ${{ needs.plan.result }}
+        run: |
+          # If planning was skipped or didn't run, use the full matrix
+          if [ "$SKIP_PLANNING" = "true" ] || [ "$PLAN_SKIPPED" = "skipped" ]; then
+            echo "matrix=$FULL_MATRIX" >> "$GITHUB_OUTPUT"
+            echo "has_languages=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Filter the full matrix to only include languages from the plan
+          if [ -z "$PLAN_LANGS" ] || [ "$PLAN_LANGS" = "[]" ] || [ "$PLAN_LANGS" = "null" ]; then
+            echo "::notice::No languages to sync — skipping all sync jobs"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo "has_languages=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          FILTERED=$(echo "$FULL_MATRIX" | jq -c --argjson langs "$PLAN_LANGS" \
+            '{include: [.include[] | select(.lang as $l | $langs | index($l))]}')
+
+          LANG_COUNT=$(echo "$FILTERED" | jq '.include | length')
+          if [ "$LANG_COUNT" -eq 0 ]; then
+            echo "::notice::No matching languages in matrix"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo "has_languages=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=$FILTERED" >> "$GITHUB_OUTPUT"
+            echo "has_languages=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Syncing $LANG_COUNT language(s)"
+          fi
+
   sync:
     name: ${{ matrix.lang }}
-    needs: setup
+    needs: [setup, plan, build-sync-matrix]
+    if: ${{ !cancelled() && needs.build-sync-matrix.outputs.has_languages == 'true' }}
 
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.build-sync-matrix.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -198,6 +404,39 @@ jobs:
 
       # JDK setup skipped for Kotlin — build check deferred to cli-ci.yml
 
+      # ── Download planner guidance (if available) ────────────────────
+      - name: Download plan artifact
+        if: inputs.approve-run == '' && needs.plan.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: sync-plan
+          path: .plan
+        continue-on-error: true
+
+      - name: Extract planner guidance
+        if: inputs.approve-run == ''
+        id: guidance
+        env:
+          LANG: ${{ matrix.lang }}
+        run: |
+          GUIDANCE=""
+          if [ -f .plan/sync-plan.json ]; then
+            GUIDANCE=$(jq -r --arg lang "$LANG" '.per_language[$lang].guidance // ""' .plan/sync-plan.json 2>/dev/null || echo "")
+          fi
+          if [ -n "$GUIDANCE" ] && [ "$GUIDANCE" != "null" ]; then
+            {
+              echo "content<<EOGUIDANCE"
+              echo ""
+              echo "### Planner guidance"
+              echo "The planning phase analyzed the Rust CLI changes and identified these specific items for this language:"
+              echo "$GUIDANCE"
+              echo ""
+              echo "EOGUIDANCE"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "content=" >> "$GITHUB_OUTPUT"
+          fi
+
       # ── Generate prompt and run Claude ───────────────────────────────
       - name: Generate sync prompt
         if: inputs.approve-run == ''
@@ -206,6 +445,7 @@ jobs:
           LANG: ${{ matrix.lang }}
           DIFF_SUMMARY: ${{ steps.diff-info.outputs.diff_summary }}
           DIFF_BASE: ${{ steps.diff-info.outputs.diff_base }}
+          PLANNER_GUIDANCE: ${{ steps.guidance.outputs.content }}
         run: |
           python3 << 'PYEOF'
           import os, sys
@@ -223,6 +463,10 @@ jobs:
           for expr, value in replacements.items():
               prompt = prompt.replace(expr, value)
 
+          # Inject planner guidance
+          guidance = os.environ.get("PLANNER_GUIDANCE", "")
+          prompt = prompt.replace("{{PLANNER_GUIDANCE}}", guidance)
+
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("content<<EOPROMPT_DELIM_7f3a\n")
               f.write(prompt)
@@ -231,6 +475,8 @@ jobs:
 
       - name: Sync ${{ steps.config.outputs.lang_name }} CLI
         if: inputs.approve-run == ''
+        id: sync-claude
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -240,6 +486,77 @@ jobs:
             --allowed-tools
             ${{ steps.config.outputs.allowed_tools }}
           prompt: ${{ steps.gen-prompt.outputs.content }}
+
+      # ── Retry on failure or empty output ───────────────────────────
+      - name: Check for changes after sync
+        if: inputs.approve-run == '' && steps.sync-claude.outcome == 'success'
+        id: change-check
+        env:
+          TARGET_DIR: ${{ steps.config.outputs.target_dir }}
+        run: |
+          git add -N "$TARGET_DIR"
+          if git diff --quiet HEAD -- "$TARGET_DIR"; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract failure context
+        if: inputs.approve-run == '' && (steps.sync-claude.outcome == 'failure' || steps.change-check.outputs.empty == 'true')
+        id: failure-ctx
+        run: |
+          LOG="${{ runner.temp }}/claude-execution-output.json"
+          if [ -f "$LOG" ]; then
+            CONTEXT=$(python3 -c "
+          import json
+          try:
+              data = json.load(open('$LOG'))
+              msgs = data.get('messages', [])[-5:]
+              for m in msgs:
+                  c = m.get('content', '')
+                  print(c[:500] if isinstance(c, str) else str(c)[:500])
+          except Exception:
+              print('Could not parse execution log')
+          " 2>/dev/null || echo "Could not parse log")
+          else
+            CONTEXT="Claude session ended without producing output log."
+          fi
+          {
+            echo "context<<EOCTX_DELIM_4a1c"
+            echo "$CONTEXT"
+            echo "EOCTX_DELIM_4a1c"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Retry sync (attempt 2)
+        if: inputs.approve-run == '' && steps.failure-ctx.outputs.context != ''
+        id: sync-retry
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'github-actions[bot]'
+          claude_args: >-
+            --model claude-opus-4-6
+            --allowed-tools
+            ${{ steps.config.outputs.allowed_tools }}
+          prompt: |
+            RETRY ATTEMPT — the previous sync session ended prematurely or produced no changes.
+
+            Previous session context (last messages before failure):
+            ---
+            ${{ steps.failure-ctx.outputs.context }}
+            ---
+
+            ${{ steps.gen-prompt.outputs.content }}
+
+            Important: The previous attempt may have left partial changes in the
+            working tree. Check the current state of files before making edits.
+
+      - name: Fail if both attempts failed
+        if: inputs.approve-run == '' && steps.sync-claude.outcome == 'failure' && (steps.sync-retry.outcome == 'failure' || steps.sync-retry.outcome == 'skipped')
+        run: |
+          echo "::error::Both sync attempts failed for ${{ matrix.lang }}"
+          exit 1
 
       # ── Create patch artifact (always, not just dry-run) ────────────
       - name: Create patch
@@ -304,8 +621,8 @@ jobs:
   # ── Consolidate all patches into a single PR ───────────────────────
   create-pr:
     name: Create PR
-    needs: [setup, sync]
-    if: ${{ !inputs.dry-run && !cancelled() }}
+    needs: [setup, build-sync-matrix, sync]
+    if: ${{ !inputs.dry-run && !cancelled() && needs.build-sync-matrix.outputs.has_languages == 'true' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -318,7 +635,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
-          fetch-depth: 1
+          fetch-depth: 0  # Full history needed to preserve existing PR branch changes
 
       # ── Resolve PR reviewer ──────────────────────────────────────────
       - name: Resolve reviewer
@@ -413,7 +730,7 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Create consolidated PR ──────────────────────────────────────
+      # ── Preserve existing PR changes & apply new patches ───────────
       - name: Create branch and PR
         if: steps.apply.outputs.has_changes == 'true'
         id: create-pr
@@ -432,12 +749,63 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           BRANCH="claude/sync-cli"
-          git checkout -B "$BRANCH"
+          PRESERVED=""
+          PRESERVE_FAILED=""
 
-          # Stage all updated language directories
+          # ── Check for existing PR branch ──────────────────────────
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "::notice::Found existing PR #${EXISTING_PR} — preserving non-overlapping changes"
+            git fetch origin "$BRANCH" 2>/dev/null || true
+
+            # Find which languages have changes on the existing branch
+            EXISTING_CHANGED=$(git diff --name-only origin/main...origin/"$BRANCH" 2>/dev/null | \
+              grep -oP 'langs/\K[^/]+' | sort -u || true)
+
+            # Start fresh from main
+            git checkout -B "$BRANCH" origin/main
+
+            # Preserve changes for languages NOT re-synced in this run
+            for EXISTING_LANG in $EXISTING_CHANGED; do
+              # Skip if this language was updated in the current run
+              if echo ",$UPDATED," | grep -q ",${EXISTING_LANG},"; then
+                echo "::notice::${EXISTING_LANG}: re-synced — replacing previous changes"
+                continue
+              fi
+
+              # Try to preserve the old changes
+              OLD_DIFF=$(git diff origin/main...origin/"$BRANCH" -- "*/langs/${EXISTING_LANG}/*" 2>/dev/null || true)
+              if [ -n "$OLD_DIFF" ]; then
+                if echo "$OLD_DIFF" | git apply 2>/dev/null; then
+                  TARGET_DIR=$(python3 -c "
+          import sys
+          sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
+          from generate import load_lang_config
+          print(load_lang_config('${EXISTING_LANG}').get('target_dir', ''))
+          " 2>/dev/null || echo "")
+                  if [ -n "$TARGET_DIR" ]; then
+                    git add "$TARGET_DIR"
+                    git commit -m "chore: preserve ${EXISTING_LANG} CLI sync from previous run"
+                    PRESERVED="${PRESERVED}${EXISTING_LANG},"
+                    echo "::notice::${EXISTING_LANG}: preserved from previous PR"
+                  fi
+                else
+                  PRESERVE_FAILED="${PRESERVE_FAILED}${EXISTING_LANG},"
+                  echo "::warning::${EXISTING_LANG}: could not preserve previous changes (main has diverged)"
+                fi
+              fi
+            done
+          else
+            git checkout -B "$BRANCH"
+          fi
+
+          PRESERVED="${PRESERVED%,}"
+          PRESERVE_FAILED="${PRESERVE_FAILED%,}"
+
+          # ── Apply new patches as per-language commits ─────────────
           IFS=',' read -ra UPDATED_LANGS <<< "$UPDATED"
           for LANG in "${UPDATED_LANGS[@]}"; do
-            # Load the target_dir for this language from its TOML config
             TARGET_DIR=$(python3 -c "
           import sys
           sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
@@ -446,13 +814,9 @@ jobs:
           ")
             if [ -n "$TARGET_DIR" ]; then
               git add "$TARGET_DIR"
+              git commit -m "chore: sync ${LANG} CLI with Rust CLI changes (${{ github.sha }})"
             fi
           done
-
-          # Build commit message
-          UPDATED_COUNT=$(echo "$UPDATED" | tr ',' '\n' | wc -l | tr -d ' ')
-          COMMIT_MSG="chore: sync ${UPDATED_COUNT} CLI language(s) with Rust CLI changes (${{ github.sha }})"
-          git commit -m "$COMMIT_MSG"
 
           # ── Build PR body ──────────────────────────────────────────
           BODY="Automated sync of language CLIs from Rust CLI changes."
@@ -463,9 +827,10 @@ jobs:
             BODY+=$'\n'"**Approved from:** [dry-run #${APPROVE_RUN}](https://github.com/${{ github.repository }}/actions/runs/${APPROVE_RUN})"
           fi
 
-          # Language status list
+          # Language status list (includes all 8 languages)
+          ALL_LANGS='["csharp","flutter","golang","kotlin-multiplatform","python","react-native","swift","wasm"]'
           BODY+=$'\n\n'"**Language status:**"
-          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+          for LANG in $(echo "$ALL_LANGS" | jq -r '.[]'); do
             LANG_NAME=$(python3 -c "
           import sys
           sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
@@ -473,13 +838,17 @@ jobs:
           print(load_lang_config('${LANG}').get('lang_name', '${LANG}'))
           ")
             if echo ",$UPDATED," | grep -q ",${LANG},"; then
-              BODY+=$'\n'"- :white_check_mark: ${LANG_NAME}"
+              BODY+=$'\n'"- :white_check_mark: ${LANG_NAME} (synced in run #${{ github.run_id }})"
+            elif echo ",$PRESERVED," | grep -q ",${LANG},"; then
+              BODY+=$'\n'"- :recycle: ${LANG_NAME} (preserved from previous run)"
             elif echo ",$FAILED," | grep -q ",${LANG},"; then
               BODY+=$'\n'"- :x: ${LANG_NAME} (patch failed to apply)"
+            elif echo ",$PRESERVE_FAILED," | grep -q ",${LANG},"; then
+              BODY+=$'\n'"- :warning: ${LANG_NAME} (previous changes could not be preserved — needs re-sync)"
             elif echo ",$NO_CHANGES," | grep -q ",${LANG},"; then
               BODY+=$'\n'"- :next_track_button: ${LANG_NAME} (no changes needed)"
             else
-              BODY+=$'\n'"- :grey_question: ${LANG_NAME} (sync job did not produce a patch)"
+              BODY+=$'\n'"- :grey_question: ${LANG_NAME} (not synced in this run)"
             fi
           done
 
@@ -509,10 +878,23 @@ jobs:
           fi
 
           # Warn about failures
-          if [ -n "$FAILED" ]; then
+          ALL_FAILED="${FAILED}"
+          if [ -n "$PRESERVE_FAILED" ]; then
+            if [ -n "$ALL_FAILED" ]; then
+              ALL_FAILED="${ALL_FAILED},${PRESERVE_FAILED}"
+            else
+              ALL_FAILED="$PRESERVE_FAILED"
+            fi
+          fi
+          if [ -n "$ALL_FAILED" ]; then
             BODY+=$'\n\n'"> [!WARNING]"
-            BODY+=$'\n'"> Some patches failed to apply. The target files may have changed since the sync ran."
-            BODY+=$'\n'"> Failed languages: ${FAILED}"
+            BODY+=$'\n'"> Some languages need attention:"
+            if [ -n "$FAILED" ]; then
+              BODY+=$'\n'"> - Patches failed to apply: ${FAILED}"
+            fi
+            if [ -n "$PRESERVE_FAILED" ]; then
+              BODY+=$'\n'"> - Previous changes could not be preserved (main diverged): ${PRESERVE_FAILED}"
+            fi
             BODY+=$'\n'"> Consider re-running the sync for these languages."
           fi
 
@@ -521,8 +903,7 @@ jobs:
             REVIEWER_FLAG="--reviewer $REVIEWER"
           fi
 
-          # Reuse existing open PR or create a new one
-          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          # Push and create/update PR
           if [ -n "$EXISTING_PR" ]; then
             git push --force-with-lease -u origin HEAD
             gh pr edit "$EXISTING_PR" --body "$BODY"
@@ -544,6 +925,19 @@ jobs:
           GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
         run: |
           git push origin --delete "claude/sync-cli" 2>/dev/null || true
+
+      # ── Auto re-trigger for failed patches ─────────────────────────
+      - name: Re-trigger for failed languages
+        if: steps.apply.outputs.failed != ''
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
+          FAILED: ${{ steps.apply.outputs.failed }}
+        run: |
+          FAILED_JSON=$(echo "$FAILED" | tr ',' '\n' | jq -R . | jq -s -c .)
+          echo "::notice::Triggering re-sync for failed languages: $FAILED"
+          gh workflow run sync-cli.yml \
+            --field languages="$FAILED_JSON" \
+            --field skip-planning=true
 
       # ── Job summary ─────────────────────────────────────────────────
       - name: Summary
