@@ -95,6 +95,7 @@ def parse_toml(text: str) -> dict[str, dict[str, str]]:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROMPT_TEMPLATE = SCRIPT_DIR / "prompt-template.md"
+PLANNER_TEMPLATE = SCRIPT_DIR / "planner-prompt.md"
 LANGS_DIR = SCRIPT_DIR / "langs"
 
 
@@ -177,6 +178,50 @@ def generate_prompt(lang_id: str) -> str:
     return render_template(template, config)
 
 
+def generate_planner_prompt() -> str:
+    """Generate the planner prompt with a summary of all language file mappings."""
+    template = PLANNER_TEMPLATE.read_text()
+
+    # Build a summary table of all languages and their target directories / file mappings
+    lines = [
+        "| Language | ID | Target directory | Key target files |",
+        "|----------|----|--------------------|-----------------|",
+    ]
+    for lang_id in sorted(p.stem for p in LANGS_DIR.glob("*.toml")):
+        config = load_lang_config(lang_id)
+        lang_name = config.get("lang_name", lang_id)
+        target_dir = config.get("target_dir", "")
+
+        # Extract file names from the file_mapping content
+        file_mapping = config.get("file_mapping", "")
+        target_files = []
+        for line in file_mapping.splitlines():
+            if "|" in line and "`" in line:
+                # Extract the target file path from the last column
+                parts = line.split("|")
+                if len(parts) >= 3:
+                    target_col = parts[-2].strip()
+                    # Extract filename from backtick-wrapped path
+                    if "`" in target_col:
+                        path = target_col.strip("`").strip()
+                        fname = path.rsplit("/", 1)[-1] if "/" in path else path
+                        if fname and fname not in ("Kotlin target", "Swift target",
+                                                   "Go target", "Python target",
+                                                   "TypeScript target", "C# target",
+                                                   "Dart target", "React Native target"):
+                            target_files.append(fname)
+
+        files_str = ", ".join(target_files[:5]) if target_files else "—"
+        lines.append(f"| {lang_name} | `{lang_id}` | `{target_dir}` | {files_str} |")
+
+    summary = "\n".join(lines)
+
+    # The planner template uses simple {{VAR}} substitution for DIFF_SUMMARY
+    # and DIFF_BASE which are resolved at workflow runtime.  We only inject
+    # the language summary here.
+    return template.replace("{{LANGUAGE_SUMMARY}}", summary)
+
+
 def available_languages() -> list[str]:
     """List available language configs."""
     return sorted(p.stem for p in LANGS_DIR.glob("*.toml"))
@@ -201,11 +246,20 @@ def main() -> None:
         action="store_true",
         help="List available languages and exit",
     )
+    parser.add_argument(
+        "--planner",
+        action="store_true",
+        help="Generate the planner prompt (ignores language args)",
+    )
     args = parser.parse_args()
 
     if args.list:
         for lang in available_languages():
             print(lang)
+        return
+
+    if args.planner:
+        print(generate_planner_prompt())
         return
 
     languages = args.languages or available_languages()

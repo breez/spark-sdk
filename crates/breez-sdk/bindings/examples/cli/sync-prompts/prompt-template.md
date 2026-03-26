@@ -5,6 +5,8 @@ Your job is to update the {{LANG_NAME}} CLI to match the current Rust CLI.
 ### What changed
 ${{ steps.diff-info.outputs.diff_summary }}
 
+{{PLANNER_GUIDANCE}}
+
 ### Step 1: Learn the {{LANG_NAME}} SDK API
 Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_DIR}}`:
 - `sdk_building` — builder pattern, storage setup, configuration
