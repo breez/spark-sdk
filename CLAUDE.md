@@ -135,6 +135,16 @@ Call {{#name get_info}} after each {{#enum SdkEvent::Synced}} event.
 
 See [snippets-processor/src/main.rs](docs/breez-sdk/snippets-processor/src/main.rs) for transformation rules.
 
+## CLI Modification Policy
+
+**Do not modify language-specific CLIs** (`crates/breez-sdk/bindings/examples/cli/langs/`) unless:
+- Fixing issues caught by static analysis (clippy, linting, build errors) in those CLIs
+- Explicitly requested by the user (e.g. porting a new feature for testing)
+
+The **Sync CLI Languages** workflow (`sync-cli.yml`) handles propagating Rust CLI changes to all language CLIs automatically. Modifying language CLIs directly on PRs creates noise and conflicts with the sync agent.
+
+The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely — it is the source of truth that the sync workflow reads from.
+
 ## Workspace Configuration
 
 - Rust edition 2024, MSRV 1.88
