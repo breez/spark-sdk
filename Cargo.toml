@@ -22,6 +22,7 @@ members = [
   "crates/platform-utils",
   "crates/spark",
   "crates/spark-itest",
+  "crates/spark-postgres",
   "crates/spark-wallet",
   "crates/xtask",
   "crates/internal",
@@ -111,6 +112,7 @@ serde-wasm-bindgen = "0.6.5"
 serde_with = "3.13.0"
 shlex = "1.3.0"
 spark = { path = "crates/spark", default-features = false }
+spark-postgres = { path = "crates/spark-postgres" }
 spark-wallet = { path = "crates/spark-wallet", default-features = false }
 strum = "0.27.1"
 strum_macros = "0.27.1"

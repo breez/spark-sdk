@@ -1531,7 +1531,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persist::postgres::base::parse_pem_to_root_store;
+    use spark_postgres::pool::parse_pem_to_root_store;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
 

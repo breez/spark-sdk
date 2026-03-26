@@ -20,11 +20,10 @@ use tokio::sync::watch;
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::persist::StorageError;
-
-use super::base::run_migrations;
-#[cfg(test)]
-use super::base::{PostgresStorageConfig, create_pool};
+use crate::config::PostgresStorageConfig;
+use crate::error::PostgresError;
+use crate::migrations::run_migrations;
+use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
@@ -50,7 +49,7 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 /// This implementation uses database-level concurrency control (row locking)
 /// to safely handle concurrent operations, making it suitable for multi-instance
 /// deployments.
-pub(crate) struct PostgresTreeStore {
+pub struct PostgresTreeStore {
     pool: Pool,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
@@ -582,17 +581,24 @@ impl TreeStore for PostgresTreeStore {
 }
 
 impl PostgresTreeStore {
-    /// Creates a new `PostgresTreeStore`.
-    #[cfg(test)]
-    pub async fn new(config: PostgresStorageConfig) -> Result<Self, StorageError> {
+    /// Creates a new `PostgresTreeStore` from a configuration.
+    ///
+    /// This creates its own connection pool and runs tree store migrations.
+    pub async fn from_config(config: PostgresStorageConfig) -> Result<Self, PostgresError> {
         let pool = create_pool(&config)?;
-        Self::new_with_pool(pool).await
+        Self::init(pool).await
     }
 
-    /// Creates a new `PostgresTreeStore` using an existing connection pool.
+    /// Creates a new `PostgresTreeStore` from an existing connection pool.
     ///
-    /// This allows sharing a single pool across multiple store implementations.
-    pub async fn new_with_pool(pool: Pool) -> Result<Self, StorageError> {
+    /// This reuses the provided pool and runs tree store migrations.
+    /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
+    pub async fn from_pool(pool: Pool) -> Result<Self, PostgresError> {
+        Self::init(pool).await
+    }
+
+    /// Shared initialization logic for both constructors.
+    async fn init(pool: Pool) -> Result<Self, PostgresError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
@@ -608,7 +614,7 @@ impl PostgresTreeStore {
     }
 
     /// Runs database migrations for tree store tables.
-    async fn migrate(&self) -> Result<(), StorageError> {
+    async fn migrate(&self) -> Result<(), PostgresError> {
         run_migrations(&self.pool, TREE_MIGRATIONS_TABLE, &Self::migrations()).await
     }
 
@@ -923,9 +929,31 @@ fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
 }
 
-/// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
-pub async fn create_postgres_tree_store(pool: Pool) -> Result<Arc<dyn TreeStore>, StorageError> {
-    Ok(Arc::new(PostgresTreeStore::new_with_pool(pool).await?))
+/// Creates a `PostgresTreeStore` instance from a configuration.
+///
+/// Creates its own connection pool. For sharing a pool, use
+/// [`create_postgres_tree_store_from_pool`] instead.
+///
+/// # Arguments
+///
+/// * `config` - Configuration for the `PostgreSQL` connection pool
+pub async fn create_postgres_tree_store(
+    config: PostgresStorageConfig,
+) -> Result<Arc<dyn TreeStore>, PostgresError> {
+    Ok(Arc::new(PostgresTreeStore::from_config(config).await?))
+}
+
+/// Creates a `PostgresTreeStore` instance from an existing connection pool.
+///
+/// Useful when sharing a pool with other components.
+///
+/// # Arguments
+///
+/// * `pool` - An existing deadpool-postgres connection pool
+pub async fn create_postgres_tree_store_from_pool(
+    pool: Pool,
+) -> Result<Arc<dyn TreeStore>, PostgresError> {
+    Ok(Arc::new(PostgresTreeStore::from_pool(pool).await?))
 }
 
 #[cfg(test)]
@@ -960,10 +988,11 @@ mod tests {
                 "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
             );
 
-            let store =
-                PostgresTreeStore::new(PostgresStorageConfig::with_defaults(connection_string))
-                    .await
-                    .expect("Failed to create PostgresTreeStore");
+            let store = PostgresTreeStore::from_config(PostgresStorageConfig::with_defaults(
+                connection_string,
+            ))
+            .await
+            .expect("Failed to create PostgresTreeStore");
 
             Self { store, container }
         }
