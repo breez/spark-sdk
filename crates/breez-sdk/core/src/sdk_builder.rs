@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
-    buy::{BuyBitcoinProviderApi, moonpay::MoonpayProvider},
+    buy::moonpay::MoonpayProvider,
 };
 use platform_utils::DefaultHttpClient;
 
@@ -590,8 +590,7 @@ impl SdkBuilder {
             };
 
         // Create the MoonPay provider for buying Bitcoin
-        let buy_bitcoin_provider: Arc<dyn BuyBitcoinProviderApi> =
-            Arc::new(MoonpayProvider::new(breez_server.clone()));
+        let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(breez_server.clone()));
 
         // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
