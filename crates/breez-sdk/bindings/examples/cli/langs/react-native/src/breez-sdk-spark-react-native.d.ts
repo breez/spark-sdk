@@ -50,6 +50,15 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const FeePolicy: any;
   export type FeePolicy = any;
 
+  export const TokenTransactionType: any;
+  export type TokenTransactionType = any;
+
+  export const BuyBitcoinRequest: any;
+  export type BuyBitcoinRequest = any;
+
+  export const WebhookEventType: any;
+  export type WebhookEventType = any;
+
   // --- values only ---
   export const defaultConfig: any;
   export const SdkEvent_Tags: any;

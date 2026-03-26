@@ -87,6 +87,8 @@ Once the app is running, type commands in the text input at the bottom:
 
 **Contacts**: `contacts <subcommand>`
 
+**Webhooks**: `webhooks <subcommand>`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Type `help` for a full list of commands. Each command mirrors the Rust CLI behavior.
@@ -108,6 +110,29 @@ Send a payment as an HTLC transfer (Spark address, Bitcoin only):
 ```
 pay -r <spark_address> -a 1000 --htlc-payment-hash <hex> --htlc-expiry-secs 3600
 ```
+
+### Buy Bitcoin
+
+Buy Bitcoin via an external provider:
+
+```
+buy-bitcoin --provider moonpay --amount-sat 100000 --redirect-url https://example.com
+buy-bitcoin --provider cashapp --amount-sat 50000
+```
+
+Supported providers: `moonpay` (default), `cashapp`.
+
+### Webhooks
+
+Register, unregister, and list webhooks for payment notifications:
+
+```
+webhooks register https://example.com/hook my-secret lightning-receive lightning-send
+webhooks list
+webhooks unregister <webhook_id>
+```
+
+Event types: `lightning-receive`, `lightning-send`, `coop-exit`, `static-deposit`.
 
 ### Payment Filtering
 

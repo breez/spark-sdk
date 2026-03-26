@@ -9,7 +9,8 @@
  *   register-lightning-address, delete-lightning-address, list-fiat-currencies,
  *   list-fiat-rates, recommended-fees, get-tokens-metadata,
  *   fetch-conversion-limits, get-user-settings, set-user-settings,
- *   get-spark-status, issuer (subcommand), contacts (subcommand)
+ *   get-spark-status, issuer (subcommand), contacts (subcommand),
+ *   webhooks (subcommand)
  */
 
 import {
@@ -28,6 +29,8 @@ import {
   MaxFee,
   Fee,
   SparkHtlcStatus,
+  TokenTransactionType,
+  BuyBitcoinRequest,
   getSparkStatus,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
@@ -38,6 +41,7 @@ import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
+import { dispatchWebhooksCommand } from './webhooks'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,6 +172,7 @@ export const COMMAND_NAMES = [
   'get-spark-status',
   'issuer',
   'contacts',
+  'webhooks',
 ]
 
 // ---------------------------------------------------------------------------
@@ -192,7 +197,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'parse', description: 'Parse an input (invoice, address, LNURL)', run: handleParse },
     { name: 'refund-deposit', description: 'Refund an on-chain deposit', run: handleRefundDeposit },
     { name: 'list-unclaimed-deposits', description: 'List unclaimed on-chain deposits', run: handleListUnclaimedDeposits },
-    { name: 'buy-bitcoin', description: 'Buy Bitcoin via MoonPay', run: handleBuyBitcoin },
+    { name: 'buy-bitcoin', description: 'Buy Bitcoin via external provider', run: handleBuyBitcoin },
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
@@ -207,6 +212,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'get-spark-status', description: 'Get Spark network service status', run: handleGetSparkStatus },
     { name: 'issuer', description: 'Token issuer commands (use "issuer help" for details)', run: handleIssuer },
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
+    { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
   ]
 
   for (const cmd of commands) {
@@ -397,8 +403,15 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
       }))
     }
     if (txType) {
+      let parsedTxType: TokenTransactionType | undefined
+      switch (txType.toLowerCase()) {
+        case 'transfer': parsedTxType = TokenTransactionType.Transfer; break
+        case 'mint': parsedTxType = TokenTransactionType.Mint; break
+        case 'burn': parsedTxType = TokenTransactionType.Burn; break
+        default: parsedTxType = undefined
+      }
       paymentDetailsFilter.push(new PaymentDetailsFilter.Token({
-        txType: undefined,
+        txType: parsedTxType,
         txHash: undefined,
         conversionRefundNeeded: undefined,
       }))
@@ -892,15 +905,31 @@ async function handleListUnclaimedDeposits(sdk: BreezSdkInterface, _tokenIssuer:
 // --- buy-bitcoin ---
 
 async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const lockedAmountSatStr = parseFlag(args, '--locked-amount-sat', '--amount')
+  const provider = parseFlag(args, '--provider') ?? 'moonpay'
+  const amountSatStr = parseFlag(args, '--amount-sat', '--amount', '--locked-amount-sat')
   const redirectUrl = parseFlag(args, '--redirect-url')
 
-  const lockedAmountSat = lockedAmountSatStr !== undefined ? BigInt(lockedAmountSatStr) : undefined
+  const amountSat = amountSatStr !== undefined ? BigInt(amountSatStr) : undefined
 
-  const result = await sdk.buyBitcoin({
-    lockedAmountSat,
-    redirectUrl,
-  })
+  let request: InstanceType<typeof BuyBitcoinRequest.Moonpay> | InstanceType<typeof BuyBitcoinRequest.CashApp>
+
+  switch (provider.toLowerCase()) {
+    case 'cashapp':
+    case 'cash_app':
+    case 'cash-app':
+      request = new BuyBitcoinRequest.CashApp({
+        amountSats: amountSat,
+      })
+      break
+    default:
+      request = new BuyBitcoinRequest.Moonpay({
+        lockedAmountSat: amountSat,
+        redirectUrl,
+      })
+      break
+  }
+
+  const result = await sdk.buyBitcoin(request)
 
   const lines = [
     'Open this URL in a browser to complete the purchase:',
@@ -1060,4 +1089,10 @@ async function handleIssuer(_sdk: BreezSdkInterface, tokenIssuer: TokenIssuerInt
 
 async function handleContacts(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchContactsCommand(args, sdk)
+}
+
+// --- webhooks (delegation) ---
+
+async function handleWebhooks(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchWebhooksCommand(args, sdk)
 }

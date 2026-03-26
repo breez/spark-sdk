@@ -90,6 +90,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `get-spark-status` — Get Spark network status
 - `issuer <subcommand>` — Token issuer commands
 - `contacts <subcommand>` — Contacts commands (add, update, delete, list)
+- `webhooks <subcommand>` — Webhook commands (register, unregister, list)
 
 ## Passkey
 

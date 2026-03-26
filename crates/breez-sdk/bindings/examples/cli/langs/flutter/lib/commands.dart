@@ -64,7 +64,7 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'parse': CommandEntry('Parse an input (invoice, address, LNURL)', _handleParse),
     'refund-deposit': CommandEntry('Refund an on-chain deposit', _handleRefundDeposit),
     'list-unclaimed-deposits': CommandEntry('List unclaimed on-chain deposits', _handleListUnclaimedDeposits),
-    'buy-bitcoin': CommandEntry('Buy Bitcoin via MoonPay', _handleBuyBitcoin),
+    'buy-bitcoin': CommandEntry('Buy Bitcoin using an external provider', _handleBuyBitcoin),
     'check-lightning-address-available': CommandEntry(
       'Check if a lightning address username is available',
       _handleCheckLightningAddressAvailable,
@@ -716,18 +716,26 @@ Future<void> _handleListUnclaimedDeposits(BreezSdk sdk, TokenIssuer tokenIssuer,
 Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
   final parser =
       _parser('buy-bitcoin')
-        ..addOption('locked-amount-sat')
-        ..addOption('redirect-url');
+        ..addOption('provider', defaultsTo: 'moonpay', help: 'Provider: moonpay (default) or cashapp')
+        ..addOption('amount-sat', help: 'Amount in satoshis')
+        ..addOption('redirect-url', help: 'Redirect URL after purchase (MoonPay only)');
   final results = _parseArgs(parser, args, 'buy-bitcoin [options]');
   if (results == null) return;
 
-  final lockedStr = results.option('locked-amount-sat');
-  final lockedAmount = lockedStr != null ? BigInt.parse(lockedStr) : null;
+  final provider = results.option('provider')!.toLowerCase();
+  final amountStr = results.option('amount-sat');
+  final amount = amountStr != null ? BigInt.parse(amountStr) : null;
   final redirectUrl = results.option('redirect-url');
 
-  final result = await sdk.buyBitcoin(
-    request: BuyBitcoinRequest_Moonpay(lockedAmountSat: lockedAmount, redirectUrl: redirectUrl),
-  );
+  BuyBitcoinRequest request;
+  switch (provider) {
+    case 'cashapp' || 'cash_app' || 'cash-app':
+      request = BuyBitcoinRequest_CashApp(amountSats: amount);
+    default:
+      request = BuyBitcoinRequest_Moonpay(lockedAmountSat: amount, redirectUrl: redirectUrl);
+  }
+
+  final result = await sdk.buyBitcoin(request: request);
   print('Open this URL in a browser to complete the purchase:');
   print(result.url);
 }

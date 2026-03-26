@@ -150,7 +150,7 @@ public static class Commands
             ["buy-bitcoin"] = new()
             {
                 Name = "buy-bitcoin",
-                Description = "Buy Bitcoin via MoonPay",
+                Description = "Buy Bitcoin using an external provider",
                 Run = HandleBuyBitcoin
             },
             ["check-lightning-address-available"] = new()
@@ -242,6 +242,7 @@ public static class Commands
         }
         Console.WriteLine($"  {"issuer <subcommand>",-40} Token issuer commands (use 'issuer help' for details)");
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
+        Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");
         Console.WriteLine($"  {"exit / quit",-40} Exit the CLI");
         Console.WriteLine($"  {"help",-40} Show this help message");
         Console.WriteLine();
@@ -929,13 +930,29 @@ public static class Commands
 
     private static async Task HandleBuyBitcoin(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        var lockedAmountStr = GetFlag(args, "--locked-amount-sat");
+        var provider = GetFlag(args, "--provider") ?? "moonpay";
+        var amountSatStr = GetFlag(args, "--amount-sat");
         var redirectUrl = GetFlag(args, "--redirect-url");
 
-        var result = await sdk.BuyBitcoin(new BuyBitcoinRequest.Moonpay(
-            lockedAmountSat: ParseOptionalUlong(lockedAmountStr),
-            redirectUrl: redirectUrl
-        ));
+        BuyBitcoinRequest request;
+        switch (provider.ToLower())
+        {
+            case "cashapp":
+            case "cash_app":
+            case "cash-app":
+                request = new BuyBitcoinRequest.CashApp(
+                    amountSats: ParseOptionalUlong(amountSatStr)
+                );
+                break;
+            default:
+                request = new BuyBitcoinRequest.Moonpay(
+                    lockedAmountSat: ParseOptionalUlong(amountSatStr),
+                    redirectUrl: redirectUrl
+                );
+                break;
+        }
+
+        var result = await sdk.BuyBitcoin(request);
         Console.WriteLine("Open this URL in a browser to complete the purchase:");
         Console.WriteLine(result.url);
     }

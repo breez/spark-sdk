@@ -247,6 +247,8 @@ def _build_receive_parser():
     p.add_argument("-s", "--sender-public-key", default=None)
     p.add_argument("--hodl", action="store_true", default=False,
                    help="Create a HODL invoice (bolt11 only)")
+    p.add_argument("--new-address", action="store_true", default=False,
+                   help="Request a new bitcoin deposit address instead of reusing the current one")
     return p
 
 async def _handle_receive(sdk, _token_issuer, _session, args):
@@ -266,7 +268,9 @@ async def _handle_receive(sdk, _token_issuer, _session, args):
             sender_public_key=args.sender_public_key,
         )
     elif method == "bitcoin":
-        payment_method = ReceivePaymentMethod.BITCOIN_ADDRESS()
+        payment_method = ReceivePaymentMethod.BITCOIN_ADDRESS(
+            new_address=args.new_address if args.new_address else None,
+        )
     elif method == "bolt11":
         payment_hash = None
         if args.hodl:
@@ -594,16 +598,25 @@ async def _handle_list_unclaimed_deposits(sdk, _token_issuer, _session, _args):
 # --- buy-bitcoin ---
 
 def _build_buy_bitcoin_parser():
-    p = _parser("buy-bitcoin", "Buy Bitcoin via MoonPay")
-    p.add_argument("--locked-amount-sat", type=int, default=None)
-    p.add_argument("--redirect-url", default=None)
+    p = _parser("buy-bitcoin", "Buy Bitcoin using an external provider")
+    p.add_argument("--provider", default="moonpay",
+                   help='Provider to use: "moonpay" (default) or "cashapp"')
+    p.add_argument("--amount-sat", type=int, default=None,
+                   help="Amount in satoshis (meaning depends on provider)")
+    p.add_argument("--redirect-url", default=None,
+                   help="Custom redirect URL after purchase completion (MoonPay only)")
     return p
 
 async def _handle_buy_bitcoin(sdk, _token_issuer, _session, args):
-    result = await sdk.buy_bitcoin(request=BuyBitcoinRequest(
-        locked_amount_sat=args.locked_amount_sat,
-        redirect_url=args.redirect_url,
-    ))
+    provider = (args.provider or "moonpay").lower()
+    if provider in ("cashapp", "cash_app", "cash-app"):
+        request = BuyBitcoinRequest.CASH_APP(amount_sats=args.amount_sat)
+    else:
+        request = BuyBitcoinRequest.MOONPAY(
+            locked_amount_sat=args.amount_sat,
+            redirect_url=args.redirect_url,
+        )
+    result = await sdk.buy_bitcoin(request=request)
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
 

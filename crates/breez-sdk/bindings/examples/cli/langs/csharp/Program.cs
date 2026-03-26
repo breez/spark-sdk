@@ -295,6 +295,7 @@ static async Task RunInteractiveMode(
     allCommands.AddRange(CommandNames.All);
     allCommands.AddRange(IssuerCommandNames.All);
     allCommands.AddRange(ContactCommandNames.All);
+    allCommands.AddRange(WebhookCommandNames.All);
     allCommands.Add("exit");
     allCommands.Add("quit");
     allCommands.Add("help");
@@ -384,6 +385,10 @@ static async Task RunInteractiveMode(
             else if (cmdName == "contacts")
             {
                 await ContactCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "webhooks")
+            {
+                await WebhookCommands.DispatchCommand(cmdArgs, sdk, Readline);
             }
             else if (registry.TryGetValue(cmdName, out var cmd))
             {

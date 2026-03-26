@@ -11,6 +11,7 @@ import 'passkey.dart';
 import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
+import 'webhooks.dart';
 
 Future<void> runCli({
   required String dataDir,
@@ -118,6 +119,7 @@ Future<void> _runRepl(
     ...commandNames,
     ...issuerCommandNames,
     ...contactsCommandNames,
+    ...webhookCommandNames,
     'exit',
     'quit',
     'help',
@@ -151,6 +153,8 @@ Future<void> _runRepl(
         await dispatchIssuerCommand(cmdArgs, tokenIssuer);
       } else if (cmdName == 'contacts') {
         await dispatchContactsCommand(cmdArgs, sdk);
+      } else if (cmdName == 'webhooks') {
+        await dispatchWebhookCommand(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -187,6 +191,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   );
   stdout.writeln(
     '  ${'contacts <subcommand>'.padRight(40)} Contacts commands (use \'contacts help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'webhooks <subcommand>'.padRight(40)} Webhook commands (use \'webhooks help\' for details)',
   );
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');
