@@ -168,7 +168,7 @@ pub(super) fn map_db_error(e: tokio_postgres::Error) -> StorageError {
 // ── Pool and migration wrappers ───────────────────────────────────────────────
 
 /// Creates a `PostgreSQL` connection pool from the given configuration.
-pub(super) fn create_pool(
+pub(crate) fn create_pool(
     config: &PostgresStorageConfig,
 ) -> Result<deadpool_postgres::Pool, StorageError> {
     let sp_config: spark_postgres::PostgresStorageConfig = config.clone().into();
@@ -188,12 +188,11 @@ pub(super) async fn run_migrations(
 
 // ── Tree store factory ────────────────────────────────────────────────────────
 
-/// Creates a `PostgresTreeStore` instance for use with the SDK.
+/// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_tree_store(
-    config: PostgresStorageConfig,
+    pool: deadpool_postgres::Pool,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    let sp_config: spark_postgres::PostgresStorageConfig = config.into();
-    spark_postgres::create_postgres_tree_store(sp_config)
+    spark_postgres::create_postgres_tree_store_from_pool(pool)
         .await
         .map_err(StorageError::from)
 }
