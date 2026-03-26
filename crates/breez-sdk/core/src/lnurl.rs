@@ -186,7 +186,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let request = RecoverLnurlPayRequest {
             signature,
-            timestamp: Some(timestamp),
+            timestamp,
         };
         let url = format!("{}/lnurlpay/{}/recover", self.base_url(), pubkey);
         let body = serde_json::to_string(&request)
@@ -228,7 +228,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
-            timestamp: Some(timestamp),
+            timestamp,
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
@@ -255,7 +255,7 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         let api_request = UnregisterLnurlPayRequest {
             username: request.username.clone(),
             signature,
-            timestamp: Some(timestamp),
+            timestamp,
         };
 
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);

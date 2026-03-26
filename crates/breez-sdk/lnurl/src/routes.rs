@@ -1219,7 +1219,7 @@ async fn validate<DB>(
     pubkey: &str,
     signature: &str,
     message: &str,
-    timestamp: Option<u64>,
+    timestamp: u64,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
@@ -1238,45 +1238,25 @@ async fn validate<DB>(
         )
     })?;
 
-    // This should be the preferred way to validate going forward. We accept both for backward
-    // compatibility, but log a warning if the timestamp is missing. Remove the old way after a
-    // deprecation period.
-    if let Some(timestamp) = timestamp {
-        let now = now_u64();
-        let diff = timestamp.abs_diff(now);
-        if diff > ACCEPTABLE_TIME_DIFF_SECS {
-            trace!(
-                "invalid timestamp, too far off: {}, now: {}, diff: {}",
-                timestamp, now, diff
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid timestamp".into())),
-            ));
-        }
-
-        state
-            .wallet
-            .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
-            .await
-            .map_err(|e| {
-                trace!("invalid signature with timestamp, could not verify: {}", e);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(Value::String("invalid signature".into())),
-                )
-            })?;
-
-        return Ok(pubkey);
+    let now = now_u64();
+    let diff = timestamp.abs_diff(now);
+    if diff > ACCEPTABLE_TIME_DIFF_SECS {
+        trace!(
+            "invalid timestamp, too far off: {}, now: {}, diff: {}",
+            timestamp, now, diff
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid timestamp".into())),
+        ));
     }
 
-    warn!("Use of endpoint without timestamp is deprecated, pubkey: {pubkey}, message: {message}");
     state
         .wallet
-        .verify_message(message, &signature, &pubkey)
+        .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
         .await
         .map_err(|e| {
-            trace!("invalid signature, could not verify: {}", e);
+            trace!("invalid signature with timestamp, could not verify: {}", e);
             (
                 StatusCode::BAD_REQUEST,
                 Json(Value::String("invalid signature".into())),
