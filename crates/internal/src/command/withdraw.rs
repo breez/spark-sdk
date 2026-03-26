@@ -1,9 +1,11 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, PrivateKey, Psbt, Txid, Witness,
+    self, Address, PrivateKey, Psbt, Txid, Witness,
+    bip32::{DerivationPath, Xpriv},
     consensus::encode::serialize_hex,
     ecdsa::Signature,
+    hashes::{Hash, sha256},
     key::Secp256k1,
     secp256k1::{PublicKey, SecretKey},
     sighash::SighashCache,
@@ -89,6 +91,7 @@ pub async fn handle_command(
     network: Network,
     wallet: &SparkWallet,
     command: WithdrawCommand,
+    seed: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         WithdrawCommand::FetchFeeQuote {
@@ -192,6 +195,18 @@ pub async fn handle_command(
                         }
                     }
 
+                    // Independent derivation path verification for refund TX
+                    if is_refund_tx {
+                        println!();
+                        println!();
+                        verify_refund_derivation_path(
+                            seed,
+                            network,
+                            &leaf_tx_cpfp_psbts.leaf_id,
+                            &tx_cpfp_psbt.parent_tx,
+                        )?;
+                    }
+
                     println!();
                 }
                 println!();
@@ -203,7 +218,82 @@ pub async fn handle_command(
             println!(
                 "The Refund TX can only be broadcast after its timelock expires (blocks after Leaf TX confirms)."
             );
+            println!(
+                "Use the taproot descriptor shown for each refund TX to sweep funds into any Bitcoin wallet."
+            );
         }
+    }
+
+    Ok(())
+}
+
+/// Independently derives keys from the seed and checks which derivation path
+/// matches the refund TX output address. This verifies the derivation path
+/// without relying on DefaultSigner or SparkWallet.
+fn verify_refund_derivation_path(
+    seed: &[u8],
+    network: Network,
+    leaf_id: &TreeNodeId,
+    refund_tx: &bitcoin::Transaction,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let secp = Secp256k1::new();
+    let btc_network: bitcoin::Network = network.into();
+    let master = Xpriv::new_master(btc_network, seed)?;
+
+    let account: u32 = match network {
+        Network::Regtest => 0,
+        _ => 1,
+    };
+    let coin_type: u32 = match network {
+        Network::Mainnet => 0,
+        _ => 1,
+    };
+
+    let refund_script = &refund_tx.output[0].script_pubkey;
+    let refund_script_bytes = refund_script.as_bytes();
+    // P2TR scriptPubkey: OP_1 (0x51) + PUSH32 (0x20) + 32-byte x-only pubkey
+    if refund_script_bytes.len() < 34 || refund_script_bytes[0] != 0x51 {
+        println!("Refund output is not P2TR, skipping verification");
+        return Ok(());
+    }
+
+    // Node signing key child index: sha256(leaf_id)[0..4] % 2^31
+    let hash = sha256::Hash::hash(leaf_id.to_string().as_bytes());
+    let hash_bytes: &[u8] = hash.as_ref();
+    let signing_child_index = u32::from_be_bytes(hash_bytes[..4].try_into().unwrap()) % 0x8000_0000;
+
+    let candidates = [
+        format!("m/8797555'/{account}'/0'"),
+        format!("m/8797555'/{account}'"),
+        format!("m/8797555'/{account}'/1'/{signing_child_index}'"),
+        format!("m/86'/{coin_type}'/{account}'/0/0"),
+    ];
+    let labels = [
+        "identity key",
+        "identity master",
+        "node signing key",
+        "BIP86 taproot",
+    ];
+
+    let mut found_match = false;
+    for (path_str, label) in candidates.iter().zip(labels.iter()) {
+        let path: DerivationPath = path_str.parse()?;
+        let derived = master.derive_priv(&secp, &path)?;
+        let pubkey = derived.private_key.public_key(&secp);
+        let (xonly, _parity) = pubkey.x_only_public_key();
+        let addr = Address::p2tr(&secp, xonly, None, btc_network);
+        if *refund_script == addr.script_pubkey() {
+            let wif = PrivateKey::new(derived.private_key, btc_network);
+            println!("Derivation path: {path_str} ({label})");
+            println!("Refund address:  {addr}");
+            println!("Descriptor:      tr({wif})");
+            found_match = true;
+            break;
+        }
+    }
+
+    if !found_match {
+        println!("WARNING: No candidate derivation path matched the refund output");
     }
 
     Ok(())

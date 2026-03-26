@@ -74,6 +74,7 @@ pub(crate) async fn handle_command(
     mempool_config: &MempoolConfig,
     wallet: &SparkWallet,
     command: Command,
+    seed: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Balance => {
@@ -121,7 +122,7 @@ pub(crate) async fn handle_command(
             println!("Signature verified successfully.");
         }
         Command::Withdraw(withdraw_command) => {
-            withdraw::handle_command(network, wallet, withdraw_command).await?
+            withdraw::handle_command(network, wallet, withdraw_command, seed).await?
         }
         Command::Invoices(invoices_command) => {
             invoices::handle_command(wallet, invoices_command).await?
