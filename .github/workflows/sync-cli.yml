@@ -4,6 +4,8 @@
 # prompt is assembled at runtime from:
 #   sync-prompts/prompt-template.md  +  sync-prompts/langs/<lang>.toml
 #
+# All language changes are consolidated into a single PR (instead of one per language).
+#
 # To add a new language: create a TOML in sync-prompts/langs/ and add a
 # matrix entry below.
 
@@ -32,6 +34,10 @@ on:
         description: 'Run ID of a previous dry-run to approve (set languages to match)'
         required: false
         type: string
+
+concurrency:
+  group: sync-cli
+  cancel-in-progress: true
 
 jobs:
   # ── Build a filtered matrix from the `languages` input ──────────
@@ -79,13 +85,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
 
-    concurrency:
-      group: sync-${{ matrix.lang }}-cli
-      cancel-in-progress: true
-
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       id-token: write
       actions: read
 
@@ -97,13 +98,14 @@ jobs:
           exit 1
 
       - name: Checkout repository
+        if: inputs.approve-run == ''
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
-          fetch-depth: ${{ inputs.approve-run != '' && 1 || 0 }}
+          fetch-depth: 0
 
       # ── Load per-language config from TOML ──────────────────────────
       - name: Load language config
+        if: inputs.approve-run == ''
         id: config
         env:
           LANG: ${{ matrix.lang }}
@@ -129,96 +131,6 @@ jobs:
               )
               f.write(f"allowed_tools={tools_line}\n")
           PYEOF
-
-      # ── Resolve PR reviewer ──────────────────────────────────────────
-      - name: Resolve reviewer
-        id: reviewer
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          REVIEWER=$(gh api "repos/${{ github.repository }}/commits?path=crates/breez-sdk/cli/src/&per_page=1" \
-            --jq '.[0].author.login // empty') || true
-          if [ -n "$REVIEWER" ] && [[ ! "$REVIEWER" =~ \[bot\]$ ]]; then
-            echo "reviewer=$REVIEWER" >> "$GITHUB_OUTPUT"
-            echo "::notice::Will request review from $REVIEWER (last Rust CLI committer)"
-          else
-            echo "reviewer=" >> "$GITHUB_OUTPUT"
-            echo "::notice::No reviewer to assign (last committer is a bot or unknown)"
-          fi
-
-      # ── Approve flow ────────────────────────────────────────────────
-      - name: Download dry-run patch
-        if: inputs.approve-run != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: sync-${{ matrix.lang }}-patch
-          run-id: ${{ inputs.approve-run }}
-          github-token: ${{ github.token }}
-
-      - name: Apply patch and create PR
-        if: inputs.approve-run != ''
-        id: approve-pr
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
-          LANG: ${{ matrix.lang }}
-          LANG_NAME: ${{ steps.config.outputs.lang_name }}
-          TARGET_DIR: ${{ steps.config.outputs.target_dir }}
-          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
-        run: |
-          if [ ! -s "sync-${LANG}.patch" ]; then
-            echo "::notice::Patch is empty — no changes to apply."
-            exit 0
-          fi
-          if ! git apply "sync-${LANG}.patch"; then
-            echo "::error::Patch failed to apply — the target files may have changed since the dry-run. Run a new dry-run instead."
-            exit 1
-          fi
-          # Explicitly set credentials for push (checkout token may have been cleared)
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          BRANCH="claude/sync-${LANG}-cli"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add "$TARGET_DIR"
-          git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
-
-          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes."
-          BODY+=$'\n\n'"**Source commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
-          BODY+=$'\n'"**Approved from:** [dry-run #${{ inputs.approve-run }}](https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }})"
-          if [ -f sync-findings.md ]; then
-            BODY+=$'\n\n'"<details>"
-            BODY+=$'\n'"<summary>Sync findings</summary>"
-            BODY+=$'\n\n'"$(cat sync-findings.md)"
-            BODY+=$'\n\n'"</details>"
-          fi
-
-          REVIEWER_FLAG=""
-          if [ -n "$REVIEWER" ]; then
-            REVIEWER_FLAG="--reviewer $REVIEWER"
-          fi
-
-          # Reuse existing open PR or create a new one
-          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
-          if [ -n "$EXISTING_PR" ]; then
-            git push --force-with-lease -u origin HEAD
-            gh pr edit "$EXISTING_PR" --body "$BODY"
-            echo "::notice::Updated existing PR #${EXISTING_PR}"
-            echo "action=updated" >> "$GITHUB_OUTPUT"
-          else
-            git push -u origin HEAD
-            gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
-              --body "$BODY" \
-              --label "CLI" \
-              $REVIEWER_FLAG \
-              --base main
-            echo "action=created" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Cleanup branch on approve failure
-        if: failure() && inputs.approve-run != '' && steps.approve-pr.outputs.action == 'created'
-        run: |
-          git push origin --delete "claude/sync-${{ matrix.lang }}-cli" 2>/dev/null || true
 
       # ── Normal / dry-run flow ───────────────────────────────────────
       - name: Compute diff info
@@ -332,81 +244,9 @@ jobs:
             ${{ steps.config.outputs.allowed_tools }}
           prompt: ${{ steps.gen-prompt.outputs.content }}
 
-      # ── Post-Claude: create branch & PR ──────────────────────────────
-      - name: Check for changes
-        if: inputs.approve-run == '' && !inputs.dry-run
-        id: changes
-        env:
-          TARGET_DIR: ${{ steps.config.outputs.target_dir }}
-        run: |
-          git add -N "$TARGET_DIR"
-          if git diff --quiet HEAD -- "$TARGET_DIR"; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create branch and PR
-        if: inputs.approve-run == '' && !inputs.dry-run && steps.changes.outputs.changed == 'true'
-        id: sync-pr
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
-          LANG: ${{ matrix.lang }}
-          LANG_NAME: ${{ steps.config.outputs.lang_name }}
-          TARGET_DIR: ${{ steps.config.outputs.target_dir }}
-          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
-        run: |
-          # Re-set credentials — claude-code-action may have reset the ones
-          # configured by actions/checkout during its own git operations.
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          BRANCH="claude/sync-${LANG}-cli"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add "$TARGET_DIR"
-          git commit -m "chore: sync ${LANG_NAME} CLI with Rust CLI changes (${{ github.sha }})"
-
-          BODY="Automated sync of ${LANG_NAME} CLI from Rust CLI changes."
-          BODY+=$'\n\n'"**Source commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
-          BODY+=$'\n'"**Claude log:** [View artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-          if [ -f sync-findings.md ]; then
-            BODY+=$'\n\n'"<details>"
-            BODY+=$'\n'"<summary>Sync findings</summary>"
-            BODY+=$'\n\n'"$(cat sync-findings.md)"
-            BODY+=$'\n\n'"</details>"
-          fi
-
-          REVIEWER_FLAG=""
-          if [ -n "$REVIEWER" ]; then
-            REVIEWER_FLAG="--reviewer $REVIEWER"
-          fi
-
-          # Reuse existing open PR or create a new one
-          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
-          if [ -n "$EXISTING_PR" ]; then
-            git push --force-with-lease -u origin HEAD
-            gh pr edit "$EXISTING_PR" --body "$BODY"
-            echo "::notice::Updated existing PR #${EXISTING_PR}"
-            echo "action=updated" >> "$GITHUB_OUTPUT"
-          else
-            git push -u origin HEAD
-            gh pr create --title "chore: sync ${LANG_NAME} CLI with Rust CLI changes" \
-              --body "$BODY" \
-              --label "CLI" \
-              $REVIEWER_FLAG \
-              --base main
-            echo "action=created" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Cleanup branch on PR failure
-        if: failure() && inputs.approve-run == '' && !inputs.dry-run && steps.sync-pr.outputs.action == 'created'
-        run: |
-          git push origin --delete "claude/sync-${{ matrix.lang }}-cli" 2>/dev/null || true
-
-      # ── Dry-run artifacts ───────────────────────────────────────────
-      - name: Create dry-run patch
-        if: inputs.approve-run == '' && inputs.dry-run
+      # ── Create patch artifact (always, not just dry-run) ────────────
+      - name: Create patch
+        if: inputs.approve-run == ''
         env:
           TARGET_DIR: ${{ steps.config.outputs.target_dir }}
           LANG: ${{ matrix.lang }}
@@ -414,8 +254,8 @@ jobs:
           git add -N "$TARGET_DIR"
           git diff HEAD -- "$TARGET_DIR" > "sync-${LANG}.patch"
 
-      - name: Upload dry-run artifacts
-        if: inputs.approve-run == '' && inputs.dry-run
+      - name: Upload patch artifacts
+        if: inputs.approve-run == ''
         uses: actions/upload-artifact@v4
         with:
           name: sync-${{ matrix.lang }}-patch
@@ -435,18 +275,12 @@ jobs:
 
       # ── Summary ─────────────────────────────────────────────────────
       - name: Summary
-        if: always()
+        if: always() && inputs.approve-run == ''
         env:
           LANG: ${{ matrix.lang }}
           LANG_NAME: ${{ steps.config.outputs.lang_name }}
         run: |
-          if [ "${{ inputs.approve-run }}" != "" ]; then
-            if [ -s "sync-${LANG}.patch" ]; then
-              echo "::notice::PR created from approved dry-run ${{ inputs.approve-run }}"
-            else
-              echo "::notice::Patch from dry-run ${{ inputs.approve-run }} was empty — no changes needed."
-            fi
-          elif [ "${{ inputs.dry-run }}" = "true" ]; then
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "### Dry run — ${LANG_NAME} CLI sync" >> "$GITHUB_STEP_SUMMARY"
             if [ -f sync-findings.md ]; then
               echo "#### Findings" >> "$GITHUB_STEP_SUMMARY"
@@ -459,7 +293,7 @@ jobs:
               cat "sync-${LANG}.patch" >> "$GITHUB_STEP_SUMMARY"
               echo '```' >> "$GITHUB_STEP_SUMMARY"
               echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "To approve, re-run with \`approve-run\` = \`${{ github.run_id }}\` and \`languages\` = \`${LANG}\`." >> "$GITHUB_STEP_SUMMARY"
+              echo "To approve, re-run with \`approve-run\` = \`${{ github.run_id }}\`." >> "$GITHUB_STEP_SUMMARY"
             elif [ -f sync-findings.md ]; then
               echo "::warning::Changes were made but cancelled before patch capture." >> "$GITHUB_STEP_SUMMARY"
             else
@@ -467,5 +301,281 @@ jobs:
             fi
             echo "::notice::Dry run completed — no PR created. See job summary for diff."
           else
-            echo "::notice::Claude Code sync completed — check for new PR"
+            echo "::notice::Claude Code sync completed for ${LANG_NAME}"
+          fi
+
+  # ── Consolidate all patches into a single PR ───────────────────────
+  create-pr:
+    name: Create PR
+    needs: [setup, sync]
+    if: ${{ !inputs.dry-run && !cancelled() }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.SYNC_CLI_PR_TOKEN || github.token }}
+          fetch-depth: 1
+
+      # ── Resolve PR reviewer ──────────────────────────────────────────
+      - name: Resolve reviewer
+        id: reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REVIEWER=$(gh api "repos/${{ github.repository }}/commits?path=crates/breez-sdk/cli/src/&per_page=1" \
+            --jq '.[0].author.login // empty') || true
+          if [ -n "$REVIEWER" ] && [[ ! "$REVIEWER" =~ \[bot\]$ ]]; then
+            echo "reviewer=$REVIEWER" >> "$GITHUB_OUTPUT"
+            echo "::notice::Will request review from $REVIEWER (last Rust CLI committer)"
+          else
+            echo "reviewer=" >> "$GITHUB_OUTPUT"
+            echo "::notice::No reviewer to assign (last committer is a bot or unknown)"
+          fi
+
+      # ── Determine which languages were requested ────────────────────
+      - name: Determine languages
+        id: langs
+        env:
+          REQUESTED: ${{ inputs.languages }}
+        run: |
+          ALL='["csharp","flutter","golang","kotlin-multiplatform","python","react-native","swift","wasm"]'
+          if [ -z "$REQUESTED" ]; then
+            echo "list=$ALL" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=$REQUESTED" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Download patches ────────────────────────────────────────────
+      - name: Download all patch artifacts
+        id: download
+        env:
+          LANGS: ${{ steps.langs.outputs.list }}
+          APPROVE_RUN: ${{ inputs.approve-run }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p patches
+          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+            ARTIFACT_NAME="sync-${LANG}-patch"
+            RUN_ID="${APPROVE_RUN:-${{ github.run_id }}}"
+            echo "Downloading artifact ${ARTIFACT_NAME} from run ${RUN_ID}..."
+            if gh run download "$RUN_ID" --name "$ARTIFACT_NAME" --dir "patches/${LANG}" 2>/dev/null; then
+              echo "::notice::Downloaded patch for ${LANG}"
+            else
+              echo "::warning::No patch artifact found for ${LANG} (sync job may have failed or been skipped)"
+              mkdir -p "patches/${LANG}"
+              touch "patches/${LANG}/sync-${LANG}.patch"
+            fi
+          done
+
+      # ── Apply patches and track results ─────────────────────────────
+      - name: Apply patches
+        id: apply
+        env:
+          LANGS: ${{ steps.langs.outputs.list }}
+        run: |
+          UPDATED=""
+          NO_CHANGES=""
+          FAILED=""
+
+          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+            PATCH="patches/${LANG}/sync-${LANG}.patch"
+            if [ ! -f "$PATCH" ] || [ ! -s "$PATCH" ]; then
+              echo "::notice::${LANG}: no changes"
+              NO_CHANGES="${NO_CHANGES}${LANG},"
+              continue
+            fi
+            if git apply "$PATCH" 2>/dev/null; then
+              echo "::notice::${LANG}: patch applied successfully"
+              UPDATED="${UPDATED}${LANG},"
+            else
+              echo "::warning::${LANG}: patch failed to apply — target files may have changed"
+              FAILED="${FAILED}${LANG},"
+            fi
+          done
+
+          # Trim trailing commas
+          UPDATED="${UPDATED%,}"
+          NO_CHANGES="${NO_CHANGES%,}"
+          FAILED="${FAILED%,}"
+
+          echo "updated=$UPDATED" >> "$GITHUB_OUTPUT"
+          echo "no_changes=$NO_CHANGES" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$UPDATED" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No language patches to apply — skipping PR creation."
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Create consolidated PR ──────────────────────────────────────
+      - name: Create branch and PR
+        if: steps.apply.outputs.has_changes == 'true'
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
+          UPDATED: ${{ steps.apply.outputs.updated }}
+          NO_CHANGES: ${{ steps.apply.outputs.no_changes }}
+          FAILED: ${{ steps.apply.outputs.failed }}
+          REVIEWER: ${{ steps.reviewer.outputs.reviewer }}
+          APPROVE_RUN: ${{ inputs.approve-run }}
+          LANGS: ${{ steps.langs.outputs.list }}
+        run: |
+          # Set up git identity
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="claude/sync-cli"
+          git checkout -B "$BRANCH"
+
+          # Stage all updated language directories
+          IFS=',' read -ra UPDATED_LANGS <<< "$UPDATED"
+          for LANG in "${UPDATED_LANGS[@]}"; do
+            # Load the target_dir for this language from its TOML config
+            TARGET_DIR=$(python3 -c "
+          import sys
+          sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
+          from generate import load_lang_config
+          print(load_lang_config('${LANG}').get('target_dir', ''))
+          ")
+            if [ -n "$TARGET_DIR" ]; then
+              git add "$TARGET_DIR"
+            fi
+          done
+
+          # Build commit message
+          UPDATED_COUNT=$(echo "$UPDATED" | tr ',' '\n' | wc -l | tr -d ' ')
+          COMMIT_MSG="chore: sync ${UPDATED_COUNT} CLI language(s) with Rust CLI changes (${{ github.sha }})"
+          git commit -m "$COMMIT_MSG"
+
+          # ── Build PR body ──────────────────────────────────────────
+          BODY="Automated sync of language CLIs from Rust CLI changes."
+          BODY+=$'\n\n'"**Source commit:** [\`${GITHUB_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
+          BODY+=$'\n'"**Workflow run:** [View logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+          if [ -n "$APPROVE_RUN" ]; then
+            BODY+=$'\n'"**Approved from:** [dry-run #${APPROVE_RUN}](https://github.com/${{ github.repository }}/actions/runs/${APPROVE_RUN})"
+          fi
+
+          # Language status list
+          BODY+=$'\n\n'"**Language status:**"
+          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+            LANG_NAME=$(python3 -c "
+          import sys
+          sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
+          from generate import load_lang_config
+          print(load_lang_config('${LANG}').get('lang_name', '${LANG}'))
+          ")
+            if echo ",$UPDATED," | grep -q ",${LANG},"; then
+              BODY+=$'\n'"- :white_check_mark: ${LANG_NAME}"
+            elif echo ",$FAILED," | grep -q ",${LANG},"; then
+              BODY+=$'\n'"- :x: ${LANG_NAME} (patch failed to apply)"
+            elif echo ",$NO_CHANGES," | grep -q ",${LANG},"; then
+              BODY+=$'\n'"- :next_track_button: ${LANG_NAME} (no changes needed)"
+            else
+              BODY+=$'\n'"- :grey_question: ${LANG_NAME} (sync job did not produce a patch)"
+            fi
+          done
+
+          # Aggregate sync findings from all languages
+          HAS_FINDINGS=false
+          FINDINGS=""
+          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+            FINDINGS_FILE="patches/${LANG}/sync-findings.md"
+            if [ -f "$FINDINGS_FILE" ] && [ -s "$FINDINGS_FILE" ]; then
+              LANG_NAME=$(python3 -c "
+          import sys
+          sys.path.insert(0, 'crates/breez-sdk/bindings/examples/cli/sync-prompts')
+          from generate import load_lang_config
+          print(load_lang_config('${LANG}').get('lang_name', '${LANG}'))
+          ")
+              FINDINGS+=$'\n'"### ${LANG_NAME}"$'\n'
+              FINDINGS+="$(cat "$FINDINGS_FILE")"$'\n'
+              HAS_FINDINGS=true
+            fi
+          done
+
+          if [ "$HAS_FINDINGS" = true ]; then
+            BODY+=$'\n\n'"<details>"
+            BODY+=$'\n'"<summary>Sync findings</summary>"
+            BODY+=$'\n'"${FINDINGS}"
+            BODY+=$'\n'"</details>"
+          fi
+
+          # Warn about failures
+          if [ -n "$FAILED" ]; then
+            BODY+=$'\n\n'"> [!WARNING]"
+            BODY+=$'\n'"> Some patches failed to apply. The target files may have changed since the sync ran."
+            BODY+=$'\n'"> Failed languages: ${FAILED}"
+            BODY+=$'\n'"> Consider re-running the sync for these languages."
+          fi
+
+          REVIEWER_FLAG=""
+          if [ -n "$REVIEWER" ]; then
+            REVIEWER_FLAG="--reviewer $REVIEWER"
+          fi
+
+          # Reuse existing open PR or create a new one
+          EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING_PR" ]; then
+            git push --force-with-lease -u origin HEAD
+            gh pr edit "$EXISTING_PR" --body "$BODY"
+            echo "::notice::Updated existing PR #${EXISTING_PR}"
+            echo "action=updated" >> "$GITHUB_OUTPUT"
+          else
+            git push -u origin HEAD
+            gh pr create --title "chore: sync CLI languages with Rust CLI changes" \
+              --body "$BODY" \
+              --label "CLI" \
+              $REVIEWER_FLAG \
+              --base main
+            echo "action=created" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cleanup branch on failure
+        if: failure() && steps.create-pr.outputs.action == 'created'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
+        run: |
+          git push origin --delete "claude/sync-cli" 2>/dev/null || true
+
+      # ── Job summary ─────────────────────────────────────────────────
+      - name: Summary
+        if: always()
+        env:
+          UPDATED: ${{ steps.apply.outputs.updated }}
+          NO_CHANGES: ${{ steps.apply.outputs.no_changes }}
+          FAILED: ${{ steps.apply.outputs.failed }}
+          LANGS: ${{ steps.langs.outputs.list }}
+        run: |
+          echo "## CLI Sync Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Language | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for LANG in $(echo "$LANGS" | jq -r '.[]'); do
+            if echo ",$UPDATED," | grep -q ",${LANG},"; then
+              STATUS="Updated"
+            elif echo ",$FAILED," | grep -q ",${LANG},"; then
+              STATUS="Failed"
+            elif echo ",$NO_CHANGES," | grep -q ",${LANG},"; then
+              STATUS="No changes"
+            else
+              STATUS="No patch"
+            fi
+            echo "| ${LANG} | ${STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [ -n "${{ inputs.approve-run }}" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Approved from dry-run [${{ inputs.approve-run }}](https://github.com/${{ github.repository }}/actions/runs/${{ inputs.approve-run }})" >> "$GITHUB_STEP_SUMMARY"
           fi
