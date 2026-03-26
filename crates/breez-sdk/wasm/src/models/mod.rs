@@ -1332,9 +1332,14 @@ pub struct SparkStatus {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinRequest)]
-pub struct BuyBitcoinRequest {
-    pub locked_amount_sat: Option<u64>,
-    pub redirect_url: Option<String>,
+pub enum BuyBitcoinRequest {
+    Moonpay {
+        locked_amount_sat: Option<u64>,
+        redirect_url: Option<String>,
+    },
+    CashApp {
+        amount_sats: Option<u64>,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::BuyBitcoinResponse)]
