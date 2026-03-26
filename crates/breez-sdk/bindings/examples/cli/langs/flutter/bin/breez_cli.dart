@@ -94,6 +94,7 @@ Future<void> main(List<String> arguments) async {
       label: label,
       listLabels: listLabels,
       storeLabel: storeLabel,
+      rpid: results.option('rpid'),
     );
   }
 

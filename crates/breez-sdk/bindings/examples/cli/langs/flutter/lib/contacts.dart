@@ -1,4 +1,7 @@
+import 'package:args/args.dart';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+
+import 'serialization.dart';
 
 /// Contacts subcommand names (used for tab completion).
 const contactsCommandNames = ['contacts add', 'contacts update', 'contacts delete', 'contacts list'];
@@ -27,7 +30,7 @@ Future<void> dispatchContactsCommand(List<String> args, BreezSdk sdk) async {
   final registry = _getRegistry();
 
   if (args.isEmpty || args[0] == 'help' || args[0] == '--help') {
-    print('\nContacts subcommands (not yet supported in Flutter):\n');
+    print('\nContacts subcommands:\n');
     for (final entry in registry.entries.toList()..sort((a, b) => a.key.compareTo(b.key))) {
       print('  contacts ${entry.key.padRight(30)} ${entry.value.description}');
     }
@@ -49,23 +52,63 @@ Future<void> dispatchContactsCommand(List<String> args, BreezSdk sdk) async {
 // --- add ---
 
 Future<void> _handleAdd(BreezSdk sdk, List<String> args) async {
-  print('Not yet supported');
+  if (args.length < 2 || args.first == 'help' || args.first == '--help') {
+    print('Usage: contacts add <name> <payment_identifier>');
+    return;
+  }
+  final name = args[0];
+  final paymentIdentifier = args[1];
+  final result = await sdk.addContact(
+    request: AddContactRequest(name: name, paymentIdentifier: paymentIdentifier),
+  );
+  printValue(result);
 }
 
 // --- update ---
 
 Future<void> _handleUpdate(BreezSdk sdk, List<String> args) async {
-  print('Not yet supported');
+  if (args.length < 3 || args.first == 'help' || args.first == '--help') {
+    print('Usage: contacts update <id> <name> <payment_identifier>');
+    return;
+  }
+  final id = args[0];
+  final name = args[1];
+  final paymentIdentifier = args[2];
+  final result = await sdk.updateContact(
+    request: UpdateContactRequest(id: id, name: name, paymentIdentifier: paymentIdentifier),
+  );
+  printValue(result);
 }
 
 // --- delete ---
 
 Future<void> _handleDelete(BreezSdk sdk, List<String> args) async {
-  print('Not yet supported');
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: contacts delete <id>');
+    return;
+  }
+  final id = args[0];
+  await sdk.deleteContact(id: id);
+  print('Contact deleted successfully');
 }
 
 // --- list ---
 
 Future<void> _handleList(BreezSdk sdk, List<String> args) async {
-  print('Not yet supported');
+  final parser =
+      ArgParser()
+        ..addOption('offset')
+        ..addOption('limit');
+  if (args.contains('help') || args.contains('--help')) {
+    print('Usage: contacts list [options]');
+    print(parser.usage);
+    return;
+  }
+  final results = parser.parse(args);
+  final offsetStr = results.option('offset');
+  final limitStr = results.option('limit');
+  final offset = offsetStr != null ? int.parse(offsetStr) : null;
+  final limit = limitStr != null ? int.parse(limitStr) : null;
+  final result = await sdk.listContacts(request: ListContactsRequest(offset: offset, limit: limit));
+  printValue(result);
 }

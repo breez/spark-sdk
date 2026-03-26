@@ -26,6 +26,7 @@ from breez_sdk_spark import (
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
+from breez_cli.webhooks import WEBHOOKS_COMMAND_NAMES, dispatch_webhooks_command
 from breez_cli.passkey import create_provider, resolve_passkey_seed
 from breez_cli.persistence import CliPersistence
 from breez_cli.serialization import serialize
@@ -136,7 +137,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -178,6 +179,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
                 await dispatch_contacts_command(cmd_args, sdk)
             elif cmd_name == "issuer":
                 await dispatch_issuer_command(cmd_args, token_issuer)
+            elif cmd_name == "webhooks":
+                await dispatch_webhooks_command(cmd_args, sdk)
             elif cmd_name in registry:
                 parser, handler = registry[cmd_name]
                 try:
@@ -214,6 +217,7 @@ def print_help(registry):
         print(f"  {name:40s} {desc}")
     print(f"\n  {'contacts <subcommand>':40s} Contacts commands (use 'contacts help' for details)")
     print(f"  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
+    print(f"  {'webhooks <subcommand>':40s} Webhook commands (use 'webhooks help' for details)")
     print(f"  {'exit / quit':40s} Exit the CLI")
     print(f"  {'help':40s} Show this help message")
     print()

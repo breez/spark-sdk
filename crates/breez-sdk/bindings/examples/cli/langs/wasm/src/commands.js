@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const { printValue } = require('./serialization')
 const { registerIssuerCommands } = require('./issuer')
 const { registerContactsCommands } = require('./contacts')
+const { registerWebhooksCommands } = require('./webhooks')
 
 // ---------------------------------------------------------------------------
 // Command names for tab completion
@@ -51,7 +52,10 @@ const COMMAND_NAMES = [
   'contacts add',
   'contacts update',
   'contacts delete',
-  'contacts list'
+  'contacts list',
+  'webhooks register',
+  'webhooks unregister',
+  'webhooks list'
 ]
 
 /**
@@ -209,6 +213,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('-e, --expiry-secs <seconds>', 'Optional expiry time in seconds from now', parseInt)
     .option('-s, --sender-public-key <key>', 'Optional sender public key (spark invoice only)')
     .option('--hodl', 'Create a HODL invoice (bolt11 only)', false)
+    .option('--new-address', 'Request a new bitcoin deposit address instead of reusing the current one', false)
     .action(async (options) => {
       const sdk = getSdk()
       let paymentMethod
@@ -237,7 +242,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
           break
         }
         case 'bitcoin': {
-          paymentMethod = { type: 'bitcoinAddress' }
+          paymentMethod = { type: 'bitcoinAddress', newAddress: options.newAddress || undefined }
           break
         }
         case 'bolt11': {
@@ -582,15 +587,20 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
   // --- buy-bitcoin ---
   program
     .command('buy-bitcoin')
-    .description('Buy Bitcoin using an external provider (MoonPay)')
-    .option('--locked-amount-sat <amount>', 'Lock the purchase to a specific amount in sats', parseInt)
-    .option('--redirect-url <url>', 'Custom redirect URL after purchase completion')
+    .description('Buy Bitcoin using an external provider')
+    .option('--provider <provider>', 'Provider to use: "moonpay" (default) or "cashapp"', 'moonpay')
+    .option('--amount-sat <amount>', 'Amount in satoshis (meaning depends on provider)', parseInt)
+    .option('--redirect-url <url>', 'Custom redirect URL after purchase completion (MoonPay only)')
     .action(async (options) => {
       const sdk = getSdk()
-      const value = await sdk.buyBitcoin({
-        lockedAmountSat: options.lockedAmountSat,
-        redirectUrl: options.redirectUrl
-      })
+      const provider = (options.provider || 'moonpay').toLowerCase()
+      let request
+      if (provider === 'cashapp' || provider === 'cash_app' || provider === 'cash-app') {
+        request = { type: 'cashApp', amountSats: options.amountSat }
+      } else {
+        request = { type: 'moonpay', lockedAmountSat: options.amountSat, redirectUrl: options.redirectUrl }
+      }
+      const value = await sdk.buyBitcoin(request)
       console.log('Open this URL in a browser to complete the purchase:')
       console.log(value.url)
     })
@@ -748,6 +758,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
   // --- contacts subcommands ---
   registerContactsCommands(program, getSdk)
+
+  // --- webhooks subcommands ---
+  registerWebhooksCommands(program, getSdk)
 
   return program
 }

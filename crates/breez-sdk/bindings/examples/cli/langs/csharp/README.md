@@ -87,6 +87,8 @@ Once inside the REPL, type `help` for all commands:
 
 **Contacts**: `contacts <subcommand>`
 
+**Webhooks**: `webhooks <subcommand>`
+
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 ## Build

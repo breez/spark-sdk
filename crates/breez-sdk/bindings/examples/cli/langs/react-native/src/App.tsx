@@ -96,8 +96,12 @@ class CliEventListener {
       eventDesc = 'ClaimedDeposits'
     } else if (event.tag === SdkEvent_Tags.UnclaimedDeposits) {
       eventDesc = 'UnclaimedDeposits'
+    } else if (event.tag === SdkEvent_Tags.NewDeposits) {
+      eventDesc = 'NewDeposits'
     } else if (event.tag === SdkEvent_Tags.Optimization) {
       eventDesc = 'Optimization'
+    } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
+      eventDesc = 'LightningAddressChanged'
     }
     this.appendLog(`[Event] ${eventDesc}: ${formatValue(event)}`)
   }

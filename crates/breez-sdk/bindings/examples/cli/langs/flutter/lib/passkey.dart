@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 import 'package:crypto/crypto.dart';
 
+import 'cli.dart';
+
 const _secretFileName = 'seedless-restore-secret';
 
 /// File-based implementation of passkey PRF provider.
@@ -57,17 +59,20 @@ class PasskeyConfig {
   final String? label;
   final bool listLabels;
   final bool storeLabel;
+  final String? rpid;
 
-  PasskeyConfig({required this.provider, this.label, this.listLabels = false, this.storeLabel = false});
+  PasskeyConfig({
+    required this.provider,
+    this.label,
+    this.listLabels = false,
+    this.storeLabel = false,
+    this.rpid,
+  });
 }
 
 /// Resolve the seed using a passkey PRF provider.
 ///
 /// Mirrors the Rust CLI's `resolve_passkey_seed` function.
-///
-/// Note: Passkey/Nostr label operations are not yet available in the
-/// Flutter SDK. This implementation derives a seed from the file-based PRF
-/// provider using the Entropy seed variant.
 Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? breezApiKey) async {
   if (config.provider != 'file') {
     throw Exception(
@@ -78,17 +83,45 @@ Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? br
 
   final filePrf = FilePrfProvider.create(dataDir);
 
-  // Passkey and NostrRelayConfig are not yet available in the Flutter SDK.
-  // For now, derive a seed directly from the PRF provider.
+  final relayConfig = NostrRelayConfig(breezApiKey: breezApiKey);
+  final passkey = Passkey(
+    derivePrfSeed: filePrf.derivePrfSeed,
+    isPrfAvailable: filePrf.isPrfAvailable,
+    relayConfig: relayConfig,
+  );
+
+  // --store-label: publish the label to Nostr
   if (config.storeLabel && config.label != null) {
-    print('Note: Label publishing to Nostr is not yet supported in Flutter');
+    print("Publishing label '${config.label}' to Nostr...");
+    await passkey.storeLabel(label: config.label!);
+    print("Label '${config.label}' published successfully.");
   }
 
+  // --list-labels: query Nostr and prompt user to select
+  String? label;
   if (config.listLabels) {
-    print('Note: Label listing from Nostr is not yet supported in Flutter');
+    print('Querying Nostr for available labels...');
+    final labels = await passkey.listLabels();
+
+    if (labels.isEmpty) {
+      throw Exception('No labels found on Nostr for this identity');
+    }
+
+    print('Available labels:');
+    for (var i = 0; i < labels.length; i++) {
+      print('  ${i + 1}: ${labels[i]}');
+    }
+
+    final input = prompt('Select label (1-${labels.length}): ');
+    final idx = int.parse(input);
+    if (idx < 1 || idx > labels.length) {
+      throw Exception('Selection out of range');
+    }
+    label = labels[idx - 1];
+  } else {
+    label = config.label;
   }
 
-  final label = config.label ?? 'Default';
-  final seedBytes = await filePrf.derivePrfSeed(label);
-  return Seed.entropy(seedBytes);
+  final wallet = await passkey.getWallet(label: label);
+  return wallet.seed;
 }
