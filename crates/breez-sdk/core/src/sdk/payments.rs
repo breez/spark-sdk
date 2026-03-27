@@ -519,10 +519,10 @@ impl BreezSdk {
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Suppress auto-convert while this send-with-conversion is in flight
-        let _payment_guard = self
-            .stable_balance
-            .as_ref()
-            .map(|sb| sb.acquire_payment_guard());
+        let _payment_guard = match &self.stable_balance {
+            Some(sb) => Some(sb.acquire_payment_guard().await),
+            None => None,
+        };
 
         // FeesIncluded not supported with token conversion (validated earlier)
         if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {

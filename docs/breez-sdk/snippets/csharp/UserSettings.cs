@@ -30,6 +30,7 @@ namespace BreezSdkSnippets
             // ANCHOR: activate-stable-balance
             await sdk.UpdateUserSettings(
                 request: new UpdateUserSettingsRequest(
+                    sparkPrivateModeEnabled: null,
                     stableBalanceActiveLabel: new StableBalanceActiveLabel.Set(label: "USDB")
                 )
             );
@@ -41,6 +42,7 @@ namespace BreezSdkSnippets
             // ANCHOR: deactivate-stable-balance
             await sdk.UpdateUserSettings(
                 request: new UpdateUserSettingsRequest(
+                    sparkPrivateModeEnabled: null,
                     stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset()
                 )
             );

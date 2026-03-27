@@ -137,7 +137,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
-use tokio::sync::{Notify, RwLock, watch};
+use tokio::sync::{Mutex, Notify, RwLock, watch};
 use tracing::{debug, info, warn};
 
 use self::queue::ConversionQueue;
@@ -232,6 +232,11 @@ pub(crate) struct StableBalance {
     /// Number of in-flight send-with-conversion payments.
     /// Auto-convert is suppressed while this is > 0.
     pub(super) payment_counter: Arc<AtomicUsize>,
+
+    /// Lock that serializes "check counter + read balance" (auto-convert) with
+    /// "increment counter" (payment start), preventing the balance read from
+    /// seeing funds that an in-flight payment is about to spend.
+    pub(super) payment_lock: Arc<Mutex<()>>,
 }
 
 impl StableBalance {
@@ -273,6 +278,7 @@ impl StableBalance {
             synced_notify,
             sync_coordinator,
             payment_counter: Arc::new(AtomicUsize::new(0)),
+            payment_lock: Arc::new(Mutex::new(())),
         };
 
         // Register as event middleware
@@ -309,7 +315,10 @@ impl StableBalance {
     /// Call this before starting a send-with-conversion payment. The guard
     /// increments the payment counter; when dropped, it decrements the counter
     /// and wakes the conversion worker.
-    pub(crate) fn acquire_payment_guard(&self) -> PaymentGuard {
+    pub(crate) async fn acquire_payment_guard(&self) -> PaymentGuard {
+        // Hold the lock while incrementing so auto-convert's
+        // "check counter + read balance" window can't interleave.
+        let _lock = self.payment_lock.lock().await;
         self.payment_counter.fetch_add(1, Ordering::Relaxed);
         PaymentGuard {
             counter: self.payment_counter.clone(),

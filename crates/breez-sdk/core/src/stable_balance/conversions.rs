@@ -140,23 +140,29 @@ impl StableBalance {
     /// - Stable balance is inactive
     /// - Balance is below the trigger amount
     pub(super) async fn auto_convert(&self) -> Result<bool, ConversionError> {
-        // Skip if a send-with-conversion is in flight
-        if self.payment_counter.load(Ordering::Relaxed) > 0 {
-            debug!("Auto-conversion skipped: payments in flight");
-            return Ok(false);
-        }
-
         // Get the active token, skip if stable balance is inactive
         let Some(active_token_identifier) = self.get_active_token_identifier().await else {
             debug!("Auto-conversion skipped: stable balance is inactive");
             return Ok(false);
         };
 
+        // Lock to atomically check "no payments in flight" + read balance.
+        // This prevents a payment from starting between the check and the read,
+        // which could inflate the balance with in-flight conversion funds.
+        // The lock is released after reading — the captured balance is a clean snapshot.
+        let balance_sats = {
+            let _lock = self.payment_lock.lock().await;
+            if self.payment_counter.load(Ordering::Relaxed) > 0 {
+                debug!("Auto-conversion skipped: payments in flight");
+                return Ok(false);
+            }
+            self.spark_wallet.get_balance().await?
+        };
+
         // Check if balance exceeds the threshold
         let (threshold, _) = self
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
-        let balance_sats = self.spark_wallet.get_balance().await?;
         if balance_sats < threshold {
             debug!("Auto-conversion skipped: balance {balance_sats} < threshold {threshold}");
             return Ok(false);
