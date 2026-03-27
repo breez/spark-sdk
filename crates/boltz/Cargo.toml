@@ -24,9 +24,12 @@ macros.workspace = true
 alloy-sol-types = { version = "1.5", default-features = false }
 alloy-primitives = { version = "1.5", default-features = false, features = ["k256"] }
 
-# ECDSA signing — used directly instead of alloy-signer-local to avoid
-# wasm-bindgen/getrandom dependency. RFC 6979 deterministic signing needs
-# no randomness source, so this is fully WASM-compatible.
+# EVM signing — battle-tested EIP-712, EIP-191, and raw ECDSA signing.
+# Uses k256 RFC 6979 deterministic signing internally (no randomness needed for signing).
+# The `rand` transitive dep (used only for key generation, which we don't use) requires
+# `getrandom` with `js` feature on WASM — see WASM dependencies below.
+alloy-signer = { version = "1.5", default-features = false, features = ["eip712"] }
+alloy-signer-local = { version = "1.5", default-features = false, features = ["eip712"] }
 k256.workspace = true
 
 # Crypto
@@ -41,6 +44,7 @@ tokio-tungstenite-wasm = { version = "0.8", features = ["rustls-tls-webpki-roots
 
 # Async
 futures-util = "0.3"
+async-trait.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
@@ -49,6 +53,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 tokio = { workspace = true, features = ["macros", "sync"] }
+# Required by alloy-signer-local's transitive `rand` dep (used only for key generation,
+# which we don't call). On WASM, getrandom needs the `js` feature to use crypto.getRandomValues().
+getrandom = { version = "0.2", features = ["js"] }
 
 # WASM dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
