@@ -1356,8 +1356,10 @@ dependencies = [
  "alloy-signer",
  "alloy-signer-local",
  "alloy-sol-types",
+ "anyhow",
  "async-trait",
  "bip32",
+ "bip39",
  "futures-util",
  "getrandom 0.2.16",
  "hex",
@@ -1372,7 +1374,21 @@ dependencies = [
  "tokio",
  "tokio-tungstenite-wasm",
  "tracing",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "boltz-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip39",
+ "boltz",
+ "clap",
+ "hex",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
