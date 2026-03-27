@@ -418,7 +418,7 @@ struct CallsStatusReceipt {
     status: Option<String>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use super::*;
     use crate::keys::EvmKeyManager;
@@ -478,7 +478,7 @@ mod tests {
         }
     }
 
-    fn alchemy_rpc_success(result: serde_json::Value) -> HttpResponse {
+    fn alchemy_rpc_success(result: &serde_json::Value) -> HttpResponse {
         HttpResponse {
             status: 200,
             body: serde_json::json!({
@@ -552,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_sign_subsequent_response() {
         let config = AlchemyConfig {
             api_key: "test".to_string(),
@@ -579,6 +580,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_sign_first_time_response() {
         let config = AlchemyConfig {
             api_key: "test".to_string(),
@@ -635,7 +637,7 @@ mod tests {
         // Mock responses: prepareCalls -> sendPreparedCalls -> getCallsStatus (confirmed)
         let responses = vec![
             // 1. wallet_prepareCalls -> subsequent-style response
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "type": "user-operation-v070",
                 "data": {
                     "hash": format!("0x{}", hex::encode([1u8; 32]))
@@ -643,11 +645,11 @@ mod tests {
                 "chainId": "0xa4b1"
             })),
             // 2. wallet_sendPreparedCalls
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "preparedCallIds": ["call_123"]
             })),
             // 3. wallet_getCallsStatus (confirmed)
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "status": 1,
                 "receipts": [{
                     "transactionHash": "0xabc123",
@@ -689,17 +691,17 @@ mod tests {
         let signer = test_signer();
 
         let responses = vec![
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "type": "user-operation-v070",
                 "data": {
                     "hash": format!("0x{}", hex::encode([1u8; 32]))
                 },
                 "chainId": "0xa4b1"
             })),
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "preparedCallIds": ["call_456"]
             })),
-            alchemy_rpc_success(serde_json::json!({
+            alchemy_rpc_success(&serde_json::json!({
                 "status": 1,
                 "receipts": [{
                     "transactionHash": "0xfailed",

@@ -29,6 +29,12 @@ pub enum BoltzError {
     #[error("Quote expired")]
     QuoteExpired,
 
+    #[error("Amount out of range: {amount} sats (min: {min}, max: {max})")]
+    AmountOutOfRange { amount: u64, min: u64, max: u64 },
+
+    #[error("Invalid quote: {0}")]
+    InvalidQuote(String),
+
     #[error("{0}")]
     Generic(String),
 }

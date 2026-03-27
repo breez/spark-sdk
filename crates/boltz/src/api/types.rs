@@ -96,7 +96,8 @@ pub struct SwapStatusResponse {
 #[serde(rename_all = "camelCase")]
 pub struct SwapTransactionResponse {
     pub id: String,
-    pub hex: String,
+    #[serde(default)]
+    pub hex: Option<String>,
     #[serde(default)]
     pub timeout_block_height: Option<u64>,
     #[serde(default)]
@@ -104,10 +105,12 @@ pub struct SwapTransactionResponse {
 }
 
 /// Transaction info included in status updates.
+/// EVM transactions only have `id` (tx hash). UTXO transactions also have `hex`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapTransaction {
     pub id: String,
-    pub hex: String,
+    #[serde(default)]
+    pub hex: Option<String>,
 }
 
 // ─── DEX Quotes ───────────────────────────────────────────────────────────

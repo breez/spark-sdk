@@ -274,6 +274,7 @@ mod tests {
     // ─── Basic signing tests ─────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_sign_raw_digest_deterministic() {
         let signer = test_signer();
         let digest = alloy_primitives::keccak256(b"test message");
@@ -338,6 +339,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_sign_eip712_erc20swap_claim_deterministic() {
         let signer = test_signer();
 

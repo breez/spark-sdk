@@ -159,7 +159,7 @@ fn parse_hex_u64(s: &str) -> Result<u64, BoltzError> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use super::*;
     use platform_utils::http::{HttpError, HttpResponse};
@@ -211,7 +211,7 @@ mod tests {
         }
     }
 
-    fn rpc_success(result: serde_json::Value) -> HttpResponse {
+    fn rpc_success(result: &serde_json::Value) -> HttpResponse {
         HttpResponse {
             status: 200,
             body: serde_json::json!({
@@ -237,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_eth_chain_id() {
-        let client = MockHttpClient::new(vec![rpc_success(serde_json::json!("0xa4b1"))]);
+        let client = MockHttpClient::new(vec![rpc_success(&serde_json::json!("0xa4b1"))]);
         let provider = EvmProvider::new("http://localhost:8545".to_string(), Box::new(client));
 
         let chain_id = provider.eth_chain_id().await.unwrap();
@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_eth_block_number() {
-        let client = MockHttpClient::new(vec![rpc_success(serde_json::json!("0x1234"))]);
+        let client = MockHttpClient::new(vec![rpc_success(&serde_json::json!("0x1234"))]);
         let provider = EvmProvider::new("http://localhost:8545".to_string(), Box::new(client));
 
         let block = provider.eth_block_number().await.unwrap();
@@ -257,7 +257,7 @@ mod tests {
     async fn test_eth_call() {
         // Return ABI-encoded uint256(6) — 32 bytes, value 6
         let hex_result = format!("0x{}", "00".repeat(31) + "06");
-        let client = MockHttpClient::new(vec![rpc_success(serde_json::json!(hex_result))]);
+        let client = MockHttpClient::new(vec![rpc_success(&serde_json::json!(hex_result))]);
         let provider = EvmProvider::new("http://localhost:8545".to_string(), Box::new(client));
 
         let data = hex::decode("54fd4d50").unwrap(); // version() selector
@@ -279,7 +279,7 @@ mod tests {
             "blockNumber": "0x100",
             "gasUsed": "0x5208"
         });
-        let client = MockHttpClient::new(vec![rpc_success(receipt_json)]);
+        let client = MockHttpClient::new(vec![rpc_success(&receipt_json)]);
         let provider = EvmProvider::new("http://localhost:8545".to_string(), Box::new(client));
 
         let receipt = provider
@@ -293,7 +293,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_eth_get_transaction_receipt_not_found() {
-        let client = MockHttpClient::new(vec![rpc_success(serde_json::json!(null))]);
+        let client = MockHttpClient::new(vec![rpc_success(&serde_json::json!(null))]);
         let provider = EvmProvider::new("http://localhost:8545".to_string(), Box::new(client));
 
         let receipt = provider
