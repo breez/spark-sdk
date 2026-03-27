@@ -35,7 +35,7 @@ You can activate, switch, or deactivate stable balance at runtime using the [use
 
 ### Activating stable balance
 
-To activate stable balance, set the active label to one of the labels defined in your `#{{name StableBalanceConfig.tokens}}` list:
+To activate stable balance, set the active label to one of the labels defined in your #{{name StableBalanceConfig.tokens}} list:
 
 {{#tabs user_settings:activate-stable-balance}}
 
@@ -51,11 +51,11 @@ When deactivated, the SDK automatically converts any remaining token balance bac
 
 ### Checking the current mode
 
-You can check which token is currently active using `{{#name get_user_settings}}`:
+You can check which token is currently active using {{#name get_user_settings}}:
 
 {{#tabs user_settings:get-user-settings}}
 
-The `{{#name stable_balance_active_label}}` field will be unset if stable balance is deactivated, or the label of the currently active token.
+The {{#name stable_balance_active_label}} field will be unset if stable balance is deactivated, or the label of the currently active token.
 
 ## Sending payments with stable balance
 
@@ -71,6 +71,44 @@ When you [prepare to send a payment](./send_payment.md#preparing-payments) witho
 You can still explicitly specify `conversion options` in your request if you need custom slippage settings or want to override the automatic behavior.
 
 </div>
+
+## Conversion details
+
+Payments involving token conversions include a {{#name conversion_details}} field that describes the conversion that took place. This is useful for displaying conversion context in your UI.
+
+### Status
+
+The {{#name status}} field tracks the lifecycle of the conversion:
+
+| Status | Description |
+|--------|-------------|
+| {{#enum ConversionStatus::Pending}} | Conversion is queued or in progress |
+| {{#enum ConversionStatus::Completed}} | Conversion finished successfully |
+| {{#enum ConversionStatus::Failed}} | Conversion could not be completed |
+| {{#enum ConversionStatus::RefundNeeded}} | Conversion failed and requires a refund |
+| {{#enum ConversionStatus::Refunded}} | Failed conversion has been refunded |
+
+### Conversion steps
+
+The {{#name from}} and {{#name to}} fields are conversion step objects describing each side of the conversion:
+
+| Field | Description |
+|-------|-------------|
+| {{#name payment_id}} | The ID of the internal conversion payment |
+| {{#name amount}} | The amount in the step's denomination (sats or token units) |
+| {{#name fee}} | Fee charged for this step |
+| {{#name method}} | Payment method ({{#enum PaymentMethod::Spark}} for Bitcoin, {{#enum PaymentMethod::Token}} for stable tokens) |
+| {{#name token_metadata}} | Token metadata (name, symbol, etc.) — present when method is {{#enum PaymentMethod::Token}} |
+| {{#name amount_adjustment}} | Present if the amount was modified before conversion (see [amount adjustments](#amount-adjustments)) |
+
+### Amount adjustments
+
+The {{#name amount_adjustment}} field is present when the conversion amount was modified before execution:
+
+| Reason | Description |
+|--------|-------------|
+| {{#enum AmountAdjustmentReason::FlooredToMinLimit}} | Amount was increased to meet the minimum conversion limit |
+| {{#enum AmountAdjustmentReason::IncreasedToAvoidDust}} | Amount was increased to convert the entire remaining balance, avoiding a leftover too small to convert back |
 
 ## Related pages
 
