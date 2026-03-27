@@ -380,19 +380,8 @@ pub fn signature_to_hex(sig: &EvmSignature) -> String {
     )
 }
 
-/// Platform-aware sleep.
 async fn sleep_ms(ms: u64) {
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-    }
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    {
-        // On WASM, use a simple JS timeout via gloo_timers or similar.
-        // For now, yield back to the event loop.
-        let _ = ms;
-        futures_util::future::ready(()).await;
-    }
+    platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_millis(ms)).await;
 }
 
 // ─── Serde Types ─────────────────────────────────────────────────────────

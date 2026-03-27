@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::U256;
 
 use crate::api::BoltzApiClient;
-use crate::api::types::{EncodeRequest, ReversePairInfo};
+use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
 use crate::api::ws::{SwapStatusSubscriber, SwapStatusUpdate};
 use crate::config::{
     ARBITRUM_ERC20SWAP_ADDRESS, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
@@ -265,18 +265,13 @@ impl ReverseSwapExecutor {
                 u128::from(usdt_amount),
             )
             .await?;
-        let quote = quotes.first().ok_or_else(|| BoltzError::Api {
-            reason: "No DEX quote returned".to_string(),
-            code: None,
-        })?;
-        let amount: u128 = quote.quote.parse().map_err(|_| BoltzError::Api {
-            reason: format!("Invalid quote amount: {}", quote.quote),
-            code: None,
-        })?;
-        if amount == 0 {
+        // "out" direction: pick lowest amount (least input needed for desired output),
+        // matching web app's sortDexQuotes("out") which sorts ascending.
+        let quote = pick_best_quote(&quotes, QuoteDirection::Out)?;
+        if quote == 0 {
             return Err(BoltzError::InvalidQuote("DEX quote returned zero tBTC".to_string()));
         }
-        Ok(amount)
+        Ok(quote)
     }
 
     async fn wait_for_lockup(
@@ -308,6 +303,8 @@ impl ReverseSwapExecutor {
                 "transaction.mempool" => {
                     if let Some(tx) = &update.transaction {
                         swap.lockup_tx_id = Some(tx.id.clone());
+                        swap.updated_at = current_unix_timestamp();
+                        self.store.update_swap(swap).await?;
                     }
                     tracing::info!(swap_id = swap.boltz_id, "tBTC lockup in mempool");
                 }
@@ -502,27 +499,21 @@ impl ReverseSwapExecutor {
             .api_client
             .get_quote_in("ARB", ARBITRUM_TBTC_ADDRESS, ARBITRUM_USDT_ADDRESS, amount_in)
             .await?;
-        let quote = quotes.first().ok_or_else(|| BoltzError::Api {
-            reason: "No DEX quote returned".to_string(),
-            code: None,
-        })?;
-
-        let amount_out: u128 = quote.quote.parse().map_err(|_| BoltzError::Api {
-            reason: format!("Invalid quote amount: {}", quote.quote),
-            code: None,
-        })?;
-        if amount_out == 0 {
+        // "in" direction: pick highest output (best return for our input),
+        // matching web app's sortDexQuotes("in") which sorts descending.
+        let best = pick_best_quote_with_data(&quotes, QuoteDirection::In)?;
+        if best.amount == 0 {
             return Err(BoltzError::InvalidQuote("DEX quote returned zero USDT".to_string()));
         }
         let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
-        let min_amount_out_u128 = amount_out * slippage_factor / 10000;
+        let min_amount_out_u128 = best.amount * slippage_factor / 10000;
         let min_amount_out = U256::from(min_amount_out_u128);
 
         let encode_req = EncodeRequest {
             recipient: router_address.to_string(),
             amount_in,
             amount_out_min: min_amount_out_u128,
-            data: quote.data.clone(),
+            data: best.data.clone(),
         };
         let encode_resp = self.api_client.encode_quote("ARB", &encode_req).await?;
 
@@ -633,14 +624,66 @@ fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 async fn sleep_1s() {
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_secs(1)).await;
 }
 
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-async fn sleep_1s() {
-    futures_util::future::pending::<()>().await;
+// ─── DEX quote selection ─────────────────────────────────────────────────
+// Matches the web app's `sortDexQuotes` logic:
+// - "in" direction (quoting by input):  pick highest output (best return)
+// - "out" direction (quoting by output): pick lowest input  (cheapest route)
+
+#[derive(Clone, Copy)]
+enum QuoteDirection {
+    In,
+    Out,
+}
+
+struct ParsedQuote {
+    amount: u128,
+    data: serde_json::Value,
+}
+
+fn pick_best_quote(quotes: &[QuoteResponse], direction: QuoteDirection) -> Result<u128, BoltzError> {
+    Ok(pick_best_quote_with_data(quotes, direction)?.amount)
+}
+
+fn pick_best_quote_with_data(
+    quotes: &[QuoteResponse],
+    direction: QuoteDirection,
+) -> Result<ParsedQuote, BoltzError> {
+    if quotes.is_empty() {
+        return Err(BoltzError::Api {
+            reason: "No DEX quote returned".to_string(),
+            code: None,
+        });
+    }
+
+    let mut best: Option<ParsedQuote> = None;
+    for q in quotes {
+        let amount: u128 = q.quote.parse().map_err(|_| BoltzError::Api {
+            reason: format!("Invalid quote amount: {}", q.quote),
+            code: None,
+        })?;
+        let is_better = match best {
+            None => true,
+            Some(ref b) => match direction {
+                QuoteDirection::In => amount > b.amount,
+                QuoteDirection::Out => amount < b.amount,
+            },
+        };
+        if is_better {
+            best = Some(ParsedQuote {
+                amount,
+                data: q.data.clone(),
+            });
+        }
+    }
+
+    best.ok_or_else(|| BoltzError::Api {
+        reason: "No DEX quote returned".to_string(),
+        code: None,
+    })
 }
 
 #[cfg(test)]
@@ -687,5 +730,60 @@ mod tests {
         assert!(result.invoice_sats > 100_341);
         assert!(result.boltz_fee_sats > 0);
         assert!(result.onchain_sats > 0);
+    }
+
+    fn make_quote(amount: &str) -> QuoteResponse {
+        QuoteResponse {
+            quote: amount.to_string(),
+            data: serde_json::json!({"type": "test"}),
+        }
+    }
+
+    #[test]
+    fn test_pick_best_quote_in_direction() {
+        // "in" direction: highest output wins
+        let quotes = vec![
+            make_quote("100"),
+            make_quote("300"),
+            make_quote("200"),
+        ];
+        let best = pick_best_quote(&quotes, QuoteDirection::In).unwrap();
+        assert_eq!(best, 300);
+    }
+
+    #[test]
+    fn test_pick_best_quote_out_direction() {
+        // "out" direction: lowest input wins
+        let quotes = vec![
+            make_quote("300"),
+            make_quote("100"),
+            make_quote("200"),
+        ];
+        let best = pick_best_quote(&quotes, QuoteDirection::Out).unwrap();
+        assert_eq!(best, 100);
+    }
+
+    #[test]
+    fn test_pick_best_quote_single() {
+        let quotes = vec![make_quote("42")];
+        assert_eq!(pick_best_quote(&quotes, QuoteDirection::In).unwrap(), 42);
+        assert_eq!(pick_best_quote(&quotes, QuoteDirection::Out).unwrap(), 42);
+    }
+
+    #[test]
+    fn test_pick_best_quote_empty() {
+        let quotes: Vec<QuoteResponse> = vec![];
+        assert!(pick_best_quote(&quotes, QuoteDirection::In).is_err());
+    }
+
+    #[test]
+    fn test_pick_best_quote_preserves_data() {
+        let quotes = vec![
+            QuoteResponse { quote: "100".to_string(), data: serde_json::json!({"route": "A"}) },
+            QuoteResponse { quote: "200".to_string(), data: serde_json::json!({"route": "B"}) },
+        ];
+        let best = pick_best_quote_with_data(&quotes, QuoteDirection::In).unwrap();
+        assert_eq!(best.amount, 200);
+        assert_eq!(best.data, serde_json::json!({"route": "B"}));
     }
 }
