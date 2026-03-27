@@ -128,8 +128,12 @@ impl ReverseSwapExecutor {
         let key_index = self.store.increment_key_index(self.config.chain_id).await?;
 
         let gas_signer = self.key_manager.derive_gas_signer(chain_id_u32)?;
-        let preimage_hash = self.key_manager.derive_preimage_hash(chain_id_u32, key_index)?;
-        let preimage_key = self.key_manager.derive_preimage_key(chain_id_u32, key_index)?;
+        let preimage_hash = self
+            .key_manager
+            .derive_preimage_hash(chain_id_u32, key_index)?;
+        let preimage_key = self
+            .key_manager
+            .derive_preimage_key(chain_id_u32, key_index)?;
 
         let create_req = crate::api::types::CreateReverseSwapRequest {
             from: "BTC".to_string(),
@@ -269,7 +273,9 @@ impl ReverseSwapExecutor {
         // matching web app's sortDexQuotes("out") which sorts ascending.
         let quote = pick_best_quote(&quotes, QuoteDirection::Out)?;
         if quote == 0 {
-            return Err(BoltzError::InvalidQuote("DEX quote returned zero tBTC".to_string()));
+            return Err(BoltzError::InvalidQuote(
+                "DEX quote returned zero tBTC".to_string(),
+            ));
         }
         Ok(quote)
     }
@@ -353,10 +359,13 @@ impl ReverseSwapExecutor {
             .derive_preimage(chain_id_u32, swap.claim_key_index)?;
         let gas_key_pair = self.key_manager.derive_gas_signer(chain_id_u32)?;
         let gas_signer = EvmSigner::new(&gas_key_pair, swap.chain_id);
-        let erc20swap_version = self.fetch_erc20swap_version(&swap.erc20swap_address).await?;
+        let erc20swap_version = self
+            .fetch_erc20swap_version(&swap.erc20swap_address)
+            .await?;
 
         let addrs = ClaimAddresses::parse(swap)?;
-        let tbtc_evm_amount = U256::from(swap.onchain_amount).saturating_mul(U256::from(SATS_TO_TBTC_FACTOR));
+        let tbtc_evm_amount =
+            U256::from(swap.onchain_amount).saturating_mul(U256::from(SATS_TO_TBTC_FACTOR));
         let timelock = U256::from(swap.timeout_block_height);
 
         for attempt in 0..MAX_CLAIM_RETRIES {
@@ -474,13 +483,20 @@ impl ReverseSwapExecutor {
             .send_sponsored_calls(vec![evm_call], swap.chain_id)
             .await?;
 
-        tracing::info!(tx_hash = result.tx_hash, swap_id = swap.boltz_id, "Claim confirmed");
+        tracing::info!(
+            tx_hash = result.tx_hash,
+            swap_id = swap.boltz_id,
+            "Claim confirmed"
+        );
         Ok(result.tx_hash)
     }
 
     async fn fetch_erc20swap_version(&self, erc20swap_address: &str) -> Result<String, BoltzError> {
         let calldata = contracts::encode_version_call();
-        let result = self.evm_provider.eth_call(erc20swap_address, &calldata).await?;
+        let result = self
+            .evm_provider
+            .eth_call(erc20swap_address, &calldata)
+            .await?;
         let version = contracts::decode_version_return(&result)?;
         Ok(version.to_string())
     }
@@ -497,13 +513,20 @@ impl ReverseSwapExecutor {
 
         let quotes = self
             .api_client
-            .get_quote_in("ARB", ARBITRUM_TBTC_ADDRESS, ARBITRUM_USDT_ADDRESS, amount_in)
+            .get_quote_in(
+                "ARB",
+                ARBITRUM_TBTC_ADDRESS,
+                ARBITRUM_USDT_ADDRESS,
+                amount_in,
+            )
             .await?;
         // "in" direction: pick highest output (best return for our input),
         // matching web app's sortDexQuotes("in") which sorts descending.
         let best = pick_best_quote_with_data(&quotes, QuoteDirection::In)?;
         if best.amount == 0 {
-            return Err(BoltzError::InvalidQuote("DEX quote returned zero USDT".to_string()));
+            return Err(BoltzError::InvalidQuote(
+                "DEX quote returned zero USDT".to_string(),
+            ));
         }
         let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
         let min_amount_out_u128 = best.amount * slippage_factor / 10000;
@@ -560,12 +583,20 @@ struct FeeCalc {
 }
 
 /// Compute the total sats needed from tBTC EVM units and Boltz pair info.
-#[expect(clippy::arithmetic_side_effects, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn compute_invoice_amount(pair: &ReversePairInfo, tbtc_evm_units: u128) -> Result<FeeCalc, BoltzError> {
+#[expect(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn compute_invoice_amount(
+    pair: &ReversePairInfo,
+    tbtc_evm_units: u128,
+) -> Result<FeeCalc, BoltzError> {
     let sats_factor = u128::from(SATS_TO_TBTC_FACTOR);
     let tbtc_sats = tbtc_evm_units / sats_factor;
 
-    let miner_fees = u128::from(pair.fees.miner_fees.claim) + u128::from(pair.fees.miner_fees.lockup);
+    let miner_fees =
+        u128::from(pair.fees.miner_fees.claim) + u128::from(pair.fees.miner_fees.lockup);
     let base = tbtc_sats + miner_fees;
 
     // percentage is e.g. 0.25 for 0.25%. Convert to basis points (25).
@@ -644,7 +675,10 @@ struct ParsedQuote {
     data: serde_json::Value,
 }
 
-fn pick_best_quote(quotes: &[QuoteResponse], direction: QuoteDirection) -> Result<u128, BoltzError> {
+fn pick_best_quote(
+    quotes: &[QuoteResponse],
+    direction: QuoteDirection,
+) -> Result<u128, BoltzError> {
     Ok(pick_best_quote_with_data(quotes, direction)?.amount)
 }
 
@@ -742,11 +776,7 @@ mod tests {
     #[test]
     fn test_pick_best_quote_in_direction() {
         // "in" direction: highest output wins
-        let quotes = vec![
-            make_quote("100"),
-            make_quote("300"),
-            make_quote("200"),
-        ];
+        let quotes = vec![make_quote("100"), make_quote("300"), make_quote("200")];
         let best = pick_best_quote(&quotes, QuoteDirection::In).unwrap();
         assert_eq!(best, 300);
     }
@@ -754,11 +784,7 @@ mod tests {
     #[test]
     fn test_pick_best_quote_out_direction() {
         // "out" direction: lowest input wins
-        let quotes = vec![
-            make_quote("300"),
-            make_quote("100"),
-            make_quote("200"),
-        ];
+        let quotes = vec![make_quote("300"), make_quote("100"), make_quote("200")];
         let best = pick_best_quote(&quotes, QuoteDirection::Out).unwrap();
         assert_eq!(best, 100);
     }
@@ -779,8 +805,14 @@ mod tests {
     #[test]
     fn test_pick_best_quote_preserves_data() {
         let quotes = vec![
-            QuoteResponse { quote: "100".to_string(), data: serde_json::json!({"route": "A"}) },
-            QuoteResponse { quote: "200".to_string(), data: serde_json::json!({"route": "B"}) },
+            QuoteResponse {
+                quote: "100".to_string(),
+                data: serde_json::json!({"route": "A"}),
+            },
+            QuoteResponse {
+                quote: "200".to_string(),
+                data: serde_json::json!({"route": "B"}),
+            },
         ];
         let best = pick_best_quote_with_data(&quotes, QuoteDirection::In).unwrap();
         assert_eq!(best.amount, 200);

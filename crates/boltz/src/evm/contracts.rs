@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, FixedBytes, U256};
-use alloy_sol_types::{sol, SolCall, SolValue};
+use alloy_sol_types::{SolCall, SolValue, sol};
 
 use crate::api::types::QuoteCalldata;
 use crate::error::BoltzError;
@@ -162,11 +162,10 @@ pub fn encode_version_call() -> Vec<u8> {
 
 /// Decode `version()` return value.
 pub fn decode_version_return(data: &[u8]) -> Result<u64, BoltzError> {
-    let decoded = <(u64,)>::abi_decode(data)
-        .map_err(|e| BoltzError::Evm {
-            reason: format!("Failed to decode version return: {e}"),
-            tx_hash: None,
-        })?;
+    let decoded = <(u64,)>::abi_decode(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode version return: {e}"),
+        tx_hash: None,
+    })?;
     Ok(decoded.0)
 }
 
@@ -177,11 +176,10 @@ pub fn encode_balance_of(account: Address) -> Vec<u8> {
 
 /// Decode `balanceOf` return value.
 pub fn decode_balance_of(data: &[u8]) -> Result<U256, BoltzError> {
-    let decoded = <(U256,)>::abi_decode(data)
-        .map_err(|e| BoltzError::Evm {
-            reason: format!("Failed to decode balanceOf return: {e}"),
-            tx_hash: None,
-        })?;
+    let decoded = <(U256,)>::abi_decode(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode balanceOf return: {e}"),
+        tx_hash: None,
+    })?;
     Ok(decoded.0)
 }
 
@@ -212,11 +210,10 @@ pub fn encode_typehash_send_data_call() -> Vec<u8> {
 
 /// Decode `TYPEHASH_SEND_DATA()` return value.
 pub fn decode_typehash_send_data(data: &[u8]) -> Result<[u8; 32], BoltzError> {
-    let decoded = <(FixedBytes<32>,)>::abi_decode(data)
-        .map_err(|e| BoltzError::Evm {
-            reason: format!("Failed to decode TYPEHASH_SEND_DATA return: {e}"),
-            tx_hash: None,
-        })?;
+    let decoded = <(FixedBytes<32>,)>::abi_decode(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode TYPEHASH_SEND_DATA return: {e}"),
+        tx_hash: None,
+    })?;
     Ok(decoded.0.into())
 }
 
@@ -268,16 +265,14 @@ mod tests {
     #[test]
     fn test_parse_address() {
         let addr = parse_address("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
-        let expected_bytes =
-            hex::decode("aB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
+        let expected_bytes = hex::decode("aB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
         assert_eq!(addr.as_slice(), &expected_bytes);
     }
 
     #[test]
     fn test_parse_address_no_prefix() {
         let addr = parse_address("aB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
-        let expected_bytes =
-            hex::decode("aB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
+        let expected_bytes = hex::decode("aB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
         assert_eq!(addr.as_slice(), &expected_bytes);
     }
 
@@ -374,10 +369,8 @@ mod tests {
         let claim = Erc20Claim {
             preimage: [1u8; 32].into(),
             amount: U256::from(100_000_000_000_000u64),
-            tokenAddress: parse_address("0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40")
-                .unwrap(),
-            refundAddress: parse_address("0x0000000000000000000000000000000000000002")
-                .unwrap(),
+            tokenAddress: parse_address("0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40").unwrap(),
+            refundAddress: parse_address("0x0000000000000000000000000000000000000002").unwrap(),
             timelock: U256::from(12345u64),
             v: 27,
             r: [2u8; 32].into(),
@@ -392,8 +385,7 @@ mod tests {
 
         let token = parse_address("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9").unwrap();
         let min_amount_out = U256::from(71_000_000u64);
-        let destination =
-            parse_address("0x0000000000000000000000000000000000000004").unwrap();
+        let destination = parse_address("0x0000000000000000000000000000000000000004").unwrap();
 
         let encoded = encode_claim_erc20_execute(
             &claim,

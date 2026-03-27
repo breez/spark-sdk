@@ -22,7 +22,8 @@ fn next_key_index() -> u32 {
         let offset = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() % 1_000_000) as u32
+            .as_secs()
+            % 1_000_000) as u32
             * 100;
         COUNTER.store(offset + 1, Ordering::Relaxed);
         return offset;
@@ -57,10 +58,14 @@ async fn test_api_get_contracts() {
 
     let contracts = client.get_contracts().await.unwrap();
 
-    let has_evm_chain = contracts.0.values().any(|c| {
-        !c.swap_contracts.ether_swap.is_empty()
-    });
-    assert!(has_evm_chain, "Should have at least one EVM chain with EtherSwap");
+    let has_evm_chain = contracts
+        .0
+        .values()
+        .any(|c| !c.swap_contracts.ether_swap.is_empty());
+    assert!(
+        has_evm_chain,
+        "Should have at least one EVM chain with EtherSwap"
+    );
 }
 
 fn create_swap_request(
@@ -98,11 +103,20 @@ async fn test_api_create_reverse_swap() {
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
     let rbtc_pair = &pairs.0["BTC"]["RBTC"];
 
-    let req = create_swap_request(&config, &km, next_key_index(), &rbtc_pair.hash, rbtc_pair.limits.minimal);
+    let req = create_swap_request(
+        &config,
+        &km,
+        next_key_index(),
+        &rbtc_pair.hash,
+        rbtc_pair.limits.minimal,
+    );
     let resp = client.create_reverse_swap(&req).await.unwrap();
 
     assert!(!resp.id.is_empty());
-    assert!(resp.invoice.starts_with("lnbcrt"), "Expected regtest invoice prefix");
+    assert!(
+        resp.invoice.starts_with("lnbcrt"),
+        "Expected regtest invoice prefix"
+    );
     assert!(!resp.lockup_address.is_empty());
     assert!(resp.onchain_amount > 0);
     assert!(resp.timeout_block_height > 0);
@@ -117,7 +131,13 @@ async fn test_api_get_swap_status() {
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
     let rbtc_pair = &pairs.0["BTC"]["RBTC"];
 
-    let req = create_swap_request(&config, &km, next_key_index(), &rbtc_pair.hash, rbtc_pair.limits.minimal);
+    let req = create_swap_request(
+        &config,
+        &km,
+        next_key_index(),
+        &rbtc_pair.hash,
+        rbtc_pair.limits.minimal,
+    );
     let swap = client.create_reverse_swap(&req).await.unwrap();
 
     let status = client.get_swap_status(&swap.id).await.unwrap();
@@ -136,11 +156,19 @@ async fn test_ws_receives_status_updates() {
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
     let rbtc_pair = &pairs.0["BTC"]["RBTC"];
 
-    let req = create_swap_request(&config, &km, next_key_index(), &rbtc_pair.hash, rbtc_pair.limits.minimal);
+    let req = create_swap_request(
+        &config,
+        &km,
+        next_key_index(),
+        &rbtc_pair.hash,
+        rbtc_pair.limits.minimal,
+    );
     let swap = client.create_reverse_swap(&req).await.unwrap();
 
     // Connect WS and subscribe — should receive initial status
-    let ws = SwapStatusSubscriber::connect(&config.ws_url()).await.unwrap();
+    let ws = SwapStatusSubscriber::connect(&config.ws_url())
+        .await
+        .unwrap();
     let mut rx = ws.subscribe(&swap.id).await.unwrap();
 
     // The subscription response sends the current status (swap.created)
@@ -166,11 +194,19 @@ async fn test_full_swap_lifecycle() {
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
     let rbtc_pair = &pairs.0["BTC"]["RBTC"];
 
-    let req = create_swap_request(&config, &km, next_key_index(), &rbtc_pair.hash, rbtc_pair.limits.minimal);
+    let req = create_swap_request(
+        &config,
+        &km,
+        next_key_index(),
+        &rbtc_pair.hash,
+        rbtc_pair.limits.minimal,
+    );
     let swap = client.create_reverse_swap(&req).await.unwrap();
 
     // Subscribe WS
-    let ws = SwapStatusSubscriber::connect(&config.ws_url()).await.unwrap();
+    let ws = SwapStatusSubscriber::connect(&config.ws_url())
+        .await
+        .unwrap();
     let mut rx = ws.subscribe(&swap.id).await.unwrap();
 
     // Pay invoice in background (fire-and-forget — hold invoice blocks until claim)
@@ -205,7 +241,10 @@ async fn test_full_swap_lifecycle() {
         }
     }
 
-    assert!(saw_confirmed, "Expected transaction.confirmed. Statuses: {statuses:?}");
+    assert!(
+        saw_confirmed,
+        "Expected transaction.confirmed. Statuses: {statuses:?}"
+    );
 
     // Verify via REST API too
     let api_status = client.get_swap_status(&swap.id).await.unwrap();

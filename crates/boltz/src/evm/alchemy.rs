@@ -104,10 +104,7 @@ impl AlchemyGasClient {
     }
 
     /// Step 2: Sign the prepared calls and send via `wallet_sendPreparedCalls`.
-    async fn sign_and_send(
-        &self,
-        prepared: serde_json::Value,
-    ) -> Result<String, BoltzError> {
+    async fn sign_and_send(&self, prepared: serde_json::Value) -> Result<String, BoltzError> {
         let signed = self.sign_prepared_response(&prepared)?;
 
         let result: SendPreparedCallsResponse = self
@@ -133,12 +130,10 @@ impl AlchemyGasClient {
         &self,
         prepared: &serde_json::Value,
     ) -> Result<serde_json::Value, BoltzError> {
-        let resp_type = prepared["type"]
-            .as_str()
-            .ok_or_else(|| BoltzError::Evm {
-                reason: "prepareCalls response missing 'type' field".to_string(),
-                tx_hash: None,
-            })?;
+        let resp_type = prepared["type"].as_str().ok_or_else(|| BoltzError::Evm {
+            reason: "prepareCalls response missing 'type' field".to_string(),
+            tx_hash: None,
+        })?;
 
         match resp_type {
             "array" => self.sign_first_time_response(prepared),
@@ -157,16 +152,17 @@ impl AlchemyGasClient {
         &self,
         prepared: &serde_json::Value,
     ) -> Result<serde_json::Value, BoltzError> {
-        let data = prepared["data"]
-            .as_array()
-            .ok_or_else(|| BoltzError::Evm {
-                reason: "First-time response 'data' is not an array".to_string(),
-                tx_hash: None,
-            })?;
+        let data = prepared["data"].as_array().ok_or_else(|| BoltzError::Evm {
+            reason: "First-time response 'data' is not an array".to_string(),
+            tx_hash: None,
+        })?;
 
         if data.len() < 2 {
             return Err(BoltzError::Evm {
-                reason: format!("Expected 2 entries in first-time response, got {}", data.len()),
+                reason: format!(
+                    "Expected 2 entries in first-time response, got {}",
+                    data.len()
+                ),
                 tx_hash: None,
             });
         }
@@ -211,10 +207,7 @@ impl AlchemyGasClient {
     async fn poll_status(&self, call_id: &str) -> Result<AlchemyResult, BoltzError> {
         for attempt in 0..MAX_POLL_ATTEMPTS {
             let status: CallsStatusResponse = self
-                .rpc_call(
-                    "wallet_getCallsStatus",
-                    serde_json::json!([call_id]),
-                )
+                .rpc_call("wallet_getCallsStatus", serde_json::json!([call_id]))
                 .await?;
 
             if let Some(receipts) = &status.receipts
@@ -230,12 +223,13 @@ impl AlchemyGasClient {
                     });
                 }
 
-                let tx_hash = receipt.transaction_hash.clone().ok_or_else(|| {
-                    BoltzError::Evm {
+                let tx_hash = receipt
+                    .transaction_hash
+                    .clone()
+                    .ok_or_else(|| BoltzError::Evm {
                         reason: "Receipt missing transactionHash".to_string(),
                         tx_hash: None,
-                    }
-                })?;
+                    })?;
 
                 return Ok(AlchemyResult { tx_hash });
             }
@@ -294,7 +288,10 @@ impl AlchemyGasClient {
             })?;
 
         if let Some(err) = rpc_response.get("error") {
-            let code = err.get("code").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             let message = err
                 .get("message")
                 .and_then(|m| m.as_str())
@@ -565,7 +562,12 @@ mod tests {
 
         let signed = client.sign_prepared_response(&prepared).unwrap();
         assert!(signed["signature"]["type"].as_str() == Some("secp256k1"));
-        assert!(signed["signature"]["data"].as_str().unwrap().starts_with("0x"));
+        assert!(
+            signed["signature"]["data"]
+                .as_str()
+                .unwrap()
+                .starts_with("0x")
+        );
     }
 
     #[test]

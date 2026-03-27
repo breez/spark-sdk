@@ -64,10 +64,7 @@ impl EvmProvider {
         tx_hash: &str,
     ) -> Result<Option<TxReceipt>, BoltzError> {
         let result: Option<TxReceipt> = self
-            .rpc_request(
-                "eth_getTransactionReceipt",
-                serde_json::json!([tx_hash]),
-            )
+            .rpc_request("eth_getTransactionReceipt", serde_json::json!([tx_hash]))
             .await?;
         Ok(result)
     }
@@ -123,12 +120,18 @@ impl EvmProvider {
 
         let rpc_response: serde_json::Value =
             serde_json::from_str(&response.body).map_err(|e| BoltzError::Evm {
-                reason: format!("Failed to parse JSON-RPC response: {e} (body: {})", response.body),
+                reason: format!(
+                    "Failed to parse JSON-RPC response: {e} (body: {})",
+                    response.body
+                ),
                 tx_hash: None,
             })?;
 
         if let Some(err) = rpc_response.get("error") {
-            let code = err.get("code").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let code = err
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             let message = err
                 .get("message")
                 .and_then(|m| m.as_str())

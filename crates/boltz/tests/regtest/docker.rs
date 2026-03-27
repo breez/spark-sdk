@@ -9,9 +9,7 @@ use anyhow::{Context, Result, bail};
 /// Execute a command inside the `boltz-scripts` container.
 /// Equivalent to the web app's `execCommand()`.
 pub fn exec_boltz_scripts(cmd: &str) -> Result<String> {
-    let full_cmd = format!(
-        "source /etc/profile.d/utils.sh && {cmd}"
-    );
+    let full_cmd = format!("source /etc/profile.d/utils.sh && {cmd}");
     let output = Command::new("docker")
         .args(["exec", "boltz-scripts", "bash", "-c", &full_cmd])
         .output()
@@ -71,9 +69,7 @@ pub fn pay_invoice_lnd(invoice: &str) -> Result<String> {
 /// For reverse swaps, `payinvoice` blocks until the hold invoice settles,
 /// so we must run it detached.
 pub fn pay_invoice_lnd_background(invoice: &str) -> Result<()> {
-    let full_cmd = format!(
-        "source /etc/profile.d/utils.sh && lncli-sim 1 payinvoice -f {invoice}"
-    );
+    let full_cmd = format!("source /etc/profile.d/utils.sh && lncli-sim 1 payinvoice -f {invoice}");
     let output = Command::new("docker")
         .args(["exec", "-d", "boltz-scripts", "bash", "-c", &full_cmd])
         .output()
@@ -88,12 +84,10 @@ pub fn pay_invoice_lnd_background(invoice: &str) -> Result<()> {
 
 /// Generate a Lightning invoice via LND.
 pub fn generate_invoice_lnd(amount_sats: u64) -> Result<String> {
-    let output = exec_boltz_scripts(&format!(
-        "lncli-sim 1 addinvoice --amt {amount_sats}"
-    ))?;
+    let output = exec_boltz_scripts(&format!("lncli-sim 1 addinvoice --amt {amount_sats}"))?;
     // Output is JSON, extract payment_request
-    let parsed: serde_json::Value = serde_json::from_str(&output)
-        .context("Failed to parse LND addinvoice output")?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).context("Failed to parse LND addinvoice output")?;
     parsed["payment_request"]
         .as_str()
         .map(String::from)

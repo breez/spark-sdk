@@ -47,10 +47,7 @@ impl BoltzStore for MemoryBoltzStore {
             swaps.insert(swap.id.clone(), swap.clone());
             Ok(())
         } else {
-            Err(BoltzError::Store(format!(
-                "Swap not found: {}",
-                swap.id
-            )))
+            Err(BoltzError::Store(format!("Swap not found: {}", swap.id)))
         }
     }
 
@@ -77,9 +74,9 @@ impl BoltzStore for MemoryBoltzStore {
         let mut indices = self.key_indices.lock().await;
         let idx = indices.entry(chain_id).or_insert(0);
         let current = *idx;
-        *idx = current.checked_add(1).ok_or_else(|| {
-            BoltzError::Store("Key index overflow".to_string())
-        })?;
+        *idx = current
+            .checked_add(1)
+            .ok_or_else(|| BoltzError::Store("Key index overflow".to_string()))?;
         Ok(current)
     }
 }

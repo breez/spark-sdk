@@ -73,10 +73,7 @@ pub enum BoltzSwapStatus {
 impl BoltzSwapStatus {
     /// Whether this status is terminal (no further transitions expected).
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed { .. } | Self::Expired
-        )
+        matches!(self, Self::Completed | Self::Failed { .. } | Self::Expired)
     }
 }
 
@@ -154,10 +151,12 @@ mod tests {
         assert!(!BoltzSwapStatus::Claiming.is_terminal());
         assert!(BoltzSwapStatus::Completed.is_terminal());
         assert!(BoltzSwapStatus::Expired.is_terminal());
-        assert!(BoltzSwapStatus::Failed {
-            reason: "test".to_string()
-        }
-        .is_terminal());
+        assert!(
+            BoltzSwapStatus::Failed {
+                reason: "test".to_string()
+            }
+            .is_terminal()
+        );
     }
 
     #[test]

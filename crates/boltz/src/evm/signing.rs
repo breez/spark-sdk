@@ -194,7 +194,9 @@ impl EvmSigner {
         let sig = self
             .inner
             .sign_typed_data_sync(&claim, &domain)
-            .map_err(|e| BoltzError::Signing(format!("Router Claim EIP-712 signing failed: {e}")))?;
+            .map_err(|e| {
+                BoltzError::Signing(format!("Router Claim EIP-712 signing failed: {e}"))
+            })?;
         Ok(alloy_sig_to_evm_sig(&sig))
     }
 
@@ -453,9 +455,7 @@ mod tests {
             sig.v == 28,
         );
 
-        let recovered = alloy_sig
-            .recover_address_from_prehash(&digest)
-            .unwrap();
+        let recovered = alloy_sig.recover_address_from_prehash(&digest).unwrap();
         assert_eq!(recovered.as_slice(), &signer.address());
     }
 
@@ -473,9 +473,7 @@ mod tests {
             sig.v == 28,
         );
 
-        let recovered = alloy_sig
-            .recover_address_from_prehash(&digest)
-            .unwrap();
+        let recovered = alloy_sig.recover_address_from_prehash(&digest).unwrap();
         assert_eq!(recovered.as_slice(), &signer.address());
     }
 
@@ -521,9 +519,7 @@ mod tests {
             sig.v == 28,
         );
 
-        let recovered = alloy_sig
-            .recover_address_from_prehash(&digest)
-            .unwrap();
+        let recovered = alloy_sig.recover_address_from_prehash(&digest).unwrap();
         assert_eq!(recovered.as_slice(), &signer.address());
     }
 

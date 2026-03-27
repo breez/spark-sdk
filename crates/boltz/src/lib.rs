@@ -100,10 +100,7 @@ impl BoltzService {
 
     /// After the invoice is paid, monitor and complete the swap.
     /// Blocks until USDT is delivered or swap fails.
-    pub async fn complete_reverse_swap(
-        &self,
-        swap_id: &str,
-    ) -> Result<CompletedSwap, BoltzError> {
+    pub async fn complete_reverse_swap(&self, swap_id: &str) -> Result<CompletedSwap, BoltzError> {
         self.executor.complete(swap_id).await
     }
 

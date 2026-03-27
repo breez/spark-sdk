@@ -46,8 +46,11 @@ impl SwapStatusSubscriber {
             Arc::new(Mutex::new(HashMap::new()));
         let (cmd_tx, cmd_rx) = mpsc::channel(16);
 
-        let reader_handle =
-            tokio::spawn(Self::reader_loop(ws_url.to_string(), senders.clone(), cmd_rx));
+        let reader_handle = tokio::spawn(Self::reader_loop(
+            ws_url.to_string(),
+            senders.clone(),
+            cmd_rx,
+        ));
 
         Ok(Self {
             senders,
@@ -74,15 +77,15 @@ impl SwapStatusSubscriber {
         swap_id: &str,
     ) -> Result<mpsc::Receiver<SwapStatusUpdate>, BoltzError> {
         let (tx, rx) = mpsc::channel(32);
-        self.senders
-            .lock()
-            .await
-            .insert(swap_id.to_string(), tx);
+        self.senders.lock().await.insert(swap_id.to_string(), tx);
 
         // Tell the reader loop to send a subscribe message for this new ID
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
         {
-            let _ = self.cmd_tx.send(ReaderCommand::Subscribe(swap_id.to_string())).await;
+            let _ = self
+                .cmd_tx
+                .send(ReaderCommand::Subscribe(swap_id.to_string()))
+                .await;
         }
 
         #[cfg(all(target_family = "wasm", target_os = "unknown"))]
@@ -302,10 +305,7 @@ impl SwapStatusSubscriber {
                         );
                     }
                 } else {
-                    tracing::debug!(
-                        swap_id = update.id,
-                        "No subscriber for swap update"
-                    );
+                    tracing::debug!(swap_id = update.id, "No subscriber for swap update");
                 }
             }
         }

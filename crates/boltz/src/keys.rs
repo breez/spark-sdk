@@ -325,19 +325,17 @@ mod tests {
     #[test]
     fn test_checksum_address_eip55() {
         // EIP-55 test vector
-        let addr_bytes: [u8; 20] =
-            hex::decode("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")
-                .unwrap()
-                .try_into()
-                .unwrap();
+        let addr_bytes: [u8; 20] = hex::decode("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed")
+            .unwrap()
+            .try_into()
+            .unwrap();
         let checksummed = checksum_address(&addr_bytes);
         assert_eq!(checksummed, "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
 
-        let addr_bytes2: [u8; 20] =
-            hex::decode("fB6916095ca1df60bB79Ce92cE3Ea74c37c5d359")
-                .unwrap()
-                .try_into()
-                .unwrap();
+        let addr_bytes2: [u8; 20] = hex::decode("fB6916095ca1df60bB79Ce92cE3Ea74c37c5d359")
+            .unwrap()
+            .try_into()
+            .unwrap();
         let checksummed2 = checksum_address(&addr_bytes2);
         assert_eq!(checksummed2, "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359");
     }

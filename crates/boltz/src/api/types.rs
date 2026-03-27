@@ -294,7 +294,10 @@ mod tests {
         assert_eq!(json["from"], "BTC");
         assert_eq!(json["to"], "TBTC");
         assert_eq!(json["preimageHash"], "abcd1234");
-        assert_eq!(json["claimAddress"], "0x1234567890abcdef1234567890abcdef12345678");
+        assert_eq!(
+            json["claimAddress"],
+            "0x1234567890abcdef1234567890abcdef12345678"
+        );
         assert_eq!(json["invoiceAmount"], 100_000);
         assert_eq!(json["pairHash"], "hash123");
         assert_eq!(json["referralId"], "test_ref");

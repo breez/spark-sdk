@@ -4,12 +4,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use boltz::{
-    AlchemyConfig, BoltzConfig, BoltzService, Chain, MemoryBoltzStore, PreparedSwap,
-};
+use boltz::{AlchemyConfig, BoltzConfig, BoltzService, Chain, MemoryBoltzStore, PreparedSwap};
 
 #[derive(Parser)]
-#[command(name = "boltz-cli", about = "Test CLI for the Boltz LN -> USDT reverse swap flow")]
+#[command(
+    name = "boltz-cli",
+    about = "Test CLI for the Boltz LN -> USDT reverse swap flow"
+)]
 struct Cli {
     /// BIP-39 mnemonic (12 or 24 words). If not provided, generates a new one.
     #[arg(long, env = "BOLTZ_MNEMONIC")]
@@ -28,11 +29,19 @@ struct Cli {
     referral_id: String,
 
     /// Boltz API URL (without /v2).
-    #[arg(long, env = "BOLTZ_API_URL", default_value = "https://api.boltz.exchange")]
+    #[arg(
+        long,
+        env = "BOLTZ_API_URL",
+        default_value = "https://api.boltz.exchange"
+    )]
     api_url: String,
 
     /// Arbitrum RPC URL for read-only operations.
-    #[arg(long, env = "ARBITRUM_RPC_URL", default_value = "https://arb1.arbitrum.io/rpc")]
+    #[arg(
+        long,
+        env = "ARBITRUM_RPC_URL",
+        default_value = "https://arb1.arbitrum.io/rpc"
+    )]
     arbitrum_rpc_url: String,
 
     /// Slippage tolerance in basis points (100 = 1%).
@@ -77,15 +86,13 @@ async fn main() -> Result<()> {
         m.clone()
     } else {
         let entropy: [u8; 16] = rand_entropy();
-        let m = bip39::Mnemonic::from_entropy(&entropy)
-            .context("Failed to generate mnemonic")?;
+        let m = bip39::Mnemonic::from_entropy(&entropy).context("Failed to generate mnemonic")?;
         let words = m.to_string();
         println!("Generated new mnemonic (save this!):\n  {words}\n");
         words
     };
 
-    let mnemonic = bip39::Mnemonic::parse_normalized(&mnemonic_str)
-        .context("Invalid mnemonic")?;
+    let mnemonic = bip39::Mnemonic::parse_normalized(&mnemonic_str).context("Invalid mnemonic")?;
     let seed = mnemonic.to_seed("");
 
     // Build config
@@ -136,14 +143,19 @@ async fn init_service(config: BoltzConfig, seed: &[u8]) -> Result<BoltzService> 
 
 fn cmd_info(seed: &[u8]) -> Result<()> {
     let km = boltz::EvmKeyManager::from_seed(seed)?;
-    let chain_id = u32::try_from(boltz::ARBITRUM_CHAIN_ID)
-        .context("Chain ID overflow")?;
+    let chain_id = u32::try_from(boltz::ARBITRUM_CHAIN_ID).context("Chain ID overflow")?;
     let gas = km.derive_gas_signer(chain_id)?;
     let preimage_key = km.derive_preimage_key(chain_id, 0)?;
 
-    println!("EVM Key Info (Arbitrum, chain_id={}):", boltz::ARBITRUM_CHAIN_ID);
+    println!(
+        "EVM Key Info (Arbitrum, chain_id={}):",
+        boltz::ARBITRUM_CHAIN_ID
+    );
     println!("  Gas signer address:     {}", gas.address_hex());
-    println!("  Preimage key[0] pubkey: {}", hex::encode(&preimage_key.public_key));
+    println!(
+        "  Preimage key[0] pubkey: {}",
+        hex::encode(&preimage_key.public_key)
+    );
     println!("  Preimage key[0] addr:   {}", preimage_key.address_hex());
     Ok(())
 }
@@ -209,7 +221,10 @@ fn print_prepared(p: &PreparedSwap) {
     println!("  Invoice amount:   {} sats", p.invoice_amount_sats);
     println!("  Boltz fee:        {} sats", p.boltz_fee_sats);
     println!("  Onchain (tBTC):   {} sats", p.estimated_onchain_amount);
-    println!("  Est. USDT output: {} (6 decimals)", p.estimated_usdt_output);
+    println!(
+        "  Est. USDT output: {} (6 decimals)",
+        p.estimated_usdt_output
+    );
     println!("  Slippage:         {} bps", p.slippage_bps);
 }
 
