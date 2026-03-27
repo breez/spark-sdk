@@ -1152,6 +1152,7 @@ class IndexedDBStorage {
           conversionInfo: metadata.conversionInfo
             ? JSON.stringify(metadata.conversionInfo)
             : existing.conversionInfo ?? null,
+          conversionStatus: metadata.conversionStatus ?? existing.conversionStatus ?? null,
         };
 
         const putRequest = store.put(metadataToStore);
@@ -2273,6 +2274,9 @@ class IndexedDBStorage {
       timestamp: payment.timestamp,
       method,
       details,
+      conversionDetails: metadata?.conversionStatus
+        ? { status: metadata.conversionStatus, from: null, to: null }
+        : null,
     };
   }
 

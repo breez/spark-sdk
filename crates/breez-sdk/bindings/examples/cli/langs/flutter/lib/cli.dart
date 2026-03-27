@@ -41,10 +41,10 @@ Future<void> runCli({
   if (stableBalanceTokenIdentifier != null) {
     config = config.copyWith(
       stableBalanceConfig: StableBalanceConfig(
-        tokenIdentifier: stableBalanceTokenIdentifier,
+        tokens: [StableBalanceToken(label: "USDB", tokenIdentifier: stableBalanceTokenIdentifier)],
+        defaultActiveLabel: "USDB",
         thresholdSats: stableBalanceThreshold,
         maxSlippageBps: null,
-        reservedSats: null,
       ),
     );
   }

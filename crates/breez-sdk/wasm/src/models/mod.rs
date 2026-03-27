@@ -457,8 +457,9 @@ pub struct Payment {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionDetails)]
 pub struct ConversionDetails {
-    pub from: ConversionStep,
-    pub to: ConversionStep,
+    pub status: ConversionStatus,
+    pub from: Option<ConversionStep>,
+    pub to: Option<ConversionStep>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStep)]
@@ -468,6 +469,8 @@ pub struct ConversionStep {
     pub fee: u128,
     pub method: PaymentMethod,
     pub token_metadata: Option<TokenMetadata>,
+    #[serde(default)]
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentDetails)]
@@ -669,12 +672,18 @@ pub struct OptimizationConfig {
     pub multiplicity: u8,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceToken)]
+pub struct StableBalanceToken {
+    pub label: String,
+    pub token_identifier: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceConfig)]
 pub struct StableBalanceConfig {
-    pub token_identifier: String,
+    pub tokens: Vec<StableBalanceToken>,
+    pub default_active_label: Option<String>,
     pub threshold_sats: Option<u64>,
     pub max_slippage_bps: Option<u32>,
-    pub reserved_sats: Option<u64>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::MaxFee)]
@@ -1025,6 +1034,7 @@ pub struct PaymentMetadata {
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     pub lnurl_description: Option<String>,
     pub conversion_info: Option<ConversionInfo>,
+    pub conversion_status: Option<ConversionStatus>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]
@@ -1228,11 +1238,19 @@ pub struct OutgoingChange {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UserSettings)]
 pub struct UserSettings {
     pub spark_private_mode_enabled: bool,
+    pub stable_balance_active_label: Option<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceActiveLabel)]
+pub enum StableBalanceActiveLabel {
+    Set { label: String },
+    Unset,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UpdateUserSettingsRequest)]
 pub struct UpdateUserSettingsRequest {
     pub spark_private_mode_enabled: Option<bool>,
+    pub stable_balance_active_label: Option<StableBalanceActiveLabel>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimHtlcPaymentRequest)]
@@ -1264,6 +1282,7 @@ pub struct ConversionEstimate {
     pub options: ConversionOptions,
     pub amount: u128,
     pub fee: u128,
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionPurpose)]
@@ -1273,9 +1292,17 @@ pub enum ConversionPurpose {
     AutoConversion,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AmountAdjustmentReason)]
+pub enum AmountAdjustmentReason {
+    FlooredToMinLimit,
+    IncreasedToAvoidDust,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStatus)]
 pub enum ConversionStatus {
+    Pending,
     Completed,
+    Failed,
     RefundNeeded,
     Refunded,
 }
@@ -1289,6 +1316,8 @@ pub struct ConversionInfo {
     #[serde(default, with = "serde_option_u128_as_string")]
     pub fee: Option<u128>,
     pub purpose: Option<ConversionPurpose>,
+    #[serde(default)]
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionOptions)]

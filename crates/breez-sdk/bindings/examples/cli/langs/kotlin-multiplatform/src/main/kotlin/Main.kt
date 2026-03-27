@@ -172,10 +172,13 @@ fun main(args: Array<String>) {
     // Build stable balance config
     val stableBalanceConfig = if (stableBalanceTokenIdentifier != null) {
         StableBalanceConfig(
-            tokenIdentifier = stableBalanceTokenIdentifier,
+            tokens = listOf(StableBalanceToken(
+                label = "USDB",
+                tokenIdentifier = stableBalanceTokenIdentifier,
+            )),
+            defaultActiveLabel = "USDB",
             thresholdSats = stableBalanceThreshold,
             maxSlippageBps = null,
-            reservedSats = null,
         )
     } else null
 

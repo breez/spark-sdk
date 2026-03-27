@@ -4,27 +4,21 @@ The stable balance feature enables users to automatically convert received Bitco
 
 ## How it works
 
-When stable balance is configured, the SDK automatically monitors your sats balance after each wallet sync. When your sats balance exceeds the configured threshold plus the reserved amount, the SDK automatically converts the excess sats (above the reserve) to the specified stable token using [token conversions](./token_conversion.md).
+When stable balance is configured and activated, the SDK automatically monitors your sats balance. When your sats balance exceeds the configured threshold, the SDK automatically converts the excess sats to the active stable token using [token conversions](./token_conversion.md).
 
 This creates a seamless experience where:
 
 1. You can receive payments in any format (Lightning, Spark, on-chain deposits)
 2. The SDK automatically converts any received sats to your chosen stable token
 3. Your balance remains stable in value, denominated in the stable token
-4. A Bitcoin reserve is maintained for sending payments without conversion
 
 ## Configuration
 
 To enable stable balance, configure the [stable balance config](./config.md#stable-balance-configuration) when initializing the SDK with the following options:
-- **Token Identifier** - The identifier of the stable token to convert Bitcoin to.
+- **Tokens** - A list of available stable tokens, each with a display label and token identifier. Labels must be unique and are used to activate a specific token at runtime.
+- **Default Active Label** - Optional label of the token to activate by default. If unset, stable balance starts deactivated and can be activated at runtime via [user settings](./user_settings.md).
 - **Threshold Sats** - Optional minimum sats balance to trigger auto-conversion. Defaults to the conversion limit minimum if not specified.
 - **Maximum Slippage** - Optional maximum slippage in basis points. Defaults to 50 bps (0.5%).
-- **Reserved Sats** - Optional amount of sats to keep as Bitcoin and not convert. Defaults to the conversion limit minimum if not specified. This reserve ensures you can send some Bitcoin payments that fall below the conversion limit minimum.
-
-**Example**: With a `threshold sats` of 2000 and a `reserved sats` of 1000:
-- Auto-conversion triggers when balance exceeds 3000 sats (threshold + reserve)
-- Only the amount above 1000 sats is converted
-- You always maintain ~1000 sats for direct Bitcoin payments
 
 {{#tabs config:stable-balance-config}}
 
@@ -34,6 +28,34 @@ To enable stable balance, configure the [stable balance config](./config.md#stab
 If the configured `threshold sats` is lower than the minimum amount required by the conversion protocol, the protocol minimum will be used instead. This ensures conversions always meet the minimum requirements.
 
 </div>
+
+## Switching stable balance mode
+
+You can activate, switch, or deactivate stable balance at runtime using the [user settings](./user_settings.md) API. This allows users to choose when to enable stable balance and which token to use.
+
+### Activating stable balance
+
+To activate stable balance, set the active label to one of the labels defined in your #{{name StableBalanceConfig.tokens}} list:
+
+{{#tabs user_settings:activate-stable-balance}}
+
+When activated, the SDK immediately converts any excess sats balance to the specified token.
+
+### Deactivating stable balance
+
+To deactivate stable balance, unset the active label:
+
+{{#tabs user_settings:deactivate-stable-balance}}
+
+When deactivated, the SDK automatically converts any remaining token balance back to Bitcoin.
+
+### Checking the current mode
+
+You can check which token is currently active using {{#name get_user_settings}}:
+
+{{#tabs user_settings:get-user-settings}}
+
+The {{#name stable_balance_active_label}} field will be unset if stable balance is deactivated, or the label of the currently active token.
 
 ## Sending payments with stable balance
 
@@ -50,8 +72,47 @@ You can still explicitly specify `conversion options` in your request if you nee
 
 </div>
 
+## Conversion details
+
+Payments involving token conversions include a {{#name conversion_details}} field that describes the conversion that took place. This is useful for displaying conversion context in your UI.
+
+### Status
+
+The {{#name status}} field tracks the lifecycle of the conversion:
+
+| Status | Description |
+|--------|-------------|
+| {{#enum ConversionStatus::Pending}} | Conversion is queued or in progress |
+| {{#enum ConversionStatus::Completed}} | Conversion finished successfully |
+| {{#enum ConversionStatus::Failed}} | Conversion could not be completed |
+| {{#enum ConversionStatus::RefundNeeded}} | Conversion failed and requires a refund |
+| {{#enum ConversionStatus::Refunded}} | Failed conversion has been refunded |
+
+### Conversion steps
+
+The {{#name from}} and {{#name to}} fields are conversion step objects describing each side of the conversion:
+
+| Field | Description |
+|-------|-------------|
+| {{#name payment_id}} | The ID of the internal conversion payment |
+| {{#name amount}} | The amount in the step's denomination (sats or token units) |
+| {{#name fee}} | Fee charged for this step |
+| {{#name method}} | Payment method ({{#enum PaymentMethod::Spark}} for Bitcoin, {{#enum PaymentMethod::Token}} for stable tokens) |
+| {{#name token_metadata}} | Token metadata (name, symbol, etc.) — present when method is {{#enum PaymentMethod::Token}} |
+| {{#name amount_adjustment}} | Present if the amount was modified before conversion (see [amount adjustments](#amount-adjustments)) |
+
+### Amount adjustments
+
+The {{#name amount_adjustment}} field is present when the conversion amount was modified before execution:
+
+| Reason | Description |
+|--------|-------------|
+| {{#enum AmountAdjustmentReason::FlooredToMinLimit}} | Amount was increased to meet the minimum conversion limit |
+| {{#enum AmountAdjustmentReason::IncreasedToAvoidDust}} | Amount was increased to convert the entire remaining balance, avoiding a leftover too small to convert back |
+
 ## Related pages
 
 - [Token conversion](./token_conversion.md) - Learn about converting between Bitcoin and tokens
 - [Custom configuration](./config.md#stable-balance-configuration) - All configuration options
+- [User settings](./user_settings.md) - Getting and updating user settings
 - [Handling tokens](./tokens.md) - Working with tokens in the SDK

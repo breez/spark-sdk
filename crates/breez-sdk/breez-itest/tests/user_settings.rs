@@ -1,5 +1,6 @@
 use anyhow::Result;
 use breez_sdk_itest::ReinitializableSdkInstance;
+use breez_sdk_itest::fixtures::{BEAN_REGTEST_TOKEN_ID, SHELL_REGTEST_TOKEN_ID};
 use breez_sdk_spark::*;
 use rstest::*;
 use tempdir::TempDir;
@@ -50,12 +51,14 @@ async fn test_01_spark_private_mode_user_setting(
     default_private
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
+            stable_balance_active_label: None,
             spark_private_mode_enabled: Some(false),
         })
         .await?;
     default_non_private
         .sdk
         .update_user_settings(UpdateUserSettingsRequest {
+            stable_balance_active_label: None,
             spark_private_mode_enabled: Some(true),
         })
         .await?;
@@ -85,5 +88,93 @@ async fn test_01_spark_private_mode_user_setting(
     assert!(reinitialized_non_private_settings.spark_private_mode_enabled);
 
     info!("=== Test test_01_spark_private_mode_user_setting PASSED ===");
+    Ok(())
+}
+
+// ---------------------
+// Stable Balance Fixtures
+// ---------------------
+
+#[fixture]
+fn persistent_sdk_stable_balance() -> ReinitializableSdkInstance {
+    let mut cfg = default_config(Network::Regtest);
+    cfg.stable_balance_config = Some(StableBalanceConfig {
+        tokens: vec![
+            StableBalanceToken {
+                label: "SHELL".to_string(),
+                token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
+            },
+            StableBalanceToken {
+                label: "BEAN".to_string(),
+                token_identifier: BEAN_REGTEST_TOKEN_ID.to_string(),
+            },
+        ],
+        default_active_label: Some("SHELL".to_string()),
+        threshold_sats: Some(1000),
+        max_slippage_bps: Some(500),
+    });
+    ReinitializableSdkInstance::new(
+        cfg,
+        TempDir::new("breez-sdk-persistent-stable-balance").unwrap(),
+    )
+    .unwrap()
+}
+
+/// Test 2: Stable balance active ticker user setting
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_02_stable_balance_user_setting(
+    persistent_sdk_stable_balance: ReinitializableSdkInstance,
+) -> Result<()> {
+    info!("=== Starting test_02_stable_balance_user_setting ===");
+
+    let sdk_instance = persistent_sdk_stable_balance.build_sdk().await?;
+
+    // Check initial setting — default is SHELL
+    let settings = sdk_instance.sdk.get_user_settings().await?;
+    assert_eq!(
+        settings.stable_balance_active_label.as_deref(),
+        Some("SHELL")
+    );
+
+    // Unset the active ticker
+    sdk_instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+        })
+        .await?;
+    let settings = sdk_instance.sdk.get_user_settings().await?;
+    assert_eq!(settings.stable_balance_active_label, None);
+
+    // Set to BEAN
+    sdk_instance
+        .sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: Some(StableBalanceActiveLabel::Set {
+                label: "BEAN".to_string(),
+            }),
+        })
+        .await?;
+    let settings = sdk_instance.sdk.get_user_settings().await?;
+    assert_eq!(
+        settings.stable_balance_active_label.as_deref(),
+        Some("BEAN")
+    );
+
+    // Verify persistence across SDK reinitialization
+    info!("=== Testing stable balance setting persistence across SDK reinitialization ===");
+    drop(sdk_instance);
+
+    let reinitialized = persistent_sdk_stable_balance.build_sdk().await?;
+    let settings = reinitialized.sdk.get_user_settings().await?;
+    assert_eq!(
+        settings.stable_balance_active_label.as_deref(),
+        Some("BEAN")
+    );
+
+    info!("=== Test test_02_stable_balance_user_setting PASSED ===");
     Ok(())
 }

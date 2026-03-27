@@ -11,7 +11,7 @@ For syntax and supported features, see [https://rust-lang.github.io/mdBook](http
 To locally serve the docs run:
 
 ```bash
-cargo install mdbook
+cargo install mdbook@0.4.52
 cargo install --path ./snippets-processor
 cargo install mdbook-variables
 cargo install mdbook-pagetoc

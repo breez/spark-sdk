@@ -206,10 +206,13 @@ let breezApiKey: String? = {
 config.apiKey = breezApiKey
 if let tokenIdentifier = opts.stableBalanceTokenIdentifier {
     config.stableBalanceConfig = StableBalanceConfig(
-        tokenIdentifier: tokenIdentifier,
+        tokens: [StableBalanceToken(
+            label: "USDB",
+            tokenIdentifier: tokenIdentifier
+        )],
+        defaultActiveLabel: "USDB",
         thresholdSats: opts.stableBalanceThreshold,
-        maxSlippageBps: nil,
-        reservedSats: nil
+        maxSlippageBps: nil
     )
 }
 

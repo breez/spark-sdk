@@ -24,5 +24,29 @@ namespace BreezSdkSnippets
             );
             // ANCHOR_END: update-user-settings
         }
+
+        async Task ActivateStableBalance(BreezSdk sdk)
+        {
+            // ANCHOR: activate-stable-balance
+            await sdk.UpdateUserSettings(
+                request: new UpdateUserSettingsRequest(
+                    sparkPrivateModeEnabled: null,
+                    stableBalanceActiveLabel: new StableBalanceActiveLabel.Set(label: "USDB")
+                )
+            );
+            // ANCHOR_END: activate-stable-balance
+        }
+
+        async Task DeactivateStableBalance(BreezSdk sdk)
+        {
+            // ANCHOR: deactivate-stable-balance
+            await sdk.UpdateUserSettings(
+                request: new UpdateUserSettingsRequest(
+                    sparkPrivateModeEnabled: null,
+                    stableBalanceActiveLabel: new StableBalanceActiveLabel.Unset()
+                )
+            );
+            // ANCHOR_END: deactivate-stable-balance
+        }
     }
 }

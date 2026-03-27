@@ -50,10 +50,13 @@ Future<void> configureStableBalance() async {
   var config = defaultConfig(network: Network.mainnet).copyWith(
       // Enable stable balance with auto-conversion to a specific token
       stableBalanceConfig: StableBalanceConfig(
-          tokenIdentifier: "<token_identifier>",
+          tokens: [StableBalanceToken(
+            label: "USDB",
+            tokenIdentifier: "<token_identifier>",
+          )],
+          defaultActiveLabel: "USDB",
           thresholdSats: BigInt.from(10000),
           maxSlippageBps: 100,
-          reservedSats: BigInt.from(1000)
           ));
   // ANCHOR_END: stable-balance-config
   print(config);
