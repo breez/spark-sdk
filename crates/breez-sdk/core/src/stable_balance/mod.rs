@@ -81,26 +81,6 @@
 //! │                                                                     │
 //! └─────────────────────────────────────────────────────────────────────┘
 //!
-//! # Multi-Instance Coordination
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────┐
-//! │  payment_lock (non-exclusive, ref-counted)                          │
-//! │  • Held during send-with-conversion                                 │
-//! │  • Blocks auto-convert on all instances                             │
-//! │  • Checked before per-receive on other instances                    │
-//! │                                                                     │
-//! │  auto_conversion_lock (exclusive)                                   │
-//! │  • Acquired for auto-convert and deactivation                       │
-//! │  • Only one instance converts at a time                             │
-//! │                                                                     │
-//! │  Deferred tasks                                                     │
-//! │  • Per-receive failure → defer with deterministic ID                │
-//! │  • Resolved when PaymentSucceeded matches transfer_id               │
-//! │  • Cleaned up after 120s timeout on Synced events                   │
-//! └─────────────────────────────────────────────────────────────────────┘
-//! ```
-//!
 //! # Amount Adjustments
 //!
 //! Conversion amounts may be adjusted before execution to respect limits
@@ -146,17 +126,18 @@
 //! send_payment() → get_conversion_options()
 //!   • If stable balance active + no explicit options + sats < amount
 //!   • Auto-populates Token → BTC conversion options
-//!   • payment_lock guard held for duration of send
+//!   • PaymentGuard held for duration of send (suppresses auto-convert)
 //! ```
 
 mod conversions;
 mod queue;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
-use tokio::sync::{Mutex, Notify, RwLock, watch};
+use tokio::sync::{Notify, RwLock, watch};
 use tracing::{debug, info, warn};
 
 use self::queue::ConversionQueue;
@@ -194,12 +175,21 @@ pub(super) struct EffectiveValues {
     pub min_from_amount: u64,
 }
 
-/// Tracks the last known BTC balance and when it was observed.
-/// Used by auto-convert debounce to wait for balance stability.
-/// When `None`, the debounce is skipped and a snapshot is initialized.
-pub(super) struct BalanceSnapshot {
-    pub balance: u64,
-    pub updated_at: u64,
+/// RAII guard that tracks an in-flight send-with-conversion payment.
+///
+/// While held, auto-convert is suppressed to avoid converting BTC that
+/// is about to be spent. When dropped, decrements the counter and wakes
+/// the conversion worker so it can re-evaluate.
+pub(crate) struct PaymentGuard {
+    counter: Arc<AtomicUsize>,
+    notify: Arc<Notify>,
+}
+
+impl Drop for PaymentGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+        self.notify.notify_one();
+    }
 }
 
 /// Manages stable balance auto-conversion behavior.
@@ -239,9 +229,9 @@ pub(crate) struct StableBalance {
     /// Sync coordinator for triggering wallet syncs after conversions complete.
     pub(super) sync_coordinator: SyncCoordinator,
 
-    /// Last observed BTC balance and timestamp, used for auto-convert debounce.
-    /// `None` means skip debounce on next auto-convert (cold start or label change).
-    pub(super) balance_snapshot: Arc<Mutex<Option<BalanceSnapshot>>>,
+    /// Number of in-flight send-with-conversion payments.
+    /// Auto-convert is suppressed while this is > 0.
+    pub(super) payment_counter: Arc<AtomicUsize>,
 }
 
 impl StableBalance {
@@ -282,7 +272,7 @@ impl StableBalance {
             queue,
             synced_notify,
             sync_coordinator,
-            balance_snapshot: Arc::new(Mutex::new(None)),
+            payment_counter: Arc::new(AtomicUsize::new(0)),
         };
 
         // Register as event middleware
@@ -314,9 +304,17 @@ impl StableBalance {
             .map(|t| t.label.clone())
     }
 
-    /// Resets the balance snapshot so the next auto-convert skips the debounce.
-    async fn reset_balance_snapshot(&self) {
-        *self.balance_snapshot.lock().await = None;
+    /// Acquires a payment guard that suppresses auto-convert while held.
+    ///
+    /// Call this before starting a send-with-conversion payment. The guard
+    /// increments the payment counter; when dropped, it decrements the counter
+    /// and wakes the conversion worker.
+    pub(crate) fn acquire_payment_guard(&self) -> PaymentGuard {
+        self.payment_counter.fetch_add(1, Ordering::Relaxed);
+        PaymentGuard {
+            counter: self.payment_counter.clone(),
+            notify: self.queue.notify.clone(),
+        }
     }
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
@@ -388,9 +386,6 @@ impl StableBalance {
 
         // Clear cached effective values since limits may differ per token
         self.effective_values.clear().await;
-
-        // Reset balance snapshot so auto-convert skips the debounce
-        self.reset_balance_snapshot().await;
 
         // If enabling stable balance, trigger auto-convert for any existing excess
         if new_active.is_some() {
@@ -608,6 +603,10 @@ impl EventMiddleware for StableBalance {
                 }
 
                 self.synced_notify.notify_one();
+
+                // Re-assess balance after sync — may have changed due to external activity
+                self.queue.push_auto_convert().await;
+
                 Some(SdkEvent::Synced)
             }
 

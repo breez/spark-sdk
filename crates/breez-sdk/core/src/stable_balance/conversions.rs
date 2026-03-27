@@ -5,6 +5,8 @@
 //! - `auto_convert`: batch converts accumulated BTC above threshold
 //! - `deactivation_convert`: converts all tokens back to BTC on deactivation
 
+use std::sync::atomic::Ordering;
+
 use tracing::{debug, info};
 
 use crate::models::{ConversionStatus, PaymentDetails};
@@ -16,22 +18,10 @@ use crate::token_conversion::{
 
 use super::{StableBalance, per_receive_transfer_id};
 
-/// How long the BTC balance must remain unchanged before auto-converting.
-const AUTO_CONVERT_DEBOUNCE_SECS: u64 = 60;
-
-/// Result of a debounced auto-convert attempt.
-pub(super) enum AutoConvertResult {
-    /// Conversion executed (may or may not have converted).
-    Done { converted: bool },
-    /// Debounce timer not elapsed — task should stay in queue.
-    Debounced,
-}
-
 impl StableBalance {
     /// Converts a single received payment if it meets the minimum threshold.
     ///
     /// Returns `true` if conversion was performed, `false` if skipped.
-    /// Acquires a payment lock guard to block auto-convert on other instances.
     #[allow(clippy::too_many_lines)]
     pub(super) async fn per_receive_convert(
         &self,
@@ -146,9 +136,16 @@ impl StableBalance {
     /// Executes auto-conversion if the balance exceeds the threshold.
     ///
     /// Skips if:
+    /// - A send-with-conversion payment is in flight (payment guard held)
     /// - Stable balance is inactive
     /// - Balance is below the trigger amount
     pub(super) async fn auto_convert(&self) -> Result<bool, ConversionError> {
+        // Skip if a send-with-conversion is in flight
+        if self.payment_counter.load(Ordering::Relaxed) > 0 {
+            debug!("Auto-conversion skipped: payments in flight");
+            return Ok(false);
+        }
+
         // Get the active token, skip if stable balance is inactive
         let Some(active_token_identifier) = self.get_active_token_identifier().await else {
             debug!("Auto-conversion skipped: stable balance is inactive");
@@ -223,58 +220,6 @@ impl StableBalance {
             .await?;
 
         Ok(true)
-    }
-
-    /// Auto-convert with debounce ([`AUTO_CONVERT_DEBOUNCE_SECS`] secs).
-    ///
-    /// Checks the balance snapshot to determine if the balance has been stable
-    /// for the debounce period. If the balance changed, updates the snapshot
-    /// and returns [`AutoConvertResult::Debounced`]. If stable long enough,
-    /// proceeds with conversion.
-    pub(super) async fn debounced_auto_convert(
-        &self,
-    ) -> Result<AutoConvertResult, ConversionError> {
-        let current_balance = self.spark_wallet.get_balance().await?;
-        let now = super::queue::now_secs();
-
-        {
-            let mut snapshot = self.balance_snapshot.lock().await;
-            match snapshot.as_mut() {
-                // No snapshot — first check or label change, skip debounce
-                None => {
-                    *snapshot = Some(super::BalanceSnapshot {
-                        balance: current_balance,
-                        updated_at: now,
-                    });
-                    debug!("Auto-convert debounce: skipped (no snapshot)");
-                    let converted = self.auto_convert().await?;
-                    return Ok(AutoConvertResult::Done { converted });
-                }
-                Some(s) if s.balance != current_balance => {
-                    debug!(
-                        "Auto-convert debounce: balance changed to {current_balance} sats, resetting timer"
-                    );
-                    s.balance = current_balance;
-                    s.updated_at = now;
-                    return Ok(AutoConvertResult::Debounced);
-                }
-                Some(s) => {
-                    let elapsed = now.saturating_sub(s.updated_at);
-                    if elapsed < AUTO_CONVERT_DEBOUNCE_SECS {
-                        debug!(
-                            "Auto-convert debounce: {elapsed}s elapsed, need {AUTO_CONVERT_DEBOUNCE_SECS}s of stability"
-                        );
-                        return Ok(AutoConvertResult::Debounced);
-                    }
-                }
-            }
-        }
-
-        debug!(
-            "Auto-convert debounce: balance stable at {current_balance} sats for ≥{AUTO_CONVERT_DEBOUNCE_SECS}s, proceeding"
-        );
-        let converted = self.auto_convert().await?;
-        Ok(AutoConvertResult::Done { converted })
     }
 
     /// Converts the full token balance back to BTC on deactivation.

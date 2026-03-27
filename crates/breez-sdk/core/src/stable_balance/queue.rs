@@ -18,7 +18,7 @@ use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 
 use super::{StableBalance, per_receive_transfer_id};
 
-pub(super) fn now_secs() -> u64 {
+fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -51,9 +51,6 @@ pub(crate) enum PendingState {
 
 /// How long to keep a deferred task before marking it as failed (seconds).
 const DEFERRED_TASK_TIMEOUT_SECS: u64 = 120;
-
-/// How often the worker wakes to re-check the queue (e.g. for debounce polling).
-const WORKER_POLL_INTERVAL_SECS: u64 = 20;
 
 /// A pending per-receive conversion with its processing state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,7 +86,7 @@ struct ConversionQueueState {
 /// collapse continue to work during processing.
 pub(crate) struct ConversionQueue {
     state: Mutex<ConversionQueueState>,
-    notify: Notify,
+    pub(crate) notify: Arc<Notify>,
     storage: Arc<dyn Storage>,
 }
 
@@ -100,7 +97,7 @@ impl ConversionQueue {
                 per_receive: Vec::new(),
                 pending_task: None,
             }),
-            notify: Notify::new(),
+            notify: Arc::new(Notify::new()),
             storage,
         }
     }
@@ -323,23 +320,17 @@ impl StableBalance {
                                 }
                             }
                             ConversionTask::AutoConvert => {
-                                use super::conversions::AutoConvertResult;
-                                match stable_balance.debounced_auto_convert().await {
-                                    Ok(AutoConvertResult::Done { converted }) => {
-                                        debug!("Conversion worker: auto-convert done (converted={converted})");
-                                        stable_balance.queue.complete_task(&task).await;
-                                        if converted {
-                                            stable_balance.trigger_sync().await;
-                                        }
-                                    }
-                                    Ok(AutoConvertResult::Debounced) => {
-                                        debug!("Conversion worker: auto-convert debounce deferred");
-                                        break;
-                                    }
+                                let converted = match stable_balance.auto_convert().await {
+                                    Ok(converted) => converted,
                                     Err(e) => {
                                         warn!("Auto-conversion failed: {e:?}");
-                                        stable_balance.queue.complete_task(&task).await;
+                                        false
                                     }
+                                };
+                                debug!("Conversion worker: auto-convert done (converted={converted})");
+                                stable_balance.queue.complete_task(&task).await;
+                                if converted {
+                                    stable_balance.trigger_sync().await;
                                 }
                             }
                             ConversionTask::Deactivation(token_id) => {
@@ -368,9 +359,6 @@ impl StableBalance {
                         }
                         () = notified => {
                             debug!("Conversion worker: woken by notify");
-                        }
-                        () = tokio::time::sleep(std::time::Duration::from_secs(WORKER_POLL_INTERVAL_SECS)) => {
-                            debug!("Conversion worker: periodic wake");
                         }
                     }
                 }
