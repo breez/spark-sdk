@@ -1,0 +1,55 @@
+[package]
+name = "boltz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+# Workspace
+platform-utils.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+hex.workspace = true
+macros.workspace = true
+
+# EVM ABI encoding (alloy-rs/core — full no_std/WASM support)
+alloy-sol-types = { version = "1.5", default-features = false }
+alloy-primitives = { version = "1.5", default-features = false, features = ["k256"] }
+
+# ECDSA signing — used directly instead of alloy-signer-local to avoid
+# wasm-bindgen/getrandom dependency. RFC 6979 deterministic signing needs
+# no randomness source, so this is fully WASM-compatible.
+k256.workspace = true
+
+# Crypto
+sha2 = "0.10"
+tiny-keccak = { version = "2", features = ["keccak"] }
+
+# Key derivation (BIP-32 over secp256k1, matching Boltz web app's @scure/bip32)
+bip32 = "0.5"
+
+# WebSocket (native: tokio-tungstenite; WASM: web-sys WebSocket)
+tokio-tungstenite-wasm = { version = "0.8", features = ["rustls-tls-webpki-roots"] }
+
+# Async
+futures-util = "0.3"
+
+# Non-Wasm dependencies
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+# WASM dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+tokio = { workspace = true, features = ["macros", "sync"] }
+
+# WASM dev dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test.workspace = true
