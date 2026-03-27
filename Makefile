@@ -61,6 +61,21 @@ flutter-check:
 itest:
 	cargo xtask itest
 
+boltz-itest:
+	@cd crates/boltz/regtest && ./start.sh
+	@echo "Waiting for Boltz regtest stack..."; \
+	for i in $$(seq 1 90); do \
+		curl -sf http://localhost:9001/v2/swap/reverse > /dev/null 2>&1 \
+		&& docker exec boltz-scripts bash -c "source /etc/profile.d/utils.sh && lncli-sim 1 getinfo" > /dev/null 2>&1 \
+		&& break; \
+		[ "$$i" = "90" ] && echo "Boltz regtest stack failed to start" && exit 1; \
+		sleep 2; \
+	done
+	@cargo test -p boltz --features regtest --test regtest -- --test-threads=1; \
+	rc=$$?; \
+	cd crates/boltz/regtest && docker compose down --volumes > /dev/null 2>&1; \
+	exit $$rc
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 

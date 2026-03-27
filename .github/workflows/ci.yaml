@@ -95,6 +95,20 @@ jobs:
       - name: Run Tests
         run: make breez-itest
 
+  boltz-itest:
+    name: Boltz integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Boltz integration tests
+        run: make boltz-itest
+
   wasm-clippy:
     name: Wasm clippy
     runs-on: ubuntu-latest
