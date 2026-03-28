@@ -8,7 +8,11 @@ use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
-use x509_parser::parse_x509_certificate;
+use x509_cert::Certificate;
+use x509_cert::der::{
+    Decode,
+    asn1::{ObjectIdentifier, Utf8StringRef},
+};
 
 use crate::{
     PaymentDetails, WaitForPaymentIdentifier,
@@ -167,6 +171,9 @@ pub(crate) fn process_success_action(
     Ok(Some(SuccessActionProcessed::Aes { result }))
 }
 
+// OID 2.5.4.3 = commonName
+const OID_COMMON_NAME: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.4.3");
+
 pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
     let api_key_decoded = base64::engine::general_purpose::STANDARD
         .decode(api_key.as_bytes())
@@ -175,15 +182,19 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
                 "Could not base64 decode the Breez API key: {err:?}"
             ))
         })?;
-    let (_rem, cert) = parse_x509_certificate(&api_key_decoded).map_err(|err| {
+    let cert = Certificate::from_der(&api_key_decoded).map_err(|err| {
         SdkError::Generic(format!("Invalid certificate for Breez API key: {err:?}"))
     })?;
 
     let issuer = cert
-        .issuer()
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok());
+        .tbs_certificate
+        .issuer
+        .0
+        .iter()
+        .flat_map(|rdn| rdn.0.iter())
+        .find(|atv| atv.oid == OID_COMMON_NAME)
+        .and_then(|atv| atv.value.decode_as::<Utf8StringRef<'_>>().ok())
+        .map(|s| s.as_str());
     match issuer {
         Some(common_name) => {
             if !common_name.starts_with("Breez") {
