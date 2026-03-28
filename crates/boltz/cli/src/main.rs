@@ -12,20 +12,52 @@ use boltz::{AlchemyConfig, BoltzConfig, BoltzError, BoltzService, BoltzStore, Pr
 #[derive(Clone, clap::ValueEnum)]
 enum Chain {
     Arbitrum,
+    Berachain,
+    Conflux,
+    Corn,
     Ethereum,
-    Base,
+    Flare,
+    Hedera,
+    HyperEvm,
+    Ink,
+    Mantle,
+    MegaEth,
+    Monad,
+    Morph,
     Optimism,
+    Plasma,
     Polygon,
+    Rootstock,
+    Sei,
+    Stable,
+    Unichain,
+    XLayer,
 }
 
 impl From<Chain> for boltz::Chain {
     fn from(c: Chain) -> Self {
         match c {
             Chain::Arbitrum => Self::Arbitrum,
+            Chain::Berachain => Self::Berachain,
+            Chain::Conflux => Self::Conflux,
+            Chain::Corn => Self::Corn,
             Chain::Ethereum => Self::Ethereum,
-            Chain::Base => Self::Base,
+            Chain::Flare => Self::Flare,
+            Chain::Hedera => Self::Hedera,
+            Chain::HyperEvm => Self::HyperEvm,
+            Chain::Ink => Self::Ink,
+            Chain::Mantle => Self::Mantle,
+            Chain::MegaEth => Self::MegaEth,
+            Chain::Monad => Self::Monad,
+            Chain::Morph => Self::Morph,
             Chain::Optimism => Self::Optimism,
+            Chain::Plasma => Self::Plasma,
             Chain::Polygon => Self::Polygon,
+            Chain::Rootstock => Self::Rootstock,
+            Chain::Sei => Self::Sei,
+            Chain::Stable => Self::Stable,
+            Chain::Unichain => Self::Unichain,
+            Chain::XLayer => Self::XLayer,
         }
     }
 }
@@ -51,11 +83,19 @@ struct Cli {
     alchemy_api_key: String,
 
     /// Alchemy gas policy ID.
-    #[arg(long, env = "ALCHEMY_GAS_POLICY_ID", default_value = "dcf46730-a11c-4869-a38b-35bcd73fe73f")]
+    #[arg(
+        long,
+        env = "ALCHEMY_GAS_POLICY_ID",
+        default_value = "dcf46730-a11c-4869-a38b-35bcd73fe73f"
+    )]
     alchemy_gas_policy_id: String,
 
     /// Boltz referral ID.
-    #[arg(long, env = "BOLTZ_REFERRAL_ID", default_value = "boltz_webapp_desktop")]
+    #[arg(
+        long,
+        env = "BOLTZ_REFERRAL_ID",
+        default_value = "boltz_webapp_desktop"
+    )]
     referral_id: String,
 
     /// Boltz API URL (without /v2).
@@ -197,11 +237,7 @@ fn get_or_create_mnemonic(data_dir: &Path) -> Result<Mnemonic> {
     }
 }
 
-async fn init_service(
-    config: BoltzConfig,
-    seed: &[u8],
-    data_dir: &Path,
-) -> Result<BoltzService> {
+async fn init_service(config: BoltzConfig, seed: &[u8], data_dir: &Path) -> Result<BoltzService> {
     let store = Arc::new(FileBoltzStore::new(data_dir));
     let svc = BoltzService::new(config, seed, store)
         .await
@@ -236,7 +272,12 @@ async fn cmd_limits(svc: &BoltzService) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_prepare(svc: &BoltzService, destination: &str, chain: boltz::Chain, usdt_amount: u64) -> Result<()> {
+async fn cmd_prepare(
+    svc: &BoltzService,
+    destination: &str,
+    chain: boltz::Chain,
+    usdt_amount: u64,
+) -> Result<()> {
     let prepared = svc
         .prepare_reverse_swap(destination, chain, usdt_amount)
         .await?;
@@ -244,7 +285,12 @@ async fn cmd_prepare(svc: &BoltzService, destination: &str, chain: boltz::Chain,
     Ok(())
 }
 
-async fn cmd_swap(svc: &BoltzService, destination: &str, chain: boltz::Chain, usdt_amount: u64) -> Result<()> {
+async fn cmd_swap(
+    svc: &BoltzService,
+    destination: &str,
+    chain: boltz::Chain,
+    usdt_amount: u64,
+) -> Result<()> {
     // Step 1: Prepare
     println!("Fetching quote...\n");
     let prepared = svc
@@ -274,7 +320,10 @@ async fn cmd_swap(svc: &BoltzService, destination: &str, chain: boltz::Chain, us
     let completed = svc.complete_reverse_swap(&created.swap_id).await?;
     println!("\nSwap completed!");
     println!("  Claim tx:    {}", completed.claim_tx_hash);
-    println!("  USDT amount: {} USDT", format_usdt(completed.usdt_delivered));
+    println!(
+        "  USDT amount: {} USDT",
+        format_usdt(completed.usdt_delivered)
+    );
     println!("  Destination: {}", completed.destination_address);
     println!("  Chain:       {:?}", completed.destination_chain);
 
@@ -309,8 +358,11 @@ fn init_logging(data_dir: &Path) -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "debug,h2=warn,rustls=warn,hyper=warn,tonic=warn".parse().unwrap());
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        "debug,h2=warn,rustls=warn,hyper=warn,tonic=warn"
+            .parse()
+            .unwrap()
+    });
 
     let log_file = fs::OpenOptions::new()
         .create(true)

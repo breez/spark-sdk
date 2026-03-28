@@ -7,13 +7,15 @@ use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
 use crate::api::ws::{SwapStatusSubscriber, SwapStatusUpdate};
 use crate::config::{
     ARBITRUM_ERC20SWAP_ADDRESS, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
-    ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR,
+    ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
 };
 use crate::error::BoltzError;
 use crate::evm::alchemy::{AlchemyGasClient, EvmCall};
 use crate::evm::contracts::{
-    self, Erc20Claim, encode_claim_erc20_execute, parse_address, quote_calldata_to_call,
+    self, ClaimSendAuthorization, Erc20Claim, SendData, encode_claim_erc20_execute,
+    encode_claim_erc20_execute_oft, parse_address, quote_calldata_to_call,
 };
+use crate::evm::oft::OftDeployments;
 use crate::evm::provider::EvmProvider;
 use crate::evm::signing::EvmSigner;
 use crate::keys::EvmKeyManager;
@@ -32,17 +34,20 @@ pub struct ReverseSwapExecutor {
     key_manager: EvmKeyManager,
     alchemy_client: AlchemyGasClient,
     evm_provider: EvmProvider,
+    oft_deployments: OftDeployments,
     store: Arc<dyn BoltzStore>,
     config: BoltzConfig,
 }
 
 impl ReverseSwapExecutor {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         api_client: BoltzApiClient,
         ws_subscriber: SwapStatusSubscriber,
         key_manager: EvmKeyManager,
         alchemy_client: AlchemyGasClient,
         evm_provider: EvmProvider,
+        oft_deployments: OftDeployments,
         store: Arc<dyn BoltzStore>,
         config: BoltzConfig,
     ) -> Self {
@@ -52,6 +57,7 @@ impl ReverseSwapExecutor {
             key_manager,
             alchemy_client,
             evm_provider,
+            oft_deployments,
             store,
             config,
         }
@@ -70,19 +76,15 @@ impl ReverseSwapExecutor {
     ///
     /// Walks the route in reverse:
     /// 1. Get DEX quote: how much tBTC needed for `usdt_amount` USDT?
-    /// 2. Convert tBTC EVM units to sats
-    /// 3. Apply Boltz fee to get total sats needed
+    /// 2. For cross-chain: estimate LZ messaging fee in tBTC and add it
+    /// 3. Convert tBTC EVM units to sats
+    /// 4. Apply Boltz fee to get total sats needed
     pub async fn prepare(
         &self,
         destination: &str,
         chain: Chain,
         usdt_amount: u64,
     ) -> Result<PreparedSwap, BoltzError> {
-        if chain != Chain::Arbitrum {
-            return Err(BoltzError::Generic(
-                "Only Arbitrum destination is supported in v1".to_string(),
-            ));
-        }
         if self.config.slippage_bps < 10 {
             return Err(BoltzError::Generic(
                 "slippage_bps must be at least 10 (0.1%)".to_string(),
@@ -90,7 +92,17 @@ impl ReverseSwapExecutor {
         }
 
         let tbtc_pair = self.fetch_tbtc_pair().await?;
-        let tbtc_evm_units = self.fetch_quote_out_tbtc(usdt_amount).await?;
+        let mut tbtc_evm_units = self.fetch_quote_out_tbtc(usdt_amount).await?;
+
+        // For cross-chain destinations, add the LZ messaging fee cost in tBTC.
+        // Matches web app's `invertPostOftQuote` which inflates required sats.
+        if !chain.is_source_chain() {
+            let lz_fee_tbtc = self
+                .estimate_lz_fee_in_tbtc(&chain, usdt_amount)
+                .await?;
+            tbtc_evm_units = tbtc_evm_units.saturating_add(lz_fee_tbtc);
+        }
+
         let fee_calc = compute_invoice_amount(&tbtc_pair, tbtc_evm_units)?;
 
         // Validate against Boltz swap limits
@@ -421,6 +433,43 @@ impl ReverseSwapExecutor {
         tbtc_evm_amount: U256,
         timelock: U256,
     ) -> Result<String, BoltzError> {
+        if swap.destination_chain == Chain::Arbitrum {
+            self.try_claim_same_chain(
+                swap,
+                gas_signer,
+                erc20swap_version,
+                preimage,
+                addrs,
+                tbtc_evm_amount,
+                timelock,
+            )
+            .await
+        } else {
+            self.try_claim_cross_chain(
+                swap,
+                gas_signer,
+                erc20swap_version,
+                preimage,
+                addrs,
+                tbtc_evm_amount,
+                timelock,
+            )
+            .await
+        }
+    }
+
+    /// Same-chain claim: claim tBTC + DEX swap to USDT + sweep to destination on Arbitrum.
+    #[expect(clippy::too_many_arguments)]
+    async fn try_claim_same_chain(
+        &self,
+        swap: &mut BoltzSwap,
+        gas_signer: &EvmSigner,
+        erc20swap_version: &str,
+        preimage: &[u8; 32],
+        addrs: &ClaimAddresses,
+        tbtc_evm_amount: U256,
+        timelock: U256,
+    ) -> Result<String, BoltzError> {
         let (dex_calls, min_amount_out) = self
             .fetch_and_encode_dex_quote(tbtc_evm_amount, &addrs.router.to_string())
             .await?;
@@ -468,14 +517,286 @@ impl ReverseSwapExecutor {
             router_sig.s,
         );
 
+        self.submit_claim(swap, &swap.router_address.clone(), &calldata)
+            .await
+    }
+
+    /// Cross-chain claim: claim tBTC + DEX swap to USDT + OFT bridge to destination chain.
+    ///
+    /// Two-pass approach matching the Boltz web app (`TransactionConfirmed.tsx`):
+    /// - Pass 1: estimate `LayerZero` messaging fee cost in tBTC
+    /// - Pass 2: re-quote with adjusted tBTC split (trade vs fee)
+    #[expect(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn try_claim_cross_chain(
+        &self,
+        swap: &mut BoltzSwap,
+        gas_signer: &EvmSigner,
+        erc20swap_version: &str,
+        preimage: &[u8; 32],
+        addrs: &ClaimAddresses,
+        tbtc_evm_amount: U256,
+        timelock: U256,
+    ) -> Result<String, BoltzError> {
+        let dst_chain_id = swap.destination_chain.evm_chain_id();
+        let dst_info = self.oft_deployments.get(dst_chain_id).ok_or_else(|| {
+            BoltzError::Generic(format!(
+                "No OFT deployment for destination chain ID {dst_chain_id}"
+            ))
+        })?;
+        let dst_eid = dst_info.lz_eid;
+
+        let source_oft_address = self
+            .oft_deployments
+            .source_oft_address(self.config.chain_id)
+            .ok_or_else(|| {
+                BoltzError::Generic("No OFT deployment for source chain (Arbitrum)".into())
+            })?;
+        let oft_addr = parse_address(source_oft_address)?;
+
+        let tbtc_amount: u128 = tbtc_evm_amount
+            .try_into()
+            .map_err(|_| BoltzError::Generic("tBTC amount too large".into()))?;
+        let router_str = addrs.router.to_string();
+
+        // ─── Pass 1: estimate LZ fee cost ─────────────────────────────
+        // Get initial DEX quote with full tBTC to estimate USDT output
+        let initial_trade = pick_best_quote_with_data(
+            &self
+                .api_client
+                .get_quote_in(
+                    "ARB",
+                    ARBITRUM_TBTC_ADDRESS,
+                    ARBITRUM_USDT_ADDRESS,
+                    tbtc_amount,
+                )
+                .await?,
+            QuoteDirection::In,
+        )?;
+
+        // Quote OFT with initial USDT amount to get messaging fee
+        let initial_send_param = contracts::build_oft_send_param(
+            dst_eid,
+            addrs.destination,
+            U256::from(initial_trade.amount),
+            U256::ZERO,
+        );
+        let (_, initial_receipt) = self
+            .quote_oft(source_oft_address, &initial_send_param)
+            .await?;
+
+        let mut quoted_send_param = initial_send_param.clone();
+        quoted_send_param.minAmountLD = initial_receipt.amountReceivedLD;
+        let msg_fee = self
+            .quote_send(source_oft_address, &quoted_send_param)
+            .await?;
+
+        // Apply slippage buffer to messaging fee
+        let native_fee: u128 = msg_fee
+            .nativeFee
+            .try_into()
+            .map_err(|_| BoltzError::Generic("LZ fee too large".into()))?;
+        let fee_with_slippage = apply_slippage_up(native_fee, u128::from(self.config.slippage_bps));
+
+        // Quote DEX: how much tBTC for the ETH messaging fee
+        let fee_dex = pick_best_quote_with_data(
+            &self
+                .api_client
+                .get_quote_out(
+                    "ARB",
+                    ARBITRUM_TBTC_ADDRESS,
+                    ZERO_ADDRESS,
+                    fee_with_slippage,
+                )
+                .await?,
+            QuoteDirection::Out,
+        )?;
+
+        // ─── Pass 2: final quotes with adjusted tBTC split ────────────
+        let fee_tbtc = fee_dex.amount;
+        let trade_tbtc = tbtc_amount.checked_sub(fee_tbtc).ok_or_else(|| {
+            BoltzError::Generic("Amount too small to cover OFT cross-chain messaging fee".into())
+        })?;
+        if trade_tbtc == 0 {
+            return Err(BoltzError::Generic(
+                "Amount too small to cover OFT cross-chain messaging fee".into(),
+            ));
+        }
+
+        // Final trade DEX quote: trade_tbtc -> USDT
+        let trade_best = pick_best_quote_with_data(
+            &self
+                .api_client
+                .get_quote_in(
+                    "ARB",
+                    ARBITRUM_TBTC_ADDRESS,
+                    ARBITRUM_USDT_ADDRESS,
+                    trade_tbtc,
+                )
+                .await?,
+            QuoteDirection::In,
+        )?;
+        if trade_best.amount == 0 {
+            return Err(BoltzError::InvalidQuote("DEX returned zero USDT".into()));
+        }
+        #[expect(clippy::arithmetic_side_effects)]
+        let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
+        #[expect(clippy::arithmetic_side_effects)]
+        let min_usdt_out = trade_best.amount * slippage_factor / 10000;
+
+        // Final OFT quote with the actual USDT amount
+        let final_send_param = contracts::build_oft_send_param(
+            dst_eid,
+            addrs.destination,
+            U256::from(min_usdt_out),
+            U256::ZERO,
+        );
+        let (_, final_receipt) = self
+            .quote_oft(source_oft_address, &final_send_param)
+            .await?;
+
+        let mut final_quoted_param = final_send_param.clone();
+        final_quoted_param.minAmountLD = final_receipt.amountReceivedLD;
+        let final_msg_fee = self
+            .quote_send(source_oft_address, &final_quoted_param)
+            .await?;
+
+        // Apply slippage to the OFT min receive amount
+        let min_amount_ld_raw: u128 = final_receipt
+            .amountReceivedLD
+            .try_into()
+            .map_err(|_| BoltzError::Generic("OFT amount too large".into()))?;
+        #[expect(clippy::arithmetic_side_effects)]
+        let min_amount_ld_slipped = min_amount_ld_raw * slippage_factor / 10000;
+
+        // ─── Encode DEX calls ─────────────────────────────────────────
+        // Trade calls: tBTC -> USDT
+        let trade_encode = self
+            .api_client
+            .encode_quote(
+                "ARB",
+                &EncodeRequest {
+                    recipient: router_str.clone(),
+                    amount_in: trade_tbtc,
+                    amount_out_min: min_usdt_out,
+                    data: trade_best.data,
+                },
+            )
+            .await?;
+        let trade_calls: Vec<contracts::Call> = trade_encode
+            .calls
+            .iter()
+            .map(quote_calldata_to_call)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Fee calls: tBTC -> ETH (for LZ messaging)
+        let fee_encode = self
+            .api_client
+            .encode_quote(
+                "ARB",
+                &EncodeRequest {
+                    recipient: router_str.clone(),
+                    amount_in: fee_tbtc,
+                    amount_out_min: native_fee,
+                    data: fee_dex.data,
+                },
+            )
+            .await?;
+        let fee_calls: Vec<contracts::Call> = fee_encode
+            .calls
+            .iter()
+            .map(quote_calldata_to_call)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Combine all DEX calls
+        let mut all_calls = trade_calls;
+        all_calls.extend(fee_calls);
+
+        // ─── Build SendData + hash ────────────────────────────────────
+        let send_data = SendData {
+            dstEid: dst_eid,
+            to: contracts::address_to_bytes32(addrs.destination),
+            extraOptions: vec![].into(),
+            composeMsg: vec![].into(),
+            oftCmd: vec![].into(),
+        };
+
+        let typehash = self.fetch_typehash_send_data(&swap.router_address).await?;
+        let send_data_hash = contracts::hash_send_data(typehash, &send_data);
+
+        // ─── Sign ─────────────────────────────────────────────────────
+        let erc20swap_sig = gas_signer.sign_eip712_erc20swap_claim(
+            addrs.erc20swap,
+            erc20swap_version,
+            swap.chain_id,
+            preimage,
+            tbtc_evm_amount,
+            addrs.tbtc,
+            addrs.refund,
+            timelock,
+            addrs.router,
+        )?;
+
+        let router_sig = gas_signer.sign_eip712_router_claim_send(
+            addrs.router,
+            swap.chain_id,
+            preimage,
+            addrs.usdt,
+            oft_addr,
+            send_data_hash,
+            U256::from(min_amount_ld_slipped),
+            final_msg_fee.lzTokenFee,
+            addrs.refund,
+        )?;
+
+        // ─── Encode calldata ──────────────────────────────────────────
+        let erc20_claim = Erc20Claim {
+            preimage: (*preimage).into(),
+            amount: tbtc_evm_amount,
+            tokenAddress: addrs.tbtc,
+            refundAddress: addrs.refund,
+            timelock,
+            v: erc20swap_sig.v,
+            r: erc20swap_sig.r.into(),
+            s: erc20swap_sig.s.into(),
+        };
+
+        let auth = ClaimSendAuthorization {
+            minAmountLd: U256::from(min_amount_ld_slipped),
+            lzTokenFee: final_msg_fee.lzTokenFee,
+            refundAddress: addrs.refund,
+            v: router_sig.v,
+            r: router_sig.r.into(),
+            s: router_sig.s.into(),
+        };
+
+        let calldata = encode_claim_erc20_execute_oft(
+            &erc20_claim,
+            &all_calls,
+            addrs.usdt,
+            oft_addr,
+            &send_data,
+            &auth,
+        );
+
+        self.submit_claim(swap, &swap.router_address.clone(), &calldata)
+            .await
+    }
+
+    /// Submit encoded calldata via Alchemy gas abstraction.
+    async fn submit_claim(
+        &self,
+        swap: &mut BoltzSwap,
+        router_address: &str,
+        calldata: &[u8],
+    ) -> Result<String, BoltzError> {
         swap.status = BoltzSwapStatus::Claiming;
         swap.updated_at = current_unix_timestamp();
         self.store.update_swap(swap).await?;
 
         let evm_call = EvmCall {
-            to: swap.router_address.clone(),
+            to: router_address.to_string(),
             value: None,
-            data: Some(format!("0x{}", hex::encode(&calldata))),
+            data: Some(format!("0x{}", hex::encode(calldata))),
         };
 
         let result = self
@@ -489,6 +810,102 @@ impl ReverseSwapExecutor {
             "Claim confirmed"
         );
         Ok(result.tx_hash)
+    }
+
+    // ─── OFT fee estimation (for prepare-time quoting) ─────────────────
+
+    /// Estimate the LZ messaging fee cost in tBTC EVM units.
+    /// Used at prepare time to inflate the invoice to cover cross-chain fees.
+    /// Matches the web app's `invertPostOftQuote` → `quoteMessagingFeeCost` flow.
+    async fn estimate_lz_fee_in_tbtc(
+        &self,
+        chain: &Chain,
+        usdt_amount: u64,
+    ) -> Result<u128, BoltzError> {
+        let dst_chain_id = chain.evm_chain_id();
+        let dst_info = self.oft_deployments.get(dst_chain_id).ok_or_else(|| {
+            BoltzError::Generic(format!(
+                "No OFT deployment for destination chain ID {dst_chain_id}"
+            ))
+        })?;
+        let source_oft_address = self
+            .oft_deployments
+            .source_oft_address(self.config.chain_id)
+            .ok_or_else(|| {
+                BoltzError::Generic("No OFT deployment for source chain (Arbitrum)".into())
+            })?;
+
+        // Quote OFT to get the messaging fee
+        let send_param = contracts::build_oft_send_param(
+            dst_info.lz_eid,
+            alloy_primitives::Address::ZERO, // placeholder recipient for quoting
+            U256::from(usdt_amount),
+            U256::ZERO,
+        );
+        let (_, receipt) = self.quote_oft(source_oft_address, &send_param).await?;
+
+        let mut quoted_param = send_param;
+        quoted_param.minAmountLD = receipt.amountReceivedLD;
+        let msg_fee = self.quote_send(source_oft_address, &quoted_param).await?;
+
+        let native_fee: u128 = msg_fee
+            .nativeFee
+            .try_into()
+            .map_err(|_| BoltzError::Generic("LZ fee too large".into()))?;
+
+        if native_fee == 0 {
+            return Ok(0);
+        }
+
+        // Apply slippage buffer upward to the fee
+        let fee_with_slippage =
+            apply_slippage_up(native_fee, u128::from(self.config.slippage_bps));
+
+        // DEX quote: how much tBTC to get the required ETH for the LZ fee
+        let fee_dex = pick_best_quote(
+            &self
+                .api_client
+                .get_quote_out("ARB", ARBITRUM_TBTC_ADDRESS, ZERO_ADDRESS, fee_with_slippage)
+                .await?,
+            QuoteDirection::Out,
+        )?;
+
+        Ok(fee_dex)
+    }
+
+    // ─── OFT quoting helpers ──────────────────────────────────────────
+
+    /// Call `quoteOFT` on the OFT contract via `eth_call`.
+    async fn quote_oft(
+        &self,
+        oft_address: &str,
+        send_param: &contracts::OftSendParam,
+    ) -> Result<(contracts::OftLimit, contracts::OftReceipt), BoltzError> {
+        let calldata = contracts::encode_quote_oft(send_param);
+        let result = self.evm_provider.eth_call(oft_address, &calldata).await?;
+        let (limit, _fees, receipt) = contracts::decode_quote_oft_return(&result)?;
+        Ok((limit, receipt))
+    }
+
+    /// Call `quoteSend` on the OFT contract via `eth_call`.
+    async fn quote_send(
+        &self,
+        oft_address: &str,
+        send_param: &contracts::OftSendParam,
+    ) -> Result<contracts::MessagingFee, BoltzError> {
+        let calldata = contracts::encode_quote_send(send_param, false);
+        let result = self.evm_provider.eth_call(oft_address, &calldata).await?;
+        contracts::decode_quote_send_return(&result)
+    }
+
+    /// Fetch `TYPEHASH_SEND_DATA` from the Router contract.
+    async fn fetch_typehash_send_data(&self, router_address: &str) -> Result<[u8; 32], BoltzError> {
+        let calldata = contracts::encode_typehash_send_data_call();
+        let result = self
+            .evm_provider
+            .eth_call(router_address, &calldata)
+            .await?;
+        contracts::decode_typehash_send_data(&result)
     }
 
     async fn fetch_erc20swap_version(&self, erc20swap_address: &str) -> Result<String, BoltzError> {
@@ -657,6 +1074,13 @@ fn current_unix_timestamp() -> u64 {
 
 async fn sleep_1s() {
     platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_secs(1)).await;
+}
+
+/// Apply slippage upward (for fees that might increase).
+/// Returns `amount * (10000 + slippage_bps) / 10000`.
+#[expect(clippy::arithmetic_side_effects)]
+fn apply_slippage_up(amount: u128, slippage_bps: u128) -> u128 {
+    amount * (10000 + slippage_bps) / 10000
 }
 
 // ─── DEX quote selection ─────────────────────────────────────────────────

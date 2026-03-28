@@ -863,8 +863,8 @@ mod tests {
             ]
         });
 
-        let signed = client.sign_prepared_response(&prepared).unwrap();
-        let data = signed["data"].as_array().unwrap();
+        let sign_result = client.sign_prepared_response(&prepared).unwrap();
+        let data = sign_result["data"].as_array().unwrap();
 
         // Auth entry signature must match ethers
         assert_eq!(
@@ -880,8 +880,10 @@ mod tests {
 
         // Signed entries must only have type, data, chainId, signature (no signatureRequest)
         for entry in data {
-            assert!(entry.get("signatureRequest").is_none(),
-                "signatureRequest must not be forwarded to wallet_sendPreparedCalls");
+            assert!(
+                entry.get("signatureRequest").is_none(),
+                "signatureRequest must not be forwarded to wallet_sendPreparedCalls"
+            );
             assert!(entry.get("type").is_some());
             assert!(entry.get("data").is_some());
             assert!(entry.get("chainId").is_some());
@@ -914,14 +916,14 @@ mod tests {
             "chainId": "0xa4b1"
         });
 
-        let signed = client.sign_prepared_response(&prepared).unwrap();
+        let sign_result = client.sign_prepared_response(&prepared).unwrap();
 
         assert_eq!(
-            signed["signature"]["data"].as_str().unwrap(),
+            sign_result["signature"]["data"].as_str().unwrap(),
             "0xd0d8a4157083c95016141628bcbabf7a25f437674386440e2cd9e9e331f86b907a2733dade4f75818927b4b91f1af5966daba643a5e0473865a44608b7721f8a1b"
         );
 
         // Must not forward signatureRequest
-        assert!(signed.get("signatureRequest").is_none());
+        assert!(sign_result.get("signatureRequest").is_none());
     }
 }

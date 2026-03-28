@@ -94,6 +94,46 @@ sol! {
     // ─── Router read functions ───────────────────────────────────────────
 
     function TYPEHASH_SEND_DATA() external view returns (bytes32);
+
+    // ─── OFT Contract (LayerZero USDT0) ──────────────────────────────
+
+    struct OftSendParam {
+        uint32 dstEid;
+        bytes32 to;
+        uint256 amountLD;
+        uint256 minAmountLD;
+        bytes extraOptions;
+        bytes composeMsg;
+        bytes oftCmd;
+    }
+
+    struct OftLimit {
+        uint256 minAmountLD;
+        uint256 maxAmountLD;
+    }
+
+    struct OftReceipt {
+        uint256 amountSentLD;
+        uint256 amountReceivedLD;
+    }
+
+    struct OftFeeDetail {
+        int256 feeAmountLD;
+        string description;
+    }
+
+    struct MessagingFee {
+        uint256 nativeFee;
+        uint256 lzTokenFee;
+    }
+
+    function quoteOFT(OftSendParam calldata sendParam)
+        external view
+        returns (OftLimit, OftFeeDetail[], OftReceipt);
+
+    function quoteSend(OftSendParam calldata sendParam, bool payInLzToken)
+        external view
+        returns (MessagingFee);
 }
 
 /// Convert a Boltz encode API `QuoteCalldata` to a Router `Call`.
@@ -215,6 +255,97 @@ pub fn decode_typehash_send_data(data: &[u8]) -> Result<[u8; 32], BoltzError> {
         tx_hash: None,
     })?;
     Ok(decoded.0.into())
+}
+
+// ─── OFT helpers ─────────────────────────────────────────────────────────
+
+/// Build an `OftSendParam` for quoting. `extraOptions`, `composeMsg`, and `oftCmd`
+/// are empty (no native drops — disabled for USDT0, matching the web app).
+pub fn build_oft_send_param(
+    dst_eid: u32,
+    recipient: Address,
+    amount_ld: U256,
+    min_amount_ld: U256,
+) -> OftSendParam {
+    OftSendParam {
+        dstEid: dst_eid,
+        to: address_to_bytes32(recipient),
+        amountLD: amount_ld,
+        minAmountLD: min_amount_ld,
+        extraOptions: vec![].into(),
+        composeMsg: vec![].into(),
+        oftCmd: vec![].into(),
+    }
+}
+
+/// Left-pad a 20-byte EVM address to 32 bytes (`bytes32`), as required by OFT `to` field.
+pub fn address_to_bytes32(addr: Address) -> FixedBytes<32> {
+    let mut bytes = [0u8; 32];
+    bytes[12..32].copy_from_slice(addr.as_slice());
+    FixedBytes::from(bytes)
+}
+
+/// Encode `quoteOFT(OftSendParam)` calldata.
+pub fn encode_quote_oft(send_param: &OftSendParam) -> Vec<u8> {
+    quoteOFTCall {
+        sendParam: send_param.clone(),
+    }
+    .abi_encode()
+}
+
+/// Decode `quoteOFT` return value: `(OftLimit, OftFeeDetail[], OftReceipt)`.
+pub fn decode_quote_oft_return(
+    data: &[u8],
+) -> Result<(OftLimit, Vec<OftFeeDetail>, OftReceipt), BoltzError> {
+    let decoded = quoteOFTCall::abi_decode_returns(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode quoteOFT return: {e}"),
+        tx_hash: None,
+    })?;
+    Ok((decoded._0, decoded._1, decoded._2))
+}
+
+/// Encode `quoteSend(OftSendParam, bool)` calldata.
+pub fn encode_quote_send(send_param: &OftSendParam, pay_in_lz_token: bool) -> Vec<u8> {
+    quoteSendCall {
+        sendParam: send_param.clone(),
+        payInLzToken: pay_in_lz_token,
+    }
+    .abi_encode()
+}
+
+/// Decode `quoteSend` return value: `MessagingFee`.
+pub fn decode_quote_send_return(data: &[u8]) -> Result<MessagingFee, BoltzError> {
+    let decoded = quoteSendCall::abi_decode_returns(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode quoteSend return: {e}"),
+        tx_hash: None,
+    })?;
+    Ok(MessagingFee {
+        nativeFee: decoded.nativeFee,
+        lzTokenFee: decoded.lzTokenFee,
+    })
+}
+
+/// Compute the EIP-712 struct hash for `SendData`.
+///
+/// `hash = keccak256(abi.encode(TYPEHASH, dstEid, to, keccak256(extraOptions), keccak256(composeMsg), keccak256(oftCmd)))`
+pub fn hash_send_data(typehash: [u8; 32], send_data: &SendData) -> [u8; 32] {
+    use alloy_primitives::keccak256;
+
+    let extra_options_hash = keccak256(send_data.extraOptions.as_ref());
+    let compose_msg_hash = keccak256(send_data.composeMsg.as_ref());
+    let oft_cmd_hash = keccak256(send_data.oftCmd.as_ref());
+
+    let encoded = (
+        FixedBytes::<32>::from(typehash),
+        U256::from(send_data.dstEid),
+        send_data.to,
+        extra_options_hash,
+        compose_msg_hash,
+        oft_cmd_hash,
+    )
+        .abi_encode();
+
+    keccak256(&encoded).into()
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -466,5 +597,89 @@ mod tests {
 
         let empty = parse_hex_bytes("0x").unwrap();
         assert!(empty.is_empty());
+    }
+
+    // ─── OFT tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_address_to_bytes32() {
+        let addr = parse_address("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
+        let b32 = address_to_bytes32(addr);
+        // First 12 bytes should be zero-padding
+        assert_eq!(&b32[..12], &[0u8; 12]);
+        // Last 20 bytes should be the address
+        assert_eq!(&b32[12..], addr.as_slice());
+    }
+
+    #[test]
+    fn test_address_to_bytes32_zero() {
+        let b32 = address_to_bytes32(Address::ZERO);
+        assert_eq!(b32, FixedBytes::<32>::ZERO);
+    }
+
+    #[test]
+    fn test_quote_oft_call_selector() {
+        let send_param = build_oft_send_param(30101, Address::ZERO, U256::ZERO, U256::ZERO);
+        let encoded = encode_quote_oft(&send_param);
+        let expected_selector = &quoteOFTCall::SELECTOR;
+        assert_eq!(&encoded[..4], expected_selector);
+    }
+
+    #[test]
+    fn test_quote_send_call_selector() {
+        let send_param = build_oft_send_param(30101, Address::ZERO, U256::ZERO, U256::ZERO);
+        let encoded = encode_quote_send(&send_param, false);
+        let expected_selector = &quoteSendCall::SELECTOR;
+        assert_eq!(&encoded[..4], expected_selector);
+    }
+
+    #[test]
+    fn test_hash_send_data_deterministic() {
+        let typehash = [1u8; 32];
+        let send_data = SendData {
+            dstEid: 30101,
+            to: [0xaa; 32].into(),
+            extraOptions: vec![].into(),
+            composeMsg: vec![].into(),
+            oftCmd: vec![].into(),
+        };
+
+        let hash1 = hash_send_data(typehash, &send_data);
+        let hash2 = hash_send_data(typehash, &send_data);
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_hash_send_data_different_eid() {
+        let typehash = [1u8; 32];
+        let sd1 = SendData {
+            dstEid: 30101,
+            to: [0xaa; 32].into(),
+            extraOptions: vec![].into(),
+            composeMsg: vec![].into(),
+            oftCmd: vec![].into(),
+        };
+        let sd2 = SendData {
+            dstEid: 30111,
+            ..sd1.clone()
+        };
+        assert_ne!(
+            hash_send_data(typehash, &sd1),
+            hash_send_data(typehash, &sd2)
+        );
+    }
+
+    #[test]
+    fn test_build_oft_send_param() {
+        let addr = parse_address("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61").unwrap();
+        let sp = build_oft_send_param(30111, addr, U256::from(1000u64), U256::from(900u64));
+        assert_eq!(sp.dstEid, 30111);
+        assert_eq!(&sp.to[12..], addr.as_slice());
+        assert_eq!(sp.amountLD, U256::from(1000u64));
+        assert_eq!(sp.minAmountLD, U256::from(900u64));
+        assert!(sp.extraOptions.is_empty());
+        assert!(sp.composeMsg.is_empty());
+        assert!(sp.oftCmd.is_empty());
     }
 }

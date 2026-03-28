@@ -20,6 +20,7 @@ pub use store::{BoltzStore, MemoryBoltzStore};
 use api::BoltzApiClient;
 use api::ws::SwapStatusSubscriber;
 use evm::alchemy::AlchemyGasClient;
+use evm::oft::OftDeployments;
 use evm::provider::EvmProvider;
 use evm::signing::EvmSigner;
 use swap::reverse::ReverseSwapExecutor;
@@ -65,12 +66,16 @@ impl BoltzService {
             Box::new(DefaultHttpClient::new(None)),
         );
 
+        let oft_deployments =
+            OftDeployments::fetch(&*Box::new(DefaultHttpClient::new(None))).await?;
+
         let executor = ReverseSwapExecutor::new(
             api_client,
             ws_subscriber,
             key_manager,
             alchemy_client,
             evm_provider,
+            oft_deployments,
             store,
             config,
         );

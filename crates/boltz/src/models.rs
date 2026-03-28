@@ -80,10 +80,61 @@ impl BoltzSwapStatus {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Chain {
     Arbitrum,
+    Berachain,
+    Conflux,
+    Corn,
     Ethereum,
-    Base,
+    Flare,
+    Hedera,
+    HyperEvm,
+    Ink,
+    Mantle,
+    MegaEth,
+    Monad,
+    Morph,
     Optimism,
+    Plasma,
     Polygon,
+    Rootstock,
+    Sei,
+    Stable,
+    Unichain,
+    XLayer,
+}
+
+impl Chain {
+    /// EVM chain ID for this chain.
+    pub fn evm_chain_id(&self) -> u64 {
+        match self {
+            Self::Arbitrum => 42161,
+            Self::Berachain => 80094,
+            Self::Conflux => 1030,
+            Self::Corn => 21_000_000,
+            Self::Ethereum => 1,
+            Self::Flare => 14,
+            Self::Hedera => 295,
+            Self::HyperEvm => 999,
+            Self::Ink => 57073,
+            Self::Mantle => 5000,
+            Self::MegaEth => 4326,
+            Self::Monad => 143,
+            Self::Morph => 2818,
+            Self::Optimism => 10,
+            Self::Plasma => 9745,
+            Self::Polygon => 137,
+            Self::Rootstock => 30,
+            Self::Sei => 1329,
+            Self::Stable => 988,
+            Self::Unichain => 130,
+            Self::XLayer => 196,
+        }
+    }
+
+    /// Whether this is the source chain (Arbitrum) where claims happen on-chain.
+    /// Non-Arbitrum destinations require OFT cross-chain bridging.
+    pub fn is_source_chain(&self) -> bool {
+        *self == Self::Arbitrum
+    }
 }
 
 /// Quote result returned to caller before committing to a swap.
@@ -195,5 +246,20 @@ mod tests {
     fn test_chain_equality() {
         assert_eq!(Chain::Arbitrum, Chain::Arbitrum);
         assert_ne!(Chain::Arbitrum, Chain::Ethereum);
+    }
+
+    #[test]
+    fn test_evm_chain_id() {
+        assert_eq!(Chain::Arbitrum.evm_chain_id(), 42161);
+        assert_eq!(Chain::Ethereum.evm_chain_id(), 1);
+        assert_eq!(Chain::Optimism.evm_chain_id(), 10);
+        assert_eq!(Chain::Polygon.evm_chain_id(), 137);
+    }
+
+    #[test]
+    fn test_is_source_chain() {
+        assert!(Chain::Arbitrum.is_source_chain());
+        assert!(!Chain::Ethereum.is_source_chain());
+        assert!(!Chain::Optimism.is_source_chain());
     }
 }

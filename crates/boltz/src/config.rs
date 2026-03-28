@@ -80,3 +80,6 @@ pub const ARBITRUM_USDT_ADDRESS: &str = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FC
 
 /// tBTC has 18 decimals on EVM. Sats have 8 decimals. Conversion factor = 10^10.
 pub const SATS_TO_TBTC_FACTOR: u64 = 10_000_000_000;
+
+/// Zero address — used as `tokenOut` in Boltz DEX quote API to represent native ETH.
+pub const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";

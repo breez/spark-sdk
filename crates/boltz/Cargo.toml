@@ -9,6 +9,7 @@ workspace = true
 
 [features]
 default = []
+browser-tests = [] # Enable browser wasm-pack tests
 regtest = []
 
 [dependencies]
