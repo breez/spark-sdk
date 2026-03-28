@@ -29,7 +29,7 @@ lightning.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
 prost.workspace = true
-regex.workspace = true
+regex-lite.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

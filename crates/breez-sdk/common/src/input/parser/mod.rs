@@ -3,7 +3,7 @@ use std::ops::Not;
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use platform_utils::time::UNIX_EPOCH;
-use regex::Regex;
+use regex_lite::Regex;
 use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
 
