@@ -15,7 +15,6 @@ bitcoin = { workspace = true, features = ["rand"] }
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 ecies.workspace = true
-enum_to_enum.workspace = true
 frost-core.workspace = true
 frost-secp256k1-tr.workspace = true
 futures.workspace = true

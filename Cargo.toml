@@ -65,7 +65,6 @@ chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 dirs = "6.0.0"
 ecies = { version = "0.2.7", default-features = false, features = ["pure"] }
-enum_to_enum = "0.1.0"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
 # frost-core = "2.1.0"

@@ -71,7 +71,6 @@ use crate::ssp::graphql::queries::user_request::{
 };
 use bitcoin::secp256k1::PublicKey;
 use chrono::{DateTime, Utc};
-use enum_to_enum::FromEnum;
 use serde::{Deserialize, Serialize};
 
 pub use crate::ssp::graphql::queries::claim_static_deposit::ClaimStaticDepositInput;
@@ -371,14 +370,7 @@ pub struct UserRequest {
     pub on: TransferFragmentUserRequestOn,
 }
 
-#[derive(FromEnum, Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
-#[from_enum(RequestCoopExitUserRequestFragmentOn)]
-#[from_enum(RequestSwapUserRequestFragmentOn)]
-#[from_enum(RequestLightningReceiveUserRequestFragmentOn)]
-#[from_enum(RequestLightningSendUserRequestFragmentOn)]
-#[from_enum(UserRequestTransferFragmentUserRequestOn)]
-#[from_enum(CompleteCoopExitUserRequestFragmentOn)]
-#[from_enum(TransfersTransferFragmentUserRequestOn)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 pub enum TransferFragmentUserRequestOn {
     ClaimStaticDeposit,
     CoopExitRequest,
@@ -386,6 +378,30 @@ pub enum TransferFragmentUserRequestOn {
     LightningReceiveRequest,
     LightningSendRequest,
 }
+
+macro_rules! impl_from_user_request_on {
+    ($source:ty) => {
+        impl From<$source> for TransferFragmentUserRequestOn {
+            fn from(src: $source) -> Self {
+                match src {
+                    <$source>::ClaimStaticDeposit => Self::ClaimStaticDeposit,
+                    <$source>::CoopExitRequest => Self::CoopExitRequest,
+                    <$source>::LeavesSwapRequest => Self::LeavesSwapRequest,
+                    <$source>::LightningReceiveRequest => Self::LightningReceiveRequest,
+                    <$source>::LightningSendRequest => Self::LightningSendRequest,
+                }
+            }
+        }
+    };
+}
+
+impl_from_user_request_on!(RequestCoopExitUserRequestFragmentOn);
+impl_from_user_request_on!(RequestSwapUserRequestFragmentOn);
+impl_from_user_request_on!(RequestLightningReceiveUserRequestFragmentOn);
+impl_from_user_request_on!(RequestLightningSendUserRequestFragmentOn);
+impl_from_user_request_on!(UserRequestTransferFragmentUserRequestOn);
+impl_from_user_request_on!(CompleteCoopExitUserRequestFragmentOn);
+impl_from_user_request_on!(TransfersTransferFragmentUserRequestOn);
 
 //#[macros::derive_from(TransferTransferFragment)]
 #[macros::derive_from(FullTransferFragment)]
@@ -396,14 +412,35 @@ pub struct SspTransfer {
     pub user_request: Option<SspUserRequest>,
 }
 
-#[derive(FromEnum, Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[from_enum(TransferUserRequestFragment)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub enum SspUserRequest {
     ClaimStaticDeposit(ClaimStaticDepositInfo),
     CoopExitRequest(CoopExitRequest),
     LeavesSwapRequest(LeavesSwapRequest),
     LightningReceiveRequest(LightningReceiveRequest),
     LightningSendRequest(LightningSendRequest),
+}
+
+impl From<TransferUserRequestFragment> for SspUserRequest {
+    fn from(src: TransferUserRequestFragment) -> Self {
+        match src {
+            TransferUserRequestFragment::ClaimStaticDeposit(inner) => {
+                Self::ClaimStaticDeposit(inner.into())
+            }
+            TransferUserRequestFragment::CoopExitRequest(inner) => {
+                Self::CoopExitRequest(inner.into())
+            }
+            TransferUserRequestFragment::LeavesSwapRequest(inner) => {
+                Self::LeavesSwapRequest(inner.into())
+            }
+            TransferUserRequestFragment::LightningReceiveRequest(inner) => {
+                Self::LightningReceiveRequest(inner.into())
+            }
+            TransferUserRequestFragment::LightningSendRequest(inner) => {
+                Self::LightningSendRequest(inner.into())
+            }
+        }
+    }
 }
 
 impl SspUserRequest {
