@@ -16,16 +16,16 @@ struct Cli {
     #[arg(long, env = "BOLTZ_MNEMONIC")]
     mnemonic: Option<String>,
 
-    /// Alchemy API key (required).
-    #[arg(long, env = "ALCHEMY_API_KEY")]
+    /// Alchemy API key.
+    #[arg(long, env = "ALCHEMY_API_KEY", default_value = "R-iU8US4vKEe2GH6VlCTg")]
     alchemy_api_key: String,
 
-    /// Alchemy gas policy ID (required).
-    #[arg(long, env = "ALCHEMY_GAS_POLICY_ID")]
+    /// Alchemy gas policy ID.
+    #[arg(long, env = "ALCHEMY_GAS_POLICY_ID", default_value = "dcf46730-a11c-4869-a38b-35bcd73fe73f")]
     alchemy_gas_policy_id: String,
 
     /// Boltz referral ID.
-    #[arg(long, env = "BOLTZ_REFERRAL_ID", default_value = "breez_sdk")]
+    #[arg(long, env = "BOLTZ_REFERRAL_ID", default_value = "boltz_webapp_desktop")]
     referral_id: String,
 
     /// Boltz API URL (without /v2).
