@@ -4,6 +4,7 @@ pub mod error;
 pub mod evm;
 pub mod keys;
 pub mod models;
+pub mod recover;
 pub mod store;
 pub mod swap;
 
@@ -123,5 +124,12 @@ impl BoltzService {
     /// Get current Boltz swap limits (min/max sats).
     pub async fn get_limits(&self) -> Result<SwapLimits, BoltzError> {
         self.executor.get_limits().await
+    }
+
+    /// Recover unclaimed swaps by scanning the blockchain.
+    /// Uses EVM contract log scanning to find Lockup events matching
+    /// this wallet's derived keys, then claims any still-locked swaps.
+    pub async fn recover(&self, destination_address: &str) -> Result<RecoveryResult, BoltzError> {
+        self.executor.recover(destination_address).await
     }
 }

@@ -190,6 +190,27 @@ pub struct SwapLimits {
     pub max_sats: u64,
 }
 
+/// Summary of a recovery operation.
+#[derive(Clone, Debug)]
+pub struct RecoveryResult {
+    /// Swaps that were found and claimed.
+    pub claimed: Vec<ClaimedRecovery>,
+    /// Swaps found on-chain but already claimed/refunded.
+    pub already_settled: u32,
+    /// Total Lockup events scanned matching our claim address.
+    pub total_events_scanned: u32,
+    /// Highest key index found (for syncing the counter).
+    pub highest_key_index: Option<u32>,
+}
+
+/// A single successfully claimed recovery.
+#[derive(Clone, Debug)]
+pub struct ClaimedRecovery {
+    pub key_index: u32,
+    pub preimage_hash: [u8; 32],
+    pub claim_tx_hash: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

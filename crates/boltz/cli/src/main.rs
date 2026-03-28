@@ -153,6 +153,12 @@ enum Command {
         #[arg(value_enum)]
         chain: Chain,
     },
+
+    /// Recover unclaimed swaps by scanning the blockchain (from mnemonic alone).
+    Recover {
+        /// Destination EVM address for recovered USDT.
+        destination: String,
+    },
 }
 
 #[tokio::main]
@@ -207,6 +213,10 @@ async fn main() -> Result<()> {
         } => {
             let svc = init_service(config, &seed, &cli.data_dir).await?;
             cmd_swap(&svc, &destination, chain.into(), usdt_amount).await?;
+        }
+        Command::Recover { destination } => {
+            let svc = init_service(config, &seed, &cli.data_dir).await?;
+            cmd_recover(&svc, &destination).await?;
         }
     }
 
@@ -326,6 +336,35 @@ async fn cmd_swap(
     );
     println!("  Destination: {}", completed.destination_address);
     println!("  Chain:       {:?}", completed.destination_chain);
+
+    Ok(())
+}
+
+async fn cmd_recover(svc: &BoltzService, destination: &str) -> Result<()> {
+    println!("Scanning blockchain for recoverable swaps...");
+    println!("This may take a few minutes.\n");
+
+    let result = svc.recover(destination).await?;
+
+    println!("Scan complete:");
+    println!("  Events scanned:    {}", result.total_events_scanned);
+    println!("  Already settled:   {}", result.already_settled);
+    println!("  Claimed:           {}", result.claimed.len());
+
+    if let Some(highest) = result.highest_key_index {
+        println!("  Highest key index: {highest}");
+    }
+
+    for claim in &result.claimed {
+        println!("\n  Claimed swap:");
+        println!("    Key index:     {}", claim.key_index);
+        println!("    Preimage hash: 0x{}", hex::encode(claim.preimage_hash));
+        println!("    Claim tx:      {}", claim.claim_tx_hash);
+    }
+
+    if result.claimed.is_empty() && result.total_events_scanned == 0 {
+        println!("\nNo recoverable swaps found.");
+    }
 
     Ok(())
 }
@@ -468,6 +507,14 @@ impl BoltzStore for FileBoltzStore {
             .ok_or_else(|| BoltzError::Store("Key index overflow".to_string()))?;
         self.write_index(chain_id, next)?;
         Ok(current)
+    }
+
+    async fn set_key_index_if_higher(&self, chain_id: u64, value: u32) -> Result<(), BoltzError> {
+        let current = self.read_index(chain_id)?;
+        if value > current {
+            self.write_index(chain_id, value)?;
+        }
+        Ok(())
     }
 }
 

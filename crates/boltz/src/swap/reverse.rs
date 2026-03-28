@@ -6,8 +6,8 @@ use crate::api::BoltzApiClient;
 use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
 use crate::api::ws::{SwapStatusSubscriber, SwapStatusUpdate};
 use crate::config::{
-    ARBITRUM_ERC20SWAP_ADDRESS, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
-    ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
+    ARBITRUM_ERC20SWAP_ADDRESS, ARBITRUM_ERC20SWAP_DEPLOY_BLOCK, ARBITRUM_ROUTER_ADDRESS,
+    ARBITRUM_TBTC_ADDRESS, ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
 };
 use crate::error::BoltzError;
 use crate::evm::alchemy::{AlchemyGasClient, EvmCall};
@@ -20,8 +20,10 @@ use crate::evm::provider::EvmProvider;
 use crate::evm::signing::EvmSigner;
 use crate::keys::EvmKeyManager;
 use crate::models::{
-    BoltzSwap, BoltzSwapStatus, Chain, CompletedSwap, CreatedSwap, PreparedSwap, SwapLimits,
+    BoltzSwap, BoltzSwapStatus, Chain, ClaimedRecovery, CompletedSwap, CreatedSwap, PreparedSwap,
+    RecoveryResult, SwapLimits,
 };
+use crate::recover::{self, RecoverableSwap};
 use crate::store::BoltzStore;
 
 /// Maximum claim retries (quote may go stale between encode and submit).
@@ -97,9 +99,7 @@ impl ReverseSwapExecutor {
         // For cross-chain destinations, add the LZ messaging fee cost in tBTC.
         // Matches web app's `invertPostOftQuote` which inflates required sats.
         if !chain.is_source_chain() {
-            let lz_fee_tbtc = self
-                .estimate_lz_fee_in_tbtc(&chain, usdt_amount)
-                .await?;
+            let lz_fee_tbtc = self.estimate_lz_fee_in_tbtc(&chain, usdt_amount).await?;
             tbtc_evm_units = tbtc_evm_units.saturating_add(lz_fee_tbtc);
         }
 
@@ -242,9 +242,11 @@ impl ReverseSwapExecutor {
         }
     }
 
-    /// Resume all active (non-final) swaps. Returns list of swap IDs being resumed.
+    /// Resume all active (non-final) swaps by re-driving them to completion.
+    /// Errors are logged per-swap; one failing swap does not abort the others.
     pub async fn resume_active_swaps(&self) -> Result<Vec<String>, BoltzError> {
         let active = self.store.list_active_swaps().await?;
+        let mut resumed = Vec::with_capacity(active.len());
         for swap in &active {
             tracing::info!(
                 swap_id = swap.id,
@@ -252,8 +254,132 @@ impl ReverseSwapExecutor {
                 status = ?swap.status,
                 "Resuming active swap"
             );
+            match self.complete(&swap.id).await {
+                Ok(completed) => {
+                    tracing::info!(
+                        swap_id = completed.swap_id,
+                        claim_tx = completed.claim_tx_hash,
+                        "Resumed swap completed successfully"
+                    );
+                    resumed.push(completed.swap_id);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        swap_id = swap.id,
+                        boltz_id = swap.boltz_id,
+                        error = %e,
+                        "Failed to resume swap"
+                    );
+                }
+            }
         }
-        Ok(active.into_iter().map(|s| s.id).collect())
+        Ok(resumed)
+    }
+
+    /// Recover unclaimed swaps by scanning the blockchain.
+    ///
+    /// Matches the Boltz web app's EVM recovery flow: scan `ERC20Swap` contract
+    /// Lockup events, match against derived preimage hashes, claim any still-locked swaps.
+    pub async fn recover(&self, destination_address: &str) -> Result<RecoveryResult, BoltzError> {
+        let chain_id_u32 = to_chain_id_u32(self.config.chain_id)?;
+
+        let (recoverable, stats) = recover::scan_for_recoverable_swaps(
+            &self.evm_provider,
+            &self.key_manager,
+            chain_id_u32,
+            ARBITRUM_ERC20SWAP_ADDRESS,
+            ARBITRUM_ERC20SWAP_DEPLOY_BLOCK,
+        )
+        .await?;
+
+        // Sync key index past all discovered indices
+        if let Some(highest) = stats.highest_key_index {
+            self.store
+                .set_key_index_if_higher(self.config.chain_id, highest.saturating_add(1))
+                .await?;
+        }
+
+        // Claim each recoverable swap
+        let mut claimed = Vec::new();
+        for swap in &recoverable {
+            match self.claim_recovered_swap(swap, destination_address).await {
+                Ok(tx_hash) => {
+                    claimed.push(ClaimedRecovery {
+                        key_index: swap.key_index,
+                        preimage_hash: swap.preimage_hash,
+                        claim_tx_hash: tx_hash,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(
+                        key_index = swap.key_index,
+                        tx = swap.lockup_tx_hash,
+                        error = %e,
+                        "Failed to claim recovered swap"
+                    );
+                }
+            }
+        }
+
+        Ok(RecoveryResult {
+            claimed,
+            already_settled: stats.already_settled,
+            total_events_scanned: stats.total_events,
+            highest_key_index: stats.highest_key_index,
+        })
+    }
+
+    /// Claim a single recovered swap by constructing a synthetic `BoltzSwap`
+    /// and reusing the existing claim pipeline.
+    async fn claim_recovered_swap(
+        &self,
+        recoverable: &RecoverableSwap,
+        destination_address: &str,
+    ) -> Result<String, BoltzError> {
+        // Convert tBTC EVM amount (18 decimals) back to sats (8 decimals)
+        let onchain_sats: u64 = recoverable
+            .amount
+            .checked_div(U256::from(SATS_TO_TBTC_FACTOR))
+            .unwrap_or(U256::ZERO)
+            .try_into()
+            .map_err(|_| BoltzError::Generic("tBTC amount too large for u64".into()))?;
+
+        let timelock: u64 = recoverable
+            .timelock
+            .try_into()
+            .map_err(|_| BoltzError::Generic("Timelock too large for u64".into()))?;
+
+        let now = current_unix_timestamp();
+        let swap_id = generate_swap_id();
+
+        let mut swap = BoltzSwap {
+            id: swap_id,
+            boltz_id: String::new(), // No Boltz ID for recovered swaps
+            status: BoltzSwapStatus::TbtcLocked,
+            claim_key_index: recoverable.key_index,
+            chain_id: self.config.chain_id,
+            claim_address: format!("0x{}", hex::encode(recoverable.claim_address.as_slice())),
+            destination_address: destination_address.to_string(),
+            destination_chain: Chain::Arbitrum, // Recovery always claims to Arbitrum
+            refund_address: format!("0x{}", hex::encode(recoverable.refund_address.as_slice())),
+            erc20swap_address: ARBITRUM_ERC20SWAP_ADDRESS.to_string(),
+            router_address: ARBITRUM_ROUTER_ADDRESS.to_string(),
+            invoice: String::new(),
+            invoice_amount_sats: 0,
+            onchain_amount: onchain_sats,
+            expected_usdt_amount: 0, // Unknown for recovered swaps
+            timeout_block_height: timelock,
+            lockup_tx_id: Some(recoverable.lockup_tx_hash.clone()),
+            claim_tx_hash: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        // Insert into store so claim_and_swap can track it
+        self.store.insert_swap(&swap).await?;
+
+        let completed = self.claim_and_swap(&mut swap).await?;
+        Ok(completed.claim_tx_hash.unwrap_or_default())
     }
 
     // ─── Internal ────────────────────────────────────────────────────────
@@ -858,14 +984,18 @@ impl ReverseSwapExecutor {
         }
 
         // Apply slippage buffer upward to the fee
-        let fee_with_slippage =
-            apply_slippage_up(native_fee, u128::from(self.config.slippage_bps));
+        let fee_with_slippage = apply_slippage_up(native_fee, u128::from(self.config.slippage_bps));
 
         // DEX quote: how much tBTC to get the required ETH for the LZ fee
         let fee_dex = pick_best_quote(
             &self
                 .api_client
-                .get_quote_out("ARB", ARBITRUM_TBTC_ADDRESS, ZERO_ADDRESS, fee_with_slippage)
+                .get_quote_out(
+                    "ARB",
+                    ARBITRUM_TBTC_ADDRESS,
+                    ZERO_ADDRESS,
+                    fee_with_slippage,
+                )
                 .await?,
             QuoteDirection::Out,
         )?;

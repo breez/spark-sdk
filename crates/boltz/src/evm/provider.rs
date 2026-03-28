@@ -6,10 +6,27 @@ use platform_utils::http::HttpClient;
 
 use crate::error::BoltzError;
 
+/// Maximum retries for rate-limited (429) RPC requests.
+const MAX_RPC_RETRIES: u32 = 5;
+
+/// Base delay in milliseconds for exponential backoff (doubles each retry).
+const RPC_RETRY_BASE_MS: u64 = 1000;
+
 /// Thin JSON-RPC wrapper over `platform_utils::HttpClient` for EVM read operations.
 pub struct EvmProvider {
     rpc_url: String,
     http_client: Box<dyn HttpClient>,
+}
+
+/// A single log entry from `eth_getLogs`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    pub address: String,
+    pub topics: Vec<String>,
+    pub data: String,
+    pub block_number: String,
+    pub transaction_hash: String,
 }
 
 /// Minimal transaction receipt from `eth_getTransactionReceipt`.
@@ -77,6 +94,34 @@ impl EvmProvider {
         parse_hex_u64(&result)
     }
 
+    /// Query logs matching the given filter via `eth_getLogs`.
+    /// Each element in `topics` is either `Some(hex_topic)` for an exact match
+    /// or `None` for a wildcard.
+    pub async fn eth_get_logs(
+        &self,
+        address: &str,
+        topics: &[Option<&str>],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<LogEntry>, BoltzError> {
+        let topics_json: Vec<serde_json::Value> = topics
+            .iter()
+            .map(|t| match t {
+                Some(hex) => serde_json::Value::String(hex.to_string()),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+
+        let params = serde_json::json!([{
+            "address": address,
+            "topics": topics_json,
+            "fromBlock": format_hex_u64(from_block),
+            "toBlock": format_hex_u64(to_block),
+        }]);
+
+        self.rpc_request("eth_getLogs", params).await
+    }
+
     /// Get the latest block number.
     pub async fn eth_block_number(&self) -> Result<u64, BoltzError> {
         let result: String = self
@@ -86,6 +131,7 @@ impl EvmProvider {
     }
 
     /// Internal: send a JSON-RPC request and parse the result.
+    /// Retries with exponential backoff on HTTP 429 (rate limit) responses.
     async fn rpc_request<T: for<'a> Deserialize<'a>>(
         &self,
         method: &str,
@@ -106,27 +152,88 @@ impl EvmProvider {
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
-        let response = self
-            .http_client
-            .post(self.rpc_url.clone(), Some(headers), Some(body))
-            .await?;
+        let mut last_err = None;
+        for attempt in 0..MAX_RPC_RETRIES {
+            let response = self
+                .http_client
+                .post(
+                    self.rpc_url.clone(),
+                    Some(headers.clone()),
+                    Some(body.clone()),
+                )
+                .await?;
 
-        if !response.is_success() {
-            return Err(BoltzError::Evm {
-                reason: format!("RPC HTTP error {}: {}", response.status, response.body),
-                tx_hash: None,
-            });
+            if response.status == 429 {
+                let delay = RPC_RETRY_BASE_MS << attempt;
+                tracing::warn!(
+                    method,
+                    attempt,
+                    delay_ms = delay,
+                    "RPC rate limited (429), retrying"
+                );
+                sleep_ms(delay).await;
+                last_err = Some(BoltzError::Evm {
+                    reason: format!("RPC HTTP error 429: {}", response.body),
+                    tx_hash: None,
+                });
+                continue;
+            }
+
+            if !response.is_success() {
+                return Err(BoltzError::Evm {
+                    reason: format!("RPC HTTP error {}: {}", response.status, response.body),
+                    tx_hash: None,
+                });
+            }
+
+            let rpc_response: serde_json::Value =
+                serde_json::from_str(&response.body).map_err(|e| BoltzError::Evm {
+                    reason: format!(
+                        "Failed to parse JSON-RPC response: {e} (body: {})",
+                        response.body
+                    ),
+                    tx_hash: None,
+                })?;
+
+            // JSON-RPC level 429 (rate limit in the JSON body)
+            if let Some(err) = rpc_response.get("error") {
+                let code = err
+                    .get("code")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                if code == 429 {
+                    let delay = RPC_RETRY_BASE_MS << attempt;
+                    tracing::warn!(
+                        method,
+                        attempt,
+                        delay_ms = delay,
+                        "RPC rate limited (JSON-RPC 429), retrying"
+                    );
+                    sleep_ms(delay).await;
+                    let message = err
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Too Many Requests");
+                    last_err = Some(BoltzError::Evm {
+                        reason: format!("JSON-RPC error 429: {message}"),
+                        tx_hash: None,
+                    });
+                    continue;
+                }
+            }
+
+            return Self::parse_rpc_response(&rpc_response);
         }
 
-        let rpc_response: serde_json::Value =
-            serde_json::from_str(&response.body).map_err(|e| BoltzError::Evm {
-                reason: format!(
-                    "Failed to parse JSON-RPC response: {e} (body: {})",
-                    response.body
-                ),
-                tx_hash: None,
-            })?;
+        Err(last_err.unwrap_or_else(|| BoltzError::Evm {
+            reason: format!("RPC request failed after {MAX_RPC_RETRIES} retries"),
+            tx_hash: None,
+        }))
+    }
 
+    fn parse_rpc_response<T: for<'a> Deserialize<'a>>(
+        rpc_response: &serde_json::Value,
+    ) -> Result<T, BoltzError> {
         if let Some(err) = rpc_response.get("error") {
             let code = err
                 .get("code")
@@ -154,12 +261,20 @@ impl EvmProvider {
     }
 }
 
+fn format_hex_u64(n: u64) -> String {
+    format!("0x{n:x}")
+}
+
 fn parse_hex_u64(s: &str) -> Result<u64, BoltzError> {
     let clean = s.strip_prefix("0x").unwrap_or(s);
     u64::from_str_radix(clean, 16).map_err(|e| BoltzError::Evm {
         reason: format!("Failed to parse hex u64 '{s}': {e}"),
         tx_hash: None,
     })
+}
+
+async fn sleep_ms(ms: u64) {
+    platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_millis(ms)).await;
 }
 
 #[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]

@@ -86,6 +86,19 @@ sol! {
     /// `ERC20Swap` version — used for EIP-712 domain (currently returns 6).
     function version() external view returns (uint64);
 
+    /// Hash all values of a swap to get the on-chain state key.
+    function hashValues(
+        bytes32 preimageHash,
+        uint256 amount,
+        address tokenAddress,
+        address claimAddress,
+        address refundAddress,
+        uint256 timelock
+    ) external pure returns (bytes32);
+
+    /// Check whether a swap is still locked (true = funds present, false = already claimed/refunded).
+    function swaps(bytes32 hash) external view returns (bool);
+
     // ─── ERC20 ───────────────────────────────────────────────────────────
 
     function transfer(address to, uint256 amount) returns (bool);
@@ -346,6 +359,147 @@ pub fn hash_send_data(typehash: [u8; 32], send_data: &SendData) -> [u8; 32] {
         .abi_encode();
 
     keccak256(&encoded).into()
+}
+
+// ─── Lockup event decoding (for recovery) ───────────────────────────────
+
+/// Lockup event topic0: `keccak256("Lockup(bytes32,uint256,address,address,address,uint256)")`.
+pub fn lockup_event_topic() -> [u8; 32] {
+    use alloy_primitives::keccak256;
+    keccak256(b"Lockup(bytes32,uint256,address,address,address,uint256)").into()
+}
+
+/// Decoded fields from an `ERC20Swap` `Lockup` event log.
+#[derive(Debug, Clone)]
+pub struct DecodedLockupEvent {
+    pub preimage_hash: [u8; 32],
+    pub amount: U256,
+    pub token_address: Address,
+    pub claim_address: Address,
+    pub refund_address: Address,
+    pub timelock: U256,
+    pub block_number: u64,
+    pub transaction_hash: String,
+}
+
+/// Decode a `Lockup` event from a raw log entry.
+///
+/// Topics layout: `[event_sig, preimageHash, claimAddress, refundAddress]`
+/// Data layout: `abi.encode(uint256 amount, address tokenAddress, uint256 timelock)`
+pub fn decode_lockup_event(
+    log: &crate::evm::provider::LogEntry,
+) -> Result<DecodedLockupEvent, BoltzError> {
+    if log.topics.len() < 4 {
+        return Err(BoltzError::Evm {
+            reason: format!("Lockup log has {} topics, expected 4", log.topics.len()),
+            tx_hash: None,
+        });
+    }
+
+    let preimage_hash: [u8; 32] = parse_hex_bytes32(&log.topics[1])?;
+    let claim_address = address_from_topic(&log.topics[2])?;
+    let refund_address = address_from_topic(&log.topics[3])?;
+
+    let data_bytes = parse_hex_bytes(log.data.strip_prefix("0x").unwrap_or(&log.data))?;
+    let (amount, token_address, timelock) = <(U256, Address, U256)>::abi_decode(&data_bytes)
+        .map_err(|e| BoltzError::Evm {
+            reason: format!("Failed to decode Lockup event data: {e}"),
+            tx_hash: None,
+        })?;
+
+    let block_number = parse_block_number(&log.block_number)?;
+
+    Ok(DecodedLockupEvent {
+        preimage_hash,
+        amount,
+        token_address,
+        claim_address,
+        refund_address,
+        timelock,
+        block_number,
+        transaction_hash: log.transaction_hash.clone(),
+    })
+}
+
+/// Encode `hashValues(...)` calldata.
+pub fn encode_hash_values(
+    preimage_hash: [u8; 32],
+    amount: U256,
+    token_address: Address,
+    claim_address: Address,
+    refund_address: Address,
+    timelock: U256,
+) -> Vec<u8> {
+    hashValuesCall {
+        preimageHash: preimage_hash.into(),
+        amount,
+        tokenAddress: token_address,
+        claimAddress: claim_address,
+        refundAddress: refund_address,
+        timelock,
+    }
+    .abi_encode()
+}
+
+/// Decode `hashValues` return value (bytes32).
+pub fn decode_hash_values_return(data: &[u8]) -> Result<[u8; 32], BoltzError> {
+    let decoded = <(FixedBytes<32>,)>::abi_decode(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode hashValues return: {e}"),
+        tx_hash: None,
+    })?;
+    Ok(decoded.0.into())
+}
+
+/// Encode `swaps(bytes32)` calldata.
+pub fn encode_swaps_check(hash: [u8; 32]) -> Vec<u8> {
+    swapsCall { hash: hash.into() }.abi_encode()
+}
+
+/// Decode `swaps(bytes32)` return value (bool).
+pub fn decode_swaps_check_return(data: &[u8]) -> Result<bool, BoltzError> {
+    let decoded = <(bool,)>::abi_decode(data).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to decode swaps return: {e}"),
+        tx_hash: None,
+    })?;
+    Ok(decoded.0)
+}
+
+/// Left-pad a 20-byte address to 32 bytes for use as an indexed event topic filter.
+pub fn address_to_topic(address: &[u8; 20]) -> String {
+    let mut padded = [0u8; 32];
+    padded[12..].copy_from_slice(address);
+    format!("0x{}", hex::encode(padded))
+}
+
+fn parse_hex_bytes32(hex_str: &str) -> Result<[u8; 32], BoltzError> {
+    let clean = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    let bytes = hex::decode(clean).map_err(|e| BoltzError::Evm {
+        reason: format!("Invalid hex bytes32 '{hex_str}': {e}"),
+        tx_hash: None,
+    })?;
+    if bytes.len() != 32 {
+        return Err(BoltzError::Evm {
+            reason: format!("Expected 32 bytes, got {}", bytes.len()),
+            tx_hash: None,
+        });
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+fn address_from_topic(topic: &str) -> Result<Address, BoltzError> {
+    let bytes32 = parse_hex_bytes32(topic)?;
+    // Indexed address is left-padded to 32 bytes; take last 20 bytes
+    Ok(Address::from_slice(&bytes32[12..]))
+}
+
+fn parse_block_number(hex_str: &str) -> Result<u64, BoltzError> {
+    let clean = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    u64::from_str_radix(clean, 16).map_err(|e| BoltzError::Evm {
+        reason: format!("Failed to parse block number '{hex_str}': {e}"),
+        tx_hash: None,
+    })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
