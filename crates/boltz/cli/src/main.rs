@@ -7,7 +7,28 @@ use anyhow::{Context, Result, bail};
 use bip39::{Language, Mnemonic};
 use clap::{Parser, Subcommand};
 
-use boltz::{AlchemyConfig, BoltzConfig, BoltzService, Chain, MemoryBoltzStore, PreparedSwap};
+use boltz::{AlchemyConfig, BoltzConfig, BoltzService, MemoryBoltzStore, PreparedSwap};
+
+#[derive(Clone, clap::ValueEnum)]
+enum Chain {
+    Arbitrum,
+    Ethereum,
+    Base,
+    Optimism,
+    Polygon,
+}
+
+impl From<Chain> for boltz::Chain {
+    fn from(c: Chain) -> Self {
+        match c {
+            Chain::Arbitrum => Self::Arbitrum,
+            Chain::Ethereum => Self::Ethereum,
+            Chain::Base => Self::Base,
+            Chain::Optimism => Self::Optimism,
+            Chain::Polygon => Self::Polygon,
+        }
+    }
+}
 
 const PHRASE_FILE_NAME: &str = "phrase";
 
@@ -71,18 +92,26 @@ enum Command {
 
     /// Get a quote for a LN -> USDT swap (no commitment).
     Prepare {
-        /// USDT amount (6 decimals, e.g. 1000000 = 1 USDT).
+        /// USDT amount (e.g. 1.5 for 1.50 USDT).
+        #[arg(value_parser = parse_usdt_amount)]
         usdt_amount: u64,
-        /// Destination EVM address on Arbitrum.
+        /// Destination EVM address.
         destination: String,
+        /// Destination chain.
+        #[arg(value_enum)]
+        chain: Chain,
     },
 
     /// Full swap flow: prepare -> create -> wait for payment -> complete.
     Swap {
-        /// USDT amount (6 decimals, e.g. 1000000 = 1 USDT).
+        /// USDT amount (e.g. 1.5 for 1.50 USDT).
+        #[arg(value_parser = parse_usdt_amount)]
         usdt_amount: u64,
-        /// Destination EVM address on Arbitrum.
+        /// Destination EVM address.
         destination: String,
+        /// Destination chain.
+        #[arg(value_enum)]
+        chain: Chain,
     },
 }
 
@@ -124,16 +153,18 @@ async fn main() -> Result<()> {
         Command::Prepare {
             usdt_amount,
             destination,
+            chain,
         } => {
             let svc = init_service(config, &seed).await?;
-            cmd_prepare(&svc, &destination, usdt_amount).await?;
+            cmd_prepare(&svc, &destination, chain.into(), usdt_amount).await?;
         }
         Command::Swap {
             usdt_amount,
             destination,
+            chain,
         } => {
             let svc = init_service(config, &seed).await?;
-            cmd_swap(&svc, &destination, usdt_amount).await?;
+            cmd_swap(&svc, &destination, chain.into(), usdt_amount).await?;
         }
     }
 
@@ -199,19 +230,19 @@ async fn cmd_limits(svc: &BoltzService) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_prepare(svc: &BoltzService, destination: &str, usdt_amount: u64) -> Result<()> {
+async fn cmd_prepare(svc: &BoltzService, destination: &str, chain: boltz::Chain, usdt_amount: u64) -> Result<()> {
     let prepared = svc
-        .prepare_reverse_swap(destination, Chain::Arbitrum, usdt_amount)
+        .prepare_reverse_swap(destination, chain, usdt_amount)
         .await?;
     print_prepared(&prepared);
     Ok(())
 }
 
-async fn cmd_swap(svc: &BoltzService, destination: &str, usdt_amount: u64) -> Result<()> {
+async fn cmd_swap(svc: &BoltzService, destination: &str, chain: boltz::Chain, usdt_amount: u64) -> Result<()> {
     // Step 1: Prepare
     println!("Fetching quote...\n");
     let prepared = svc
-        .prepare_reverse_swap(destination, Chain::Arbitrum, usdt_amount)
+        .prepare_reverse_swap(destination, chain, usdt_amount)
         .await?;
     print_prepared(&prepared);
 
@@ -237,24 +268,30 @@ async fn cmd_swap(svc: &BoltzService, destination: &str, usdt_amount: u64) -> Re
     let completed = svc.complete_reverse_swap(&created.swap_id).await?;
     println!("\nSwap completed!");
     println!("  Claim tx:    {}", completed.claim_tx_hash);
-    println!("  USDT amount: {} (6 decimals)", completed.usdt_delivered);
+    println!("  USDT amount: {} USDT", format_usdt(completed.usdt_delivered));
     println!("  Destination: {}", completed.destination_address);
     println!("  Chain:       {:?}", completed.destination_chain);
 
     Ok(())
 }
 
+fn format_usdt(raw: u64) -> String {
+    let whole = raw / 1_000_000;
+    let frac = raw % 1_000_000;
+    format!("{whole}.{frac:06}")
+}
+
 fn print_prepared(p: &PreparedSwap) {
     println!("Quote:");
     println!("  Destination:      {}", p.destination_address);
     println!("  Chain:            {:?}", p.destination_chain);
-    println!("  USDT requested:   {} (6 decimals)", p.usdt_amount);
+    println!("  USDT requested:   {} USDT", format_usdt(p.usdt_amount));
     println!("  Invoice amount:   {} sats", p.invoice_amount_sats);
     println!("  Boltz fee:        {} sats", p.boltz_fee_sats);
     println!("  Onchain (tBTC):   {} sats", p.estimated_onchain_amount);
     println!(
-        "  Est. USDT output: {} (6 decimals)",
-        p.estimated_usdt_output
+        "  Est. USDT output: {} USDT",
+        format_usdt(p.estimated_usdt_output)
     );
     println!("  Slippage:         {} bps", p.slippage_bps);
 }
@@ -281,6 +318,34 @@ fn rand_entropy() -> [u8; 16] {
     out[..8].copy_from_slice(&h1.to_le_bytes());
     out[8..].copy_from_slice(&h2.to_le_bytes());
     out
+}
+
+/// Parse a human-readable USDT amount (e.g. "1.5") into 6-decimal raw units (1500000).
+fn parse_usdt_amount(s: &str) -> std::result::Result<u64, String> {
+    const DECIMALS: u32 = 6;
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => {
+            let whole: u64 = parts[0].parse().map_err(|e| format!("{e}"))?;
+            whole
+                .checked_mul(10u64.pow(DECIMALS))
+                .ok_or_else(|| "amount too large".to_string())
+        }
+        2 => {
+            let whole: u64 = parts[0].parse().map_err(|e| format!("{e}"))?;
+            let frac_str = parts[1];
+            if frac_str.len() > DECIMALS as usize {
+                return Err(format!("too many decimal places (max {DECIMALS})"));
+            }
+            let padded = format!("{frac_str:0<width$}", width = DECIMALS as usize);
+            let frac: u64 = padded.parse().map_err(|e| format!("{e}"))?;
+            whole
+                .checked_mul(10u64.pow(DECIMALS))
+                .and_then(|w| w.checked_add(frac))
+                .ok_or_else(|| "amount too large".to_string())
+        }
+        _ => Err("invalid amount format".to_string()),
+    }
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
