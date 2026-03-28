@@ -13,9 +13,9 @@ default = []
 browser-tests = []
 
 [dependencies]
+base64.workspace = true
 bitcoin.workspace = true
 hex.workspace = true
-jwt = "0.16.0"
 macros.workspace = true
 platform-utils.workspace = true
 rand.workspace = true
