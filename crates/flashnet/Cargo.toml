@@ -21,7 +21,7 @@ platform-utils.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_qs = "1.0.0-rc.3"
+serde_urlencoded = "0.7"
 serde_with.workspace = true
 spark.workspace = true
 spark-wallet.workspace = true

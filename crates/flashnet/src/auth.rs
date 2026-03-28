@@ -145,9 +145,7 @@ impl FlashnetClient {
     {
         let query_string = match query {
             Some(q) => {
-                let qs_config =
-                    serde_qs::Config::new().array_format(serde_qs::ArrayFormat::Unindexed);
-                let qs = qs_config.serialize_string(&q).map_err(|e| {
+                let qs = serde_urlencoded::to_string(&q).map_err(|e| {
                     FlashnetError::Generic(format!("Failed to serialize query parameters: {e}"))
                 })?;
                 format!("?{qs}")
