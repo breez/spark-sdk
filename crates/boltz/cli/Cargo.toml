@@ -9,10 +9,14 @@ workspace = true
 
 [dependencies]
 boltz = { path = ".." }
+macros.workspace = true
+async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 bip39.workspace = true
+rand.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rustls.workspace = true

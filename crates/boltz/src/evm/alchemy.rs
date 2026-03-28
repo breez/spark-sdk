@@ -105,7 +105,17 @@ impl AlchemyGasClient {
 
     /// Step 2: Sign the prepared calls and send via `wallet_sendPreparedCalls`.
     async fn sign_and_send(&self, prepared: serde_json::Value) -> Result<String, BoltzError> {
+        tracing::debug!(
+            prepared = %serde_json::to_string_pretty(&prepared).unwrap_or_default(),
+            "wallet_prepareCalls response"
+        );
+
         let signed = self.sign_prepared_response(&prepared)?;
+
+        tracing::debug!(
+            signed = %serde_json::to_string_pretty(&signed).unwrap_or_default(),
+            "Signed payload for wallet_sendPreparedCalls"
+        );
 
         let result: SendPreparedCallsResponse = self
             .rpc_call("wallet_sendPreparedCalls", serde_json::json!([signed]))
@@ -146,8 +156,8 @@ impl AlchemyGasClient {
     }
 
     /// First-time response: array with [authorization, user-operation-v070].
-    /// Entry 0: sign with `sign_raw_digest` (NO EIP-191 prefix).
-    /// Entry 1: sign with `sign_message` (WITH EIP-191 prefix).
+    /// Authorization: sign `signatureRequest.rawPayload` with raw ECDSA (no prefix).
+    /// `UserOp`: sign `signatureRequest.data.raw` with EIP-191.
     fn sign_first_time_response(
         &self,
         prepared: &serde_json::Value,
@@ -167,36 +177,34 @@ impl AlchemyGasClient {
             });
         }
 
-        let mut signed_entries = Vec::with_capacity(data.len());
+        // Entry 0: authorization — raw ECDSA sign of signatureRequest.rawPayload
+        let auth_entry = &data[0];
+        let auth_payload = extract_raw_payload(auth_entry)?;
+        let auth_digest = parse_payload_to_digest(&auth_payload)?;
+        let auth_sig = self.gas_signer.sign_raw_digest(&auth_digest)?;
 
-        for (i, entry) in data.iter().enumerate() {
-            let entry_type = entry["type"].as_str().unwrap_or("");
-            let payload = extract_signing_payload(entry)?;
-            let sig = if i == 0 && entry_type != "user-operation-v070" {
-                // Authorization entry — raw ECDSA sign (no prefix)
-                let digest = parse_payload_to_digest(&payload)?;
-                self.gas_signer.sign_raw_digest(&digest)?
-            } else {
-                // UserOperation — EIP-191 personal_sign
-                let bytes = parse_payload_to_bytes(&payload)?;
-                self.gas_signer.sign_message(&bytes)?
-            };
-
-            signed_entries.push(attach_signature(entry, &sig));
-        }
+        // Entry 1: user-operation — EIP-191 sign of signatureRequest.data.raw
+        let uo_entry = &data[1];
+        let uo_payload = extract_data_raw(uo_entry)?;
+        let uo_bytes = parse_payload_to_bytes(&uo_payload)?;
+        let uo_sig = self.gas_signer.sign_message(&uo_bytes)?;
 
         Ok(serde_json::json!({
             "type": "array",
-            "data": signed_entries
+            "data": [
+                attach_signature(auth_entry, &auth_sig),
+                attach_signature(uo_entry, &uo_sig),
+            ]
         }))
     }
 
     /// Subsequent response: single user-operation-v070.
+    /// Sign `signatureRequest.data.raw` with EIP-191.
     fn sign_subsequent_response(
         &self,
         prepared: &serde_json::Value,
     ) -> Result<serde_json::Value, BoltzError> {
-        let payload = extract_signing_payload(prepared)?;
+        let payload = extract_data_raw(prepared)?;
         let bytes = parse_payload_to_bytes(&payload)?;
         let sig = self.gas_signer.sign_message(&bytes)?;
 
@@ -316,16 +324,24 @@ impl AlchemyGasClient {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-/// Extract the signing payload from a prepareCalls entry.
-/// The payload is in `data.hash` (a hex string).
-fn extract_signing_payload(entry: &serde_json::Value) -> Result<String, BoltzError> {
-    // Try data.hash first (UserOp), then just hash at top level
-    entry["data"]["hash"]
+/// Extract `signatureRequest.rawPayload` (authorization entries).
+fn extract_raw_payload(entry: &serde_json::Value) -> Result<String, BoltzError> {
+    entry["signatureRequest"]["rawPayload"]
         .as_str()
-        .or_else(|| entry["hash"].as_str())
         .map(String::from)
         .ok_or_else(|| BoltzError::Evm {
-            reason: format!("No signing payload found in entry: {entry}"),
+            reason: format!("Missing signatureRequest.rawPayload in entry: {entry}"),
+            tx_hash: None,
+        })
+}
+
+/// Extract `signatureRequest.data.raw` (`UserOp` entries).
+fn extract_data_raw(entry: &serde_json::Value) -> Result<String, BoltzError> {
+    entry["signatureRequest"]["data"]["raw"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| BoltzError::Evm {
+            reason: format!("Missing signatureRequest.data.raw in entry: {entry}"),
             tx_hash: None,
         })
 }
@@ -350,7 +366,9 @@ fn parse_payload_to_bytes(payload: &str) -> Result<Vec<u8>, BoltzError> {
     hex::decode(clean).map_err(|e| BoltzError::Signing(format!("Invalid hex payload: {e}")))
 }
 
-/// Attach a signature to a prepared calls entry.
+/// Build a signed entry from a prepared calls entry.
+/// Only includes the fields Alchemy expects: `type`, `data`, `chainId`, `signature`.
+/// Mirrors the web app's `SignedEntry` shape — `signatureRequest` is NOT forwarded.
 fn attach_signature(entry: &serde_json::Value, sig: &EvmSignature) -> serde_json::Value {
     let sig_hex = format!(
         "0x{}{}{}",
@@ -359,12 +377,15 @@ fn attach_signature(entry: &serde_json::Value, sig: &EvmSignature) -> serde_json
         hex::encode([sig.v])
     );
 
-    let mut result = entry.clone();
-    result["signature"] = serde_json::json!({
-        "type": "secp256k1",
-        "data": sig_hex
-    });
-    result
+    serde_json::json!({
+        "type": entry["type"],
+        "data": entry["data"],
+        "chainId": entry["chainId"],
+        "signature": {
+            "type": "secp256k1",
+            "data": sig_hex
+        }
+    })
 }
 
 /// Encode an `EvmSignature` as a 65-byte hex string (r || s || v) with `0x` prefix.
@@ -521,20 +542,30 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_signing_payload() {
-        // UserOp style: data.hash
+    fn test_extract_raw_payload() {
+        let entry = serde_json::json!({
+            "type": "authorization",
+            "signatureRequest": {
+                "rawPayload": "0xabcd1234",
+                "type": "eip7702Auth"
+            }
+        });
+        assert_eq!(extract_raw_payload(&entry).unwrap(), "0xabcd1234");
+        assert!(extract_raw_payload(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn test_extract_data_raw() {
         let entry = serde_json::json!({
             "type": "user-operation-v070",
-            "data": { "hash": "0xdeadbeef" }
+            "signatureRequest": {
+                "data": { "raw": "0xdeadbeef" },
+                "rawPayload": "0x_WRONG_do_not_use_this"
+            }
         });
-        assert_eq!(extract_signing_payload(&entry).unwrap(), "0xdeadbeef");
-
-        // Top-level hash
-        let entry2 = serde_json::json!({
-            "type": "authorization",
-            "hash": "0xcafebabe"
-        });
-        assert_eq!(extract_signing_payload(&entry2).unwrap(), "0xcafebabe");
+        // Must use data.raw, NOT rawPayload, even when both are present
+        assert_eq!(extract_data_raw(&entry).unwrap(), "0xdeadbeef");
+        assert!(extract_data_raw(&serde_json::json!({})).is_err());
     }
 
     #[test]
@@ -554,8 +585,9 @@ mod tests {
         // Subsequent response: single UserOp
         let prepared = serde_json::json!({
             "type": "user-operation-v070",
-            "data": {
-                "hash": format!("0x{}", hex::encode([1u8; 32]))
+            "data": { "sender": "0x1234" },
+            "signatureRequest": {
+                "data": { "raw": format!("0x{}", hex::encode([1u8; 32])) }
             },
             "chainId": "0xa4b1"
         });
@@ -590,15 +622,18 @@ mod tests {
             "data": [
                 {
                     "type": "authorization",
-                    "data": {
-                        "hash": format!("0x{}", hex::encode([2u8; 32]))
+                    "data": { "address": "0x1234", "nonce": "0x0" },
+                    "signatureRequest": {
+                        "rawPayload": format!("0x{}", hex::encode([2u8; 32])),
+                        "type": "eip7702Auth"
                     },
                     "chainId": "0xa4b1"
                 },
                 {
                     "type": "user-operation-v070",
-                    "data": {
-                        "hash": format!("0x{}", hex::encode([3u8; 32]))
+                    "data": { "sender": "0x5678" },
+                    "signatureRequest": {
+                        "data": { "raw": format!("0x{}", hex::encode([3u8; 32])) }
                     },
                     "chainId": "0xa4b1"
                 }
@@ -630,8 +665,9 @@ mod tests {
             // 1. wallet_prepareCalls -> subsequent-style response
             alchemy_rpc_success(&serde_json::json!({
                 "type": "user-operation-v070",
-                "data": {
-                    "hash": format!("0x{}", hex::encode([1u8; 32]))
+                "data": { "sender": "0x1234" },
+                "signatureRequest": {
+                    "data": { "raw": format!("0x{}", hex::encode([1u8; 32])) }
                 },
                 "chainId": "0xa4b1"
             })),
@@ -684,8 +720,9 @@ mod tests {
         let responses = vec![
             alchemy_rpc_success(&serde_json::json!({
                 "type": "user-operation-v070",
-                "data": {
-                    "hash": format!("0x{}", hex::encode([1u8; 32]))
+                "data": { "sender": "0x1234" },
+                "signatureRequest": {
+                    "data": { "raw": format!("0x{}", hex::encode([1u8; 32])) }
                 },
                 "chainId": "0xa4b1"
             })),
@@ -748,5 +785,143 @@ mod tests {
         assert!(json.get("value").is_none());
         assert!(json.get("data").is_none());
         assert_eq!(json["to"], "0xabc");
+    }
+
+    // ─── Cross-validated test vectors ───────────────────────────────
+    // These signatures were generated by `test_vectors/generate_signing.mjs`
+    // using ethers v6.16.0 — the same library the Boltz web app uses.
+    // Any mismatch here means our signing diverges from the web app.
+
+    #[test]
+    fn test_raw_ecdsa_matches_ethers() {
+        // Vector 1: signingKey.sign(payload).serialized
+        let signer = test_signer();
+        let payload = "0x0101010101010101010101010101010101010101010101010101010101010101";
+        let digest = parse_payload_to_digest(payload).unwrap();
+        let sig = signer.sign_raw_digest(&digest).unwrap();
+        let sig_hex = signature_to_hex(&sig);
+        assert_eq!(
+            sig_hex,
+            "0xdbdb4d2abb3cae4ece51ccbe3989aaf8d39d385d3844ce75aa7fe9b93c8295731d47a5dd8df538e573714ea4f4ad3f4848787552b70edb4fdfa08315cddf6c7a1b",
+            "Raw ECDSA signature must match ethers signingKey.sign().serialized"
+        );
+    }
+
+    #[test]
+    fn test_eip191_sign_message_matches_ethers() {
+        // Vector 2: wallet.signMessage(getBytes(payload))
+        let signer = test_signer();
+        let payload = "0x0202020202020202020202020202020202020202020202020202020202020202";
+        let bytes = parse_payload_to_bytes(payload).unwrap();
+        let sig = signer.sign_message(&bytes).unwrap();
+        let sig_hex = signature_to_hex(&sig);
+        assert_eq!(
+            sig_hex,
+            "0x8a664e40364a638a70cb1e0ba0e6c39d24e9de39d68868598935b6f7c1d9ef0156bcffe603d274f403389de6afe6471c46a5ac5968279a61239ac2d380b5406f1c",
+            "EIP-191 signature must match ethers wallet.signMessage()"
+        );
+    }
+
+    #[test]
+    fn test_first_time_flow_matches_ethers() {
+        // Vector 3: full signPreparedCalls first-time flow
+        let config = AlchemyConfig {
+            api_key: "test".to_string(),
+            gas_policy_id: "policy".to_string(),
+        };
+        let signer = test_signer();
+        let client = AlchemyGasClient::new(
+            &config,
+            Box::new(MockAlchemyHttpClient::new(vec![])),
+            signer,
+        );
+
+        // Mirrors real Alchemy response: UserOp entry has BOTH rawPayload and data.raw
+        // with different values. We must use data.raw for UserOp, rawPayload for auth.
+        let prepared = serde_json::json!({
+            "type": "array",
+            "data": [
+                {
+                    "type": "authorization",
+                    "data": { "address": "0x69007702764179f14F51cdce752f4f775d74E139", "nonce": "0x0" },
+                    "signatureRequest": {
+                        "rawPayload": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "type": "eip7702Auth"
+                    },
+                    "chainId": "0xa4b1"
+                },
+                {
+                    "type": "user-operation-v070",
+                    "data": { "sender": "0x323f3d3cD440Ad067a8d6CeB8c9bF2252C5779Da" },
+                    "signatureRequest": {
+                        "data": { "raw": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+                        "rawPayload": "0xff_DECOY_must_not_be_used_for_userop_signing_ffffffffffffffff",
+                        "type": "personal_sign"
+                    },
+                    "chainId": "0xa4b1"
+                }
+            ]
+        });
+
+        let signed = client.sign_prepared_response(&prepared).unwrap();
+        let data = signed["data"].as_array().unwrap();
+
+        // Auth entry signature must match ethers
+        assert_eq!(
+            data[0]["signature"]["data"].as_str().unwrap(),
+            "0xc1836abdb4aeee42d853020293f9f2a2ff34c19c745c96e8d2d7e4822f6916d42eb1e8b60447a6a17d4a2602e499352c9c9645f4aba95adc898588b8d302bc561b"
+        );
+
+        // UserOp entry signature must match ethers
+        assert_eq!(
+            data[1]["signature"]["data"].as_str().unwrap(),
+            "0x220cccad90893eb6b523e98a17143a8959d4b57747e760356c181829fcf2bfea30afd418a6a3cd236f0fa6360bb40f9455068f48c364fccaceddbb132b15fd3e1b"
+        );
+
+        // Signed entries must only have type, data, chainId, signature (no signatureRequest)
+        for entry in data {
+            assert!(entry.get("signatureRequest").is_none(),
+                "signatureRequest must not be forwarded to wallet_sendPreparedCalls");
+            assert!(entry.get("type").is_some());
+            assert!(entry.get("data").is_some());
+            assert!(entry.get("chainId").is_some());
+            assert!(entry.get("signature").is_some());
+        }
+    }
+
+    #[test]
+    fn test_subsequent_flow_matches_ethers() {
+        // Vector 4: full signPreparedCalls subsequent flow
+        let config = AlchemyConfig {
+            api_key: "test".to_string(),
+            gas_policy_id: "policy".to_string(),
+        };
+        let signer = test_signer();
+        let client = AlchemyGasClient::new(
+            &config,
+            Box::new(MockAlchemyHttpClient::new(vec![])),
+            signer,
+        );
+
+        let prepared = serde_json::json!({
+            "type": "user-operation-v070",
+            "data": { "sender": "0x323f3d3cD440Ad067a8d6CeB8c9bF2252C5779Da" },
+            "signatureRequest": {
+                "data": { "raw": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+                "rawPayload": "0xff_DECOY_must_not_be_used_ffffffffffffffffffffffffffffffff",
+                "type": "personal_sign"
+            },
+            "chainId": "0xa4b1"
+        });
+
+        let signed = client.sign_prepared_response(&prepared).unwrap();
+
+        assert_eq!(
+            signed["signature"]["data"].as_str().unwrap(),
+            "0xd0d8a4157083c95016141628bcbabf7a25f437674386440e2cd9e9e331f86b907a2733dade4f75818927b4b91f1af5966daba643a5e0473865a44608b7721f8a1b"
+        );
+
+        // Must not forward signatureRequest
+        assert!(signed.get("signatureRequest").is_none());
     }
 }

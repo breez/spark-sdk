@@ -1383,13 +1383,17 @@ name = "boltz-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bip39",
  "boltz",
  "clap",
  "hex",
+ "macros",
+ "rand 0.8.5",
  "rustls 0.23.31",
  "serde_json",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use bip39::{Language, Mnemonic};
 use clap::{Parser, Subcommand};
 
-use boltz::{AlchemyConfig, BoltzConfig, BoltzService, MemoryBoltzStore, PreparedSwap};
+use boltz::{AlchemyConfig, BoltzConfig, BoltzError, BoltzService, BoltzStore, PreparedSwap};
 
 #[derive(Clone, clap::ValueEnum)]
 enum Chain {
@@ -123,6 +123,8 @@ async fn main() -> Result<()> {
     fs::create_dir_all(&cli.data_dir)
         .with_context(|| format!("Failed to create data dir: {}", cli.data_dir.display()))?;
 
+    init_logging(&cli.data_dir)?;
+
     // Resolve mnemonic: CLI arg > phrase file > generate new
     let mnemonic = if let Some(m) = &cli.mnemonic {
         Mnemonic::from_str(m).context("Invalid mnemonic")?
@@ -147,7 +149,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Info => cmd_info(&seed)?,
         Command::Limits => {
-            let svc = init_service(config, &seed).await?;
+            let svc = init_service(config, &seed, &cli.data_dir).await?;
             cmd_limits(&svc).await?;
         }
         Command::Prepare {
@@ -155,7 +157,7 @@ async fn main() -> Result<()> {
             destination,
             chain,
         } => {
-            let svc = init_service(config, &seed).await?;
+            let svc = init_service(config, &seed, &cli.data_dir).await?;
             cmd_prepare(&svc, &destination, chain.into(), usdt_amount).await?;
         }
         Command::Swap {
@@ -163,7 +165,7 @@ async fn main() -> Result<()> {
             destination,
             chain,
         } => {
-            let svc = init_service(config, &seed).await?;
+            let svc = init_service(config, &seed, &cli.data_dir).await?;
             cmd_swap(&svc, &destination, chain.into(), usdt_amount).await?;
         }
     }
@@ -195,8 +197,12 @@ fn get_or_create_mnemonic(data_dir: &Path) -> Result<Mnemonic> {
     }
 }
 
-async fn init_service(config: BoltzConfig, seed: &[u8]) -> Result<BoltzService> {
-    let store = Arc::new(MemoryBoltzStore::new());
+async fn init_service(
+    config: BoltzConfig,
+    seed: &[u8],
+    data_dir: &Path,
+) -> Result<BoltzService> {
+    let store = Arc::new(FileBoltzStore::new(data_dir));
     let svc = BoltzService::new(config, seed, store)
         .await
         .context("Failed to initialize BoltzService")?;
@@ -296,27 +302,126 @@ fn print_prepared(p: &PreparedSwap) {
     println!("  Slippage:         {} bps", p.slippage_bps);
 }
 
-/// Generate 16 bytes of entropy using system time (good enough for test CLI).
+// ─── Logging ────────────────────────────────────────────────────────────
+
+fn init_logging(data_dir: &Path) -> Result<()> {
+    use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "debug,h2=warn,rustls=warn,hyper=warn,tonic=warn".parse().unwrap());
+
+    let log_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data_dir.join("boltz.log"))
+        .with_context(|| "Failed to open log file")?;
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_file)
+                .with_ansi(false),
+        )
+        .try_init()
+        .ok(); // Ignore if already initialized
+
+    Ok(())
+}
+
+// ─── File-backed BoltzStore ─────────────────────────────────────────────
+// Persists key indices to `{data_dir}/key_index_{chain_id}` so that
+// consecutive CLI runs derive fresh preimage keys. Swap state stays in
+// memory since the CLI runs a single swap to completion.
+
+struct FileBoltzStore {
+    data_dir: PathBuf,
+    swaps: tokio::sync::Mutex<std::collections::HashMap<String, boltz::BoltzSwap>>,
+}
+
+impl FileBoltzStore {
+    fn new(data_dir: &Path) -> Self {
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            swaps: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn index_path(&self, chain_id: u64) -> PathBuf {
+        self.data_dir.join(format!("key_index_{chain_id}"))
+    }
+
+    fn read_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
+        match fs::read_to_string(self.index_path(chain_id)) {
+            Ok(s) => s
+                .trim()
+                .parse()
+                .map_err(|e| BoltzError::Store(format!("Invalid key index: {e}"))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(BoltzError::Store(format!("Failed to read key index: {e}"))),
+        }
+    }
+
+    fn write_index(&self, chain_id: u64, index: u32) -> Result<(), BoltzError> {
+        fs::write(self.index_path(chain_id), index.to_string())
+            .map_err(|e| BoltzError::Store(format!("Failed to write key index: {e}")))
+    }
+}
+
+#[macros::async_trait]
+impl BoltzStore for FileBoltzStore {
+    async fn insert_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
+        self.swaps
+            .lock()
+            .await
+            .insert(swap.id.clone(), swap.clone());
+        Ok(())
+    }
+
+    async fn update_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
+        let mut swaps = self.swaps.lock().await;
+        if swaps.contains_key(&swap.id) {
+            swaps.insert(swap.id.clone(), swap.clone());
+            Ok(())
+        } else {
+            Err(BoltzError::Store(format!("Swap not found: {}", swap.id)))
+        }
+    }
+
+    async fn get_swap(&self, id: &str) -> Result<Option<boltz::BoltzSwap>, BoltzError> {
+        Ok(self.swaps.lock().await.get(id).cloned())
+    }
+
+    async fn list_active_swaps(&self) -> Result<Vec<boltz::BoltzSwap>, BoltzError> {
+        Ok(self
+            .swaps
+            .lock()
+            .await
+            .values()
+            .filter(|s| !s.status.is_terminal())
+            .cloned()
+            .collect())
+    }
+
+    async fn get_next_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
+        self.read_index(chain_id)
+    }
+
+    async fn increment_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
+        let current = self.read_index(chain_id)?;
+        let next = current
+            .checked_add(1)
+            .ok_or_else(|| BoltzError::Store("Key index overflow".to_string()))?;
+        self.write_index(chain_id, next)?;
+        Ok(current)
+    }
+}
+
 fn rand_entropy() -> [u8; 16] {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-
-    let mut hasher = DefaultHasher::new();
-    nanos.hash(&mut hasher);
-    let h1 = hasher.finish();
-
-    (nanos.wrapping_add(1)).hash(&mut hasher);
-    let h2 = hasher.finish();
-
     let mut out = [0u8; 16];
-    out[..8].copy_from_slice(&h1.to_le_bytes());
-    out[8..].copy_from_slice(&h2.to_le_bytes());
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut out);
     out
 }
 

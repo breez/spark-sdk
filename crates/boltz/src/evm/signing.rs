@@ -89,7 +89,7 @@ impl EvmSigner {
     }
 
     pub fn address_hex(&self) -> String {
-        format!("0x{}", hex::encode(self.address_bytes))
+        Address::from(self.address_bytes).to_checksum(None)
     }
 
     pub fn chain_id(&self) -> u64 {
