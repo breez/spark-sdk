@@ -5,8 +5,7 @@ version.workspace = true
 
 [features]
 browser-tests = ["passkey"]                 # Enable browser wasm-pack tests
-uniffi = ["dep:uniffi", "openssl-vendored"]
-openssl-vendored = ["openssl"]
+uniffi = ["dep:uniffi"]
 test-utils = ["spark-wallet/test-utils"]
 # Passkey functionality
 passkey = ["dep:nostr", "dep:nostr-sdk"]
@@ -38,7 +37,6 @@ lnurl-models.workspace = true
 macros.workspace = true
 nostr = { workspace = true, optional = true }
 nostr-sdk = { workspace = true, optional = true }
-openssl = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-postgres = { workspace = true, optional = true }

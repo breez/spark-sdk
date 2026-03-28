@@ -88,7 +88,6 @@ lnurl-models = { path = "crates/breez-sdk/lnurl-models" }
 macros = { path = "crates/macros" }
 nostr = { version = "0.43.1", default-features = false, features = ["std"] }
 nostr-sdk = { version = "0.43.0", default-features = false }
-openssl = { version = "0.10.70", default-features = false, features = ["vendored"] }
 platform-utils = { path = "crates/platform-utils" }
 proc-macro2 = "1.0.97"
 prost = "0.13.4"
