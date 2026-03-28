@@ -1,10 +1,15 @@
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, str::FromStr};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use bip39::{Language, Mnemonic};
 use clap::{Parser, Subcommand};
 
 use boltz::{AlchemyConfig, BoltzConfig, BoltzService, Chain, MemoryBoltzStore, PreparedSwap};
+
+const PHRASE_FILE_NAME: &str = "phrase";
 
 #[derive(Parser)]
 #[command(
@@ -12,9 +17,13 @@ use boltz::{AlchemyConfig, BoltzConfig, BoltzService, Chain, MemoryBoltzStore, P
     about = "Test CLI for the Boltz LN -> USDT reverse swap flow"
 )]
 struct Cli {
-    /// BIP-39 mnemonic (12 or 24 words). If not provided, generates a new one.
+    /// BIP-39 mnemonic (12 or 24 words). If not provided, reads from data-dir or generates new.
     #[arg(long, env = "BOLTZ_MNEMONIC")]
     mnemonic: Option<String>,
+
+    /// Data directory for persisting mnemonic and state.
+    #[arg(long, env = "BOLTZ_DATA_DIR", default_value = "./.data-boltz")]
+    data_dir: PathBuf,
 
     /// Alchemy API key.
     #[arg(long, env = "ALCHEMY_API_KEY", default_value = "R-iU8US4vKEe2GH6VlCTg")]
@@ -81,18 +90,16 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Derive seed from mnemonic
-    let mnemonic_str = if let Some(m) = &cli.mnemonic {
-        m.clone()
-    } else {
-        let entropy: [u8; 16] = rand_entropy();
-        let m = bip39::Mnemonic::from_entropy(&entropy).context("Failed to generate mnemonic")?;
-        let words = m.to_string();
-        println!("Generated new mnemonic (save this!):\n  {words}\n");
-        words
-    };
+    // Ensure data directory exists
+    fs::create_dir_all(&cli.data_dir)
+        .with_context(|| format!("Failed to create data dir: {}", cli.data_dir.display()))?;
 
-    let mnemonic = bip39::Mnemonic::parse_normalized(&mnemonic_str).context("Invalid mnemonic")?;
+    // Resolve mnemonic: CLI arg > phrase file > generate new
+    let mnemonic = if let Some(m) = &cli.mnemonic {
+        Mnemonic::from_str(m).context("Invalid mnemonic")?
+    } else {
+        get_or_create_mnemonic(&cli.data_dir)?
+    };
     let seed = mnemonic.to_seed("");
 
     // Build config
@@ -131,6 +138,30 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn get_or_create_mnemonic(data_dir: &Path) -> Result<Mnemonic> {
+    let filename = data_dir.join(PHRASE_FILE_NAME);
+
+    match fs::read_to_string(&filename) {
+        Ok(phrase) => {
+            let mnemonic = Mnemonic::from_str(phrase.trim())?;
+            println!("Loaded mnemonic from {}\n", filename.display());
+            Ok(mnemonic)
+        }
+        Err(e) => {
+            if e.kind() != io::ErrorKind::NotFound {
+                bail!("Can't read from file: {}, err {e}", filename.display());
+            }
+            let mnemonic = Mnemonic::from_entropy_in(Language::English, &rand_entropy())?;
+            fs::write(&filename, mnemonic.to_string())?;
+            println!(
+                "Generated new mnemonic (saved to {}):\n  {mnemonic}\n",
+                filename.display()
+            );
+            Ok(mnemonic)
+        }
+    }
 }
 
 async fn init_service(config: BoltzConfig, seed: &[u8]) -> Result<BoltzService> {
@@ -228,15 +259,6 @@ fn print_prepared(p: &PreparedSwap) {
     println!("  Slippage:         {} bps", p.slippage_bps);
 }
 
-fn confirm(prompt: &str) -> Result<bool> {
-    print!("{prompt} [y/N] ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let trimmed = input.trim().to_lowercase();
-    Ok(trimmed == "y" || trimmed == "yes")
-}
-
 /// Generate 16 bytes of entropy using system time (good enough for test CLI).
 fn rand_entropy() -> [u8; 16] {
     use std::collections::hash_map::DefaultHasher;
@@ -259,4 +281,13 @@ fn rand_entropy() -> [u8; 16] {
     out[..8].copy_from_slice(&h1.to_le_bytes());
     out[8..].copy_from_slice(&h2.to_le_bytes());
     out
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt} [y/N] ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim().to_lowercase();
+    Ok(trimmed == "y" || trimmed == "yes")
 }

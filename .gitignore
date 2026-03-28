@@ -16,6 +16,7 @@ js_reference/
 # Example CLI files
 *.spark*/
 crates/breez-sdk/cli/.data*
+crates/boltz/cli/.data*
 crates/breez-sdk/bindings/examples/cli/langs/**/.data/
 crates/breez-sdk/bindings/examples/cli/langs/**/breez-cli
 

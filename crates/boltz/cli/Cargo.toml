@@ -15,3 +15,4 @@ anyhow.workspace = true
 serde_json.workspace = true
 hex.workspace = true
 bip39.workspace = true
+rustls.workspace = true
