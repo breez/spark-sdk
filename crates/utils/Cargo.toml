@@ -16,3 +16,7 @@ k256 = { workspace = true }
 rand.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
+# Wasm dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

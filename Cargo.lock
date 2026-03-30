@@ -5993,6 +5993,7 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "getrandom 0.2.16",
  "hex",
  "hkdf",
  "k256",
