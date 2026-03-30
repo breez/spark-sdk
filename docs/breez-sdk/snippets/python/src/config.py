@@ -52,15 +52,13 @@ async def configure_stable_balance():
     # ANCHOR: stable-balance-config
     config = default_config(network=Network.MAINNET)
 
-    # Enable stable balance with auto-conversion to a specific token
+    # Enable stable balance with USDB conversion
     config.stable_balance_config = StableBalanceConfig(
         tokens=[StableBalanceToken(
             label="USDB",
-            token_identifier="<token_identifier>",
+            token_identifier="btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87",
         )],
         default_active_label="USDB",
-        threshold_sats=10_000,
-        max_slippage_bps=100,
     )
     # ANCHOR_END: stable-balance-config
     logging.info(f"Config: {config}")

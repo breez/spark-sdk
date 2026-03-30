@@ -46,15 +46,13 @@ class Config {
         // ANCHOR: stable-balance-config
         val config = defaultConfig(Network.MAINNET)
 
-        // Enable stable balance with auto-conversion to a specific token
+        // Enable stable balance with USDB conversion
         config.stableBalanceConfig = StableBalanceConfig(
             tokens = listOf(StableBalanceToken(
                 label = "USDB",
-                tokenIdentifier = "<token_identifier>",
+                tokenIdentifier = "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87",
             )),
             defaultActiveLabel = "USDB",
-            thresholdSats = 10_000u,
-            maxSlippageBps = 100u,
         )
         // ANCHOR_END: stable-balance-config
         println("Config: $config")
