@@ -300,52 +300,60 @@ impl TimelockManager {
         )
         .await?;
 
+        let idempotency_key = node
+            .refund_tx
+            .as_ref()
+            .map(|tx| tx.compute_txid().to_string());
+
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .renew_leaf(RenewLeafRequest {
-                leaf_id: node.id.to_string(),
-                signing_jobs: Some(SigningJobs::RenewNodeTimelockSigningJob(
-                    RenewNodeTimelockSigningJob {
-                        split_node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpSplitNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        split_node_direct_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectSplitNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_from_cpfp_refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                    },
-                )),
-            })
+            .renew_leaf(
+                RenewLeafRequest {
+                    leaf_id: node.id.to_string(),
+                    signing_jobs: Some(SigningJobs::RenewNodeTimelockSigningJob(
+                        RenewNodeTimelockSigningJob {
+                            split_node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpSplitNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            split_node_direct_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectSplitNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_from_cpfp_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                        },
+                    )),
+                },
+                idempotency_key,
+            )
             .await?;
 
         let Some(RenewResult::RenewNodeTimelockResult(renew_result)) = response.renew_result else {
@@ -458,42 +466,50 @@ impl TimelockManager {
         )
         .await?;
 
+        let idempotency_key = node
+            .refund_tx
+            .as_ref()
+            .map(|tx| tx.compute_txid().to_string());
+
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .renew_leaf(RenewLeafRequest {
-                leaf_id: node.id.to_string(),
-                signing_jobs: Some(SigningJobs::RenewRefundTimelockSigningJob(
-                    RenewRefundTimelockSigningJob {
-                        node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_from_cpfp_refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                    },
-                )),
-            })
+            .renew_leaf(
+                RenewLeafRequest {
+                    leaf_id: node.id.to_string(),
+                    signing_jobs: Some(SigningJobs::RenewRefundTimelockSigningJob(
+                        RenewRefundTimelockSigningJob {
+                            node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_from_cpfp_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                        },
+                    )),
+                },
+                idempotency_key,
+            )
             .await?;
 
         let Some(RenewResult::RenewRefundTimelockResult(renew_result)) = response.renew_result
@@ -590,37 +606,45 @@ impl TimelockManager {
         )
         .await?;
 
+        let idempotency_key = node
+            .refund_tx
+            .as_ref()
+            .map(|tx| tx.compute_txid().to_string());
+
         let response = self
             .operator_pool
             .get_coordinator()
             .client
-            .renew_leaf(RenewLeafRequest {
-                leaf_id: node.id.to_string(),
-                signing_jobs: Some(SigningJobs::RenewNodeZeroTimelockSigningJob(
-                    RenewNodeZeroTimelockSigningJob {
-                        node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::CpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_node_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectNode)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                        direct_from_cpfp_refund_tx_signing_job: signed_jobs
-                            .iter()
-                            .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
-                            .map(|j| j.signed_tx.as_ref().try_into())
-                            .transpose()?,
-                    },
-                )),
-            })
+            .renew_leaf(
+                RenewLeafRequest {
+                    leaf_id: node.id.to_string(),
+                    signing_jobs: Some(SigningJobs::RenewNodeZeroTimelockSigningJob(
+                        RenewNodeZeroTimelockSigningJob {
+                            node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::CpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_node_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectNode)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                            direct_from_cpfp_refund_tx_signing_job: signed_jobs
+                                .iter()
+                                .find(|j| j.job_type == SigningJobType::DirectFromCpfpRefund)
+                                .map(|j| j.signed_tx.as_ref().try_into())
+                                .transpose()?,
+                        },
+                    )),
+                },
+                idempotency_key,
+            )
             .await?;
 
         let Some(RenewResult::RenewNodeZeroTimelockResult(renew_result)) = response.renew_result

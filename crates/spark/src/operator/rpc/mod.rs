@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 mod connection_manager;
 mod error;
+pub(crate) mod metadata;
 mod spark_rpc_client;
 mod transport;
 pub use connection_manager::*;
