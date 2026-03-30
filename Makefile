@@ -71,3 +71,7 @@ claude-check:
 
 open-core-rustdocs:
 	cd crates/breez-sdk/core && cargo doc --no-deps --open
+
+update-lockfiles:
+	./scripts/update-lock-files.sh
+ulf: update-lockfiles
