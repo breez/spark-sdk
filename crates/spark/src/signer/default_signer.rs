@@ -337,12 +337,12 @@ impl DefaultSigner {
         message: &[u8],
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError> {
-        ecies::encrypt(&receiver_public_key.serialize(), message)
+        utils::ecies::encrypt(&receiver_public_key.serialize(), message)
             .map_err(|e| SignerError::Generic(format!("failed to encrypt: {e}")))
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
+        utils::ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -972,7 +972,7 @@ pub(crate) mod tests {
         assert!(!result.is_empty());
 
         // Verify receiver can decrypt it
-        let decrypted = ecies::decrypt(&receiver_private_key.secret_bytes(), &result)
+        let decrypted = utils::ecies::decrypt(&receiver_private_key.secret_bytes(), &result)
             .expect("Failed to decrypt with receiver key");
         let decrypted_key =
             SecretKey::from_slice(&decrypted).expect("Failed to parse decrypted key");

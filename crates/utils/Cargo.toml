@@ -1,0 +1,18 @@
+[package]
+name = "utils"
+edition = "2024"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+hkdf.workspace = true
+k256 = { workspace = true }
+rand.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

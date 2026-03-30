@@ -20,6 +20,7 @@ members = [
   "crates/macros",
   "crates/macro_test",
   "crates/platform-utils",
+  "crates/utils",
   "crates/spark",
   "crates/spark-itest",
   "crates/spark-postgres",
@@ -65,7 +66,9 @@ cbc = "0.1.2"
 chrono = { version = "0.4.37", features = ["serde"] }
 clap = "4.5.40"
 dirs = "6.0.0"
-ecies = { version = "0.2.7", default-features = false, features = ["pure"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
 # frost-core = "2.1.0"
@@ -89,6 +92,7 @@ macros = { path = "crates/macros" }
 nostr = { version = "0.43.1", default-features = false, features = ["std"] }
 nostr-sdk = { version = "0.43.0", default-features = false }
 platform-utils = { path = "crates/platform-utils" }
+utils = { path = "crates/utils" }
 proc-macro2 = "1.0.97"
 prost = "0.13.4"
 prost-types = "0.13.4"
