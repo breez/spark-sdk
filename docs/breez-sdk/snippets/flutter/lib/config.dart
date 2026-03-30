@@ -48,15 +48,13 @@ Future<void> configureOptimizationConfiguration() async {
 Future<void> configureStableBalance() async {
   // ANCHOR: stable-balance-config
   var config = defaultConfig(network: Network.mainnet).copyWith(
-      // Enable stable balance with auto-conversion to a specific token
+      // Enable stable balance with USDB conversion
       stableBalanceConfig: StableBalanceConfig(
           tokens: [StableBalanceToken(
             label: "USDB",
-            tokenIdentifier: "<token_identifier>",
+            tokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87",
           )],
           defaultActiveLabel: "USDB",
-          thresholdSats: BigInt.from(10000),
-          maxSlippageBps: 100,
           ));
   // ANCHOR_END: stable-balance-config
   print(config);

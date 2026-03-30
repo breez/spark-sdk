@@ -53,17 +53,13 @@ func ConfigureStableBalance() {
 	// ANCHOR: stable-balance-config
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 
-	// Enable stable balance with auto-conversion to a specific token
-	thresholdSats := uint64(10_000)
-	maxSlippageBps := uint32(100)
+	// Enable stable balance with USDB conversion
 	defaultActiveLabel := "USDB"
 	stableBalanceConfig := breez_sdk_spark.StableBalanceConfig{
 		Tokens: []breez_sdk_spark.StableBalanceToken{
-			{Label: "USDB", TokenIdentifier: "<token_identifier>"},
+			{Label: "USDB", TokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"},
 		},
 		DefaultActiveLabel: &defaultActiveLabel,
-		ThresholdSats:       &thresholdSats,
-		MaxSlippageBps:      &maxSlippageBps,
 	}
 	config.StableBalanceConfig = &stableBalanceConfig
 	// ANCHOR_END: stable-balance-config

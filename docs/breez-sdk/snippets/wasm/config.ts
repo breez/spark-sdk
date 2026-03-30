@@ -43,15 +43,13 @@ const exampleConfigureStableBalance = async () => {
   // ANCHOR: stable-balance-config
   const config = defaultConfig('mainnet')
 
-  // Enable stable balance with auto-conversion to a specific token
+  // Enable stable balance with USDB conversion
   config.stableBalanceConfig = {
     tokens: [{
       label: 'USDB',
-      tokenIdentifier: '<token_identifier>'
+      tokenIdentifier: 'btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87'
     }],
-    defaultActiveLabel: 'USDB',
-    thresholdSats: 10_000,
-    maxSlippageBps: 100
+    defaultActiveLabel: 'USDB'
   }
   // ANCHOR_END: stable-balance-config
   console.log('Config:', config)

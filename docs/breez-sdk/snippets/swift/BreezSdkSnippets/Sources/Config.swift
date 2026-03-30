@@ -43,15 +43,13 @@ func configureStableBalance() async throws {
     // ANCHOR: stable-balance-config
     var config = defaultConfig(network: Network.mainnet)
 
-    // Enable stable balance with auto-conversion to a specific token
+    // Enable stable balance with USDB conversion
     config.stableBalanceConfig = StableBalanceConfig(
         tokens: [StableBalanceToken(
             label: "USDB",
-            tokenIdentifier: "<token_identifier>"
+            tokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"
         )],
-        defaultActiveLabel: "USDB",
-        thresholdSats: 10_000,
-        maxSlippageBps: 100
+        defaultActiveLabel: "USDB"
     )
     // ANCHOR_END: stable-balance-config
     print("Config: \(config)")

@@ -17,7 +17,6 @@
     - [C#](guide/install_csharp.md)
   - [Testing and development](guide/testing.md)
   - [Initializing the SDK](guide/initializing.md)
-    - [Connecting with a Passkey](guide/passkey.md)
     - [Customizing the SDK](guide/customizing.md)
   - [Getting the SDK info](guide/get_info.md)
   - [Listening to events](guide/events.md)
@@ -35,6 +34,8 @@
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [Using LNURL-Auth](guide/lnurl_auth.md)
+- [Passkey login](guide/passkey.md)
+- [Stable balance](guide/stable_balance.md)
 - [User settings](guide/user_settings.md)
 - [Signing and verifying messages](guide/messages.md)
 - [Supporting fiat currencies](guide/fiat_currencies.md)
@@ -50,7 +51,6 @@
   - [Conditional Payments](guide/htlcs.md)
   - [Using an External Signer](guide/external_signer.md)
   - [Managing webhooks](guide/webhooks.md)
-  - [Stable balance](guide/stable_balance.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

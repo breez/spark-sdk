@@ -54,17 +54,15 @@ namespace BreezSdkSnippets
             // ANCHOR: stable-balance-config
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {
-                // Enable stable balance with auto-conversion to a specific token
+                // Enable stable balance with USDB conversion
                 stableBalanceConfig = new StableBalanceConfig(
                     tokens: new StableBalanceToken[] {
                         new StableBalanceToken(
                             label: "USDB",
-                            tokenIdentifier: "<token_identifier>"
+                            tokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"
                         )
                     },
-                    defaultActiveLabel: "USDB",
-                    thresholdSats: 10000,
-                    maxSlippageBps: 100
+                    defaultActiveLabel: "USDB"
                 )
             };
             // ANCHOR_END: stable-balance-config

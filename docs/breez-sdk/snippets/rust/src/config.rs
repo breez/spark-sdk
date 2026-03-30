@@ -53,15 +53,15 @@ pub(crate) fn configure_stable_balance() -> Result<()> {
     // ANCHOR: stable-balance-config
     let mut config = default_config(Network::Mainnet);
 
-    // Enable stable balance with auto-conversion to a specific token
+    // Enable stable balance with USDB conversion
     config.stable_balance_config = Some(StableBalanceConfig {
         tokens: vec![StableBalanceToken {
             label: "USDB".to_string(),
-            token_identifier: "<token_identifier>".to_string(),
+            token_identifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87".to_string(),
         }],
         default_active_label: Some("USDB".to_string()),
-        threshold_sats: Some(10_000),
-        max_slippage_bps: Some(100),
+        threshold_sats: None,
+        max_slippage_bps: None,
     });
     // ANCHOR_END: stable-balance-config
     info!("Config: {:?}", config);
