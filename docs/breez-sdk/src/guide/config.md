@@ -35,7 +35,10 @@ The LNURL domain to be used for receiving LNURL and Lightning address payments. 
 
 ## Prefer Spark over Lightning
 
-An on-off switch that determines whether to prefer settlement using Spark when sending and receiving payments via Lightning invoices. 
+When enabled, the SDK will settle Lightning invoice payments using the Spark protocol instead of Lightning where possible. This comes with trade-offs:
+
+- **Sending:** No proof of payment (no Lightning preimage). Invoice metadata (the invoice itself, its description) is not persisted with the payment.
+- **Receiving:** The SDK [embeds a Spark address](https://docs.spark.money/api-reference/wallet/create-lightning-invoice) in the invoice's fallback field. If the payer uses this Spark address, the received payment cannot be linked back to the invoice—it appears as a separate Spark transfer with no associated metadata.
 
 ## External input parsing
 
