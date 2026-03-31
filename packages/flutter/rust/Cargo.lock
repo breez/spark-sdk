@@ -3861,9 +3861,10 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "getrandom 0.2.16",
  "hkdf",
- "k256",
  "rand 0.8.5",
+ "secp256k1",
  "sha2",
  "thiserror 2.0.17",
 ]
