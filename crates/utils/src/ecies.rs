@@ -12,10 +12,8 @@ use aes_gcm::{
     aes::Aes256,
 };
 use hkdf::Hkdf;
-use k256::{
-    AffinePoint, ProjectivePoint, PublicKey, SecretKey, elliptic_curve::sec1::ToEncodedPoint,
-};
 use rand::{RngCore, rngs::OsRng};
+use secp256k1::{PublicKey, Secp256k1, SecretKey, ecdh::shared_secret_point};
 use sha2::Sha256;
 use thiserror::Error;
 
@@ -34,19 +32,18 @@ pub enum Error {
     InvalidPublicKey,
     #[error("invalid message")]
     InvalidMessage,
-    #[error("ECDH produced the identity point")]
-    EcdhFailed,
     #[error("HKDF key derivation failed")]
     KdfFailed,
 }
 
 /// Encrypt `msg` for `receiver_pub_bytes` (compressed 33 B or uncompressed 65 B SEC1 pubkey).
 pub fn encrypt(receiver_pub_bytes: &[u8], msg: &[u8]) -> Result<Vec<u8>, Error> {
+    let secp = Secp256k1::new();
     let receiver_pubkey =
-        PublicKey::from_sec1_bytes(receiver_pub_bytes).map_err(|_| Error::InvalidPublicKey)?;
+        PublicKey::from_slice(receiver_pub_bytes).map_err(|_| Error::InvalidPublicKey)?;
 
-    let ephemeral_seckey = SecretKey::random(&mut OsRng);
-    let ephemeral_pubkey = ephemeral_seckey.public_key();
+    let ephemeral_seckey = SecretKey::new(&mut OsRng);
+    let ephemeral_pubkey = PublicKey::from_secret_key(&secp, &ephemeral_seckey);
 
     let sym_key = derive_sym_key(&ephemeral_pubkey, &ephemeral_seckey, &receiver_pubkey)?;
 
@@ -60,7 +57,7 @@ pub fn encrypt(receiver_pub_bytes: &[u8], msg: &[u8]) -> Result<Vec<u8>, Error> 
         .map_err(|_| Error::InvalidMessage)?;
 
     let mut out = Vec::with_capacity(OVERHEAD.saturating_add(msg.len()));
-    out.extend_from_slice(ephemeral_pubkey.to_encoded_point(false).as_bytes());
+    out.extend_from_slice(&ephemeral_pubkey.serialize_uncompressed());
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(tag.as_slice());
     out.extend_from_slice(&ciphertext);
@@ -76,8 +73,8 @@ pub fn decrypt(receiver_sec_bytes: &[u8], msg: &[u8]) -> Result<Vec<u8>, Error> 
 
     let receiver_sk =
         SecretKey::from_slice(receiver_sec_bytes).map_err(|_| Error::InvalidMessage)?;
-    let ephemeral_pk = PublicKey::from_sec1_bytes(&msg[..UNCOMPRESSED_PK_SIZE])
-        .map_err(|_| Error::InvalidPublicKey)?;
+    let ephemeral_pk =
+        PublicKey::from_slice(&msg[..UNCOMPRESSED_PK_SIZE]).map_err(|_| Error::InvalidPublicKey)?;
 
     let sym_key = derive_sym_key(&ephemeral_pk, &receiver_sk, &ephemeral_pk)?;
 
@@ -96,7 +93,11 @@ pub fn decrypt(receiver_sec_bytes: &[u8], msg: &[u8]) -> Result<Vec<u8>, Error> 
 
 /// ECDH + HKDF-SHA256 key derivation.
 ///
-/// - `sender_pk`: the ephemeral public key (always)
+/// `shared_secret_point` returns the raw (x, y) coordinates of the Diffie-Hellman point as
+/// `[u8; 64]`. We prepend `0x04` to form the standard 65-byte uncompressed SEC1 encoding before
+/// feeding it into the KDF, matching the wire format produced by the `ecies` 0.2.x crate.
+///
+/// - `sender_pk`:  the ephemeral public key (always)
 /// - `scalar_sk`:  the private key performing the ECDH multiply
 /// - `ecdh_pk`:    the public key being multiplied (receiver pk on encrypt, ephemeral pk on decrypt)
 fn derive_sym_key(
@@ -104,19 +105,15 @@ fn derive_sym_key(
     scalar_sk: &SecretKey,
     ecdh_pk: &PublicKey,
 ) -> Result<[u8; 32], Error> {
-    let scalar = scalar_sk.to_nonzero_scalar();
-    // `ProjectivePoint * Scalar` is EC scalar multiplication — integer overflow doesn't apply.
-    #[allow(clippy::arithmetic_side_effects)]
-    let shared_projective = ProjectivePoint::from(*ecdh_pk.as_affine()) * *scalar;
-    let shared_affine = AffinePoint::from(shared_projective);
-    let shared_pk = PublicKey::from_affine(shared_affine).map_err(|_| Error::EcdhFailed)?;
+    // Returns raw x || y (64 bytes) with no hashing — identity callback inside the C library.
+    let xy = shared_secret_point(ecdh_pk, scalar_sk);
 
-    let sender_bytes = sender_pk.to_encoded_point(false); // 65 B: 0x04 || x || y
-    let shared_bytes = shared_pk.to_encoded_point(false); // 65 B: 0x04 || x || y
+    let sender_bytes = sender_pk.serialize_uncompressed(); // 65 B: 0x04 || x || y
 
     let mut ikm = [0u8; 130]; // 65 + 65
-    ikm[..65].copy_from_slice(sender_bytes.as_bytes());
-    ikm[65..].copy_from_slice(shared_bytes.as_bytes());
+    ikm[..65].copy_from_slice(&sender_bytes);
+    ikm[65] = 0x04; // uncompressed point prefix for the shared point
+    ikm[66..].copy_from_slice(&xy);
 
     let h = Hkdf::<Sha256>::new(None, &ikm);
     let mut out = [0u8; 32];
@@ -126,17 +123,20 @@ fn derive_sym_key(
 
 #[cfg(test)]
 mod tests {
+    use secp256k1::{Secp256k1, SecretKey};
+
     use super::*;
 
     /// Round-trip: anything encrypted with a pubkey decrypts with the matching privkey.
     #[test]
     fn test_round_trip() {
-        let sk = SecretKey::random(&mut OsRng);
-        let pk = sk.public_key();
+        let secp = Secp256k1::new();
+        let sk = SecretKey::new(&mut OsRng);
+        let pk = PublicKey::from_secret_key(&secp, &sk);
 
         let msg = b"hello world";
-        let ct = encrypt(pk.to_encoded_point(false).as_bytes(), msg).unwrap();
-        let pt = decrypt(&sk.to_bytes(), &ct).unwrap();
+        let ct = encrypt(&pk.serialize_uncompressed(), msg).unwrap();
+        let pt = decrypt(&sk.secret_bytes(), &ct).unwrap();
 
         assert_eq!(pt, msg);
     }
@@ -144,16 +144,17 @@ mod tests {
     /// Both compressed (33 B) and uncompressed (65 B) receiver pubkey encodings are accepted.
     #[test]
     fn test_compressed_and_uncompressed_pubkey() {
-        let sk = SecretKey::random(&mut OsRng);
-        let pk = sk.public_key();
-        let sk_bytes = sk.to_bytes();
+        let secp = Secp256k1::new();
+        let sk = SecretKey::new(&mut OsRng);
+        let pk = PublicKey::from_secret_key(&secp, &sk);
+        let sk_bytes = sk.secret_bytes();
 
         let msg = b"key encoding test";
 
-        let ct_uncompressed = encrypt(pk.to_encoded_point(false).as_bytes(), msg).unwrap();
+        let ct_uncompressed = encrypt(&pk.serialize_uncompressed(), msg).unwrap();
         assert_eq!(decrypt(&sk_bytes, &ct_uncompressed).unwrap(), msg);
 
-        let ct_compressed = encrypt(pk.to_encoded_point(true).as_bytes(), msg).unwrap();
+        let ct_compressed = encrypt(&pk.serialize(), msg).unwrap();
         assert_eq!(decrypt(&sk_bytes, &ct_compressed).unwrap(), msg);
     }
 
@@ -180,12 +181,13 @@ mod tests {
     /// Decryption with the wrong private key must fail (GCM tag rejects it).
     #[test]
     fn test_wrong_key_fails() {
-        let sk = SecretKey::random(&mut OsRng);
-        let pk = sk.public_key();
-        let other_sk = SecretKey::random(&mut OsRng);
+        let secp = Secp256k1::new();
+        let sk = SecretKey::new(&mut OsRng);
+        let pk = PublicKey::from_secret_key(&secp, &sk);
+        let other_sk = SecretKey::new(&mut OsRng);
 
-        let ct = encrypt(pk.to_encoded_point(false).as_bytes(), b"secret").unwrap();
-        let result = decrypt(&other_sk.to_bytes(), &ct);
+        let ct = encrypt(&pk.serialize_uncompressed(), b"secret").unwrap();
+        let result = decrypt(&other_sk.secret_bytes(), &ct);
 
         assert!(matches!(result, Err(Error::InvalidMessage)));
     }
