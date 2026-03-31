@@ -8,7 +8,7 @@ use flashnet::{
 };
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::{ListTransfersRequest, SparkWallet, TransferId};
+use spark_wallet::{SparkWallet, TransferId};
 use tokio::{
     select,
     sync::{broadcast, watch},
@@ -386,59 +386,46 @@ impl FlashnetTokenConverter {
         })
     }
 
-    /// Fetches a payment by its conversion identifier.
+    /// Fetches a payment id by its conversion identifier.
     /// The identifier can be either a spark transfer id or a token transaction hash.
-    async fn fetch_payment_by_identifier(
+    async fn fetch_payment_id_by_identifier(
         &self,
         identifier: &str,
         tx_inputs_are_ours: bool,
-    ) -> Result<Payment, ConversionError> {
+    ) -> Result<String, ConversionError> {
         debug!("Fetching conversion payment for identifier: {}", identifier);
 
-        let payment: Result<Payment, ConversionError> = if let Ok(transfer_id) =
-            TransferId::from_str(identifier)
-        {
-            // It's a spark transfer id
-            let transfers = self
-                .spark_wallet
-                .list_transfers(ListTransfersRequest {
-                    transfer_ids: vec![transfer_id],
-                    ..Default::default()
-                })
-                .await?;
-            let transfer =
-                transfers.items.first().cloned().ok_or_else(|| {
-                    ConversionError::ConversionFailed("Transfer not found".into())
+        let payment_id: Result<String, ConversionError> =
+            if let Ok(transfer_id) = TransferId::from_str(identifier) {
+                Ok(transfer_id.to_string())
+            } else {
+                // It's a token transaction hash
+                let token_transactions = self
+                    .spark_wallet
+                    .get_token_transactions_by_hashes(vec![identifier.to_string()])
+                    .await?;
+                let token_transaction = token_transactions.first().ok_or_else(|| {
+                    ConversionError::ConversionFailed("Token transaction not found".into())
                 })?;
-            transfer
-                .try_into()
-                .map_err(|e: crate::SdkError| ConversionError::Sdk(e))
-        } else {
-            // It's a token transaction hash
-            let token_transactions = self
-                .spark_wallet
-                .get_token_transactions_by_hashes(vec![identifier.to_string()])
-                .await?;
-            let token_transaction = token_transactions.first().ok_or_else(|| {
-                ConversionError::ConversionFailed("Token transaction not found".into())
-            })?;
-            let object_repository = ObjectCacheRepository::new(self.storage.clone());
-            let payments = token_transaction_to_payments(
-                &self.spark_wallet,
-                &object_repository,
-                token_transaction,
-                tx_inputs_are_ours,
-            )
-            .await
-            .map_err(ConversionError::Sdk)?;
-            payments.first().cloned().ok_or_else(|| {
-                ConversionError::ConversionFailed("Payment not found for token transaction".into())
-            })
-        };
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                let payments = token_transaction_to_payments(
+                    &self.spark_wallet,
+                    &object_repository,
+                    token_transaction,
+                    tx_inputs_are_ours,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
+                payments.first().cloned().map(|p| p.id).ok_or_else(|| {
+                    ConversionError::ConversionFailed(
+                        "Payment id not found for token transaction".into(),
+                    )
+                })
+            };
 
-        payment
-            .inspect(|p| debug!("Found payment: {p:?}"))
-            .inspect_err(|e| debug!("No payment found: {e}"))
+        payment_id
+            .inspect(|p| debug!("Found payment id: {p:?}"))
+            .inspect_err(|e| debug!("No payment id found: {e}"))
     }
 
     /// Updates the payment with the conversion info.
@@ -483,75 +470,85 @@ impl FlashnetTokenConverter {
         let pool_id_str = pool_id.to_string();
         let conversion_id = uuid::Uuid::now_v7().to_string();
 
-        // Insert the sent payment metadata directly to storage.
-        let sent_payment_id = self
-            .fetch_payment_by_identifier(&outbound_identifier, true)
-            .await?
-            .id;
-        self.storage
-            .insert_payment_metadata(
-                sent_payment_id.clone(),
-                PaymentMetadata {
+        // Insert sent, received, and refund payment metadata in parallel.
+        let sent_fut = async {
+            let sent_payment_id = self
+                .fetch_payment_id_by_identifier(&outbound_identifier, true)
+                .await?;
+            self.storage
+                .insert_payment_metadata(
+                    sent_payment_id.clone(),
+                    PaymentMetadata {
+                        conversion_info: Some(ConversionInfo {
+                            pool_id: pool_id_str.clone(),
+                            conversion_id: conversion_id.clone(),
+                            status: status.clone(),
+                            fee: sent_fee,
+                            purpose: Some(purpose.clone()),
+                            amount_adjustment: amount_adjustment.clone(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            Ok::<_, ConversionError>(sent_payment_id)
+        };
+
+        let received_fut = async {
+            if let Some(identifier) = &inbound_identifier {
+                let metadata = PaymentMetadata {
                     conversion_info: Some(ConversionInfo {
                         pool_id: pool_id_str.clone(),
                         conversion_id: conversion_id.clone(),
                         status: status.clone(),
-                        fee: sent_fee,
+                        fee: received_fee,
                         purpose: Some(purpose.clone()),
-                        amount_adjustment: amount_adjustment.clone(),
+                        amount_adjustment: None,
                     }),
                     ..Default::default()
-                },
-            )
-            .await?;
-
-        // Update the received payment metadata if available
-        let received_payment_id = if let Some(identifier) = &inbound_identifier {
-            let metadata = PaymentMetadata {
-                conversion_info: Some(ConversionInfo {
-                    pool_id: pool_id_str.clone(),
-                    conversion_id: conversion_id.clone(),
-                    status: status.clone(),
-                    fee: received_fee,
-                    purpose: Some(purpose.clone()),
-                    amount_adjustment: None,
-                }),
-                ..Default::default()
-            };
-            if let Ok(payment) = self.fetch_payment_by_identifier(identifier, false).await {
-                self.storage
-                    .insert_payment_metadata(payment.id.clone(), metadata)
-                    .await?;
-                Some(payment.id)
+                };
+                if let Ok(payment_id) = self.fetch_payment_id_by_identifier(identifier, false).await
+                {
+                    self.storage
+                        .insert_payment_metadata(payment_id.clone(), metadata)
+                        .await?;
+                    Ok::<_, ConversionError>(Some(payment_id))
+                } else {
+                    cache.save_payment_metadata(identifier, &metadata).await?;
+                    Ok(Some(identifier.clone()))
+                }
             } else {
-                cache.save_payment_metadata(identifier, &metadata).await?;
-                Some(identifier.clone())
+                Ok(None)
             }
-        } else {
-            None
         };
 
-        // Update the refund payment metadata if available
-        if let Some(identifier) = &refund_identifier {
-            let metadata = PaymentMetadata {
-                conversion_info: Some(ConversionInfo {
-                    pool_id: pool_id_str,
-                    conversion_id,
-                    status,
-                    fee: None,
-                    purpose: None,
-                    amount_adjustment: None,
-                }),
-                ..Default::default()
-            };
-            if let Ok(payment) = self.fetch_payment_by_identifier(identifier, false).await {
-                self.storage
-                    .insert_payment_metadata(payment.id.clone(), metadata)
-                    .await?;
-            } else {
-                cache.save_payment_metadata(identifier, &metadata).await?;
+        let refund_fut = async {
+            if let Some(identifier) = &refund_identifier {
+                let metadata = PaymentMetadata {
+                    conversion_info: Some(ConversionInfo {
+                        pool_id: pool_id_str.clone(),
+                        conversion_id: conversion_id.clone(),
+                        status: status.clone(),
+                        fee: None,
+                        purpose: None,
+                        amount_adjustment: None,
+                    }),
+                    ..Default::default()
+                };
+                if let Ok(payment_id) = self.fetch_payment_id_by_identifier(identifier, false).await
+                {
+                    self.storage
+                        .insert_payment_metadata(payment_id.clone(), metadata)
+                        .await?;
+                } else {
+                    cache.save_payment_metadata(identifier, &metadata).await?;
+                }
             }
-        }
+            Ok::<_, ConversionError>(())
+        };
+
+        let (sent_payment_id, received_payment_id, ()) =
+            tokio::try_join!(sent_fut, received_fut, refund_fut)?;
 
         Ok((sent_payment_id, received_payment_id))
     }
