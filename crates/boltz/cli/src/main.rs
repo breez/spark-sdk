@@ -91,11 +91,7 @@ struct Cli {
     alchemy_gas_policy_id: String,
 
     /// Boltz referral ID.
-    #[arg(
-        long,
-        env = "BOLTZ_REFERRAL_ID",
-        default_value = "boltz_webapp_desktop"
-    )]
+    #[arg(long, env = "BOLTZ_REFERRAL_ID", default_value = "breez-sdk")]
     referral_id: String,
 
     /// Boltz API URL (without /v2).
