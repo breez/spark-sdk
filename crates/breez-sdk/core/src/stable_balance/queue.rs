@@ -135,6 +135,25 @@ impl ConversionQueue {
         self.notify.notify_one();
     }
 
+    /// Clear a pending auto-convert task if one exists.
+    /// Used after a successful per-receive conversion to prevent auto-convert
+    /// from running with a stale balance before the next sync completes.
+    pub async fn clear_pending_auto_convert(&self) {
+        let mut state = self.state.lock().await;
+        if matches!(state.pending_task, Some(ConversionTask::AutoConvert)) {
+            state.pending_task = None;
+        }
+    }
+
+    /// Returns `true` if there are any per-receive tasks in the queue.
+    /// Used by auto-convert to yield to per-receive tasks that arrived while it was preparing.
+    /// Matches `next_task()` semantics: auto-convert should not run while any per-receive
+    /// tasks exist (ready or deferred), since deferred tasks may still need those sats.
+    pub async fn has_per_receive(&self) -> bool {
+        let state = self.state.lock().await;
+        !state.per_receive.is_empty()
+    }
+
     /// Clear all pending tasks from the queue.
     /// Returns the payment IDs of any cleared per-receive tasks (for status updates).
     pub async fn clear_queue(&self) -> Vec<String> {
@@ -308,6 +327,10 @@ impl StableBalance {
                                         debug!("Conversion worker: completed task {task:?} (converted={converted})");
                                         stable_balance.queue.complete_task(&task).await;
                                         if converted {
+                                            // Clear any pending auto-convert — the local balance
+                                            // is stale until sync completes. The next Synced event
+                                            // will re-queue auto-convert if there's still excess.
+                                            stable_balance.queue.clear_pending_auto_convert().await;
                                             stable_balance.trigger_sync().await;
                                         }
                                     }

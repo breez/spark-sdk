@@ -183,6 +183,15 @@ impl StableBalance {
             return Ok(false);
         }
 
+        // Yield to per-receive tasks that arrived while we were preparing.
+        // Per-receive converts specific payment amounts and takes priority; if we
+        // proceed, we'd convert the same sats and per-receive would fail with
+        // InsufficientFunds. The next Synced event will re-queue auto-convert.
+        if self.queue.has_per_receive().await {
+            debug!("Auto-conversion aborted: per-receive tasks queued during preparation");
+            return Ok(false);
+        }
+
         info!(
             "Auto-conversion triggered: converting {balance_sats} sats to {active_token_identifier}",
         );
