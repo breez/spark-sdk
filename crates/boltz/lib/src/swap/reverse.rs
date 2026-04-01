@@ -325,6 +325,14 @@ impl ReverseSwapExecutor {
             )));
         }
 
+        let current_block = self.evm_provider.eth_block_number().await?;
+        if resp.timeout_block_height <= current_block {
+            return Err(BoltzError::Generic(format!(
+                "Boltz returned expired timeout: block {} <= current {current_block}",
+                resp.timeout_block_height,
+            )));
+        }
+
         let now = current_unix_timestamp();
         let swap = BoltzSwap {
             id: resp.id.clone(),
@@ -546,6 +554,17 @@ impl ReverseSwapExecutor {
             .checked_mul(U256::from(SATS_TO_TBTC_FACTOR))
             .ok_or_else(|| BoltzError::Generic("tBTC EVM amount overflow".into()))?;
         let timelock = U256::from(swap.timeout_block_height);
+
+        // Verify the timelock hasn't expired before attempting the claim.
+        // The on-chain contract enforces this too, but checking locally avoids
+        // wasted gas and gives a clearer error.
+        let current_block = self.evm_provider.eth_block_number().await?;
+        if current_block >= swap.timeout_block_height {
+            return Err(BoltzError::Generic(format!(
+                "Swap timelock expired: current block {current_block} >= timeout {}",
+                swap.timeout_block_height
+            )));
+        }
 
         for attempt in 0..MAX_CLAIM_RETRIES {
             if attempt > 0 {
@@ -851,6 +870,11 @@ impl ReverseSwapExecutor {
         let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
         #[expect(clippy::arithmetic_side_effects)]
         let min_usdt_out = trade_best.amount * slippage_factor / 10000;
+        if min_usdt_out == 0 {
+            return Err(BoltzError::Generic(
+                "Amount too small: slippage-adjusted USDT minimum is zero".into(),
+            ));
+        }
 
         // Final OFT quote with the actual USDT amount
         let final_send_param = contracts::build_oft_send_param(
@@ -883,6 +907,11 @@ impl ReverseSwapExecutor {
 
         #[expect(clippy::arithmetic_side_effects)]
         let min_amount_ld_slipped = min_amount_ld_raw * slippage_factor / 10000;
+        if min_amount_ld_slipped == 0 {
+            return Err(BoltzError::Generic(
+                "Amount too small: cross-chain slippage-adjusted minimum is zero".into(),
+            ));
+        }
 
         // ─── Encode DEX calls ─────────────────────────────────────────
         // Trade calls: tBTC -> USDT
@@ -1229,6 +1258,11 @@ impl ReverseSwapExecutor {
         let raw_quote_amount = best.amount;
         let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
         let min_amount_out_u128 = best.amount * slippage_factor / 10000;
+        if min_amount_out_u128 == 0 {
+            return Err(BoltzError::Generic(
+                "Amount too small: slippage-adjusted minimum is zero".into(),
+            ));
+        }
         let min_amount_out = U256::from(min_amount_out_u128);
 
         let encode_req = EncodeRequest {
@@ -1411,10 +1445,13 @@ fn to_chain_id_u32(chain_id: u64) -> Result<u32, BoltzError> {
 
 pub(crate) fn current_unix_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(e) => {
+            tracing::error!("System clock before UNIX epoch: {e}, returning 0");
+            0
+        }
+    }
 }
 
 async fn sleep_1s() {
