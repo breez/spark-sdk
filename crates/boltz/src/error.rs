@@ -39,6 +39,17 @@ pub enum BoltzError {
     Generic(String),
 }
 
+impl BoltzError {
+    /// Returns `true` if Boltz rejected swap creation because the preimage hash
+    /// was already used by a previous swap.
+    ///
+    /// Current error: HTTP 400, `{"error":"a swap with this preimage hash exists already"}`
+    pub fn is_duplicate_preimage(&self) -> bool {
+        matches!(self, Self::Api { code: Some(400), reason }
+            if reason.to_lowercase().contains("preimage hash"))
+    }
+}
+
 impl From<platform_utils::HttpError> for BoltzError {
     fn from(err: platform_utils::HttpError) -> Self {
         Self::Api {

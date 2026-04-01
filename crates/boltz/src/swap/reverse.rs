@@ -245,37 +245,79 @@ impl ReverseSwapExecutor {
         })
     }
 
+    /// Maximum retries when encountering duplicate preimage errors. Handles
+    /// races between concurrent instances; the consumer is responsible for
+    /// syncing the key index on restore / cold start.
+    const MAX_DUPLICATE_RETRIES: u32 = 10;
+
     /// Create the swap on Boltz. Returns the hold invoice to pay.
+    ///
+    /// If Boltz rejects the preimage hash as already used, the method bumps the
+    /// key index and retries up to [`Self::MAX_DUPLICATE_RETRIES`] times. This
+    /// handles races between concurrent instances sharing the same seed. For
+    /// larger index gaps (e.g. restoring from mnemonic after many unpaid swaps),
+    /// the consumer should sync the key index via
+    /// [`BoltzStorage::set_key_index_if_higher`] before calling this method.
     pub async fn create(&self, prepared: &PreparedSwap) -> Result<CreatedSwap, BoltzError> {
         if current_unix_timestamp() >= prepared.expires_at {
             return Err(BoltzError::QuoteExpired);
         }
         let chain_id_u32 = to_chain_id_u32(self.config.chain_id)?;
-        let key_index = self.store.increment_key_index(self.config.chain_id).await?;
-
         let gas_signer = self.key_manager.derive_gas_signer(chain_id_u32)?;
-        let preimage_hash = self
-            .key_manager
-            .derive_preimage_hash(chain_id_u32, key_index)?;
-        let preimage_key = self
-            .key_manager
-            .derive_preimage_key(chain_id_u32, key_index)?;
 
-        let create_req = crate::api::types::CreateReverseSwapRequest {
-            from: "BTC".to_string(),
-            to: "TBTC".to_string(),
-            preimage_hash: hex::encode(preimage_hash),
-            claim_address: gas_signer.address_hex(),
-            invoice_amount: prepared.invoice_amount_sats,
-            pair_hash: prepared.pair_hash.clone(),
-            referral_id: self.config.referral_id.clone(),
-            claim_public_key: hex::encode(&preimage_key.public_key),
-            description: None,
-            invoice_expiry: None,
-        };
+        let mut last_err = None;
+        for _ in 0..Self::MAX_DUPLICATE_RETRIES {
+            let key_index = self.store.increment_key_index(self.config.chain_id).await?;
 
-        let resp = self.api_client.create_reverse_swap(&create_req).await?;
+            let preimage_hash = self
+                .key_manager
+                .derive_preimage_hash(chain_id_u32, key_index)?;
+            let preimage_key = self
+                .key_manager
+                .derive_preimage_key(chain_id_u32, key_index)?;
 
+            let create_req = crate::api::types::CreateReverseSwapRequest {
+                from: "BTC".to_string(),
+                to: "TBTC".to_string(),
+                preimage_hash: hex::encode(preimage_hash),
+                claim_address: gas_signer.address_hex(),
+                invoice_amount: prepared.invoice_amount_sats,
+                pair_hash: prepared.pair_hash.clone(),
+                referral_id: self.config.referral_id.clone(),
+                claim_public_key: hex::encode(&preimage_key.public_key),
+                description: None,
+                invoice_expiry: None,
+            };
+
+            match self.api_client.create_reverse_swap(&create_req).await {
+                Ok(resp) => {
+                    return self
+                        .finalize_swap(prepared, resp, key_index, &gas_signer)
+                        .await;
+                }
+                Err(e) if e.is_duplicate_preimage() => {
+                    tracing::warn!(
+                        key_index,
+                        "Preimage hash already used, bumping key index and retrying"
+                    );
+                    last_err = Some(e);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(last_err
+            .unwrap_or_else(|| BoltzError::Generic("Exhausted duplicate preimage retries".into())))
+    }
+
+    /// Validate the Boltz response, persist the swap, and return the result.
+    async fn finalize_swap(
+        &self,
+        prepared: &PreparedSwap,
+        resp: crate::api::types::CreateReverseSwapResponse,
+        key_index: u32,
+        gas_signer: &crate::keys::EvmKeyPair,
+    ) -> Result<CreatedSwap, BoltzError> {
         if resp.onchain_amount != prepared.estimated_onchain_amount {
             return Err(BoltzError::Generic(format!(
                 "Boltz onchain_amount ({}) differs from prepared estimate ({})",
