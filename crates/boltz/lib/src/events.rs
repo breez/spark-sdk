@@ -10,6 +10,14 @@ use crate::models::BoltzSwap;
 pub enum BoltzSwapEvent {
     /// A swap's persisted state was updated.
     SwapUpdated { swap: BoltzSwap },
+    /// The claim-time DEX quote has degraded beyond the slippage tolerance
+    /// compared to the creation-time quote. Auto-claim is paused.
+    /// Call `accept_degraded_quote` to proceed at the current rate.
+    QuoteDegraded {
+        swap: BoltzSwap,
+        expected_usdt: u64,
+        quoted_usdt: u64,
+    },
 }
 
 /// Callback trait for receiving swap events.

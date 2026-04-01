@@ -460,7 +460,8 @@ impl ReverseSwapExecutor {
         // Insert into store so claim_and_swap can track it
         self.store.insert_swap(&swap).await?;
 
-        let completed = self.claim_and_swap(&mut swap).await?;
+        // Recovery swaps have no creation-time quote — skip drift check.
+        let completed = self.claim_and_swap(&mut swap, true).await?;
         Ok(completed.claim_tx_hash.unwrap_or_default())
     }
 
@@ -528,6 +529,7 @@ impl ReverseSwapExecutor {
     pub(crate) async fn claim_and_swap(
         &self,
         swap: &mut BoltzSwap,
+        skip_drift_check: bool,
     ) -> Result<BoltzSwap, BoltzError> {
         let chain_id_u32 = to_chain_id_u32(swap.chain_id)?;
         let preimage = self
@@ -559,6 +561,7 @@ impl ReverseSwapExecutor {
                     &addrs,
                     tbtc_evm_amount,
                     timelock,
+                    skip_drift_check,
                 )
                 .await;
 
@@ -567,6 +570,14 @@ impl ReverseSwapExecutor {
                     return Ok(swap.clone());
                 }
                 Err(e) => {
+                    // Quote drift is not transient — retrying immediately
+                    // won't help. Return without marking Failed so the swap
+                    // stays TbtcLocked and the consumer can accept the new
+                    // rate via `accept_degraded_quote`.
+                    if matches!(e, BoltzError::QuoteDegradedBeyondSlippage { .. }) {
+                        return Err(e);
+                    }
+
                     tracing::warn!(attempt, swap_id = swap.id, error = %e, "Claim attempt failed");
 
                     // Check if funds are still locked on-chain. If not, stop
@@ -623,6 +634,7 @@ impl ReverseSwapExecutor {
         addrs: &ClaimAddresses,
         tbtc_evm_amount: U256,
         timelock: U256,
+        skip_drift_check: bool,
     ) -> Result<String, BoltzError> {
         if swap.destination_chain == Chain::Arbitrum {
             self.try_claim_same_chain(
@@ -633,6 +645,7 @@ impl ReverseSwapExecutor {
                 addrs,
                 tbtc_evm_amount,
                 timelock,
+                skip_drift_check,
             )
             .await
         } else {
@@ -644,6 +657,7 @@ impl ReverseSwapExecutor {
                 addrs,
                 tbtc_evm_amount,
                 timelock,
+                skip_drift_check,
             )
             .await
         }
@@ -660,10 +674,15 @@ impl ReverseSwapExecutor {
         addrs: &ClaimAddresses,
         tbtc_evm_amount: U256,
         timelock: U256,
+        skip_drift_check: bool,
     ) -> Result<String, BoltzError> {
-        let (dex_calls, min_amount_out) = self
+        let (dex_calls, min_amount_out, raw_quote_usdt) = self
             .fetch_and_encode_dex_quote(tbtc_evm_amount, &addrs.router.to_string())
             .await?;
+
+        if !skip_drift_check {
+            check_quote_drift(swap.expected_usdt_amount, raw_quote_usdt, self.config.slippage_bps)?;
+        }
 
         let erc20swap_sig = gas_signer.sign_eip712_erc20swap_claim(
             addrs.erc20swap,
@@ -725,6 +744,7 @@ impl ReverseSwapExecutor {
         addrs: &ClaimAddresses,
         tbtc_evm_amount: U256,
         timelock: U256,
+        skip_drift_check: bool,
     ) -> Result<String, BoltzError> {
         let dst_chain_id = swap.destination_chain.evm_chain_id();
         let dst_info = self.oft_deployments.get(dst_chain_id).ok_or_else(|| {
@@ -854,6 +874,13 @@ impl ReverseSwapExecutor {
             .amountReceivedLD
             .try_into()
             .map_err(|_| BoltzError::Generic("OFT amount too large".into()))?;
+
+        // Drift check: compare what the user would receive on the destination
+        // chain against the creation-time estimate (expected_usdt_amount).
+        if !skip_drift_check {
+            check_quote_drift(swap.expected_usdt_amount, min_amount_ld_raw, self.config.slippage_bps)?;
+        }
+
         #[expect(clippy::arithmetic_side_effects)]
         let min_amount_ld_slipped = min_amount_ld_raw * slippage_factor / 10000;
 
@@ -1168,12 +1195,16 @@ impl ReverseSwapExecutor {
         Ok(version.to_string())
     }
 
+    /// Fetch a DEX quote for `tbtc_evm_amount` → USDT and encode it into
+    /// calldata. Returns `(calls, min_amount_out, raw_quote_amount)` where
+    /// `raw_quote_amount` is the best quote *before* slippage is applied
+    /// (used for drift detection).
     #[expect(clippy::arithmetic_side_effects)]
     async fn fetch_and_encode_dex_quote(
         &self,
         tbtc_evm_amount: U256,
         router_address: &str,
-    ) -> Result<(Vec<contracts::Call>, U256), BoltzError> {
+    ) -> Result<(Vec<contracts::Call>, U256, u128), BoltzError> {
         let amount_in: u128 = tbtc_evm_amount
             .try_into()
             .map_err(|_| BoltzError::Generic("tBTC amount too large".to_string()))?;
@@ -1195,6 +1226,7 @@ impl ReverseSwapExecutor {
                 "DEX quote returned zero USDT".to_string(),
             ));
         }
+        let raw_quote_amount = best.amount;
         let slippage_factor = 10000 - u128::from(self.config.slippage_bps);
         let min_amount_out_u128 = best.amount * slippage_factor / 10000;
         let min_amount_out = U256::from(min_amount_out_u128);
@@ -1213,7 +1245,7 @@ impl ReverseSwapExecutor {
             .map(quote_calldata_to_call)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((calls, min_amount_out))
+        Ok((calls, min_amount_out, raw_quote_amount))
     }
 }
 
@@ -1387,6 +1419,27 @@ pub(crate) fn current_unix_timestamp() -> u64 {
 
 async fn sleep_1s() {
     platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_secs(1)).await;
+}
+
+/// Check that the fresh DEX quote hasn't degraded beyond the slippage
+/// tolerance compared to the creation-time estimate. Mirrors the Boltz web
+/// app's `isOutsideSlippage` check in `TransactionConfirmed.tsx`.
+#[expect(clippy::arithmetic_side_effects)]
+fn check_quote_drift(
+    expected_usdt: u64,
+    fresh_quote_usdt: u128,
+    slippage_bps: u32,
+) -> Result<(), BoltzError> {
+    let threshold =
+        u128::from(expected_usdt) * (10000 - u128::from(slippage_bps)) / 10000;
+    if fresh_quote_usdt < threshold {
+        let quoted = fresh_quote_usdt.try_into().unwrap_or(u64::MAX);
+        return Err(BoltzError::QuoteDegradedBeyondSlippage {
+            expected_usdt,
+            quoted_usdt: quoted,
+        });
+    }
+    Ok(())
 }
 
 /// Apply slippage upward (for fees that might increase).
@@ -1619,5 +1672,43 @@ mod tests {
         let best = pick_best_quote_with_data(&quotes, QuoteDirection::In).unwrap();
         assert_eq!(best.amount, 200);
         assert_eq!(best.data, serde_json::json!({"route": "B"}));
+    }
+
+    #[test]
+    fn test_check_quote_drift_within_tolerance() {
+        // Expected 1000 USDT, got 995 (0.5% drop), slippage 1% → OK
+        assert!(check_quote_drift(1_000_000, 995_000, 100).is_ok());
+    }
+
+    #[test]
+    fn test_check_quote_drift_at_boundary() {
+        // Expected 1000 USDT, got 990 (exactly 1% drop), slippage 1% → OK
+        assert!(check_quote_drift(1_000_000, 990_000, 100).is_ok());
+    }
+
+    #[test]
+    fn test_check_quote_drift_beyond_tolerance() {
+        // Expected 1000 USDT, got 980 (2% drop), slippage 1% → error
+        let err = check_quote_drift(1_000_000, 980_000, 100).unwrap_err();
+        assert!(matches!(
+            err,
+            BoltzError::QuoteDegradedBeyondSlippage {
+                expected_usdt: 1_000_000,
+                quoted_usdt: 980_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_check_quote_drift_better_quote_ok() {
+        // Expected 1000 USDT, got 1050 (better!) → always OK
+        assert!(check_quote_drift(1_000_000, 1_050_000, 100).is_ok());
+    }
+
+    #[test]
+    fn test_check_quote_drift_zero_expected() {
+        // Recovery swaps have expected=0, should always pass
+        // (but in practice skip_drift_check=true is used for recovery)
+        assert!(check_quote_drift(0, 500_000, 100).is_ok());
     }
 }

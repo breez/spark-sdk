@@ -245,7 +245,7 @@ impl SwapManager {
                     event_emitter
                         .emit(&BoltzSwapEvent::SwapUpdated { swap: s.clone() })
                         .await;
-                    Self::spawn_claim(executor, event_emitter, active_claims, &s);
+                    Self::spawn_claim(executor, event_emitter, active_claims, &s, false);
                 }
             }
             // `invoice.settled`: reverse swap success (Boltz settled the hold
@@ -300,6 +300,7 @@ impl SwapManager {
         event_emitter: &Arc<EventEmitter>,
         active_claims: &Arc<Mutex<HashSet<String>>>,
         swap: &BoltzSwap,
+        skip_drift_check: bool,
     ) {
         let swap_id = swap.id.clone();
         let executor = executor.clone();
@@ -317,10 +318,30 @@ impl SwapManager {
                 set.insert(swap_id.clone());
             }
 
-            let result = Self::do_claim(&executor, &swap_id).await;
+            let result = Self::do_claim(&executor, &swap_id, skip_drift_check).await;
             match result {
                 Ok(swap) => {
                     emitter.emit(&BoltzSwapEvent::SwapUpdated { swap }).await;
+                }
+                Err(BoltzError::QuoteDegradedBeyondSlippage {
+                    expected_usdt,
+                    quoted_usdt,
+                }) => {
+                    tracing::warn!(
+                        swap_id,
+                        expected_usdt,
+                        quoted_usdt,
+                        "Claim-time quote degraded beyond slippage tolerance"
+                    );
+                    if let Ok(Some(swap)) = executor.store.get_swap(&swap_id).await {
+                        emitter
+                            .emit(&BoltzSwapEvent::QuoteDegraded {
+                                swap,
+                                expected_usdt,
+                                quoted_usdt,
+                            })
+                            .await;
+                    }
                 }
                 Err(e) => {
                     tracing::error!(swap_id, error = %e, "Claim failed");
@@ -340,6 +361,7 @@ impl SwapManager {
     async fn do_claim(
         executor: &ReverseSwapExecutor,
         swap_id: &str,
+        skip_drift_check: bool,
     ) -> Result<BoltzSwap, BoltzError> {
         let mut swap = executor
             .store
@@ -347,7 +369,7 @@ impl SwapManager {
             .await?
             .ok_or_else(|| BoltzError::Store(format!("Swap not found: {swap_id}")))?;
 
-        executor.claim_and_swap(&mut swap).await
+        executor.claim_and_swap(&mut swap, skip_drift_check).await
     }
 
     /// Handle resuming a swap stuck in `Claiming` status. Either the tx hash
@@ -501,9 +523,29 @@ impl SwapManager {
                     if let Err(e) = executor.store.update_swap(&s).await {
                         tracing::error!(swap_id, error = %e, "Failed to persist TbtcLocked reset");
                     }
-                    match executor.claim_and_swap(&mut s).await {
+                    match executor.claim_and_swap(&mut s, false).await {
                         Ok(s) => {
                             emitter.emit(&BoltzSwapEvent::SwapUpdated { swap: s }).await;
+                        }
+                        Err(BoltzError::QuoteDegradedBeyondSlippage {
+                            expected_usdt,
+                            quoted_usdt,
+                        }) => {
+                            tracing::warn!(
+                                swap_id = s.id,
+                                expected_usdt,
+                                quoted_usdt,
+                                "Claim-time quote degraded beyond slippage on resume"
+                            );
+                            if let Ok(Some(swap)) = executor.store.get_swap(&s.id).await {
+                                emitter
+                                    .emit(&BoltzSwapEvent::QuoteDegraded {
+                                        swap,
+                                        expected_usdt,
+                                        quoted_usdt,
+                                    })
+                                    .await;
+                            }
                         }
                         Err(e) => {
                             tracing::error!(swap_id = s.id, error = %e, "Retry claim failed");

@@ -332,9 +332,21 @@ async fn cmd_swap(
     println!("\n>>> PAY THIS INVOICE to continue <<<\n");
 
     // Step 4: Wait for this swap to reach a terminal state
-    while let Some(BoltzSwapEvent::SwapUpdated { swap }) = event_rx.recv().await {
-        if swap.id == created.swap_id && swap.status.is_terminal() {
-            break;
+    while let Some(event) = event_rx.recv().await {
+        match &event {
+            BoltzSwapEvent::SwapUpdated { swap }
+                if swap.id == created.swap_id && swap.status.is_terminal() =>
+            {
+                break;
+            }
+            BoltzSwapEvent::QuoteDegraded { swap, .. } if swap.id == created.swap_id => {
+                // Auto-accept in the CLI for convenience
+                println!("  Auto-accepting degraded quote...");
+                if let Err(e) = svc.accept_degraded_quote(&swap.id).await {
+                    eprintln!("  accept_degraded_quote failed: {e}");
+                }
+            }
+            _ => {}
         }
     }
 
@@ -355,6 +367,17 @@ impl BoltzEventListener for PrintingEventListener {
                     println!("  Final state:");
                     print_json(swap);
                 }
+            }
+            BoltzSwapEvent::QuoteDegraded {
+                swap,
+                expected_usdt,
+                quoted_usdt,
+            } => {
+                println!(
+                    "[{}] Quote degraded: expected {} USDT, got {} USDT. \
+                     Call accept_degraded_quote to proceed.",
+                    swap.id, expected_usdt, quoted_usdt
+                );
             }
         }
     }

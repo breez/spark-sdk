@@ -35,6 +35,11 @@ pub enum BoltzError {
     #[error("Invalid quote: {0}")]
     InvalidQuote(String),
 
+    #[error(
+        "DEX quote degraded beyond slippage tolerance: expected {expected_usdt}, got {quoted_usdt}"
+    )]
+    QuoteDegradedBeyondSlippage { expected_usdt: u64, quoted_usdt: u64 },
+
     #[error("{0}")]
     Generic(String),
 }

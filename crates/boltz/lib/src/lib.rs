@@ -226,6 +226,50 @@ impl BoltzService {
         self.executor.get_limits().await
     }
 
+    /// Accept a degraded DEX quote and proceed with claiming.
+    ///
+    /// Call this after receiving a [`BoltzSwapEvent::QuoteDegraded`] event.
+    /// The swap must be in `TbtcLocked` status. The claim will proceed with
+    /// the current DEX quote (with on-chain slippage protection still applied).
+    pub async fn accept_degraded_quote(&self, swap_id: &str) -> Result<BoltzSwap, BoltzError> {
+        let mut swap = self
+            .executor
+            .store
+            .get_swap(swap_id)
+            .await?
+            .ok_or_else(|| BoltzError::Store(format!("Swap not found: {swap_id}")))?;
+
+        if swap.status != BoltzSwapStatus::TbtcLocked {
+            return Err(BoltzError::Generic(format!(
+                "Cannot accept degraded quote: swap {} is {:?}, expected TbtcLocked",
+                swap_id, swap.status
+            )));
+        }
+
+        let result = self
+            .executor
+            .claim_and_swap(&mut swap, true)
+            .await;
+
+        match &result {
+            Ok(swap) => {
+                self.event_emitter
+                    .emit(&BoltzSwapEvent::SwapUpdated { swap: swap.clone() })
+                    .await;
+            }
+            Err(e) => {
+                tracing::error!(swap_id, error = %e, "Forced claim after accept_degraded_quote failed");
+                if let Ok(Some(swap)) = self.executor.store.get_swap(swap_id).await {
+                    self.event_emitter
+                        .emit(&BoltzSwapEvent::SwapUpdated { swap })
+                        .await;
+                }
+            }
+        }
+
+        result
+    }
+
     /// Recover unclaimed swaps by scanning the blockchain.
     pub async fn recover(&self, destination_address: &str) -> Result<RecoveryResult, BoltzError> {
         self.executor.recover(destination_address).await
