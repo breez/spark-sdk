@@ -12,7 +12,7 @@ pub mod swap;
 use std::sync::Arc;
 
 use platform_utils::DefaultHttpClient;
-use tokio::sync::mpsc;
+use platform_utils::tokio::sync::mpsc;
 
 pub use config::*;
 pub use error::BoltzError;

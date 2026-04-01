@@ -1374,7 +1374,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite-wasm",
  "tracing",
- "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 

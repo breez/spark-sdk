@@ -2,12 +2,24 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
+use platform_utils::tokio;
 use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite_wasm::{Message, WebSocketStream};
 
 use crate::error::BoltzError;
 
 use super::types::{WsMessage, WsSubscribeMessage};
+
+/// Keep-alive ping interval to prevent idle disconnects.
+const KEEP_ALIVE_INTERVAL: platform_utils::time::Duration =
+    platform_utils::time::Duration::from_secs(15);
+
+/// Delay between reconnection attempts.
+const RECONNECT_DELAY: platform_utils::time::Duration =
+    platform_utils::time::Duration::from_secs(5);
+
+/// JSON-encoded ping message for the Boltz WS protocol.
+const PING_JSON: &str = r#"{"op":"ping"}"#;
 
 /// Swap status update dispatched from the WebSocket.
 #[derive(Debug, Clone)]
@@ -19,7 +31,6 @@ pub struct SwapStatusUpdate {
 }
 
 /// Commands sent to the reader loop.
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 enum ReaderCommand {
     Subscribe(String),
     Unsubscribe(String),
@@ -36,30 +47,13 @@ pub struct SwapStatusSubscriber {
     /// IDs currently subscribed on the WS. Also used for resubscription on
     /// reconnect.
     subscribed_ids: Arc<Mutex<HashSet<String>>>,
-    /// Single channel that receives ALL swap status updates.
-    /// On native this is only used at construction (clone passed to
-    /// `reader_loop`). On WASM it is cloned per subscription.
-    #[cfg_attr(
-        not(all(target_family = "wasm", target_os = "unknown")),
-        expect(dead_code)
-    )]
-    global_tx: mpsc::Sender<SwapStatusUpdate>,
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    ws_url: String,
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     cmd_tx: mpsc::Sender<ReaderCommand>,
     /// Sync-safe handle used by `Drop` to abort the reader task if `close()`
     /// was never called.
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     abort_handle: tokio::task::AbortHandle,
 }
 
 impl SwapStatusSubscriber {
-    // ─── Native ──────────────────────────────────────────────────────
-
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     #[expect(clippy::unused_async)]
     pub async fn connect(
         ws_url: &str,
@@ -68,62 +62,25 @@ impl SwapStatusSubscriber {
         let subscribed_ids: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let (cmd_tx, cmd_rx) = mpsc::channel(16);
 
-        let reader_handle = tokio::spawn(Self::reader_loop(
-            ws_url.to_string(),
-            global_tx.clone(),
-            cmd_rx,
-        ));
+        let reader_handle = tokio::spawn(Self::reader_loop(ws_url.to_string(), global_tx, cmd_rx));
         let abort_handle = reader_handle.abort_handle();
 
         Ok(Self {
             subscribed_ids,
-            global_tx,
-            reader_handle: Mutex::new(Some(reader_handle)),
             cmd_tx,
             abort_handle,
         })
     }
-
-    // ─── WASM ────────────────────────────────────────────────────────
-
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    #[expect(clippy::unused_async)]
-    pub async fn connect(
-        ws_url: &str,
-        global_tx: mpsc::Sender<SwapStatusUpdate>,
-    ) -> Result<Self, BoltzError> {
-        Ok(Self {
-            subscribed_ids: Arc::new(Mutex::new(HashSet::new())),
-            global_tx,
-            ws_url: ws_url.to_string(),
-        })
-    }
-
-    // ─── Common API ──────────────────────────────────────────────────
 
     /// Start tracking a swap ID. Status updates will be sent through the
     /// global channel provided at construction.
     pub async fn subscribe(&self, swap_id: &str) -> Result<(), BoltzError> {
         self.subscribed_ids.lock().await.insert(swap_id.to_string());
 
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        {
-            let _ = self
-                .cmd_tx
-                .send(ReaderCommand::Subscribe(swap_id.to_string()))
-                .await;
-        }
-
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        {
-            let ws_url = self.ws_url.clone();
-            let global_tx = self.global_tx.clone();
-            let subscribed_ids = self.subscribed_ids.clone();
-            let swap_id_owned = swap_id.to_string();
-            wasm_bindgen_futures::spawn_local(async move {
-                Self::single_swap_reader(ws_url, global_tx, subscribed_ids, swap_id_owned).await;
-            });
-        }
+        let _ = self
+            .cmd_tx
+            .send(ReaderCommand::Subscribe(swap_id.to_string()))
+            .await;
 
         tracing::info!(swap_id, "Subscribed to swap status updates");
         Ok(())
@@ -133,31 +90,21 @@ impl SwapStatusSubscriber {
     pub async fn unsubscribe(&self, swap_id: &str) {
         self.subscribed_ids.lock().await.remove(swap_id);
 
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        {
-            let _ = self
-                .cmd_tx
-                .send(ReaderCommand::Unsubscribe(swap_id.to_string()))
-                .await;
-        }
+        let _ = self
+            .cmd_tx
+            .send(ReaderCommand::Unsubscribe(swap_id.to_string()))
+            .await;
 
         tracing::info!(swap_id, "Unsubscribed from swap status updates");
     }
 
     pub async fn close(&self) {
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        {
-            let _ = self.cmd_tx.send(ReaderCommand::Shutdown).await;
-            if let Some(handle) = self.reader_handle.lock().await.take() {
-                handle.abort();
-            }
-        }
+        let _ = self.cmd_tx.send(ReaderCommand::Shutdown).await;
         self.subscribed_ids.lock().await.clear();
         tracing::info!("WebSocket subscriber closed");
     }
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 impl Drop for SwapStatusSubscriber {
     fn drop(&mut self) {
         self.abort_handle.abort();
@@ -165,9 +112,6 @@ impl Drop for SwapStatusSubscriber {
 }
 
 impl SwapStatusSubscriber {
-    // ─── Native reader loop ──────────────────────────────────────────
-
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     async fn reader_loop(
         ws_url: String,
         global_tx: mpsc::Sender<SwapStatusUpdate>,
@@ -184,7 +128,7 @@ impl SwapStatusSubscriber {
                 Err(e) => {
                     tracing::warn!("WebSocket connection failed: {e}, retrying in 5s");
                     tokio::select! {
-                        () = tokio::time::sleep(std::time::Duration::from_secs(5)) => continue,
+                        () = tokio::time::sleep(RECONNECT_DELAY) => continue,
                         cmd = cmd_rx.recv() => {
                             match cmd {
                                 Some(ReaderCommand::Subscribe(id)) => { local_ids.insert(id); }
@@ -222,7 +166,7 @@ impl SwapStatusSubscriber {
                 }
             }
 
-            // Read loop — also listens for new commands.
+            // Read loop — also listens for new commands and sends keep-alive pings.
             let should_shutdown = loop {
                 tokio::select! {
                     msg = read.next() => {
@@ -261,6 +205,12 @@ impl SwapStatusSubscriber {
                             Some(ReaderCommand::Shutdown) | None => break true,
                         }
                     }
+                    () = tokio::time::sleep(KEEP_ALIVE_INTERVAL) => {
+                        if let Err(e) = write.send(Message::Text(PING_JSON.into())).await {
+                            tracing::warn!("Failed to send keep-alive ping: {e}");
+                            break false; // Reconnect
+                        }
+                    }
                 }
             };
 
@@ -270,7 +220,7 @@ impl SwapStatusSubscriber {
 
             // Wait before reconnecting.
             tokio::select! {
-                () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                () = tokio::time::sleep(RECONNECT_DELAY) => {}
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(ReaderCommand::Subscribe(id)) => { local_ids.insert(id); }
@@ -278,41 +228,6 @@ impl SwapStatusSubscriber {
                         Some(ReaderCommand::Shutdown) | None => return,
                     }
                 }
-            }
-        }
-    }
-
-    // ─── WASM inline reader ──────────────────────────────────────────
-
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    async fn single_swap_reader(
-        ws_url: String,
-        global_tx: mpsc::Sender<SwapStatusUpdate>,
-        subscribed_ids: Arc<Mutex<HashSet<String>>>,
-        swap_id: String,
-    ) {
-        let ws_stream = match Self::try_connect(&ws_url).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("WASM WS connection failed: {e}");
-                return;
-            }
-        };
-
-        let (mut write, mut read) = ws_stream.split();
-
-        let msg = WsSubscribeMessage::subscribe(vec![swap_id.clone()]);
-        if let Ok(json) = serde_json::to_string(&msg)
-            && let Err(e) = write.send(Message::Text(json.into())).await
-        {
-            tracing::warn!("Failed to send subscribe: {e}");
-            return;
-        }
-
-        while let Some(Ok(Message::Text(text))) = read.next().await {
-            Self::handle_message(&text, &global_tx).await;
-            if !subscribed_ids.lock().await.contains(&swap_id) {
-                break;
             }
         }
     }

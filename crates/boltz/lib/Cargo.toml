@@ -58,8 +58,6 @@ tokio = { workspace = true, features = ["macros", "sync"] }
 # Required by alloy-signer-local's transitive `rand` dep (used only for key generation,
 # which we don't call). On WASM, getrandom needs the `js` feature to use crypto.getRandomValues().
 getrandom = { version = "0.2", features = ["js"] }
-# For spawn_local in WS subscriber (WASM has no tokio::spawn)
-wasm-bindgen-futures.workspace = true
 
 [dev-dependencies]
 bip39.workspace = true
