@@ -1360,7 +1360,7 @@ dependencies = [
  "async-trait",
  "bip32",
  "bip39",
- "futures-util",
+ "futures",
  "getrandom 0.2.16",
  "hex",
  "k256",

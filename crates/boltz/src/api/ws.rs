@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, mpsc};
 use tokio_tungstenite_wasm::{Message, WebSocketStream};
 

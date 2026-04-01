@@ -45,7 +45,7 @@ bip32 = "0.5"
 tokio-tungstenite-wasm = { version = "0.8", features = ["rustls-tls-webpki-roots"] }
 
 # Async
-futures-util = "0.3"
+futures.workspace = true
 async-trait.workspace = true
 
 # Non-Wasm dependencies
