@@ -31,6 +31,13 @@ pub(crate) struct AlchemyResult {
 }
 
 /// Alchemy EIP-7702 gas-sponsored transaction submission client.
+///
+/// Request and response JSON is built with `serde_json::json!()` / `Value`
+/// rather than typed structs. This is intentional: Alchemy responses are
+/// polymorphic (first-time EIP-7702 vs subsequent `UserOp`` flows return
+/// different shapes with decoy fields), and the signing flow needs to
+/// extract specific fields, strip others (`signatureRequest`), and forward
+/// the rest as-is — all easier with `Value` than with a full typed schema.
 pub(crate) struct AlchemyGasClient {
     rpc_url: String,
     gas_policy_id: String,

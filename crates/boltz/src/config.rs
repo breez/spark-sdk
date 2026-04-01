@@ -68,6 +68,10 @@ pub const ARBITRUM_CHAIN_ID: u64 = 42161;
 /// Default slippage tolerance: 100 basis points = 1%.
 pub const DEFAULT_SLIPPAGE_BPS: u32 = 100;
 
+/// Maximum slippage tolerance: 500 basis points = 5%.
+/// Matches the Boltz web app's upper bound.
+pub const MAX_SLIPPAGE_BPS: u32 = 500;
+
 /// Default URL for fetching OFT (USDT0) deployment data.
 pub const DEFAULT_OFT_DEPLOYMENTS_URL: &str = "https://docs.usdt0.to/api/deployments";
 

@@ -31,6 +31,9 @@ pub(crate) struct SwapManager {
     /// Shutdown signal — dropping the sender stops the event loop.
     shutdown_tx: watch::Sender<()>,
     task_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Sync-safe handle used by `Drop` to abort the task if `shutdown()` was
+    /// never called.
+    abort_handle: tokio::task::AbortHandle,
 }
 
 impl SwapManager {
@@ -55,10 +58,13 @@ impl SwapManager {
             shutdown_rx,
         ));
 
+        let abort_handle = handle.abort_handle();
+
         Self {
             cmd_tx,
             shutdown_tx,
             task_handle: Mutex::new(Some(handle)),
+            abort_handle,
         }
     }
 
@@ -90,7 +96,15 @@ impl SwapManager {
             let _ = handle.await;
         }
     }
+}
 
+impl Drop for SwapManager {
+    fn drop(&mut self) {
+        self.abort_handle.abort();
+    }
+}
+
+impl SwapManager {
     // ─── Central event loop ─────────────────────────────────────────
 
     async fn run_loop(

@@ -50,6 +50,10 @@ pub struct SwapStatusSubscriber {
     reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     cmd_tx: mpsc::Sender<ReaderCommand>,
+    /// Sync-safe handle used by `Drop` to abort the reader task if `close()`
+    /// was never called.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    abort_handle: tokio::task::AbortHandle,
 }
 
 impl SwapStatusSubscriber {
@@ -69,12 +73,14 @@ impl SwapStatusSubscriber {
             global_tx.clone(),
             cmd_rx,
         ));
+        let abort_handle = reader_handle.abort_handle();
 
         Ok(Self {
             subscribed_ids,
             global_tx,
             reader_handle: Mutex::new(Some(reader_handle)),
             cmd_tx,
+            abort_handle,
         })
     }
 
@@ -149,7 +155,16 @@ impl SwapStatusSubscriber {
         self.subscribed_ids.lock().await.clear();
         tracing::info!("WebSocket subscriber closed");
     }
+}
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl Drop for SwapStatusSubscriber {
+    fn drop(&mut self) {
+        self.abort_handle.abort();
+    }
+}
+
+impl SwapStatusSubscriber {
     // ─── Native reader loop ──────────────────────────────────────────
 
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]

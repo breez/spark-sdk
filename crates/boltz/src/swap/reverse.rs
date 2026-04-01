@@ -6,7 +6,7 @@ use crate::api::BoltzApiClient;
 use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
 use crate::config::{
     ARBITRUM_ERC20SWAP_DEPLOY_BLOCK, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
-    ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
+    ARBITRUM_USDT_ADDRESS, BoltzConfig, MAX_SLIPPAGE_BPS, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
 };
 use crate::error::BoltzError;
 use crate::evm::alchemy::{AlchemyGasClient, EvmCall};
@@ -86,10 +86,10 @@ impl ReverseSwapExecutor {
         chain: Chain,
         usdt_amount: u64,
     ) -> Result<PreparedSwap, BoltzError> {
-        if self.config.slippage_bps < 10 || self.config.slippage_bps >= 10000 {
-            return Err(BoltzError::Generic(
-                "slippage_bps must be >= 10 and < 10000".to_string(),
-            ));
+        if self.config.slippage_bps < 10 || self.config.slippage_bps > MAX_SLIPPAGE_BPS {
+            return Err(BoltzError::Generic(format!(
+                "slippage_bps must be >= 10 and <= {MAX_SLIPPAGE_BPS}"
+            )));
         }
 
         // Validate destination is a well-formed EVM address before committing to a swap
@@ -165,10 +165,10 @@ impl ReverseSwapExecutor {
         chain: Chain,
         invoice_amount_sats: u64,
     ) -> Result<PreparedSwap, BoltzError> {
-        if self.config.slippage_bps < 10 || self.config.slippage_bps >= 10000 {
-            return Err(BoltzError::Generic(
-                "slippage_bps must be >= 10 and < 10000".to_string(),
-            ));
+        if self.config.slippage_bps < 10 || self.config.slippage_bps > MAX_SLIPPAGE_BPS {
+            return Err(BoltzError::Generic(format!(
+                "slippage_bps must be >= 10 and <= {MAX_SLIPPAGE_BPS}"
+            )));
         }
 
         parse_address(destination)?;
