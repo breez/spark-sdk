@@ -118,8 +118,6 @@ pub enum ServiceError {
     TokenOutputServiceError(Box<crate::token::TokenOutputServiceError>),
     #[error("transfer observer error: {0}")]
     TransferObserverError(#[from] crate::services::TransferObserverError),
-    #[error("unknown status: {0}")]
-    UnknownStatus(String),
     #[error("generic error: {0}")]
     Generic(String),
 }

@@ -24,7 +24,7 @@ use crate::{
     services::{Transfer, Utxo},
     signer::{SecretSource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
-    tree::{TreeNode, TreeNodeId},
+    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::{
         frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
@@ -757,10 +757,7 @@ impl DepositService {
                         )
                     },
                     signing_keyshare: signing_keyshare.try_into()?,
-                    status: node
-                        .status
-                        .parse()
-                        .map_err(|_| ServiceError::UnknownStatus(node.status.clone()))?,
+                    status: TreeNodeStatus::from(node.status.as_str()),
                 })
             })
             .collect::<Result<Vec<_>, ServiceError>>()?;

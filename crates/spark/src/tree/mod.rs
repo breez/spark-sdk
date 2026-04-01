@@ -90,6 +90,13 @@ pub enum TreeNodeStatus {
     Lost,
     /// Reimbursed is the status of a tree node that is reimbursed after LOST.
     Reimbursed,
+    /// RenewLocked is the status of a tree node that is locked for renewal.
+    RenewLocked,
+    /// ParentExited is the status of a tree node whose parent is exiting,
+    /// making this node not valid for transfer, timelock refresh, etc.
+    ParentExited,
+    /// Unknown is a status not yet recognized by this SDK version.
+    Unknown,
 }
 
 impl std::fmt::Display for TreeNodeStatus {
@@ -108,29 +115,35 @@ impl std::fmt::Display for TreeNodeStatus {
             TreeNodeStatus::Investigation => write!(f, "Investigation"),
             TreeNodeStatus::Lost => write!(f, "Lost"),
             TreeNodeStatus::Reimbursed => write!(f, "Reimbursed"),
+            TreeNodeStatus::RenewLocked => write!(f, "RenewLocked"),
+            TreeNodeStatus::ParentExited => write!(f, "ParentExited"),
+            TreeNodeStatus::Unknown => write!(f, "Unknown"),
         }
     }
 }
 
-impl std::str::FromStr for TreeNodeStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+impl From<&str> for TreeNodeStatus {
+    fn from(s: &str) -> Self {
         match s {
-            "CREATING" => Ok(TreeNodeStatus::Creating),
-            "AVAILABLE" => Ok(TreeNodeStatus::Available),
-            "FROZEN_BY_ISSUER" => Ok(TreeNodeStatus::FrozenByIssuer),
-            "TRANSFER_LOCKED" => Ok(TreeNodeStatus::TransferLocked),
-            "SPLIT_LOCKED" => Ok(TreeNodeStatus::SplitLocked),
-            "SPLITTED" => Ok(TreeNodeStatus::Splitted),
-            "AGGREGATED" => Ok(TreeNodeStatus::Aggregated),
-            "ON_CHAIN" => Ok(TreeNodeStatus::OnChain),
-            "EXITED" => Ok(TreeNodeStatus::Exited),
-            "AGGREGATE_LOCK" => Ok(TreeNodeStatus::AggregateLock),
-            "INVESTIGATION" => Ok(TreeNodeStatus::Investigation),
-            "LOST" => Ok(TreeNodeStatus::Lost),
-            "REIMBURSED" => Ok(TreeNodeStatus::Reimbursed),
-            _ => Err(format!("Unknown TreeNodeStatus: {s}")),
+            "CREATING" => TreeNodeStatus::Creating,
+            "AVAILABLE" => TreeNodeStatus::Available,
+            "FROZEN_BY_ISSUER" => TreeNodeStatus::FrozenByIssuer,
+            "TRANSFER_LOCKED" => TreeNodeStatus::TransferLocked,
+            "SPLIT_LOCKED" => TreeNodeStatus::SplitLocked,
+            "SPLITTED" => TreeNodeStatus::Splitted,
+            "AGGREGATED" => TreeNodeStatus::Aggregated,
+            "ON_CHAIN" => TreeNodeStatus::OnChain,
+            "EXITED" => TreeNodeStatus::Exited,
+            "AGGREGATE_LOCK" => TreeNodeStatus::AggregateLock,
+            "INVESTIGATION" => TreeNodeStatus::Investigation,
+            "LOST" => TreeNodeStatus::Lost,
+            "REIMBURSED" => TreeNodeStatus::Reimbursed,
+            "RENEW_LOCKED" => TreeNodeStatus::RenewLocked,
+            "PARENT_EXITED" => TreeNodeStatus::ParentExited,
+            other => {
+                tracing::warn!("Unrecognized TreeNodeStatus: {other}");
+                TreeNodeStatus::Unknown
+            }
         }
     }
 }
