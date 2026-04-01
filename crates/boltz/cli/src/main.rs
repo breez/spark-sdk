@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use bip39::{Language, Mnemonic};
 use clap::{Parser, Subcommand};
 
-use boltz::{AlchemyConfig, BoltzConfig, BoltzError, BoltzService, BoltzStore, PreparedSwap};
+use boltz::{AlchemyConfig, BoltzConfig, BoltzError, BoltzService, BoltzStorage};
 
 #[derive(Clone, clap::ValueEnum)]
 enum Chain {
@@ -94,25 +94,9 @@ struct Cli {
     #[arg(long, env = "BOLTZ_REFERRAL_ID", default_value = "breez-sdk")]
     referral_id: String,
 
-    /// Boltz API URL (without /v2).
-    #[arg(
-        long,
-        env = "BOLTZ_API_URL",
-        default_value = "https://api.boltz.exchange"
-    )]
-    api_url: String,
-
-    /// Arbitrum RPC URL for read-only operations.
-    #[arg(
-        long,
-        env = "ARBITRUM_RPC_URL",
-        default_value = "https://arb1.arbitrum.io/rpc"
-    )]
-    arbitrum_rpc_url: String,
-
-    /// Slippage tolerance in basis points (100 = 1%).
-    #[arg(long, default_value = "100")]
-    slippage_bps: u32,
+    /// Slippage tolerance in basis points (100 = 1%). Defaults to 100.
+    #[arg(long)]
+    slippage_bps: Option<u32>,
 
     #[command(subcommand)]
     command: Command,
@@ -128,9 +112,12 @@ enum Command {
 
     /// Get a quote for a LN -> USDT swap (no commitment).
     Prepare {
-        /// USDT amount (e.g. 1.5 for 1.50 USDT).
-        #[arg(value_parser = parse_usdt_amount)]
-        usdt_amount: u64,
+        /// USDT amount (e.g. 1.5 for 1.50 USDT). Mutually exclusive with --sats.
+        #[arg(long, value_parser = parse_usdt_amount, conflicts_with = "sats")]
+        usdt: Option<u64>,
+        /// Input amount in sats. Mutually exclusive with --usdt.
+        #[arg(long, conflicts_with = "usdt")]
+        sats: Option<u64>,
         /// Destination EVM address.
         destination: String,
         /// Destination chain.
@@ -140,9 +127,12 @@ enum Command {
 
     /// Full swap flow: prepare -> create -> wait for payment -> complete.
     Swap {
-        /// USDT amount (e.g. 1.5 for 1.50 USDT).
-        #[arg(value_parser = parse_usdt_amount)]
-        usdt_amount: u64,
+        /// USDT amount (e.g. 1.5 for 1.50 USDT). Mutually exclusive with --sats.
+        #[arg(long, value_parser = parse_usdt_amount, conflicts_with = "sats")]
+        usdt: Option<u64>,
+        /// Input amount in sats. Mutually exclusive with --usdt.
+        #[arg(long, conflicts_with = "usdt")]
+        sats: Option<u64>,
         /// Destination EVM address.
         destination: String,
         /// Destination chain.
@@ -175,18 +165,16 @@ async fn main() -> Result<()> {
     };
     let seed = mnemonic.to_seed("");
 
-    // Build config
-    let config = BoltzConfig {
-        api_url: cli.api_url,
-        alchemy_config: AlchemyConfig {
+    let mut config = BoltzConfig::mainnet(
+        AlchemyConfig {
             api_key: cli.alchemy_api_key,
             gas_policy_id: cli.alchemy_gas_policy_id,
         },
-        arbitrum_rpc_url: cli.arbitrum_rpc_url,
-        chain_id: boltz::ARBITRUM_CHAIN_ID,
-        referral_id: cli.referral_id,
-        slippage_bps: cli.slippage_bps,
-    };
+        cli.referral_id,
+    );
+    if let Some(slippage_bps) = cli.slippage_bps {
+        config.slippage_bps = slippage_bps;
+    }
 
     match cli.command {
         Command::Info => cmd_info(&seed)?,
@@ -195,20 +183,23 @@ async fn main() -> Result<()> {
             cmd_limits(&svc).await?;
         }
         Command::Prepare {
-            usdt_amount,
+            usdt,
+            sats,
             destination,
             chain,
         } => {
             let svc = init_service(config, &seed, &cli.data_dir).await?;
-            cmd_prepare(&svc, &destination, chain.into(), usdt_amount).await?;
+            let prepared = prepare(&svc, &destination, chain.into(), usdt, sats).await?;
+            print_json(&prepared);
         }
         Command::Swap {
-            usdt_amount,
+            usdt,
+            sats,
             destination,
             chain,
         } => {
             let svc = init_service(config, &seed, &cli.data_dir).await?;
-            cmd_swap(&svc, &destination, chain.into(), usdt_amount).await?;
+            cmd_swap(&svc, &destination, chain.into(), usdt, sats).await?;
         }
         Command::Recover { destination } => {
             let svc = init_service(config, &seed, &cli.data_dir).await?;
@@ -244,7 +235,7 @@ fn get_or_create_mnemonic(data_dir: &Path) -> Result<Mnemonic> {
 }
 
 async fn init_service(config: BoltzConfig, seed: &[u8], data_dir: &Path) -> Result<BoltzService> {
-    let store = Arc::new(FileBoltzStore::new(data_dir));
+    let store = Arc::new(FileBoltzStorage::new(data_dir));
     let svc = BoltzService::new(config, seed, store)
         .await
         .context("Failed to initialize BoltzService")?;
@@ -272,37 +263,39 @@ fn cmd_info(seed: &[u8]) -> Result<()> {
 
 async fn cmd_limits(svc: &BoltzService) -> Result<()> {
     let limits = svc.get_limits().await?;
-    println!("Swap limits:");
-    println!("  Min: {} sats", limits.min_sats);
-    println!("  Max: {} sats", limits.max_sats);
+    print_json(&limits);
     Ok(())
 }
 
-async fn cmd_prepare(
+async fn prepare(
     svc: &BoltzService,
     destination: &str,
     chain: boltz::Chain,
-    usdt_amount: u64,
-) -> Result<()> {
-    let prepared = svc
-        .prepare_reverse_swap(destination, chain, usdt_amount)
-        .await?;
-    print_prepared(&prepared);
-    Ok(())
+    usdt: Option<u64>,
+    sats: Option<u64>,
+) -> Result<boltz::PreparedSwap> {
+    match (usdt, sats) {
+        (Some(usdt_amount), _) => Ok(svc
+            .prepare_reverse_swap(destination, chain, usdt_amount)
+            .await?),
+        (_, Some(sats_amount)) => Ok(svc
+            .prepare_reverse_swap_from_sats(destination, chain, sats_amount)
+            .await?),
+        _ => bail!("Either --usdt or --sats must be provided"),
+    }
 }
 
 async fn cmd_swap(
     svc: &BoltzService,
     destination: &str,
     chain: boltz::Chain,
-    usdt_amount: u64,
+    usdt: Option<u64>,
+    sats: Option<u64>,
 ) -> Result<()> {
     // Step 1: Prepare
     println!("Fetching quote...\n");
-    let prepared = svc
-        .prepare_reverse_swap(destination, chain, usdt_amount)
-        .await?;
-    print_prepared(&prepared);
+    let prepared = prepare(svc, destination, chain, usdt, sats).await?;
+    print_json(&prepared);
 
     // Confirm
     if !confirm("\nProceed with swap?")? {
@@ -313,25 +306,15 @@ async fn cmd_swap(
     // Step 2: Create
     println!("\nCreating swap on Boltz...");
     let created = svc.create_reverse_swap(&prepared).await?;
-    println!("\nSwap created!");
-    println!("  Swap ID:       {}", created.swap_id);
-    println!("  Boltz ID:      {}", created.boltz_id);
-    println!("  Invoice:       {}", created.invoice);
-    println!("  Amount:        {} sats", created.invoice_amount_sats);
-    println!("  Timeout block: {}", created.timeout_block_height);
+    println!("\nSwap created:");
+    print_json(&created);
     println!("\n>>> PAY THIS INVOICE to continue <<<\n");
 
     // Step 3: Complete (blocks until done)
     println!("Monitoring swap... (waiting for lockup + claim)");
     let completed = svc.complete_reverse_swap(&created.swap_id).await?;
-    println!("\nSwap completed!");
-    println!("  Claim tx:    {}", completed.claim_tx_hash);
-    println!(
-        "  USDT amount: {} USDT",
-        format_usdt(completed.usdt_delivered)
-    );
-    println!("  Destination: {}", completed.destination_address);
-    println!("  Chain:       {:?}", completed.destination_chain);
+    println!("\nSwap completed:");
+    print_json(&completed);
 
     Ok(())
 }
@@ -341,49 +324,33 @@ async fn cmd_recover(svc: &BoltzService, destination: &str) -> Result<()> {
     println!("This may take a few minutes.\n");
 
     let result = svc.recover(destination).await?;
-
-    println!("Scan complete:");
-    println!("  Events scanned:    {}", result.total_events_scanned);
-    println!("  Already settled:   {}", result.already_settled);
-    println!("  Claimed:           {}", result.claimed.len());
-
-    if let Some(highest) = result.highest_key_index {
-        println!("  Highest key index: {highest}");
-    }
-
-    for claim in &result.claimed {
-        println!("\n  Claimed swap:");
-        println!("    Key index:     {}", claim.key_index);
-        println!("    Preimage hash: 0x{}", hex::encode(claim.preimage_hash));
-        println!("    Claim tx:      {}", claim.claim_tx_hash);
-    }
-
-    if result.claimed.is_empty() && result.total_events_scanned == 0 {
-        println!("\nNo recoverable swaps found.");
-    }
+    print_json(&result);
 
     Ok(())
 }
 
-fn format_usdt(raw: u64) -> String {
-    let whole = raw / 1_000_000;
-    let frac = raw % 1_000_000;
-    format!("{whole}.{frac:06}")
+const USDT_FIELDS: &[&str] = &["usdt_amount", "usdt_delivered"];
+
+fn print_json(value: &impl serde::Serialize) {
+    let mut json = serde_json::to_value(value).unwrap();
+    format_usdt_fields(&mut json);
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
 }
 
-fn print_prepared(p: &PreparedSwap) {
-    println!("Quote:");
-    println!("  Destination:      {}", p.destination_address);
-    println!("  Chain:            {:?}", p.destination_chain);
-    println!("  USDT requested:   {} USDT", format_usdt(p.usdt_amount));
-    println!("  Invoice amount:   {} sats", p.invoice_amount_sats);
-    println!("  Boltz fee:        {} sats", p.boltz_fee_sats);
-    println!("  Onchain (tBTC):   {} sats", p.estimated_onchain_amount);
-    println!(
-        "  Est. USDT output: {} USDT",
-        format_usdt(p.estimated_usdt_output)
-    );
-    println!("  Slippage:         {} bps", p.slippage_bps);
+fn format_usdt_fields(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        for (key, val) in obj.iter_mut() {
+            if USDT_FIELDS.contains(&key.as_str())
+                && let Some(raw) = val.as_u64()
+            {
+                *val = serde_json::Value::String(format!(
+                    "{}.{:06} USDT",
+                    raw / 1_000_000,
+                    raw % 1_000_000
+                ));
+            }
+        }
+    }
 }
 
 // ─── Logging ────────────────────────────────────────────────────────────
@@ -418,17 +385,17 @@ fn init_logging(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-// ─── File-backed BoltzStore ─────────────────────────────────────────────
+// ─── File-backed BoltzStorage ─────────────────────────────────────────────
 // Persists key indices to `{data_dir}/key_index_{chain_id}` so that
 // consecutive CLI runs derive fresh preimage keys. Swap state stays in
 // memory since the CLI runs a single swap to completion.
 
-struct FileBoltzStore {
+struct FileBoltzStorage {
     data_dir: PathBuf,
     swaps: tokio::sync::Mutex<std::collections::HashMap<String, boltz::BoltzSwap>>,
 }
 
-impl FileBoltzStore {
+impl FileBoltzStorage {
     fn new(data_dir: &Path) -> Self {
         Self {
             data_dir: data_dir.to_path_buf(),
@@ -458,7 +425,7 @@ impl FileBoltzStore {
 }
 
 #[macros::async_trait]
-impl BoltzStore for FileBoltzStore {
+impl BoltzStorage for FileBoltzStorage {
     async fn insert_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
         self.swaps
             .lock()
@@ -490,10 +457,6 @@ impl BoltzStore for FileBoltzStore {
             .filter(|s| !s.status.is_terminal())
             .cloned()
             .collect())
-    }
-
-    async fn get_next_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
-        self.read_index(chain_id)
     }
 
     async fn increment_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {

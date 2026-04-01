@@ -3,7 +3,6 @@ pub mod ws;
 
 use std::collections::HashMap;
 
-use platform_utils::DefaultHttpClient;
 use platform_utils::http::HttpClient;
 
 use crate::config::BoltzConfig;
@@ -18,14 +17,14 @@ use self::types::{
 /// HTTP client for the Boltz REST API.
 pub struct BoltzApiClient {
     config: BoltzConfig,
-    http_client: DefaultHttpClient,
+    http_client: Box<dyn HttpClient>,
 }
 
 impl BoltzApiClient {
-    pub fn new(config: &BoltzConfig) -> Self {
+    pub fn new(config: &BoltzConfig, http_client: Box<dyn HttpClient>) -> Self {
         Self {
             config: config.clone(),
-            http_client: DefaultHttpClient::new(None),
+            http_client,
         }
     }
 
@@ -190,7 +189,10 @@ mod tests {
             },
             "test_referral".to_string(),
         );
-        let client = BoltzApiClient::new(&config);
+        let client = BoltzApiClient::new(
+            &config,
+            Box::new(platform_utils::DefaultHttpClient::new(None)),
+        );
         assert_eq!(client.config.api_url, "https://api.boltz.exchange");
     }
 

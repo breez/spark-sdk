@@ -164,7 +164,9 @@ impl EvmProvider {
                 .await?;
 
             if response.status == 429 {
-                let delay = RPC_RETRY_BASE_MS << attempt;
+                let delay = RPC_RETRY_BASE_MS
+                    .saturating_mul(2u64.saturating_pow(attempt))
+                    .min(30_000);
                 tracing::warn!(
                     method,
                     attempt,
@@ -202,7 +204,9 @@ impl EvmProvider {
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
                 if code == 429 {
-                    let delay = RPC_RETRY_BASE_MS << attempt;
+                    let delay = RPC_RETRY_BASE_MS
+                        .saturating_mul(2u64.saturating_pow(attempt))
+                        .min(30_000);
                     tracing::warn!(
                         method,
                         attempt,

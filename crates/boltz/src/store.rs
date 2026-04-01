@@ -4,16 +4,14 @@ use crate::models::BoltzSwap;
 /// Persistence interface for Boltz swap state.
 ///
 /// The boltz crate defines the trait; the caller provides the implementation.
-/// For testing, use `MemoryBoltzStore`.
+/// For testing, use `MemoryBoltzStorage`.
 #[macros::async_trait]
-pub trait BoltzStore: Send + Sync {
+pub trait BoltzStorage: Send + Sync {
     async fn insert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError>;
     async fn update_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError>;
     async fn get_swap(&self, id: &str) -> Result<Option<BoltzSwap>, BoltzError>;
     /// Return all swaps with non-terminal status.
     async fn list_active_swaps(&self) -> Result<Vec<BoltzSwap>, BoltzError>;
-    /// Get the next available key derivation index for the given chain.
-    async fn get_next_key_index(&self, chain_id: u64) -> Result<u32, BoltzError>;
     /// Atomically reserve the next key index and return it.
     async fn increment_key_index(&self, chain_id: u64) -> Result<u32, BoltzError>;
     /// Set the key index to `value` if it is greater than the current index.
@@ -23,19 +21,19 @@ pub trait BoltzStore: Send + Sync {
 
 /// In-memory store for testing.
 #[derive(Default)]
-pub struct MemoryBoltzStore {
+pub struct MemoryBoltzStorage {
     swaps: tokio::sync::Mutex<std::collections::HashMap<String, BoltzSwap>>,
     key_indices: tokio::sync::Mutex<std::collections::HashMap<u64, u32>>,
 }
 
-impl MemoryBoltzStore {
+impl MemoryBoltzStorage {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
 #[macros::async_trait]
-impl BoltzStore for MemoryBoltzStore {
+impl BoltzStorage for MemoryBoltzStorage {
     async fn insert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
         self.swaps
             .lock()
@@ -69,10 +67,6 @@ impl BoltzStore for MemoryBoltzStore {
             .collect())
     }
 
-    async fn get_next_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
-        Ok(*self.key_indices.lock().await.entry(chain_id).or_insert(0))
-    }
-
     async fn increment_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
         let mut indices = self.key_indices.lock().await;
         let idx = indices.entry(chain_id).or_insert(0);
@@ -101,7 +95,6 @@ mod tests {
     fn test_swap(id: &str, status: BoltzSwapStatus) -> BoltzSwap {
         BoltzSwap {
             id: id.to_string(),
-            boltz_id: format!("boltz-{id}"),
             status,
             claim_key_index: 0,
             chain_id: 42161,
@@ -125,17 +118,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_and_get() {
-        let store = MemoryBoltzStore::new();
+        let store = MemoryBoltzStorage::new();
         let swap = test_swap("1", BoltzSwapStatus::Created);
         store.insert_swap(&swap).await.unwrap();
 
         let retrieved = store.get_swap("1").await.unwrap().unwrap();
-        assert_eq!(retrieved.boltz_id, "boltz-1");
+        assert_eq!(retrieved.id, "1");
     }
 
     #[tokio::test]
     async fn test_update_swap() {
-        let store = MemoryBoltzStore::new();
+        let store = MemoryBoltzStorage::new();
         let mut swap = test_swap("1", BoltzSwapStatus::Created);
         store.insert_swap(&swap).await.unwrap();
 
@@ -148,14 +141,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_nonexistent_fails() {
-        let store = MemoryBoltzStore::new();
+        let store = MemoryBoltzStorage::new();
         let swap = test_swap("1", BoltzSwapStatus::Created);
         assert!(store.update_swap(&swap).await.is_err());
     }
 
     #[tokio::test]
     async fn test_list_active_swaps() {
-        let store = MemoryBoltzStore::new();
+        let store = MemoryBoltzStorage::new();
         store
             .insert_swap(&test_swap("1", BoltzSwapStatus::Created))
             .await
@@ -175,25 +168,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_index_management() {
-        let store = MemoryBoltzStore::new();
-
-        assert_eq!(store.get_next_key_index(42161).await.unwrap(), 0);
+        let store = MemoryBoltzStorage::new();
 
         let idx0 = store.increment_key_index(42161).await.unwrap();
         assert_eq!(idx0, 0);
 
         let idx1 = store.increment_key_index(42161).await.unwrap();
         assert_eq!(idx1, 1);
-
-        assert_eq!(store.get_next_key_index(42161).await.unwrap(), 2);
-
-        // Different chain is independent
-        assert_eq!(store.get_next_key_index(1).await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn test_get_nonexistent_returns_none() {
-        let store = MemoryBoltzStore::new();
+        let store = MemoryBoltzStorage::new();
         assert!(store.get_swap("nonexistent").await.unwrap().is_none());
     }
 }

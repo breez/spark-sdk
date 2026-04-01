@@ -6,8 +6,8 @@ use crate::api::BoltzApiClient;
 use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
 use crate::api::ws::{SwapStatusSubscriber, SwapStatusUpdate};
 use crate::config::{
-    ARBITRUM_ERC20SWAP_ADDRESS, ARBITRUM_ERC20SWAP_DEPLOY_BLOCK, ARBITRUM_ROUTER_ADDRESS,
-    ARBITRUM_TBTC_ADDRESS, ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
+    ARBITRUM_ERC20SWAP_DEPLOY_BLOCK, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
+    ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
 };
 use crate::error::BoltzError;
 use crate::evm::alchemy::{AlchemyGasClient, EvmCall};
@@ -24,21 +24,22 @@ use crate::models::{
     RecoveryResult, SwapLimits,
 };
 use crate::recover::{self, RecoverableSwap};
-use crate::store::BoltzStore;
+use crate::store::BoltzStorage;
 
 /// Maximum claim retries (quote may go stale between encode and submit).
 const MAX_CLAIM_RETRIES: u32 = 3;
 
 /// Orchestrates the LN -> USDT reverse swap flow.
-pub struct ReverseSwapExecutor {
+pub(crate) struct ReverseSwapExecutor {
     api_client: BoltzApiClient,
     ws_subscriber: SwapStatusSubscriber,
     key_manager: EvmKeyManager,
     alchemy_client: AlchemyGasClient,
     evm_provider: EvmProvider,
     oft_deployments: OftDeployments,
-    store: Arc<dyn BoltzStore>,
+    store: Arc<dyn BoltzStorage>,
     config: BoltzConfig,
+    erc20swap_address: String,
 }
 
 impl ReverseSwapExecutor {
@@ -50,8 +51,9 @@ impl ReverseSwapExecutor {
         alchemy_client: AlchemyGasClient,
         evm_provider: EvmProvider,
         oft_deployments: OftDeployments,
-        store: Arc<dyn BoltzStore>,
+        store: Arc<dyn BoltzStorage>,
         config: BoltzConfig,
+        erc20swap_address: String,
     ) -> Self {
         Self {
             api_client,
@@ -62,6 +64,7 @@ impl ReverseSwapExecutor {
             oft_deployments,
             store,
             config,
+            erc20swap_address,
         }
     }
 
@@ -76,10 +79,10 @@ impl ReverseSwapExecutor {
 
     /// Prepare a reverse swap quote. No side effects.
     ///
-    /// Walks the route in reverse:
-    /// 1. Get DEX quote: how much tBTC needed for `usdt_amount` USDT?
-    /// 2. For cross-chain: estimate LZ messaging fee in tBTC and add it
-    /// 3. Convert tBTC EVM units to sats
+    /// Matches the web app's `calculateSendAmount` flow, working backwards:
+    /// 1. For cross-chain: invert OFT (find USDT on Arbitrum needed to deliver target on destination)
+    /// 2. Add OFT messaging fee cost (in USDT)
+    /// 3. DEX quote: how much tBTC for the total USDT needed
     /// 4. Apply Boltz fee to get total sats needed
     pub async fn prepare(
         &self,
@@ -87,22 +90,47 @@ impl ReverseSwapExecutor {
         chain: Chain,
         usdt_amount: u64,
     ) -> Result<PreparedSwap, BoltzError> {
-        if self.config.slippage_bps < 10 {
+        if self.config.slippage_bps < 10 || self.config.slippage_bps >= 10000 {
             return Err(BoltzError::Generic(
-                "slippage_bps must be at least 10 (0.1%)".to_string(),
+                "slippage_bps must be >= 10 and < 10000".to_string(),
             ));
         }
 
+        // Validate destination is a well-formed EVM address before committing to a swap
+        parse_address(destination)?;
+
         let tbtc_pair = self.fetch_tbtc_pair().await?;
-        let mut tbtc_evm_units = self.fetch_quote_out_tbtc(usdt_amount).await?;
 
-        // For cross-chain destinations, add the LZ messaging fee cost in tBTC.
-        // Matches web app's `invertPostOftQuote` which inflates required sats.
-        if !chain.is_source_chain() {
-            let lz_fee_tbtc = self.estimate_lz_fee_in_tbtc(&chain, usdt_amount).await?;
-            tbtc_evm_units = tbtc_evm_units.saturating_add(lz_fee_tbtc);
-        }
+        // Step 1+2: Determine total USDT needed on Arbitrum
+        let total_usdt_on_arb = if chain.is_source_chain() {
+            u128::from(usdt_amount)
+        } else {
+            // Matching web app's invertPostOftQuote:
+            // Find how much USDT on Arbitrum is needed to deliver usdt_amount on destination
+            let required_usdt = self
+                .estimate_oft_required_send_amount(&chain, u128::from(usdt_amount))
+                .await?;
+            // Get messaging fee and convert to USDT cost
+            let (msg_fee_native, _) = self
+                .quote_oft_messaging_fee(&chain, required_usdt)
+                .await?;
+            let msg_fee_usdt = if msg_fee_native == 0 {
+                0u128
+            } else {
+                self.fetch_quote_out_usdt_for_eth(msg_fee_native).await?
+            };
+            // Total = OFT required amount + messaging fee cost (both in USDT)
+            required_usdt.checked_add(msg_fee_usdt).ok_or_else(|| {
+                BoltzError::Generic("USDT amount overflow".into())
+            })?
+        };
 
+        // Step 3: DEX quote for the total USDT needed → tBTC
+        let total_usdt_u64 = u64::try_from(total_usdt_on_arb)
+            .map_err(|_| BoltzError::Generic("USDT amount overflow".into()))?;
+        let tbtc_evm_units = self.fetch_quote_out_tbtc(total_usdt_u64).await?;
+
+        // Step 4: Apply Boltz fee
         let fee_calc = compute_invoice_amount(&tbtc_pair, tbtc_evm_units)?;
 
         // Validate against Boltz swap limits
@@ -124,7 +152,100 @@ impl ReverseSwapExecutor {
             invoice_amount_sats: fee_calc.invoice_sats,
             boltz_fee_sats: fee_calc.boltz_fee_sats,
             estimated_onchain_amount: fee_calc.onchain_sats,
-            estimated_usdt_output: usdt_amount,
+            slippage_bps: self.config.slippage_bps,
+            pair_hash: tbtc_pair.hash.clone(),
+            expires_at: now.saturating_add(60),
+        })
+    }
+
+    /// Prepare a reverse swap quote starting from input sats.
+    ///
+    /// Walks the route forward:
+    /// 1. Apply Boltz fee to get onchain tBTC sats
+    /// 2. Convert sats to tBTC EVM units
+    /// 3. For cross-chain: subtract LZ messaging fee cost
+    /// 4. Get DEX quote: how much USDT for the remaining tBTC?
+    pub async fn prepare_from_sats(
+        &self,
+        destination: &str,
+        chain: Chain,
+        invoice_amount_sats: u64,
+    ) -> Result<PreparedSwap, BoltzError> {
+        if self.config.slippage_bps < 10 || self.config.slippage_bps >= 10000 {
+            return Err(BoltzError::Generic(
+                "slippage_bps must be >= 10 and < 10000".to_string(),
+            ));
+        }
+
+        parse_address(destination)?;
+
+        let tbtc_pair = self.fetch_tbtc_pair().await?;
+
+        // Validate against Boltz swap limits
+        if invoice_amount_sats < tbtc_pair.limits.minimal
+            || invoice_amount_sats > tbtc_pair.limits.maximal
+        {
+            return Err(BoltzError::AmountOutOfRange {
+                amount: invoice_amount_sats,
+                min: tbtc_pair.limits.minimal,
+                max: tbtc_pair.limits.maximal,
+            });
+        }
+
+        let fee_calc = compute_onchain_amount(&tbtc_pair, invoice_amount_sats)?;
+
+        // Convert onchain sats to tBTC EVM units
+        let tbtc_evm_units = u128::from(fee_calc.onchain_sats)
+            .checked_mul(u128::from(SATS_TO_TBTC_FACTOR))
+            .ok_or_else(|| BoltzError::Generic("tBTC amount overflow".into()))?;
+
+        let usdt_output = if chain.is_source_chain() {
+            // Same-chain: simple DEX quote
+            self.fetch_quote_in_usdt(tbtc_evm_units).await?
+        } else {
+            // Cross-chain: matching web app's applyPostOftQuote exactly.
+            // 1. DEX quote with full tBTC → initial USDT
+            let initial_usdt = self.fetch_quote_in_usdt(tbtc_evm_units).await?;
+            // 2. Quote OFT with that USDT to get messaging fee
+            let (msg_fee_native, _) = self
+                .quote_oft_messaging_fee(&chain, u128::from(initial_usdt))
+                .await?;
+            // 3. Convert messaging fee (ETH) to USDT cost
+            let fee_usdt = if msg_fee_native == 0 {
+                0u128
+            } else {
+                self.fetch_quote_out_usdt_for_eth(msg_fee_native).await?
+            };
+            // 4. Subtract USDT cost from USDT amount
+            let adjusted_usdt = u128::from(initial_usdt)
+                .checked_sub(fee_usdt)
+                .ok_or_else(|| {
+                    BoltzError::Generic(
+                        "Amount too small to cover OFT cross-chain messaging fee".into(),
+                    )
+                })?;
+            if adjusted_usdt == 0 {
+                return Err(BoltzError::Generic(
+                    "Amount too small to cover OFT cross-chain messaging fee".into(),
+                ));
+            }
+            // 5. Re-quote OFT with adjusted USDT to get final received amount
+            let (_, oft_received) = self
+                .quote_oft_messaging_fee(&chain, adjusted_usdt)
+                .await?;
+            u64::try_from(oft_received)
+                .map_err(|_| BoltzError::Generic("USDT amount overflow".into()))?
+        };
+
+        let now = current_unix_timestamp();
+        Ok(PreparedSwap {
+            destination_address: destination.to_string(),
+            destination_chain: chain,
+            usdt_amount: usdt_output,
+            invoice_amount_sats,
+            boltz_fee_sats: fee_calc.boltz_fee_sats,
+            estimated_onchain_amount: fee_calc.onchain_sats,
+
             slippage_bps: self.config.slippage_bps,
             pair_hash: tbtc_pair.hash.clone(),
             expires_at: now.saturating_add(60),
@@ -162,11 +283,16 @@ impl ReverseSwapExecutor {
 
         let resp = self.api_client.create_reverse_swap(&create_req).await?;
 
-        let swap_id = generate_swap_id();
+        if resp.onchain_amount != prepared.estimated_onchain_amount {
+            return Err(BoltzError::Generic(format!(
+                "Boltz onchain_amount ({}) differs from prepared estimate ({})",
+                resp.onchain_amount, prepared.estimated_onchain_amount,
+            )));
+        }
+
         let now = current_unix_timestamp();
         let swap = BoltzSwap {
-            id: swap_id.clone(),
-            boltz_id: resp.id.clone(),
+            id: resp.id.clone(),
             status: BoltzSwapStatus::Created,
             claim_key_index: key_index,
             chain_id: self.config.chain_id,
@@ -177,7 +303,7 @@ impl ReverseSwapExecutor {
                 reason: "Missing refund_address in swap response".to_string(),
                 code: None,
             })?,
-            erc20swap_address: ARBITRUM_ERC20SWAP_ADDRESS.to_string(),
+            erc20swap_address: self.erc20swap_address.clone(),
             router_address: ARBITRUM_ROUTER_ADDRESS.to_string(),
             invoice: resp.invoice.clone(),
             invoice_amount_sats: prepared.invoice_amount_sats,
@@ -192,8 +318,7 @@ impl ReverseSwapExecutor {
         self.store.insert_swap(&swap).await?;
 
         Ok(CreatedSwap {
-            swap_id,
-            boltz_id: resp.id,
+            swap_id: resp.id,
             invoice: resp.invoice,
             invoice_amount_sats: prepared.invoice_amount_sats,
             timeout_block_height: resp.timeout_block_height,
@@ -209,7 +334,7 @@ impl ReverseSwapExecutor {
             .await?
             .ok_or_else(|| BoltzError::Store(format!("Swap not found: {swap_id}")))?;
 
-        let mut rx = self.ws_subscriber.subscribe(&swap.boltz_id).await?;
+        let mut rx = self.ws_subscriber.subscribe(&swap.id).await?;
 
         if swap.status == BoltzSwapStatus::Created || swap.status == BoltzSwapStatus::InvoicePaid {
             swap = self.wait_for_lockup(&mut swap, &mut rx).await?;
@@ -218,7 +343,7 @@ impl ReverseSwapExecutor {
             swap = self.claim_and_swap(&mut swap).await?;
         }
 
-        self.ws_subscriber.unsubscribe(&swap.boltz_id).await;
+        self.ws_subscriber.unsubscribe(&swap.id).await;
 
         if swap.status == BoltzSwapStatus::Completed {
             Ok(CompletedSwap {
@@ -231,7 +356,7 @@ impl ReverseSwapExecutor {
         } else {
             tracing::error!(
                 swap_id = swap.id,
-                boltz_id = swap.boltz_id,
+
                 status = ?swap.status,
                 "Swap completed in non-success state"
             );
@@ -250,7 +375,7 @@ impl ReverseSwapExecutor {
         for swap in &active {
             tracing::info!(
                 swap_id = swap.id,
-                boltz_id = swap.boltz_id,
+
                 status = ?swap.status,
                 "Resuming active swap"
             );
@@ -266,7 +391,7 @@ impl ReverseSwapExecutor {
                 Err(e) => {
                     tracing::error!(
                         swap_id = swap.id,
-                        boltz_id = swap.boltz_id,
+
                         error = %e,
                         "Failed to resume swap"
                     );
@@ -287,7 +412,7 @@ impl ReverseSwapExecutor {
             &self.evm_provider,
             &self.key_manager,
             chain_id_u32,
-            ARBITRUM_ERC20SWAP_ADDRESS,
+            &self.erc20swap_address,
             ARBITRUM_ERC20SWAP_DEPLOY_BLOCK,
         )
         .await?;
@@ -350,11 +475,9 @@ impl ReverseSwapExecutor {
             .map_err(|_| BoltzError::Generic("Timelock too large for u64".into()))?;
 
         let now = current_unix_timestamp();
-        let swap_id = generate_swap_id();
 
         let mut swap = BoltzSwap {
-            id: swap_id,
-            boltz_id: String::new(), // No Boltz ID for recovered swaps
+            id: format!("recovery-{}-{}", recoverable.key_index, now),
             status: BoltzSwapStatus::TbtcLocked,
             claim_key_index: recoverable.key_index,
             chain_id: self.config.chain_id,
@@ -362,7 +485,7 @@ impl ReverseSwapExecutor {
             destination_address: destination_address.to_string(),
             destination_chain: Chain::Arbitrum, // Recovery always claims to Arbitrum
             refund_address: format!("0x{}", hex::encode(recoverable.refund_address.as_slice())),
-            erc20swap_address: ARBITRUM_ERC20SWAP_ADDRESS.to_string(),
+            erc20swap_address: self.erc20swap_address.clone(),
             router_address: ARBITRUM_ROUTER_ADDRESS.to_string(),
             invoice: String::new(),
             invoice_amount_sats: 0,
@@ -418,6 +541,27 @@ impl ReverseSwapExecutor {
         Ok(quote)
     }
 
+    async fn fetch_quote_in_usdt(&self, tbtc_evm_units: u128) -> Result<u64, BoltzError> {
+        let quotes = self
+            .api_client
+            .get_quote_in(
+                "ARB",
+                ARBITRUM_TBTC_ADDRESS,
+                ARBITRUM_USDT_ADDRESS,
+                tbtc_evm_units,
+            )
+            .await?;
+        let amount = pick_best_quote(&quotes, QuoteDirection::In)?;
+        if amount == 0 {
+            return Err(BoltzError::InvalidQuote(
+                "DEX quote returned zero USDT".to_string(),
+            ));
+        }
+        amount
+            .try_into()
+            .map_err(|_| BoltzError::Generic("USDT amount overflow".into()))
+    }
+
     async fn wait_for_lockup(
         &self,
         swap: &mut BoltzSwap,
@@ -429,7 +573,7 @@ impl ReverseSwapExecutor {
             })?;
 
             tracing::info!(
-                swap_id = swap.boltz_id,
+                swap_id = swap.id,
                 status = update.status,
                 "Swap status update"
             );
@@ -450,7 +594,7 @@ impl ReverseSwapExecutor {
                         swap.updated_at = current_unix_timestamp();
                         self.store.update_swap(swap).await?;
                     }
-                    tracing::info!(swap_id = swap.boltz_id, "tBTC lockup in mempool");
+                    tracing::info!(swap_id = swap.id, "tBTC lockup in mempool");
                 }
                 "invoice.settled" => {
                     swap.status = BoltzSwapStatus::InvoicePaid;
@@ -481,7 +625,7 @@ impl ReverseSwapExecutor {
                 }
                 _ => {
                     tracing::debug!(
-                        swap_id = swap.boltz_id,
+                        swap_id = swap.id,
                         status = update.status,
                         "Unknown swap status, ignoring"
                     );
@@ -502,13 +646,14 @@ impl ReverseSwapExecutor {
             .await?;
 
         let addrs = ClaimAddresses::parse(swap)?;
-        let tbtc_evm_amount =
-            U256::from(swap.onchain_amount).saturating_mul(U256::from(SATS_TO_TBTC_FACTOR));
+        let tbtc_evm_amount = U256::from(swap.onchain_amount)
+            .checked_mul(U256::from(SATS_TO_TBTC_FACTOR))
+            .ok_or_else(|| BoltzError::Generic("tBTC EVM amount overflow".into()))?;
         let timelock = U256::from(swap.timeout_block_height);
 
         for attempt in 0..MAX_CLAIM_RETRIES {
             if attempt > 0 {
-                tracing::info!(attempt, swap_id = swap.boltz_id, "Retrying claim");
+                tracing::info!(attempt, swap_id = swap.id, "Retrying claim");
             }
 
             let result = self
@@ -532,7 +677,7 @@ impl ReverseSwapExecutor {
                     return Ok(swap.clone());
                 }
                 Err(e) if attempt < MAX_CLAIM_RETRIES.saturating_sub(1) => {
-                    tracing::warn!(attempt, swap_id = swap.boltz_id, error = %e, "Claim failed");
+                    tracing::warn!(attempt, swap_id = swap.id, error = %e, "Claim failed");
                     sleep_1s().await;
                 }
                 Err(e) => {
@@ -603,7 +748,6 @@ impl ReverseSwapExecutor {
         let erc20swap_sig = gas_signer.sign_eip712_erc20swap_claim(
             addrs.erc20swap,
             erc20swap_version,
-            swap.chain_id,
             preimage,
             tbtc_evm_amount,
             addrs.tbtc,
@@ -614,7 +758,6 @@ impl ReverseSwapExecutor {
 
         let router_sig = gas_signer.sign_eip712_router_claim(
             addrs.router,
-            swap.chain_id,
             preimage,
             addrs.usdt,
             min_amount_out,
@@ -853,7 +996,6 @@ impl ReverseSwapExecutor {
         let erc20swap_sig = gas_signer.sign_eip712_erc20swap_claim(
             addrs.erc20swap,
             erc20swap_version,
-            swap.chain_id,
             preimage,
             tbtc_evm_amount,
             addrs.tbtc,
@@ -864,7 +1006,6 @@ impl ReverseSwapExecutor {
 
         let router_sig = gas_signer.sign_eip712_router_claim_send(
             addrs.router,
-            swap.chain_id,
             preimage,
             addrs.usdt,
             oft_addr,
@@ -932,7 +1073,7 @@ impl ReverseSwapExecutor {
 
         tracing::info!(
             tx_hash = result.tx_hash,
-            swap_id = swap.boltz_id,
+            swap_id = swap.id,
             "Claim confirmed"
         );
         Ok(result.tx_hash)
@@ -940,14 +1081,63 @@ impl ReverseSwapExecutor {
 
     // ─── OFT fee estimation (for prepare-time quoting) ─────────────────
 
-    /// Estimate the LZ messaging fee cost in tBTC EVM units.
-    /// Used at prepare time to inflate the invoice to cover cross-chain fees.
-    /// Matches the web app's `invertPostOftQuote` → `quoteMessagingFeeCost` flow.
-    async fn estimate_lz_fee_in_tbtc(
+    /// Find the OFT send amount required to deliver `target_amount` on the destination chain.
+    /// Matches the web app's `quoteOftAmountInForAmountOut` binary search.
+    async fn estimate_oft_required_send_amount(
         &self,
         chain: &Chain,
-        usdt_amount: u64,
+        target_amount: u128,
     ) -> Result<u128, BoltzError> {
+        if target_amount == 0 {
+            return Ok(0);
+        }
+
+        // Binary search: find the minimum send amount where OFT receive >= target
+        let mut low = target_amount;
+        let mut high = target_amount;
+
+        // Phase 1: find upper bound
+        let mut attempts = 0u32;
+        loop {
+            let (_, received) = self.quote_oft_messaging_fee(chain, high).await?;
+            if received >= target_amount {
+                break;
+            }
+            low = high.checked_add(1).ok_or_else(|| {
+                BoltzError::Generic("OFT amount search overflow".into())
+            })?;
+            high = high.checked_mul(2).ok_or_else(|| {
+                BoltzError::Generic("OFT amount search overflow".into())
+            })?;
+            attempts += 1;
+            if attempts > 32 {
+                return Err(BoltzError::Generic(
+                    "Could not find OFT send amount for target".into(),
+                ));
+            }
+        }
+
+        // Phase 2: binary search
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let (_, received) = self.quote_oft_messaging_fee(chain, mid).await?;
+            if received >= target_amount {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        Ok(low)
+    }
+
+    /// Quote OFT messaging fee and received amount for a given USDT amount and destination chain.
+    /// Returns `(native_fee, amount_received_on_destination)`.
+    async fn quote_oft_messaging_fee(
+        &self,
+        chain: &Chain,
+        usdt_amount: u128,
+    ) -> Result<(u128, u128), BoltzError> {
         let dst_chain_id = chain.evm_chain_id();
         let dst_info = self.oft_deployments.get(dst_chain_id).ok_or_else(|| {
             BoltzError::Generic(format!(
@@ -961,10 +1151,9 @@ impl ReverseSwapExecutor {
                 BoltzError::Generic("No OFT deployment for source chain (Arbitrum)".into())
             })?;
 
-        // Quote OFT to get the messaging fee
         let send_param = contracts::build_oft_send_param(
             dst_info.lz_eid,
-            alloy_primitives::Address::ZERO, // placeholder recipient for quoting
+            alloy_primitives::Address::ZERO,
             U256::from(usdt_amount),
             U256::ZERO,
         );
@@ -978,29 +1167,27 @@ impl ReverseSwapExecutor {
             .nativeFee
             .try_into()
             .map_err(|_| BoltzError::Generic("LZ fee too large".into()))?;
+        let amount_received: u128 = receipt
+            .amountReceivedLD
+            .try_into()
+            .map_err(|_| BoltzError::Generic("OFT amount too large".into()))?;
 
-        if native_fee == 0 {
-            return Ok(0);
-        }
+        Ok((native_fee, amount_received))
+    }
 
-        // Apply slippage buffer upward to the fee
-        let fee_with_slippage = apply_slippage_up(native_fee, u128::from(self.config.slippage_bps));
-
-        // DEX quote: how much tBTC to get the required ETH for the LZ fee
-        let fee_dex = pick_best_quote(
-            &self
-                .api_client
-                .get_quote_out(
-                    "ARB",
-                    ARBITRUM_TBTC_ADDRESS,
-                    ZERO_ADDRESS,
-                    fee_with_slippage,
-                )
-                .await?,
-            QuoteDirection::Out,
-        )?;
-
-        Ok(fee_dex)
+    /// DEX quote: how much USDT needed to buy the given ETH amount.
+    /// Used to convert LZ messaging fee (in ETH) to USDT cost.
+    async fn fetch_quote_out_usdt_for_eth(&self, eth_amount: u128) -> Result<u128, BoltzError> {
+        let quotes = self
+            .api_client
+            .get_quote_out(
+                "ARB",
+                ARBITRUM_USDT_ADDRESS,
+                ZERO_ADDRESS,
+                eth_amount,
+            )
+            .await?;
+        pick_best_quote(&quotes, QuoteDirection::Out)
     }
 
     // ─── OFT quoting helpers ──────────────────────────────────────────
@@ -1130,32 +1317,55 @@ struct FeeCalc {
 }
 
 /// Compute the total sats needed from tBTC EVM units and Boltz pair info.
-#[expect(
-    clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
+///
+/// Matches the Boltz web app formula for reverse swaps (using integer math):
+///   `invoiceAmount = ceil((receiveAmount + minerFee) / (1 - percentage/100))`
+///
+/// The percentage from the API (e.g. `0.25` for 0.25%) is parsed from its string
+/// representation to avoid floating-point imprecision.
 fn compute_invoice_amount(
     pair: &ReversePairInfo,
     tbtc_evm_units: u128,
 ) -> Result<FeeCalc, BoltzError> {
     let sats_factor = u128::from(SATS_TO_TBTC_FACTOR);
-    let tbtc_sats = tbtc_evm_units / sats_factor;
+    // Division by constant factor cannot fail
+    let tbtc_sats = tbtc_evm_units.checked_div(sats_factor).unwrap_or(0);
 
-    let miner_fees =
-        u128::from(pair.fees.miner_fees.claim) + u128::from(pair.fees.miner_fees.lockup);
-    let base = tbtc_sats + miner_fees;
+    let miner_fees = u128::from(pair.fees.miner_fees.claim)
+        .checked_add(u128::from(pair.fees.miner_fees.lockup))
+        .ok_or_else(|| BoltzError::Generic("Miner fees overflow".into()))?;
 
-    // percentage is e.g. 0.25 for 0.25%. Convert to basis points (25).
-    let pct_bps = (pair.fees.percentage * 100.0).round() as u128;
-    let numerator = base * 10000;
-    let denominator = 10000u128.saturating_sub(pct_bps);
+    // Parse percentage from f64 to integer basis points to avoid floating-point imprecision.
+    // The API returns values like 0.25 (meaning 0.25%). We need basis points of 100%,
+    // i.e., 0.25% → 25 out of 10000.
+    let pct_bps = parse_percentage_to_bps(pair.fees.percentage)?;
+
+    // Web app formula: invoiceAmount = ceil((receiveAmount + minerFee) / (1 - pct/100))
+    // In integer form: ceil((base * 10000) / (10000 - pct_bps))
+    let base = tbtc_sats
+        .checked_add(miner_fees)
+        .ok_or_else(|| BoltzError::Generic("Fee base overflow".to_string()))?;
+    let denominator = 10000u64
+        .checked_sub(pct_bps)
+        .ok_or_else(|| BoltzError::Generic("Invalid fee percentage (>= 100%)".to_string()))?;
     if denominator == 0 {
-        return Err(BoltzError::Generic("Invalid fee percentage".to_string()));
+        return Err(BoltzError::Generic(
+            "Invalid fee percentage (100%)".to_string(),
+        ));
     }
-    let invoice = numerator.div_ceil(denominator);
-    let boltz_fee = invoice - base;
-    let onchain = invoice - boltz_fee - miner_fees;
+
+    // ceil(base * 10000 / denominator)
+    let numerator = base
+        .checked_mul(10000)
+        .ok_or_else(|| BoltzError::Generic("Invoice computation overflow".to_string()))?;
+    let invoice = numerator.div_ceil(u128::from(denominator));
+    let boltz_fee = invoice
+        .checked_sub(base)
+        .ok_or_else(|| BoltzError::Generic("Fee computation underflow".to_string()))?;
+    let onchain = invoice
+        .checked_sub(boltz_fee)
+        .and_then(|v| v.checked_sub(miner_fees))
+        .ok_or_else(|| BoltzError::Generic("Onchain amount underflow".to_string()))?;
 
     let to_u64 = |v: u128, name: &str| -> Result<u64, BoltzError> {
         v.try_into()
@@ -1169,29 +1379,69 @@ fn compute_invoice_amount(
     })
 }
 
+/// Parse a fee percentage (e.g. 0.25 meaning 0.25%) to basis points of 100% (e.g. 25).
+/// Uses string formatting to avoid floating-point imprecision when converting to integer.
+fn parse_percentage_to_bps(percentage: f64) -> Result<u64, BoltzError> {
+    // Format with enough precision to capture the API value, then parse as integer.
+    // percentage * 100 gives basis points (0.25% * 100 = 25 bps).
+    let s = format!("{:.4}", percentage * 100.0);
+    let parts: Vec<&str> = s.split('.').collect();
+    let whole: u64 = parts[0]
+        .parse()
+        .map_err(|_| BoltzError::Generic(format!("Invalid fee percentage: {percentage}")))?;
+    // Check if fractional part is non-zero (meaning the percentage has sub-bps precision)
+    if parts.len() > 1 && !parts[1].trim_end_matches('0').is_empty() {
+        return Err(BoltzError::Generic(format!(
+            "Fee percentage {percentage} has sub-basis-point precision, cannot represent exactly"
+        )));
+    }
+    Ok(whole)
+}
+
+/// Compute the onchain amount from invoice sats (forward direction).
+///
+/// Matches the Boltz web app formula for reverse swaps:
+///   `receiveAmount = sendAmount - ceil(sendAmount * percentage / 100) - minerFee`
+fn compute_onchain_amount(
+    pair: &ReversePairInfo,
+    invoice_sats: u64,
+) -> Result<FeeCalc, BoltzError> {
+    let invoice = u128::from(invoice_sats);
+
+    let pct_bps = parse_percentage_to_bps(pair.fees.percentage)?;
+    let miner_fees = u128::from(pair.fees.miner_fees.claim)
+        .checked_add(u128::from(pair.fees.miner_fees.lockup))
+        .ok_or_else(|| BoltzError::Generic("Miner fees overflow".into()))?;
+
+    // boltz_fee = ceil(invoice * pct_bps / 10000)
+    let boltz_fee = invoice
+        .checked_mul(u128::from(pct_bps))
+        .ok_or_else(|| BoltzError::Generic("Fee computation overflow".into()))?
+        .div_ceil(10000);
+
+    let onchain = invoice
+        .checked_sub(boltz_fee)
+        .and_then(|v| v.checked_sub(miner_fees))
+        .ok_or_else(|| BoltzError::Generic("Invoice amount too small to cover fees".into()))?;
+
+    let to_u64 = |v: u128, name: &str| -> Result<u64, BoltzError> {
+        v.try_into()
+            .map_err(|_| BoltzError::Generic(format!("{name} overflow")))
+    };
+
+    Ok(FeeCalc {
+        invoice_sats,
+        boltz_fee_sats: to_u64(boltz_fee, "Boltz fee")?,
+        onchain_sats: to_u64(onchain, "Onchain amount")?,
+    })
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 fn to_chain_id_u32(chain_id: u64) -> Result<u32, BoltzError> {
     chain_id
         .try_into()
         .map_err(|_| BoltzError::Generic("Chain ID overflow".to_string()))
-}
-
-fn generate_swap_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    // Mix in stack address for cheap per-call entropy
-    let mut hasher = DefaultHasher::new();
-    let stack_addr = &raw const nanos as usize;
-    (nanos, stack_addr).hash(&mut hasher);
-    let suffix = hasher.finish();
-    format!("boltz-{nanos:x}-{suffix:08x}")
 }
 
 fn current_unix_timestamp() -> u64 {
@@ -1279,14 +1529,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_swap_id() {
-        let id1 = generate_swap_id();
-        let id2 = generate_swap_id();
-        assert!(id1.starts_with("boltz-"));
-        assert_ne!(id1, id2);
-    }
-
-    #[test]
     fn test_current_unix_timestamp() {
         let ts = current_unix_timestamp();
         assert!(ts > 1_704_067_200);
@@ -1354,6 +1596,75 @@ mod tests {
     fn test_pick_best_quote_empty() {
         let quotes: Vec<QuoteResponse> = vec![];
         assert!(pick_best_quote(&quotes, QuoteDirection::In).is_err());
+    }
+
+    #[test]
+    fn test_parse_percentage_to_bps() {
+        assert_eq!(parse_percentage_to_bps(0.25).unwrap(), 25);
+        assert_eq!(parse_percentage_to_bps(0.5).unwrap(), 50);
+        assert_eq!(parse_percentage_to_bps(1.0).unwrap(), 100);
+        assert_eq!(parse_percentage_to_bps(0.0).unwrap(), 0);
+        assert_eq!(parse_percentage_to_bps(0.1).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_parse_percentage_to_bps_sub_bps_rejected() {
+        // 0.125% = 12.5 bps — sub-bps precision
+        assert!(parse_percentage_to_bps(0.125).is_err());
+    }
+
+    fn test_pair(percentage: f64) -> ReversePairInfo {
+        ReversePairInfo {
+            hash: "abc".to_string(),
+            rate: 1.0,
+            limits: crate::api::types::PairLimits {
+                minimal: 10000,
+                maximal: 25_000_000,
+            },
+            fees: crate::api::types::ReversePairFees {
+                percentage,
+                miner_fees: crate::api::types::MinerFees {
+                    claim: 2,
+                    lockup: 6,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn test_compute_onchain_amount() {
+        let pair = test_pair(0.25);
+        let result = compute_onchain_amount(&pair, 10000).unwrap();
+
+        // boltz_fee = ceil(10000 * 25 / 10000) = 25
+        assert_eq!(result.boltz_fee_sats, 25);
+        // onchain = 10000 - 25 - 8 = 9967
+        assert_eq!(result.onchain_sats, 9967);
+        assert_eq!(result.invoice_sats, 10000);
+    }
+
+    #[test]
+    fn test_compute_onchain_amount_too_small() {
+        let pair = test_pair(0.25);
+        // Amount too small to cover miner fees
+        assert!(compute_onchain_amount(&pair, 5).is_err());
+    }
+
+    #[test]
+    fn test_compute_invoice_and_onchain_roundtrip() {
+        // Verify that compute_invoice_amount and compute_onchain_amount are consistent:
+        // compute_onchain_amount(compute_invoice_amount(x).invoice_sats).onchain_sats
+        // should be close to the original tbtc_sats (within rounding).
+        let pair = test_pair(0.25);
+        let tbtc_evm_units: u128 = 100_000 * u128::from(SATS_TO_TBTC_FACTOR);
+        let invoice = compute_invoice_amount(&pair, tbtc_evm_units).unwrap();
+        let back = compute_onchain_amount(&pair, invoice.invoice_sats).unwrap();
+
+        // onchain_sats from roundtrip should match the original (100_000)
+        // Allow 1 sat tolerance for ceiling rounding
+        let diff = invoice.onchain_sats.abs_diff(back.onchain_sats);
+        assert!(diff <= 1, "roundtrip diff={diff}, invoice_onchain={}, back_onchain={}",
+            invoice.onchain_sats, back.onchain_sats);
     }
 
     #[test]

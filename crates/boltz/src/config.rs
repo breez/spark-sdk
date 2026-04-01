@@ -17,6 +17,8 @@ pub struct BoltzConfig {
     pub referral_id: String,
     /// DEX slippage tolerance in basis points (default: 100 = 1%).
     pub slippage_bps: u32,
+    /// URL for fetching OFT (USDT0) deployment data.
+    pub oft_deployments_url: String,
 }
 
 /// Alchemy configuration for EIP-7702 gas abstraction.
@@ -45,6 +47,7 @@ impl BoltzConfig {
             chain_id: ARBITRUM_CHAIN_ID,
             referral_id,
             slippage_bps: DEFAULT_SLIPPAGE_BPS,
+            oft_deployments_url: DEFAULT_OFT_DEPLOYMENTS_URL.to_string(),
         }
     }
 
@@ -65,11 +68,11 @@ pub const ARBITRUM_CHAIN_ID: u64 = 42161;
 /// Default slippage tolerance: 100 basis points = 1%.
 pub const DEFAULT_SLIPPAGE_BPS: u32 = 100;
 
-/// `ERC20Swap` contract address on Arbitrum — fetched at runtime from `GET /v2/chain/contracts`,
-/// but this constant serves as a fallback/reference.
-pub const ARBITRUM_ERC20SWAP_ADDRESS: &str = "0x6398B76DF91C5eBe9f488e3656658E79284dDc0F";
+/// Default URL for fetching OFT (USDT0) deployment data.
+pub const DEFAULT_OFT_DEPLOYMENTS_URL: &str = "https://docs.usdt0.to/api/deployments";
 
-/// Router contract address on Arbitrum — NOT available via API, hardcoded to match web app.
+/// Router contract address on Arbitrum — not available via the Boltz API.
+/// If upgraded, the old contract address remains valid.
 pub const ARBITRUM_ROUTER_ADDRESS: &str = "0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61";
 
 /// tBTC token address on Arbitrum.

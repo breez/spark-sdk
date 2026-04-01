@@ -6,10 +6,8 @@ use serde::{Deserialize, Serialize};
 /// derived from `seed + claim_key_index + chain_id`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoltzSwap {
-    /// Internal UUID.
+    /// Swap ID — the Boltz backend ID for normal swaps, or a `recovery-*` ID for recovered swaps.
     pub id: String,
-    /// Boltz swap ID (from create response).
-    pub boltz_id: String,
     pub status: BoltzSwapStatus,
     /// HD derivation index for the per-swap preimage key.
     pub claim_key_index: u32,
@@ -138,7 +136,7 @@ impl Chain {
 }
 
 /// Quote result returned to caller before committing to a swap.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PreparedSwap {
     pub destination_address: String,
     pub destination_chain: Chain,
@@ -150,8 +148,6 @@ pub struct PreparedSwap {
     pub boltz_fee_sats: u64,
     /// tBTC amount after Boltz fee (sats).
     pub estimated_onchain_amount: u64,
-    /// Estimated USDT after DEX swap + slippage.
-    pub estimated_usdt_output: u64,
     pub slippage_bps: u32,
     /// Pins fee/rate snapshot for `POST /swap/reverse`.
     pub pair_hash: String,
@@ -160,12 +156,10 @@ pub struct PreparedSwap {
 }
 
 /// Result of creating a swap on Boltz.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CreatedSwap {
-    /// Internal swap ID.
+    /// Swap ID (Boltz backend ID).
     pub swap_id: String,
-    /// Boltz swap ID.
-    pub boltz_id: String,
     /// Hold invoice to pay.
     pub invoice: String,
     pub invoice_amount_sats: u64,
@@ -173,7 +167,7 @@ pub struct CreatedSwap {
 }
 
 /// Result of a successfully completed swap.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CompletedSwap {
     pub swap_id: String,
     pub claim_tx_hash: String,
@@ -184,14 +178,14 @@ pub struct CompletedSwap {
 }
 
 /// Min/max swap limits from the Boltz pairs endpoint.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SwapLimits {
     pub min_sats: u64,
     pub max_sats: u64,
 }
 
 /// Summary of a recovery operation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RecoveryResult {
     /// Swaps that were found and claimed.
     pub claimed: Vec<ClaimedRecovery>,
@@ -204,11 +198,16 @@ pub struct RecoveryResult {
 }
 
 /// A single successfully claimed recovery.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ClaimedRecovery {
     pub key_index: u32,
+    #[serde(serialize_with = "serialize_hex")]
     pub preimage_hash: [u8; 32],
     pub claim_tx_hash: String,
+}
+
+fn serialize_hex<S: serde::Serializer>(bytes: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format!("0x{}", hex::encode(bytes)))
 }
 
 #[cfg(test)]
@@ -234,8 +233,7 @@ mod tests {
     #[test]
     fn test_boltz_swap_serialization() {
         let swap = BoltzSwap {
-            id: "uuid-1".to_string(),
-            boltz_id: "boltz-1".to_string(),
+            id: "boltz-1".to_string(),
             status: BoltzSwapStatus::Created,
             claim_key_index: 0,
             chain_id: 42161,
@@ -258,7 +256,7 @@ mod tests {
 
         let json = serde_json::to_string(&swap).unwrap();
         let deserialized: BoltzSwap = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.boltz_id, "boltz-1");
+        assert_eq!(deserialized.id, "boltz-1");
         assert_eq!(deserialized.status, BoltzSwapStatus::Created);
         assert_eq!(deserialized.chain_id, 42161);
     }

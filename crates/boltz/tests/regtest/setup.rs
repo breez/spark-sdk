@@ -21,6 +21,7 @@ pub fn regtest_config() -> BoltzConfig {
         chain_id: REGTEST_CHAIN_ID,
         referral_id: "regtest".to_string(),
         slippage_bps: 100,
+        oft_deployments_url: boltz::DEFAULT_OFT_DEPLOYMENTS_URL.to_string(),
     }
 }
 

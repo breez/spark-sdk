@@ -15,7 +15,7 @@ use crate::keys::EvmKeyPair;
 // with different fields. We use separate modules to avoid name collisions.
 
 /// EIP-712 types for the `ERC20Swap` contract cooperative claim.
-pub mod erc20swap_eip712 {
+pub(crate) mod erc20swap_eip712 {
     use alloy_sol_types::sol;
     sol! {
         /// `ERC20Swap` cooperative claim authorization.
@@ -32,7 +32,7 @@ pub mod erc20swap_eip712 {
 }
 
 /// EIP-712 types for the Router contract.
-pub mod router_eip712 {
+pub(crate) mod router_eip712 {
     use alloy_sol_types::sol;
     sol! {
         /// Router same-chain sweep authorization.
@@ -60,7 +60,7 @@ pub mod router_eip712 {
 
 /// An ECDSA signature with recovery id, suitable for EIP-712 / EIP-191 / raw signing.
 #[derive(Debug, Clone)]
-pub struct EvmSignature {
+pub(crate) struct EvmSignature {
     pub v: u8,
     pub r: [u8; 32],
     pub s: [u8; 32],
@@ -68,7 +68,7 @@ pub struct EvmSignature {
 
 /// EVM signer backed by `alloy-signer-local`'s `LocalSigner`.
 /// Provides EIP-712, EIP-191, and raw ECDSA signing via battle-tested alloy libraries.
-pub struct EvmSigner {
+pub(crate) struct EvmSigner {
     inner: LocalSigner<SigningKey>,
     address_bytes: [u8; 20],
     chain_id: u64,
@@ -84,16 +84,13 @@ impl EvmSigner {
         }
     }
 
+    #[cfg(test)]
     pub fn address(&self) -> [u8; 20] {
         self.address_bytes
     }
 
     pub fn address_hex(&self) -> String {
         Address::from(self.address_bytes).to_checksum(None)
-    }
-
-    pub fn chain_id(&self) -> u64 {
-        self.chain_id
     }
 
     // ─── 1. Raw ECDSA (no prefix) ───────────────────────────────────────
@@ -131,7 +128,6 @@ impl EvmSigner {
         &self,
         erc20swap_address: Address,
         erc20swap_version: &str,
-        chain_id: u64,
         preimage: &[u8; 32],
         amount: U256,
         token_address: Address,
@@ -142,7 +138,7 @@ impl EvmSigner {
         let domain = Eip712Domain {
             name: Some("ERC20Swap".into()),
             version: Some(erc20swap_version.to_string().into()),
-            chain_id: Some(U256::from(chain_id)),
+            chain_id: Some(U256::from(self.chain_id)),
             verifying_contract: Some(erc20swap_address),
             salt: None,
         };
@@ -170,7 +166,6 @@ impl EvmSigner {
     pub fn sign_eip712_router_claim(
         &self,
         router_address: Address,
-        chain_id: u64,
         preimage: &[u8; 32],
         token: Address,
         min_amount_out: U256,
@@ -179,7 +174,7 @@ impl EvmSigner {
         let domain = Eip712Domain {
             name: Some("Router".into()),
             version: Some("2".into()),
-            chain_id: Some(U256::from(chain_id)),
+            chain_id: Some(U256::from(self.chain_id)),
             verifying_contract: Some(router_address),
             salt: None,
         };
@@ -207,7 +202,6 @@ impl EvmSigner {
     pub fn sign_eip712_router_claim_send(
         &self,
         router_address: Address,
-        chain_id: u64,
         preimage: &[u8; 32],
         token: Address,
         oft: Address,
@@ -219,7 +213,7 @@ impl EvmSigner {
         let domain = Eip712Domain {
             name: Some("Router".into()),
             version: Some("2".into()),
-            chain_id: Some(U256::from(chain_id)),
+            chain_id: Some(U256::from(self.chain_id)),
             verifying_contract: Some(router_address),
             salt: None,
         };
@@ -326,7 +320,6 @@ mod tests {
             .sign_eip712_erc20swap_claim(
                 addr("0x6398B76DF91C5eBe9f488e3656658E79284dDc0F"),
                 "6",
-                42161,
                 &[1u8; 32],
                 U256::from(100_000_000_000_000u64),
                 addr("0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40"),
@@ -349,7 +342,6 @@ mod tests {
             signer.sign_eip712_erc20swap_claim(
                 addr("0x6398B76DF91C5eBe9f488e3656658E79284dDc0F"),
                 "6",
-                42161,
                 &[1u8; 32],
                 U256::from(100u64),
                 addr("0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40"),
@@ -373,7 +365,6 @@ mod tests {
         let sig = signer
             .sign_eip712_router_claim(
                 addr("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61"),
-                42161,
                 &[1u8; 32],
                 addr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
                 U256::from(71_000_000u64),
@@ -392,7 +383,6 @@ mod tests {
         let sig = signer
             .sign_eip712_router_claim_send(
                 addr("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61"),
-                42161,
                 &[1u8; 32],
                 addr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
                 addr("0x0000000000000000000000000000000000000005"),
@@ -416,7 +406,6 @@ mod tests {
             .sign_eip712_erc20swap_claim(
                 addr("0x6398B76DF91C5eBe9f488e3656658E79284dDc0F"),
                 "6",
-                42161,
                 &preimage,
                 U256::from(100u64),
                 addr("0x6c84a8f1c29108F47a79964b5Fe888D4f4D0dE40"),
@@ -429,7 +418,6 @@ mod tests {
         let router_sig = signer
             .sign_eip712_router_claim(
                 addr("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61"),
-                42161,
                 &preimage,
                 addr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
                 U256::from(100u64),
@@ -505,7 +493,6 @@ mod tests {
         let sig = signer
             .sign_eip712_router_claim(
                 addr("0xaB6B467FC443Ca37a8E5aA11B04ea29434688d61"),
-                42161,
                 &preimage,
                 addr("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"),
                 U256::from(100u64),

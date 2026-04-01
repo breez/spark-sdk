@@ -36,7 +36,10 @@ fn next_key_index() -> u32 {
 #[tokio::test]
 async fn test_api_get_pairs() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
 
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
 
@@ -54,7 +57,10 @@ async fn test_api_get_pairs() {
 #[tokio::test]
 async fn test_api_get_contracts() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
 
     let contracts = client.get_contracts().await.unwrap();
 
@@ -97,7 +103,10 @@ fn create_swap_request(
 #[tokio::test]
 async fn test_api_create_reverse_swap() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
     let km = EvmKeyManager::from_seed(&regtest_seed()).unwrap();
 
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
@@ -125,7 +134,10 @@ async fn test_api_create_reverse_swap() {
 #[tokio::test]
 async fn test_api_get_swap_status() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
     let km = EvmKeyManager::from_seed(&regtest_seed()).unwrap();
 
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
@@ -150,7 +162,10 @@ async fn test_api_get_swap_status() {
 #[tokio::test]
 async fn test_ws_receives_status_updates() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
     let km = EvmKeyManager::from_seed(&regtest_seed()).unwrap();
 
     let pairs = client.get_reverse_swap_pairs().await.unwrap();
@@ -183,12 +198,21 @@ async fn test_ws_receives_status_updates() {
     ws.close().await;
 }
 
-// ─── Full Lifecycle Test ─────────────────────────────────────────────────
+// ─── Regtest Lifecycle Test ──────────────────────────────────────────────
 
+/// Tests the BTC LN -> RBTC swap lifecycle on regtest.
+///
+/// Note: this exercises the RBTC flow, not the mainnet tBTC -> USDT flow.
+/// It still provides value by verifying: Boltz API swap creation, Lightning
+/// hold invoice payment, Boltz on-chain lockup, and WebSocket status delivery.
+/// The EVM claim + DEX swap path is NOT covered here.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_full_swap_lifecycle() {
+async fn test_rbtc_swap_lifecycle() {
     let config = regtest_config();
-    let client = BoltzApiClient::new(&config);
+    let client = BoltzApiClient::new(
+        &config,
+        Box::new(platform_utils::DefaultHttpClient::new(None)),
+    );
     let km = EvmKeyManager::from_seed(&regtest_seed()).unwrap();
 
     let pairs = client.get_reverse_swap_pairs().await.unwrap();

@@ -11,13 +11,15 @@ use crate::error::BoltzError;
 /// - **Gas signer** (`m/44/{chainId}/1/0`): Signs all EVM transactions, used as `claimAddress`.
 /// - **Per-swap preimage key** (`m/44/{chainId}/0/0/{index}`): Deterministic preimage source.
 ///
-/// All derivation levels are NON-HARDENED (matching `@scure/bip32`).
+/// All derivation levels are NON-HARDENED to match the Boltz web app's `@scure/bip32`
+/// derivation paths. This ensures key compatibility: the same mnemonic produces the
+/// same keys in both the web app and this SDK.
 pub struct EvmKeyManager {
     master_key: XPrv,
 }
 
 impl EvmKeyManager {
-    /// Create from raw seed bytes (same seed as Spark wallet).
+    /// Create from raw seed bytes.
     /// Uses BIP-32 over secp256k1 (matching `@scure/bip32`).
     pub fn from_seed(seed: &[u8]) -> Result<Self, BoltzError> {
         let master_key =
@@ -118,7 +120,7 @@ impl EvmKeyPair {
     }
 
     /// Returns the raw private key bytes (32 bytes).
-    pub fn private_key_bytes(&self) -> [u8; 32] {
+    pub(crate) fn private_key_bytes(&self) -> [u8; 32] {
         self.signing_key.to_bytes().into()
     }
 

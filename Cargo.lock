@@ -1391,6 +1391,7 @@ dependencies = [
  "macros",
  "rand 0.8.5",
  "rustls 0.23.31",
+ "serde",
  "serde_json",
  "tokio",
  "tracing-subscriber",

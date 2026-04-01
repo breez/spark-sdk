@@ -16,7 +16,7 @@ const POLL_INTERVAL_MS: u64 = 1000;
 
 /// A single call to submit via Alchemy gas abstraction.
 #[derive(Debug, Clone)]
-pub struct EvmCall {
+pub(crate) struct EvmCall {
     pub to: String,
     /// Omitted from JSON when `None` (matching web app behavior).
     pub value: Option<String>,
@@ -26,12 +26,12 @@ pub struct EvmCall {
 
 /// Result from a successfully submitted and confirmed sponsored call.
 #[derive(Debug, Clone)]
-pub struct AlchemyResult {
+pub(crate) struct AlchemyResult {
     pub tx_hash: String,
 }
 
 /// Alchemy EIP-7702 gas-sponsored transaction submission client.
-pub struct AlchemyGasClient {
+pub(crate) struct AlchemyGasClient {
     rpc_url: String,
     gas_policy_id: String,
     http_client: Box<dyn HttpClient>,
@@ -388,16 +388,6 @@ fn attach_signature(entry: &serde_json::Value, sig: &EvmSignature) -> serde_json
     })
 }
 
-/// Encode an `EvmSignature` as a 65-byte hex string (r || s || v) with `0x` prefix.
-pub fn signature_to_hex(sig: &EvmSignature) -> String {
-    format!(
-        "0x{}{}{}",
-        hex::encode(sig.r),
-        hex::encode(sig.s),
-        hex::encode([sig.v])
-    )
-}
-
 async fn sleep_ms(ms: u64) {
     platform_utils::tokio::time::sleep(platform_utils::time::Duration::from_millis(ms)).await;
 }
@@ -430,6 +420,16 @@ mod tests {
     use super::*;
     use crate::keys::EvmKeyManager;
     use platform_utils::http::{HttpError, HttpResponse};
+
+    /// Encode an `EvmSignature` as a 65-byte hex string (r || s || v) with `0x` prefix.
+    fn signature_to_hex(sig: &EvmSignature) -> String {
+        format!(
+            "0x{}{}{}",
+            hex::encode(sig.r),
+            hex::encode(sig.s),
+            hex::encode([sig.v])
+        )
+    }
     use std::sync::{Arc, Mutex};
 
     const TEST_SEED_HEX: &str = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";

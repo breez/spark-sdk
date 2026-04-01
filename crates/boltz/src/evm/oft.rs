@@ -8,9 +8,6 @@ use serde::Deserialize;
 
 use crate::error::BoltzError;
 
-/// API endpoint for OFT deployments (same as web app's `oftDeploymentsEndpoint`).
-const OFT_DEPLOYMENTS_URL: &str = "https://docs.usdt0.to/api/deployments";
-
 /// Default OFT token name to look up (matches web app's `defaultOftName`).
 const DEFAULT_OFT_NAME: &str = "usdt0";
 
@@ -30,11 +27,9 @@ pub struct OftDeployments {
 }
 
 impl OftDeployments {
-    /// Fetch OFT deployments from the USDT0 API.
-    pub async fn fetch(http_client: &dyn HttpClient) -> Result<Self, BoltzError> {
-        let response = http_client
-            .get(OFT_DEPLOYMENTS_URL.to_string(), None)
-            .await?;
+    /// Fetch OFT deployments from the given URL.
+    pub async fn fetch(http_client: &dyn HttpClient, url: &str) -> Result<Self, BoltzError> {
+        let response = http_client.get(url.to_string(), None).await?;
 
         if !response.is_success() {
             return Err(BoltzError::Api {

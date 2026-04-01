@@ -16,7 +16,7 @@ pub use config::*;
 pub use error::BoltzError;
 pub use keys::EvmKeyManager;
 pub use models::*;
-pub use store::{BoltzStore, MemoryBoltzStore};
+pub use store::{BoltzStorage, MemoryBoltzStorage};
 
 use api::BoltzApiClient;
 use api::ws::SwapStatusSubscriber;
@@ -41,7 +41,7 @@ impl BoltzService {
     pub async fn new(
         config: BoltzConfig,
         seed: &[u8],
-        store: Arc<dyn BoltzStore>,
+        store: Arc<dyn BoltzStorage>,
     ) -> Result<Self, BoltzError> {
         let key_manager = EvmKeyManager::from_seed(seed)?;
 
@@ -53,7 +53,7 @@ impl BoltzService {
         let gas_key_pair = key_manager.derive_gas_signer(chain_id_u32)?;
         let gas_signer = EvmSigner::new(&gas_key_pair, config.chain_id);
 
-        let api_client = BoltzApiClient::new(&config);
+        let api_client = BoltzApiClient::new(&config, Box::new(DefaultHttpClient::new(None)));
         let ws_subscriber = SwapStatusSubscriber::connect(&config.ws_url()).await?;
 
         let alchemy_client = AlchemyGasClient::new(
@@ -68,7 +68,23 @@ impl BoltzService {
         );
 
         let oft_deployments =
-            OftDeployments::fetch(&*Box::new(DefaultHttpClient::new(None))).await?;
+            OftDeployments::fetch(&DefaultHttpClient::new(None), &config.oft_deployments_url)
+                .await?;
+
+        // Fetch contract addresses from the Boltz API, matching by chain ID
+        let contracts = api_client.get_contracts().await?;
+        let erc20swap_address = contracts
+            .0
+            .values()
+            .find(|c| c.network.chain_id == config.chain_id)
+            .map(|c| c.swap_contracts.erc20_swap.clone())
+            .ok_or_else(|| BoltzError::Api {
+                reason: format!(
+                    "Chain ID {} not found in contracts response",
+                    config.chain_id,
+                ),
+                code: None,
+            })?;
 
         let executor = ReverseSwapExecutor::new(
             api_client,
@@ -79,6 +95,7 @@ impl BoltzService {
             oft_deployments,
             store,
             config,
+            erc20swap_address,
         );
 
         Ok(Self { executor })
@@ -93,6 +110,19 @@ impl BoltzService {
         usdt_amount: u64,
     ) -> Result<PreparedSwap, BoltzError> {
         self.executor.prepare(destination, chain, usdt_amount).await
+    }
+
+    /// Get a quote starting from input sats (computes expected USDT output).
+    /// Pure quote — no side effects, no swap created.
+    pub async fn prepare_reverse_swap_from_sats(
+        &self,
+        destination: &str,
+        chain: Chain,
+        invoice_amount_sats: u64,
+    ) -> Result<PreparedSwap, BoltzError> {
+        self.executor
+            .prepare_from_sats(destination, chain, invoice_amount_sats)
+            .await
     }
 
     /// Create the swap on Boltz. Returns the hold invoice to pay.
@@ -118,7 +148,29 @@ impl BoltzService {
 
     /// Get supported destination chains.
     pub fn supported_chains(&self) -> Vec<Chain> {
-        vec![Chain::Arbitrum]
+        vec![
+            Chain::Arbitrum,
+            Chain::Berachain,
+            Chain::Conflux,
+            Chain::Corn,
+            Chain::Ethereum,
+            Chain::Flare,
+            Chain::Hedera,
+            Chain::HyperEvm,
+            Chain::Ink,
+            Chain::Mantle,
+            Chain::MegaEth,
+            Chain::Monad,
+            Chain::Morph,
+            Chain::Optimism,
+            Chain::Plasma,
+            Chain::Polygon,
+            Chain::Rootstock,
+            Chain::Sei,
+            Chain::Stable,
+            Chain::Unichain,
+            Chain::XLayer,
+        ]
     }
 
     /// Get current Boltz swap limits (min/max sats).
