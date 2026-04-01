@@ -6,6 +6,8 @@ mod setup;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use tokio::sync::mpsc;
+
 use boltz::api::BoltzApiClient;
 use boltz::api::ws::SwapStatusSubscriber;
 use boltz::keys::EvmKeyManager;
@@ -181,10 +183,11 @@ async fn test_ws_receives_status_updates() {
     let swap = client.create_reverse_swap(&req).await.unwrap();
 
     // Connect WS and subscribe — should receive initial status
-    let ws = SwapStatusSubscriber::connect(&config.ws_url())
+    let (ws_tx, mut rx) = mpsc::channel(32);
+    let ws = SwapStatusSubscriber::connect(&config.ws_url(), ws_tx)
         .await
         .unwrap();
-    let mut rx = ws.subscribe(&swap.id).await.unwrap();
+    ws.subscribe(&swap.id).await.unwrap();
 
     // The subscription response sends the current status (swap.created)
     let update = tokio::time::timeout(Duration::from_secs(10), rx.recv())
@@ -228,10 +231,11 @@ async fn test_rbtc_swap_lifecycle() {
     let swap = client.create_reverse_swap(&req).await.unwrap();
 
     // Subscribe WS
-    let ws = SwapStatusSubscriber::connect(&config.ws_url())
+    let (ws_tx, mut rx) = mpsc::channel(32);
+    let ws = SwapStatusSubscriber::connect(&config.ws_url(), ws_tx)
         .await
         .unwrap();
-    let mut rx = ws.subscribe(&swap.id).await.unwrap();
+    ws.subscribe(&swap.id).await.unwrap();
 
     // Pay invoice in background (fire-and-forget — hold invoice blocks until claim)
     // Wait briefly for WS subscription to be fully established before paying

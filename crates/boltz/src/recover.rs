@@ -2,14 +2,18 @@ use std::collections::{HashMap, HashSet};
 
 use alloy_primitives::{Address, U256};
 
-use crate::config::{RECOVERY_MAX_KEY_INDEX, RECOVERY_SCAN_BATCH_SIZE};
+use crate::config::{
+    ARBITRUM_TBTC_ADDRESS, RECOVERY_MAX_KEY_INDEX, RECOVERY_SCAN_BATCH_SIZE, SATS_TO_TBTC_FACTOR,
+};
 use crate::error::BoltzError;
 use crate::evm::contracts::{
     DecodedLockupEvent, address_to_topic, decode_hash_values_return, decode_lockup_event,
     decode_swaps_check_return, encode_hash_values, encode_swaps_check, lockup_event_topic,
+    parse_address,
 };
 use crate::evm::provider::EvmProvider;
 use crate::keys::EvmKeyManager;
+use crate::models::BoltzSwap;
 
 /// A swap discovered on-chain that is still claimable.
 #[derive(Debug, Clone)]
@@ -196,7 +200,7 @@ pub async fn scan_for_recoverable_swaps(
 }
 
 /// Check whether a swap is still locked on-chain (not yet claimed/refunded).
-async fn is_swap_still_locked(
+pub async fn is_swap_still_locked(
     evm_provider: &EvmProvider,
     erc20swap_address: &str,
     event: &DecodedLockupEvent,
@@ -219,4 +223,35 @@ async fn is_swap_still_locked(
         .eth_call(erc20swap_address, &check_calldata)
         .await?;
     decode_swaps_check_return(&check_result)
+}
+
+/// Convenience wrapper: check whether a persisted swap's funds are still
+/// locked on the `ERC20Swap` contract. Returns `true` if claimable, `false`
+/// if already claimed or refunded.
+pub async fn is_swap_still_locked_by_swap(
+    evm_provider: &EvmProvider,
+    swap: &BoltzSwap,
+    key_manager: &EvmKeyManager,
+) -> Result<bool, BoltzError> {
+    let chain_id_u32: u32 = swap
+        .chain_id
+        .try_into()
+        .map_err(|_| BoltzError::Generic("Chain ID overflow".into()))?;
+    let preimage_hash = key_manager.derive_preimage_hash(chain_id_u32, swap.claim_key_index)?;
+    let tbtc_evm_amount = U256::from(swap.onchain_amount)
+        .checked_mul(U256::from(SATS_TO_TBTC_FACTOR))
+        .ok_or_else(|| BoltzError::Generic("tBTC EVM amount overflow".into()))?;
+
+    let event = DecodedLockupEvent {
+        preimage_hash,
+        amount: tbtc_evm_amount,
+        token_address: parse_address(ARBITRUM_TBTC_ADDRESS)?,
+        claim_address: parse_address(&swap.claim_address)?,
+        refund_address: parse_address(&swap.refund_address)?,
+        timelock: U256::from(swap.timeout_block_height),
+        block_number: 0,
+        transaction_hash: String::new(),
+    };
+
+    is_swap_still_locked(evm_provider, &swap.erc20swap_address, &event).await
 }

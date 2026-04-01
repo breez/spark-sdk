@@ -4,7 +4,6 @@ use alloy_primitives::U256;
 
 use crate::api::BoltzApiClient;
 use crate::api::types::{EncodeRequest, QuoteResponse, ReversePairInfo};
-use crate::api::ws::{SwapStatusSubscriber, SwapStatusUpdate};
 use crate::config::{
     ARBITRUM_ERC20SWAP_DEPLOY_BLOCK, ARBITRUM_ROUTER_ADDRESS, ARBITRUM_TBTC_ADDRESS,
     ARBITRUM_USDT_ADDRESS, BoltzConfig, SATS_TO_TBTC_FACTOR, ZERO_ADDRESS,
@@ -20,8 +19,8 @@ use crate::evm::provider::EvmProvider;
 use crate::evm::signing::EvmSigner;
 use crate::keys::EvmKeyManager;
 use crate::models::{
-    BoltzSwap, BoltzSwapStatus, Chain, ClaimedRecovery, CompletedSwap, CreatedSwap, PreparedSwap,
-    RecoveryResult, SwapLimits,
+    BoltzSwap, BoltzSwapStatus, Chain, ClaimedRecovery, CreatedSwap, PreparedSwap, RecoveryResult,
+    SwapLimits,
 };
 use crate::recover::{self, RecoverableSwap};
 use crate::store::BoltzStorage;
@@ -32,21 +31,19 @@ const MAX_CLAIM_RETRIES: u32 = 3;
 /// Orchestrates the LN -> USDT reverse swap flow.
 pub(crate) struct ReverseSwapExecutor {
     api_client: BoltzApiClient,
-    ws_subscriber: SwapStatusSubscriber,
-    key_manager: EvmKeyManager,
+    pub(crate) key_manager: EvmKeyManager,
     alchemy_client: AlchemyGasClient,
-    evm_provider: EvmProvider,
+    pub(crate) evm_provider: EvmProvider,
     oft_deployments: OftDeployments,
-    store: Arc<dyn BoltzStorage>,
-    config: BoltzConfig,
-    erc20swap_address: String,
+    pub(crate) store: Arc<dyn BoltzStorage>,
+    pub(crate) config: BoltzConfig,
+    pub(crate) erc20swap_address: String,
 }
 
 impl ReverseSwapExecutor {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         api_client: BoltzApiClient,
-        ws_subscriber: SwapStatusSubscriber,
         key_manager: EvmKeyManager,
         alchemy_client: AlchemyGasClient,
         evm_provider: EvmProvider,
@@ -57,7 +54,6 @@ impl ReverseSwapExecutor {
     ) -> Self {
         Self {
             api_client,
-            ws_subscriber,
             key_manager,
             alchemy_client,
             evm_provider,
@@ -111,18 +107,16 @@ impl ReverseSwapExecutor {
                 .estimate_oft_required_send_amount(&chain, u128::from(usdt_amount))
                 .await?;
             // Get messaging fee and convert to USDT cost
-            let (msg_fee_native, _) = self
-                .quote_oft_messaging_fee(&chain, required_usdt)
-                .await?;
+            let (msg_fee_native, _) = self.quote_oft_messaging_fee(&chain, required_usdt).await?;
             let msg_fee_usdt = if msg_fee_native == 0 {
                 0u128
             } else {
                 self.fetch_quote_out_usdt_for_eth(msg_fee_native).await?
             };
             // Total = OFT required amount + messaging fee cost (both in USDT)
-            required_usdt.checked_add(msg_fee_usdt).ok_or_else(|| {
-                BoltzError::Generic("USDT amount overflow".into())
-            })?
+            required_usdt
+                .checked_add(msg_fee_usdt)
+                .ok_or_else(|| BoltzError::Generic("USDT amount overflow".into()))?
         };
 
         // Step 3: DEX quote for the total USDT needed → tBTC
@@ -217,22 +211,21 @@ impl ReverseSwapExecutor {
                 self.fetch_quote_out_usdt_for_eth(msg_fee_native).await?
             };
             // 4. Subtract USDT cost from USDT amount
-            let adjusted_usdt = u128::from(initial_usdt)
-                .checked_sub(fee_usdt)
-                .ok_or_else(|| {
-                    BoltzError::Generic(
-                        "Amount too small to cover OFT cross-chain messaging fee".into(),
-                    )
-                })?;
+            let adjusted_usdt =
+                u128::from(initial_usdt)
+                    .checked_sub(fee_usdt)
+                    .ok_or_else(|| {
+                        BoltzError::Generic(
+                            "Amount too small to cover OFT cross-chain messaging fee".into(),
+                        )
+                    })?;
             if adjusted_usdt == 0 {
                 return Err(BoltzError::Generic(
                     "Amount too small to cover OFT cross-chain messaging fee".into(),
                 ));
             }
             // 5. Re-quote OFT with adjusted USDT to get final received amount
-            let (_, oft_received) = self
-                .quote_oft_messaging_fee(&chain, adjusted_usdt)
-                .await?;
+            let (_, oft_received) = self.quote_oft_messaging_fee(&chain, adjusted_usdt).await?;
             u64::try_from(oft_received)
                 .map_err(|_| BoltzError::Generic("USDT amount overflow".into()))?
         };
@@ -323,82 +316,6 @@ impl ReverseSwapExecutor {
             invoice_amount_sats: prepared.invoice_amount_sats,
             timeout_block_height: resp.timeout_block_height,
         })
-    }
-
-    /// After the invoice is paid, monitor and complete the swap.
-    /// Blocks until USDT is delivered or swap fails.
-    pub async fn complete(&self, swap_id: &str) -> Result<CompletedSwap, BoltzError> {
-        let mut swap = self
-            .store
-            .get_swap(swap_id)
-            .await?
-            .ok_or_else(|| BoltzError::Store(format!("Swap not found: {swap_id}")))?;
-
-        let mut rx = self.ws_subscriber.subscribe(&swap.id).await?;
-
-        if swap.status == BoltzSwapStatus::Created || swap.status == BoltzSwapStatus::InvoicePaid {
-            swap = self.wait_for_lockup(&mut swap, &mut rx).await?;
-        }
-        if swap.status == BoltzSwapStatus::TbtcLocked {
-            swap = self.claim_and_swap(&mut swap).await?;
-        }
-
-        self.ws_subscriber.unsubscribe(&swap.id).await;
-
-        if swap.status == BoltzSwapStatus::Completed {
-            Ok(CompletedSwap {
-                swap_id: swap.id,
-                claim_tx_hash: swap.claim_tx_hash.unwrap_or_default(),
-                usdt_delivered: swap.expected_usdt_amount,
-                destination_address: swap.destination_address,
-                destination_chain: swap.destination_chain,
-            })
-        } else {
-            tracing::error!(
-                swap_id = swap.id,
-
-                status = ?swap.status,
-                "Swap completed in non-success state"
-            );
-            Err(BoltzError::SwapFailed {
-                swap_id: swap.id,
-                reason: format!("Swap ended in status: {:?}", swap.status),
-            })
-        }
-    }
-
-    /// Resume all active (non-final) swaps by re-driving them to completion.
-    /// Errors are logged per-swap; one failing swap does not abort the others.
-    pub async fn resume_active_swaps(&self) -> Result<Vec<String>, BoltzError> {
-        let active = self.store.list_active_swaps().await?;
-        let mut resumed = Vec::with_capacity(active.len());
-        for swap in &active {
-            tracing::info!(
-                swap_id = swap.id,
-
-                status = ?swap.status,
-                "Resuming active swap"
-            );
-            match self.complete(&swap.id).await {
-                Ok(completed) => {
-                    tracing::info!(
-                        swap_id = completed.swap_id,
-                        claim_tx = completed.claim_tx_hash,
-                        "Resumed swap completed successfully"
-                    );
-                    resumed.push(completed.swap_id);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        swap_id = swap.id,
-
-                        error = %e,
-                        "Failed to resume swap"
-                    );
-                }
-            }
-        }
-        Ok(resumed)
     }
 
     /// Recover unclaimed swaps by scanning the blockchain.
@@ -562,79 +479,14 @@ impl ReverseSwapExecutor {
             .map_err(|_| BoltzError::Generic("USDT amount overflow".into()))
     }
 
-    async fn wait_for_lockup(
+    /// Claim tBTC locked on-chain and swap to USDT.
+    /// On success the swap transitions to `Claiming` with `claim_tx_hash` set.
+    /// The caller (`SwapManager`) is responsible for waiting for on-chain
+    /// confirmation and transitioning to `Completed`.
+    pub(crate) async fn claim_and_swap(
         &self,
         swap: &mut BoltzSwap,
-        rx: &mut tokio::sync::mpsc::Receiver<SwapStatusUpdate>,
     ) -> Result<BoltzSwap, BoltzError> {
-        loop {
-            let update = rx.recv().await.ok_or_else(|| {
-                BoltzError::WebSocket("WS channel closed while waiting for lockup".to_string())
-            })?;
-
-            tracing::info!(
-                swap_id = swap.id,
-                status = update.status,
-                "Swap status update"
-            );
-
-            match update.status.as_str() {
-                "transaction.confirmed" => {
-                    swap.status = BoltzSwapStatus::TbtcLocked;
-                    if let Some(tx) = &update.transaction {
-                        swap.lockup_tx_id = Some(tx.id.clone());
-                    }
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
-                    return Ok(swap.clone());
-                }
-                "transaction.mempool" => {
-                    if let Some(tx) = &update.transaction {
-                        swap.lockup_tx_id = Some(tx.id.clone());
-                        swap.updated_at = current_unix_timestamp();
-                        self.store.update_swap(swap).await?;
-                    }
-                    tracing::info!(swap_id = swap.id, "tBTC lockup in mempool");
-                }
-                "invoice.settled" => {
-                    swap.status = BoltzSwapStatus::InvoicePaid;
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
-                }
-                "invoice.expired" | "swap.expired" => {
-                    swap.status = BoltzSwapStatus::Expired;
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
-                    return Err(BoltzError::SwapExpired {
-                        swap_id: swap.id.clone(),
-                    });
-                }
-                "invoice.failedToPay" | "transaction.lockupFailed" | "transaction.refunded" => {
-                    let reason = update
-                        .failure_reason
-                        .unwrap_or_else(|| update.status.clone());
-                    swap.status = BoltzSwapStatus::Failed {
-                        reason: reason.clone(),
-                    };
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
-                    return Err(BoltzError::SwapFailed {
-                        swap_id: swap.id.clone(),
-                        reason,
-                    });
-                }
-                _ => {
-                    tracing::debug!(
-                        swap_id = swap.id,
-                        status = update.status,
-                        "Unknown swap status, ignoring"
-                    );
-                }
-            }
-        }
-    }
-
-    async fn claim_and_swap(&self, swap: &mut BoltzSwap) -> Result<BoltzSwap, BoltzError> {
         let chain_id_u32 = to_chain_id_u32(swap.chain_id)?;
         let preimage = self
             .key_manager
@@ -669,24 +521,50 @@ impl ReverseSwapExecutor {
                 .await;
 
             match result {
-                Ok(tx_hash) => {
-                    swap.claim_tx_hash = Some(tx_hash);
-                    swap.status = BoltzSwapStatus::Completed;
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
+                Ok(_tx_hash) => {
                     return Ok(swap.clone());
                 }
-                Err(e) if attempt < MAX_CLAIM_RETRIES.saturating_sub(1) => {
-                    tracing::warn!(attempt, swap_id = swap.id, error = %e, "Claim failed");
-                    sleep_1s().await;
-                }
                 Err(e) => {
-                    swap.status = BoltzSwapStatus::Failed {
-                        reason: format!("Claim failed after {MAX_CLAIM_RETRIES} attempts: {e}"),
-                    };
-                    swap.updated_at = current_unix_timestamp();
-                    self.store.update_swap(swap).await?;
-                    return Err(e);
+                    tracing::warn!(attempt, swap_id = swap.id, error = %e, "Claim attempt failed");
+
+                    // Check if funds are still locked on-chain. If not, stop
+                    // retrying — the swap was either claimed by another instance
+                    // or refunded by Boltz. Don't mark success or failure here;
+                    // the WS update will determine the final state.
+                    match recover::is_swap_still_locked_by_swap(
+                        &self.evm_provider,
+                        swap,
+                        &self.key_manager,
+                    )
+                    .await
+                    {
+                        Ok(false) => {
+                            tracing::info!(
+                                swap_id = swap.id,
+                                "Funds no longer locked on-chain, stopping retries"
+                            );
+                            return Ok(swap.clone());
+                        }
+                        Ok(true) => {} // Still locked, worth retrying.
+                        Err(check_err) => {
+                            tracing::warn!(
+                                swap_id = swap.id,
+                                error = %check_err,
+                                "On-chain lock check failed, continuing with retry"
+                            );
+                        }
+                    }
+
+                    if attempt < MAX_CLAIM_RETRIES.saturating_sub(1) {
+                        sleep_1s().await;
+                    } else {
+                        swap.status = BoltzSwapStatus::Failed {
+                            reason: format!("Claim failed after {MAX_CLAIM_RETRIES} attempts: {e}"),
+                        };
+                        swap.updated_at = current_unix_timestamp();
+                        self.store.update_swap(swap).await?;
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -1056,6 +934,8 @@ impl ReverseSwapExecutor {
         router_address: &str,
         calldata: &[u8],
     ) -> Result<String, BoltzError> {
+        // Set Claiming BEFORE the Alchemy call so that on crash we know a
+        // claim was attempted (even if we don't yet have the tx hash).
         swap.status = BoltzSwapStatus::Claiming;
         swap.updated_at = current_unix_timestamp();
         self.store.update_swap(swap).await?;
@@ -1071,10 +951,16 @@ impl ReverseSwapExecutor {
             .send_sponsored_calls(vec![evm_call], swap.chain_id)
             .await?;
 
+        // Persist the tx hash immediately so that on crash after this point
+        // we can poll the chain for the receipt.
+        swap.claim_tx_hash = Some(result.tx_hash.clone());
+        swap.updated_at = current_unix_timestamp();
+        self.store.update_swap(swap).await?;
+
         tracing::info!(
             tx_hash = result.tx_hash,
             swap_id = swap.id,
-            "Claim confirmed"
+            "Claim submitted"
         );
         Ok(result.tx_hash)
     }
@@ -1097,19 +983,25 @@ impl ReverseSwapExecutor {
         let mut high = target_amount;
 
         // Phase 1: find upper bound
+        // Safety: `attempts` is bounded to 32 iterations, and `low`/`high`
+        // use checked arithmetic. The unchecked `+= 1` on a u32 capped at
+        // 32 cannot overflow.
         let mut attempts = 0u32;
         loop {
             let (_, received) = self.quote_oft_messaging_fee(chain, high).await?;
             if received >= target_amount {
                 break;
             }
-            low = high.checked_add(1).ok_or_else(|| {
-                BoltzError::Generic("OFT amount search overflow".into())
-            })?;
-            high = high.checked_mul(2).ok_or_else(|| {
-                BoltzError::Generic("OFT amount search overflow".into())
-            })?;
-            attempts += 1;
+            low = high
+                .checked_add(1)
+                .ok_or_else(|| BoltzError::Generic("OFT amount search overflow".into()))?;
+            high = high
+                .checked_mul(2)
+                .ok_or_else(|| BoltzError::Generic("OFT amount search overflow".into()))?;
+            #[expect(clippy::arithmetic_side_effects)]
+            {
+                attempts += 1;
+            }
             if attempts > 32 {
                 return Err(BoltzError::Generic(
                     "Could not find OFT send amount for target".into(),
@@ -1118,6 +1010,10 @@ impl ReverseSwapExecutor {
         }
 
         // Phase 2: binary search
+        // Safety: `high >= low` is guaranteed by the while condition, so
+        // `high - low` cannot underflow. `mid` is between `low` and `high`,
+        // so `mid + 1 <= high` which fits in u128.
+        #[expect(clippy::arithmetic_side_effects)]
         while low < high {
             let mid = low + (high - low) / 2;
             let (_, received) = self.quote_oft_messaging_fee(chain, mid).await?;
@@ -1180,12 +1076,7 @@ impl ReverseSwapExecutor {
     async fn fetch_quote_out_usdt_for_eth(&self, eth_amount: u128) -> Result<u128, BoltzError> {
         let quotes = self
             .api_client
-            .get_quote_out(
-                "ARB",
-                ARBITRUM_USDT_ADDRESS,
-                ZERO_ADDRESS,
-                eth_amount,
-            )
+            .get_quote_out("ARB", ARBITRUM_USDT_ADDRESS, ZERO_ADDRESS, eth_amount)
             .await?;
         pick_best_quote(&quotes, QuoteDirection::Out)
     }
@@ -1444,7 +1335,7 @@ fn to_chain_id_u32(chain_id: u64) -> Result<u32, BoltzError> {
         .map_err(|_| BoltzError::Generic("Chain ID overflow".to_string()))
 }
 
-fn current_unix_timestamp() -> u64 {
+pub(crate) fn current_unix_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1663,8 +1554,12 @@ mod tests {
         // onchain_sats from roundtrip should match the original (100_000)
         // Allow 1 sat tolerance for ceiling rounding
         let diff = invoice.onchain_sats.abs_diff(back.onchain_sats);
-        assert!(diff <= 1, "roundtrip diff={diff}, invoice_onchain={}, back_onchain={}",
-            invoice.onchain_sats, back.onchain_sats);
+        assert!(
+            diff <= 1,
+            "roundtrip diff={diff}, invoice_onchain={}, back_onchain={}",
+            invoice.onchain_sats,
+            back.onchain_sats
+        );
     }
 
     #[test]

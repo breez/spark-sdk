@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use bip39::{Language, Mnemonic};
 use clap::{Parser, Subcommand};
 
-use boltz::{AlchemyConfig, BoltzConfig, BoltzError, BoltzService, BoltzStorage};
+use boltz::{
+    AlchemyConfig, BoltzConfig, BoltzError, BoltzEventListener, BoltzService, BoltzStorage,
+    BoltzSwapEvent,
+};
 
 #[derive(Clone, clap::ValueEnum)]
 enum Chain {
@@ -239,6 +242,16 @@ async fn init_service(config: BoltzConfig, seed: &[u8], data_dir: &Path) -> Resu
     let svc = BoltzService::new(config, seed, store)
         .await
         .context("Failed to initialize BoltzService")?;
+
+    // Register a global listener that prints status updates for all swaps.
+    svc.add_event_listener(Box::new(PrintingEventListener))
+        .await;
+
+    // Resume any active swaps from a previous run.
+    let resumed = svc.resume_swaps().await.context("Failed to resume swaps")?;
+    if !resumed.is_empty() {
+        println!("Resumed {} active swap(s)", resumed.len());
+    }
     Ok(svc)
 }
 
@@ -303,20 +316,60 @@ async fn cmd_swap(
         return Ok(());
     }
 
-    // Step 2: Create
+    // Step 2: Register a channel listener to wait for this swap's terminal event.
+    // The global PrintingEventListener (registered in init_service) handles
+    // printing status updates for all swaps.
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<BoltzSwapEvent>(32);
+    let listener_id = svc
+        .add_event_listener(Box::new(ChannelEventListener { tx: event_tx }))
+        .await;
+
+    // Step 3: Create — swap monitoring starts automatically
     println!("\nCreating swap on Boltz...");
     let created = svc.create_reverse_swap(&prepared).await?;
     println!("\nSwap created:");
     print_json(&created);
     println!("\n>>> PAY THIS INVOICE to continue <<<\n");
 
-    // Step 3: Complete (blocks until done)
-    println!("Monitoring swap... (waiting for lockup + claim)");
-    let completed = svc.complete_reverse_swap(&created.swap_id).await?;
-    println!("\nSwap completed:");
-    print_json(&completed);
+    // Step 4: Wait for this swap to reach a terminal state
+    while let Some(BoltzSwapEvent::SwapUpdated { swap }) = event_rx.recv().await {
+        if swap.id == created.swap_id && swap.status.is_terminal() {
+            break;
+        }
+    }
 
+    svc.remove_event_listener(&listener_id).await;
     Ok(())
+}
+
+/// Global event listener that prints swap status updates to stdout.
+struct PrintingEventListener;
+
+#[macros::async_trait]
+impl BoltzEventListener for PrintingEventListener {
+    async fn on_event(&self, event: BoltzSwapEvent) {
+        match &event {
+            BoltzSwapEvent::SwapUpdated { swap } => {
+                println!("[{}] Status: {:?}", swap.id, swap.status);
+                if swap.status.is_terminal() {
+                    println!("  Final state:");
+                    print_json(swap);
+                }
+            }
+        }
+    }
+}
+
+/// Event listener that forwards events to an mpsc channel.
+struct ChannelEventListener {
+    tx: tokio::sync::mpsc::Sender<BoltzSwapEvent>,
+}
+
+#[macros::async_trait]
+impl BoltzEventListener for ChannelEventListener {
+    async fn on_event(&self, event: BoltzSwapEvent) {
+        let _ = self.tx.send(event).await;
+    }
 }
 
 async fn cmd_recover(svc: &BoltzService, destination: &str) -> Result<()> {
@@ -386,25 +439,37 @@ fn init_logging(data_dir: &Path) -> Result<()> {
 }
 
 // ─── File-backed BoltzStorage ─────────────────────────────────────────────
-// Persists key indices to `{data_dir}/key_index_{chain_id}` so that
-// consecutive CLI runs derive fresh preimage keys. Swap state stays in
-// memory since the CLI runs a single swap to completion.
+// Persists key indices to `{data_dir}/key_index_{chain_id}` and swap state to
+// `{data_dir}/swaps/{swap_id}.json` so that active swaps survive CLI restarts.
+//
+// Known limitations (acceptable for a CLI tool):
+// - Writes are not atomic (fs::write, not write-to-temp-then-rename). A crash
+//   mid-write could produce corrupted JSON. The SDK should provide its own
+//   BoltzStorage with atomic writes.
+// - Uses blocking I/O (std::fs) inside async trait methods. Tolerable with
+//   tokio's multi-threaded runtime.
 
 struct FileBoltzStorage {
     data_dir: PathBuf,
-    swaps: tokio::sync::Mutex<std::collections::HashMap<String, boltz::BoltzSwap>>,
 }
 
 impl FileBoltzStorage {
     fn new(data_dir: &Path) -> Self {
         Self {
             data_dir: data_dir.to_path_buf(),
-            swaps: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     fn index_path(&self, chain_id: u64) -> PathBuf {
         self.data_dir.join(format!("key_index_{chain_id}"))
+    }
+
+    fn swaps_dir(&self) -> PathBuf {
+        self.data_dir.join("swaps")
+    }
+
+    fn swap_path(&self, id: &str) -> PathBuf {
+        self.swaps_dir().join(format!("{id}.json"))
     }
 
     fn read_index(&self, chain_id: u64) -> Result<u32, BoltzError> {
@@ -422,41 +487,71 @@ impl FileBoltzStorage {
         fs::write(self.index_path(chain_id), index.to_string())
             .map_err(|e| BoltzError::Store(format!("Failed to write key index: {e}")))
     }
+
+    fn write_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
+        let dir = self.swaps_dir();
+        fs::create_dir_all(&dir)
+            .map_err(|e| BoltzError::Store(format!("Failed to create swaps dir: {e}")))?;
+        let json = serde_json::to_string_pretty(swap)
+            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
+        fs::write(self.swap_path(&swap.id), json)
+            .map_err(|e| BoltzError::Store(format!("Failed to write swap: {e}")))
+    }
+
+    fn read_swap(&self, id: &str) -> Result<Option<boltz::BoltzSwap>, BoltzError> {
+        let path = self.swap_path(id);
+        match fs::read_to_string(&path) {
+            Ok(json) => {
+                let swap: boltz::BoltzSwap = serde_json::from_str(&json)
+                    .map_err(|e| BoltzError::Store(format!("Failed to parse swap: {e}")))?;
+                Ok(Some(swap))
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(BoltzError::Store(format!("Failed to read swap: {e}"))),
+        }
+    }
 }
 
 #[macros::async_trait]
 impl BoltzStorage for FileBoltzStorage {
     async fn insert_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
-        self.swaps
-            .lock()
-            .await
-            .insert(swap.id.clone(), swap.clone());
-        Ok(())
+        self.write_swap(swap)
     }
 
     async fn update_swap(&self, swap: &boltz::BoltzSwap) -> Result<(), BoltzError> {
-        let mut swaps = self.swaps.lock().await;
-        if swaps.contains_key(&swap.id) {
-            swaps.insert(swap.id.clone(), swap.clone());
-            Ok(())
-        } else {
-            Err(BoltzError::Store(format!("Swap not found: {}", swap.id)))
+        if !self.swap_path(&swap.id).exists() {
+            return Err(BoltzError::Store(format!("Swap not found: {}", swap.id)));
         }
+        self.write_swap(swap)
     }
 
     async fn get_swap(&self, id: &str) -> Result<Option<boltz::BoltzSwap>, BoltzError> {
-        Ok(self.swaps.lock().await.get(id).cloned())
+        self.read_swap(id)
     }
 
     async fn list_active_swaps(&self) -> Result<Vec<boltz::BoltzSwap>, BoltzError> {
-        Ok(self
-            .swaps
-            .lock()
-            .await
-            .values()
-            .filter(|s| !s.status.is_terminal())
-            .cloned()
-            .collect())
+        let dir = self.swaps_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut active = Vec::new();
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| BoltzError::Store(format!("Failed to read swaps dir: {e}")))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| BoltzError::Store(format!("Failed to read dir entry: {e}")))?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let json = fs::read_to_string(&path)
+                    .map_err(|e| BoltzError::Store(format!("Failed to read swap file: {e}")))?;
+                let swap: boltz::BoltzSwap = serde_json::from_str(&json)
+                    .map_err(|e| BoltzError::Store(format!("Failed to parse swap: {e}")))?;
+                if !swap.status.is_terminal() {
+                    active.push(swap);
+                }
+            }
+        }
+        Ok(active)
     }
 
     async fn increment_key_index(&self, chain_id: u64) -> Result<u32, BoltzError> {

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod evm;
 pub mod keys;
 pub mod models;
@@ -11,9 +12,11 @@ pub mod swap;
 use std::sync::Arc;
 
 use platform_utils::DefaultHttpClient;
+use tokio::sync::mpsc;
 
 pub use config::*;
 pub use error::BoltzError;
+pub use events::{BoltzEventListener, BoltzSwapEvent, EventEmitter};
 pub use keys::EvmKeyManager;
 pub use models::*;
 pub use store::{BoltzStorage, MemoryBoltzStorage};
@@ -24,16 +27,23 @@ use evm::alchemy::AlchemyGasClient;
 use evm::oft::OftDeployments;
 use evm::provider::EvmProvider;
 use evm::signing::EvmSigner;
+use swap::manager::SwapManager;
 use swap::reverse::ReverseSwapExecutor;
 
 /// Top-level Boltz service facade.
 ///
-/// Three-step flow:
+/// Two-step swap flow:
 /// - `prepare_reverse_swap` — pure quote, no side effects
-/// - `create_reverse_swap` — commit to swap, get invoice
-/// - `complete_reverse_swap` — monitor + claim (blocks until done)
+/// - `create_reverse_swap` — commit to swap, get invoice; the swap is
+///   automatically monitored and progressed to completion in the background
+///
+/// Call `start()` after construction to resume any active swaps from storage.
+/// Register a `BoltzEventListener` to receive swap status updates.
 pub struct BoltzService {
-    executor: ReverseSwapExecutor,
+    executor: Arc<ReverseSwapExecutor>,
+    swap_manager: SwapManager,
+    event_emitter: Arc<EventEmitter>,
+    ws_subscriber: Arc<SwapStatusSubscriber>,
 }
 
 impl BoltzService {
@@ -53,8 +63,14 @@ impl BoltzService {
         let gas_key_pair = key_manager.derive_gas_signer(chain_id_u32)?;
         let gas_signer = EvmSigner::new(&gas_key_pair, config.chain_id);
 
+        // Each component gets its own DefaultHttpClient. Instances are cheap
+        // (no shared connection pool), so sharing via Arc is not worth the
+        // signature churn.
         let api_client = BoltzApiClient::new(&config, Box::new(DefaultHttpClient::new(None)));
-        let ws_subscriber = SwapStatusSubscriber::connect(&config.ws_url()).await?;
+
+        // Create the global WS channel and subscriber.
+        let (ws_tx, ws_rx) = mpsc::channel(256);
+        let ws_subscriber = Arc::new(SwapStatusSubscriber::connect(&config.ws_url(), ws_tx).await?);
 
         let alchemy_client = AlchemyGasClient::new(
             &config.alchemy_config,
@@ -67,6 +83,8 @@ impl BoltzService {
             Box::new(DefaultHttpClient::new(None)),
         );
 
+        // OFT deployments are fetched once and cached for the service lifetime.
+        // They change rarely; a service restart picks up any updates.
         let oft_deployments =
             OftDeployments::fetch(&DefaultHttpClient::new(None), &config.oft_deployments_url)
                 .await?;
@@ -86,9 +104,8 @@ impl BoltzService {
                 code: None,
             })?;
 
-        let executor = ReverseSwapExecutor::new(
+        let executor = Arc::new(ReverseSwapExecutor::new(
             api_client,
-            ws_subscriber,
             key_manager,
             alchemy_client,
             evm_provider,
@@ -96,9 +113,50 @@ impl BoltzService {
             store,
             config,
             erc20swap_address,
+        ));
+
+        let event_emitter = Arc::new(EventEmitter::new());
+
+        let swap_manager = SwapManager::start(
+            executor.clone(),
+            event_emitter.clone(),
+            ws_subscriber.clone(),
+            ws_rx,
         );
 
-        Ok(Self { executor })
+        Ok(Self {
+            executor,
+            swap_manager,
+            event_emitter,
+            ws_subscriber,
+        })
+    }
+
+    /// Load and resume all active (non-terminal) swaps from storage.
+    /// Call once after construction to pick up swaps from previous runs.
+    pub async fn resume_swaps(&self) -> Result<Vec<String>, BoltzError> {
+        self.swap_manager.resume_all(&self.executor).await
+    }
+
+    /// Register an event listener. Returns a unique ID for removal.
+    pub async fn add_event_listener(&self, listener: Box<dyn BoltzEventListener>) -> String {
+        self.event_emitter.add_listener(listener).await
+    }
+
+    /// Remove a previously registered event listener.
+    pub async fn remove_event_listener(&self, id: &str) -> bool {
+        self.event_emitter.remove_listener(id).await
+    }
+
+    /// Get a swap by its internal ID.
+    pub async fn get_swap(&self, swap_id: &str) -> Result<Option<BoltzSwap>, BoltzError> {
+        self.executor.store.get_swap(swap_id).await
+    }
+
+    /// Shut down the swap manager and close the WebSocket connection.
+    pub async fn shutdown(&self) {
+        self.swap_manager.shutdown().await;
+        self.ws_subscriber.close().await;
     }
 
     /// Get a quote for converting sats to USDT.
@@ -125,25 +183,15 @@ impl BoltzService {
             .await
     }
 
-    /// Create the swap on Boltz. Returns the hold invoice to pay.
-    /// Caller must pay the invoice via Lightning.
+    /// Create the swap on Boltz and begin background monitoring.
+    /// Returns the hold invoice to pay.
     pub async fn create_reverse_swap(
         &self,
         prepared: &PreparedSwap,
     ) -> Result<CreatedSwap, BoltzError> {
-        self.executor.create(prepared).await
-    }
-
-    /// After the invoice is paid, monitor and complete the swap.
-    /// Blocks until USDT is delivered or swap fails.
-    pub async fn complete_reverse_swap(&self, swap_id: &str) -> Result<CompletedSwap, BoltzError> {
-        self.executor.complete(swap_id).await
-    }
-
-    /// Resume all active (non-final) swaps from storage.
-    /// Call on startup to recover interrupted swaps.
-    pub async fn resume(&self) -> Result<Vec<String>, BoltzError> {
-        self.executor.resume_active_swaps().await
+        let created = self.executor.create(prepared).await?;
+        self.swap_manager.track_swap(&created.swap_id).await;
+        Ok(created)
     }
 
     /// Get supported destination chains.
@@ -179,8 +227,6 @@ impl BoltzService {
     }
 
     /// Recover unclaimed swaps by scanning the blockchain.
-    /// Uses EVM contract log scanning to find Lockup events matching
-    /// this wallet's derived keys, then claims any still-locked swaps.
     pub async fn recover(&self, destination_address: &str) -> Result<RecoveryResult, BoltzError> {
         self.executor.recover(destination_address).await
     }
