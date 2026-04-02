@@ -9,10 +9,7 @@ use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 use x509_cert::Certificate;
-use x509_cert::der::{
-    Decode,
-    asn1::{ObjectIdentifier, Utf8StringRef},
-};
+use x509_cert::der::{Decode, asn1::ObjectIdentifier};
 
 use crate::{
     PaymentDetails, WaitForPaymentIdentifier,
@@ -193,8 +190,7 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
         .iter()
         .flat_map(|rdn| rdn.0.iter())
         .find(|atv| atv.oid == OID_COMMON_NAME)
-        .and_then(|atv| atv.value.decode_as::<Utf8StringRef<'_>>().ok())
-        .map(|s| s.as_str());
+        .and_then(|atv| str::from_utf8(atv.value.value()).ok());
     match issuer {
         Some(common_name) => {
             if !common_name.starts_with("Breez") {
