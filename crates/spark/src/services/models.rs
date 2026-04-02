@@ -24,7 +24,7 @@ use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource};
 use crate::ssp::BitcoinNetwork;
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
-use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId};
+use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
 
 use super::ServiceError;
@@ -452,10 +452,7 @@ impl TryFrom<operator_rpc::spark::TreeNode> for TreeNode {
             .ok_or_else(|| ServiceError::Generic("Missing signing keyshare".to_string()))?
             .try_into()?;
 
-        let status = node
-            .status
-            .parse()
-            .map_err(|_| ServiceError::Generic(format!("Unknown node status: {}", node.status)))?;
+        let status = TreeNodeStatus::from(node.status.as_str());
 
         Ok(TreeNode {
             id,
