@@ -375,6 +375,13 @@ fn cmd_info(seed: &[u8]) -> Result<()> {
         hex::encode(&preimage_key.public_key)
     );
     println!("  Preimage key[0] addr:   {}", preimage_key.address_hex());
+
+    let chains: Vec<String> = <Chain as clap::ValueEnum>::value_variants()
+        .iter()
+        .filter_map(|v| clap::ValueEnum::to_possible_value(v).map(|p| p.get_name().to_string()))
+        .collect();
+    println!("\nSupported destination chains:\n  {}", chains.join(", "));
+
     Ok(())
 }
 
