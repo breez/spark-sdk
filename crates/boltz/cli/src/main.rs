@@ -1,3 +1,4 @@
+use std::borrow::Cow::{self, Owned};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,7 +6,11 @@ use std::{fs, str::FromStr};
 
 use anyhow::{Context, Result, bail};
 use bip39::{Language, Mnemonic};
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use rustyline::Editor;
+use rustyline::error::ReadlineError;
+use rustyline::hint::HistoryHinter;
+use rustyline::{Completer, Helper, Hinter, Validator, highlight::Highlighter};
 
 use boltz::{
     AlchemyConfig, BoltzConfig, BoltzError, BoltzEventListener, BoltzService, BoltzStorage,
@@ -66,11 +71,13 @@ impl From<Chain> for boltz::Chain {
 }
 
 const PHRASE_FILE_NAME: &str = "phrase";
+const HISTORY_FILE_NAME: &str = "history.txt";
 
+// ─── Top-level CLI (startup args only) ─────────────────────────────────
 #[derive(Parser)]
 #[command(
     name = "boltz-cli",
-    about = "Test CLI for the Boltz LN -> USDT reverse swap flow"
+    about = "Interactive CLI for the Boltz LN -> USDT reverse swap flow"
 )]
 struct Cli {
     /// BIP-39 mnemonic (12 or 24 words). If not provided, reads from data-dir or generates new.
@@ -100,12 +107,10 @@ struct Cli {
     /// Slippage tolerance in basis points (100 = 1%). Defaults to 100.
     #[arg(long)]
     slippage_bps: Option<u32>,
-
-    #[command(subcommand)]
-    command: Command,
 }
 
-#[derive(Subcommand)]
+// ─── REPL commands (parsed per-line inside the interactive loop) ───────
+#[derive(Clone, Parser)]
 enum Command {
     /// Show derived EVM addresses (gas signer, first preimage key).
     Info,
@@ -148,8 +153,26 @@ enum Command {
         /// Destination EVM address for recovered USDT.
         destination: String,
     },
+
+    /// Exit the interactive shell.
+    #[command(hide = true)]
+    Exit,
 }
 
+// ─── rustyline helper ──────────────────────────────────────────────────
+#[derive(Helper, Completer, Hinter, Validator)]
+struct CliHelper {
+    #[rustyline(Hinter)]
+    hinter: HistoryHinter,
+}
+
+impl Highlighter for CliHelper {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Owned("\x1b[1m".to_owned() + hint + "\x1b[m")
+    }
+}
+
+// ─── main ──────────────────────────────────────────────────────────────
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -179,11 +202,92 @@ async fn main() -> Result<()> {
         config.slippage_bps = slippage_bps;
     }
 
-    match cli.command {
-        Command::Info => cmd_info(&seed)?,
+    // Initialize the service once — WebSocket + SwapManager stay alive for the
+    // entire session, handling ongoing swaps in the background.
+    let svc = init_service(config, &seed, &cli.data_dir).await?;
+
+    println!("Boltz CLI Interactive Mode");
+    println!("Type 'help' for available commands or 'exit' to quit\n");
+
+    run_repl(&svc, &seed, &cli.data_dir).await?;
+
+    svc.shutdown().await;
+    println!("Goodbye!");
+    Ok(())
+}
+
+// ─── REPL loop ─────────────────────────────────────────────────────────
+async fn run_repl(svc: &BoltzService, seed: &[u8], data_dir: &Path) -> Result<()> {
+    let history_file = data_dir.join(HISTORY_FILE_NAME);
+
+    let rl = &mut Editor::new()?;
+    rl.set_helper(Some(CliHelper {
+        hinter: HistoryHinter {},
+    }));
+    if rl.load_history(&history_file).is_err() {
+        // No history yet — that's fine.
+    }
+
+    loop {
+        let readline = rl.readline("boltz> ");
+        match readline {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                rl.add_history_entry(trimmed)?;
+
+                match parse_command(trimmed) {
+                    Ok(command) => match execute_command(command, svc, seed).await {
+                        Ok(should_continue) => {
+                            if !should_continue {
+                                break;
+                            }
+                        }
+                        Err(e) => println!("Error: {e}"),
+                    },
+                    Err(e) => println!("{e}"),
+                }
+            }
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(err) => {
+                println!("Error: {err:?}");
+                break;
+            }
+        }
+    }
+
+    let _ = rl.save_history(&history_file);
+    Ok(())
+}
+
+fn parse_command(input: &str) -> Result<Command> {
+    if input == "exit" || input == "quit" {
+        return Ok(Command::Exit);
+    }
+
+    let mut args = vec!["boltz-cli".to_string()];
+    match shlex::split(input) {
+        Some(split_args) => args.extend(split_args),
+        None => bail!("Failed to parse input: {input}"),
+    }
+
+    Command::try_parse_from(args).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Returns `Ok(true)` to keep the REPL running, `Ok(false)` to exit.
+async fn execute_command(command: Command, svc: &BoltzService, seed: &[u8]) -> Result<bool> {
+    match command {
+        Command::Exit => Ok(false),
+        Command::Info => {
+            cmd_info(seed)?;
+            Ok(true)
+        }
         Command::Limits => {
-            let svc = init_service(config, &seed, &cli.data_dir).await?;
-            cmd_limits(&svc).await?;
+            cmd_limits(svc).await?;
+            Ok(true)
         }
         Command::Prepare {
             usdt,
@@ -191,9 +295,9 @@ async fn main() -> Result<()> {
             destination,
             chain,
         } => {
-            let svc = init_service(config, &seed, &cli.data_dir).await?;
-            let prepared = prepare(&svc, &destination, chain.into(), usdt, sats).await?;
+            let prepared = prepare(svc, &destination, chain.into(), usdt, sats).await?;
             print_json(&prepared);
+            Ok(true)
         }
         Command::Swap {
             usdt,
@@ -201,17 +305,17 @@ async fn main() -> Result<()> {
             destination,
             chain,
         } => {
-            let svc = init_service(config, &seed, &cli.data_dir).await?;
-            cmd_swap(&svc, &destination, chain.into(), usdt, sats).await?;
+            cmd_swap(svc, &destination, chain.into(), usdt, sats).await?;
+            Ok(true)
         }
         Command::Recover { destination } => {
-            let svc = init_service(config, &seed, &cli.data_dir).await?;
-            cmd_recover(&svc, &destination).await?;
+            cmd_recover(svc, &destination).await?;
+            Ok(true)
         }
     }
-
-    Ok(())
 }
+
+// ─── command handlers ──────────────────────────────────────────────────
 
 fn get_or_create_mnemonic(data_dir: &Path) -> Result<Mnemonic> {
     let filename = data_dir.join(PHRASE_FILE_NAME);
@@ -404,6 +508,8 @@ async fn cmd_recover(svc: &BoltzService, destination: &str) -> Result<()> {
 
     Ok(())
 }
+
+// ─── Formatting ────────────────────────────────────────────────────────
 
 const USDT_FIELDS: &[&str] = &["usdt_amount", "usdt_delivered"];
 
