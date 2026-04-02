@@ -246,10 +246,7 @@ impl BoltzService {
             )));
         }
 
-        let result = self
-            .executor
-            .claim_and_swap(&mut swap, true)
-            .await;
+        let result = self.executor.claim_and_swap(&mut swap, true).await;
 
         match &result {
             Ok(swap) => {

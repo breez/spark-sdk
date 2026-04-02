@@ -318,18 +318,10 @@ impl ReverseSwapExecutor {
         key_index: u32,
         gas_signer: &crate::keys::EvmKeyPair,
     ) -> Result<CreatedSwap, BoltzError> {
-        if resp.onchain_amount != prepared.estimated_onchain_amount {
+        if resp.onchain_amount < prepared.estimated_onchain_amount {
             return Err(BoltzError::Generic(format!(
-                "Boltz onchain_amount ({}) differs from prepared estimate ({})",
+                "Boltz onchain_amount ({}) less than prepared estimate ({})",
                 resp.onchain_amount, prepared.estimated_onchain_amount,
-            )));
-        }
-
-        let current_block = self.evm_provider.eth_block_number().await?;
-        if resp.timeout_block_height <= current_block {
-            return Err(BoltzError::Generic(format!(
-                "Boltz returned expired timeout: block {} <= current {current_block}",
-                resp.timeout_block_height,
             )));
         }
 
@@ -555,17 +547,6 @@ impl ReverseSwapExecutor {
             .ok_or_else(|| BoltzError::Generic("tBTC EVM amount overflow".into()))?;
         let timelock = U256::from(swap.timeout_block_height);
 
-        // Verify the timelock hasn't expired before attempting the claim.
-        // The on-chain contract enforces this too, but checking locally avoids
-        // wasted gas and gives a clearer error.
-        let current_block = self.evm_provider.eth_block_number().await?;
-        if current_block >= swap.timeout_block_height {
-            return Err(BoltzError::Generic(format!(
-                "Swap timelock expired: current block {current_block} >= timeout {}",
-                swap.timeout_block_height
-            )));
-        }
-
         for attempt in 0..MAX_CLAIM_RETRIES {
             if attempt > 0 {
                 tracing::info!(attempt, swap_id = swap.id, "Retrying claim");
@@ -700,7 +681,11 @@ impl ReverseSwapExecutor {
             .await?;
 
         if !skip_drift_check {
-            check_quote_drift(swap.expected_usdt_amount, raw_quote_usdt, self.config.slippage_bps)?;
+            check_quote_drift(
+                swap.expected_usdt_amount,
+                raw_quote_usdt,
+                self.config.slippage_bps,
+            )?;
         }
 
         let erc20swap_sig = gas_signer.sign_eip712_erc20swap_claim(
@@ -902,7 +887,11 @@ impl ReverseSwapExecutor {
         // Drift check: compare what the user would receive on the destination
         // chain against the creation-time estimate (expected_usdt_amount).
         if !skip_drift_check {
-            check_quote_drift(swap.expected_usdt_amount, min_amount_ld_raw, self.config.slippage_bps)?;
+            check_quote_drift(
+                swap.expected_usdt_amount,
+                min_amount_ld_raw,
+                self.config.slippage_bps,
+            )?;
         }
 
         #[expect(clippy::arithmetic_side_effects)]
@@ -1467,8 +1456,7 @@ fn check_quote_drift(
     fresh_quote_usdt: u128,
     slippage_bps: u32,
 ) -> Result<(), BoltzError> {
-    let threshold =
-        u128::from(expected_usdt) * (10000 - u128::from(slippage_bps)) / 10000;
+    let threshold = u128::from(expected_usdt) * (10000 - u128::from(slippage_bps)) / 10000;
     if fresh_quote_usdt < threshold {
         let quoted = fresh_quote_usdt.try_into().unwrap_or(u64::MAX);
         return Err(BoltzError::QuoteDegradedBeyondSlippage {
