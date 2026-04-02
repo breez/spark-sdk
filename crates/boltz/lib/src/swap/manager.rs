@@ -320,8 +320,16 @@ impl SwapManager {
 
             let result = Self::do_claim(&executor, &swap_id, skip_drift_check).await;
             match result {
-                Ok(swap) => {
-                    emitter.emit(&BoltzSwapEvent::SwapUpdated { swap }).await;
+                Ok(_) => {
+                    // Re-read from store: the WS loop may have already moved
+                    // the swap to Completed while we were claiming. Emitting
+                    // the stale snapshot from claim_and_swap would produce an
+                    // out-of-order Claiming event after Completed.
+                    if let Ok(Some(swap)) = executor.store.get_swap(&swap_id).await
+                        && !swap.status.is_terminal()
+                    {
+                        emitter.emit(&BoltzSwapEvent::SwapUpdated { swap }).await;
+                    }
                 }
                 Err(BoltzError::QuoteDegradedBeyondSlippage {
                     expected_usdt,
