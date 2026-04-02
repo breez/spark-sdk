@@ -62,7 +62,7 @@ itest:
 	cargo xtask itest
 
 boltz-itest:
-	@cd crates/boltz/regtest && ./start.sh
+	@cd crates/boltz/lib/regtest && ./start.sh
 	@echo "Waiting for Boltz regtest stack..."; \
 	for i in $$(seq 1 90); do \
 		curl -sf http://localhost:9001/v2/swap/reverse > /dev/null 2>&1 \
@@ -73,7 +73,7 @@ boltz-itest:
 	done
 	@cargo test -p boltz --features regtest --test regtest -- --test-threads=1; \
 	rc=$$?; \
-	cd crates/boltz/regtest && docker compose down --volumes > /dev/null 2>&1; \
+	cd crates/boltz/lib/regtest && docker compose down --volumes > /dev/null 2>&1; \
 	exit $$rc
 
 breez-itest:
