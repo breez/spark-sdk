@@ -54,6 +54,12 @@
 
 ---
 
+# Lightning Address webhooks
+
+- [Lightning Address payment notifications](guide/lnurl_webhooks.md)
+
+---
+
 # UX Guidelines
 
 - [Overview](guide/uxguide.md)
