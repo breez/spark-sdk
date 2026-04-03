@@ -378,6 +378,7 @@ where
                 &state.db,
                 &payment_hash,
                 preimage,
+                None,
                 &state.invoice_paid_trigger,
             )
             .await
@@ -746,6 +747,7 @@ where
             &user.pubkey,
             &res.invoice,
             invoice_expiry,
+            &domain,
         )
         .await
         {
@@ -853,6 +855,7 @@ where
             &state.db,
             &payment_hash_hex,
             &payload.preimage,
+            None,
             &state.invoice_paid_trigger,
         )
         .await
@@ -996,7 +999,7 @@ where
     }
 
     // Parse the body
-    let payload: WebhookPayload = serde_json::from_slice(body).map_err(|e| {
+    let payload: SspWebhookPayload = serde_json::from_slice(body).map_err(|e| {
         trace!("invalid webhook payload: {}", e);
         (
             StatusCode::BAD_REQUEST,
@@ -1065,9 +1068,18 @@ where
         return Ok(());
     }
 
+    let amount_received_sat = match &payload.htlc_amount {
+        Some(amount) if amount.unit == "SATOSHI" => Some(amount.value),
+        Some(amount) => {
+            warn!("unexpected htlc_amount unit: {}", amount.unit);
+            None
+        }
+        None => None,
+    };
+
     // Handle the invoice paid event
     if let Err(e) =
-        handle_invoice_paid(db, &payment_hash, &payment_preimage, invoice_paid_trigger).await
+        handle_invoice_paid(db, &payment_hash, &payment_preimage, amount_received_sat, invoice_paid_trigger).await
     {
         error!(
             "failed to handle webhook invoice paid for {}: {}",
@@ -1303,11 +1315,18 @@ fn lnurl_error(message: &str) -> (StatusCode, Json<Value>) {
 }
 
 #[derive(Debug, Deserialize)]
-struct WebhookPayload {
+struct SspWebhookPayload {
     #[serde(rename = "type")]
     event_type: String,
     payment_preimage: Option<String>,
     receiver_identity_public_key: Option<String>,
+    htlc_amount: Option<SspAmount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SspAmount {
+    value: i64,
+    unit: String,
 }
 
 fn sanitize_domain<DB>(
@@ -1553,6 +1572,8 @@ mod tests {
                 invoice_expiry: i64::MAX,
                 created_at: 0,
                 updated_at: 0,
+                domain: None,
+                amount_received_sat: None,
             },
         );
         repo
@@ -1784,6 +1805,8 @@ mod tests {
                 invoice_expiry: i64::MAX,
                 created_at: 0,
                 updated_at: 0,
+                domain: None,
+                amount_received_sat: None,
             },
         );
         let (trigger, _rx) = watch::channel(());

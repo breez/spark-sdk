@@ -38,6 +38,7 @@ pub async fn handle_invoice_paid<DB>(
     db: &DB,
     payment_hash: &str,
     preimage: &str,
+    amount_received_sat: Option<i64>,
     trigger: &watch::Sender<()>,
 ) -> Result<(), HandleInvoicePaidError>
 where
@@ -58,6 +59,7 @@ where
 
     if invoice.preimage.is_none() {
         invoice.preimage = Some(preimage.to_string());
+        invoice.amount_received_sat = amount_received_sat;
         invoice.updated_at = now;
         db.upsert_invoice(&invoice).await?;
         debug!("Stored preimage for invoice {}", payment_hash);
@@ -117,6 +119,8 @@ where
             invoice_expiry,
             created_at: now,
             updated_at: now,
+            domain: None,
+            amount_received_sat: None,
         });
     }
 
@@ -161,6 +165,7 @@ pub async fn create_invoice<DB>(
     user_pubkey: &str,
     invoice: &str,
     invoice_expiry: i64,
+    domain: &str,
 ) -> Result<(), LnurlRepositoryError>
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
@@ -174,6 +179,8 @@ where
         invoice_expiry,
         created_at: now,
         updated_at: now,
+        domain: Some(domain.to_string()),
+        amount_received_sat: None,
     };
     db.upsert_invoice(&invoice_record).await?;
     debug!("Created invoice record for payment hash {}", payment_hash);

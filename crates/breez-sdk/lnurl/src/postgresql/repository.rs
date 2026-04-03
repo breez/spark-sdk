@@ -274,14 +274,16 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
     async fn upsert_invoice(&self, invoice: &Invoice) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "INSERT INTO invoices (payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT(payment_hash) DO UPDATE
              SET user_pubkey = excluded.user_pubkey
              ,   invoice = excluded.invoice
              ,   preimage = excluded.preimage
              ,   invoice_expiry = excluded.invoice_expiry
-             ,   updated_at = excluded.updated_at",
+             ,   updated_at = excluded.updated_at
+             ,   domain = excluded.domain
+             ,   amount_received_sat = excluded.amount_received_sat",
         )
         .bind(&invoice.payment_hash)
         .bind(&invoice.user_pubkey)
@@ -290,6 +292,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(invoice.invoice_expiry)
         .bind(invoice.created_at)
         .bind(invoice.updated_at)
+        .bind(&invoice.domain)
+        .bind(invoice.amount_received_sat)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -341,7 +345,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         payment_hash: &str,
     ) -> Result<Option<Invoice>, LnurlRepositoryError> {
         let maybe_invoice = sqlx::query(
-            "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at
+            "SELECT payment_hash, user_pubkey, invoice, preimage, invoice_expiry, created_at, updated_at, domain, amount_received_sat
              FROM invoices
              WHERE payment_hash = $1",
         )
@@ -357,6 +361,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 invoice_expiry: row.try_get(4)?,
                 created_at: row.try_get(5)?,
                 updated_at: row.try_get(6)?,
+                domain: row.try_get(7)?,
+                amount_received_sat: row.try_get(8)?,
             })
         })
         .transpose()?;
@@ -382,6 +388,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
              ,      i.invoice_expiry AS i_invoice_expiry
              ,      i.created_at     AS i_created_at
              ,      i.updated_at     AS i_updated_at
+             ,      i.domain         AS i_domain
+             ,      i.amount_received_sat AS i_amount_received_sat
              FROM (SELECT $1::text AS payment_hash) ph
              LEFT JOIN zaps z ON z.payment_hash = ph.payment_hash
              LEFT JOIN invoices i ON i.payment_hash = ph.payment_hash",
@@ -416,6 +424,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     invoice_expiry: row.try_get("i_invoice_expiry")?,
                     created_at: row.try_get("i_created_at")?,
                     updated_at: row.try_get("i_updated_at")?,
+                    domain: row.try_get("i_domain")?,
+                    amount_received_sat: row.try_get("i_amount_received_sat")?,
                 })
             })
             .transpose()?;

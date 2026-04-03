@@ -27,6 +27,10 @@ pub struct Invoice {
     pub invoice_expiry: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// The domain this invoice was created for, if any.
+    pub domain: Option<String>,
+    /// Amount received in satoshis (from the HTLC). NULL when unknown.
+    pub amount_received_sat: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
