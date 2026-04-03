@@ -1,7 +1,8 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt};
+use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData};
+use crate::webhooks::repository::{NewWebhookDelivery, WebhookDelivery, WebhookRepositoryError};
 use crate::zap::Zap;
 use crate::{
     repository::LnurlRepositoryError,
@@ -569,5 +570,198 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok(value)
+    }
+
+    async fn get_webhook_payloads(
+        &self,
+        payment_hashes: &[String],
+    ) -> Result<Vec<WebhookPayloadData>, LnurlRepositoryError> {
+        if payment_hashes.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders: Vec<String> = (1..=payment_hashes.len())
+            .map(|i| format!("${i}"))
+            .collect();
+        let sql = format!(
+            "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
+                    u.name, u.domain,
+                    sc.sender_comment,
+                    dw.url
+             FROM invoices i
+             JOIN domain_webhooks dw ON dw.domain = i.domain
+             LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
+             LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
+             WHERE i.payment_hash IN ({})
+               AND i.domain IS NOT NULL
+               AND i.preimage IS NOT NULL",
+            placeholders.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for hash in payment_hashes {
+            query = query.bind(hash);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        let results = rows
+            .into_iter()
+            .map(|row| {
+                let name: Option<String> = row.try_get(5)?;
+                let user_domain: Option<String> = row.try_get(6)?;
+                let lightning_address = match (name, user_domain) {
+                    (Some(n), Some(d)) => Some(format!("{n}@{d}")),
+                    _ => None,
+                };
+                Ok::<_, sqlx::Error>(WebhookPayloadData {
+                    payment_hash: row.try_get(0)?,
+                    user_pubkey: row.try_get(1)?,
+                    invoice: row.try_get(2)?,
+                    preimage: row.try_get(3)?,
+                    amount_received_sat: row.try_get(4)?,
+                    lightning_address,
+                    sender_comment: row.try_get(7)?,
+                    webhook_url: row.try_get(8)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(results)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::webhooks::WebhookRepository for LnurlRepository {
+    async fn insert_webhook_deliveries(
+        &self,
+        deliveries: &[NewWebhookDelivery],
+    ) -> Result<(), WebhookRepositoryError> {
+        if deliveries.is_empty() {
+            return Ok(());
+        }
+        let now = now_millis();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| WebhookRepositoryError::General(e.into()))?;
+        for d in deliveries {
+            sqlx::query(
+                "INSERT INTO webhook_deliveries (identifier, url, payload, created_at, next_retry_at)
+                 VALUES ($1, $2, $3, $4, $4)
+                 ON CONFLICT (identifier, url) DO NOTHING",
+            )
+            .bind(&d.identifier)
+            .bind(&d.url)
+            .bind(&d.payload)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|e| WebhookRepositoryError::General(e.into()))?;
+        Ok(())
+    }
+
+    async fn take_pending_webhook_deliveries(
+        &self,
+    ) -> Result<Vec<WebhookDelivery>, WebhookRepositoryError> {
+        let now = now_millis();
+        let stale_threshold = now.saturating_sub(300_000); // 5 minutes
+        let rows = sqlx::query(
+            "WITH candidates AS (
+                 SELECT id, ROW_NUMBER() OVER (PARTITION BY url ORDER BY next_retry_at ASC) AS rn
+                 FROM webhook_deliveries
+                 WHERE next_retry_at <= $1
+                   AND succeeded_at IS NULL
+                   AND COALESCE(claimed_at, 0) < $3
+             )
+             UPDATE webhook_deliveries
+             SET claimed_at = $2
+             WHERE id IN (SELECT id FROM candidates WHERE rn = 1)
+             RETURNING id, identifier, url, payload, created_at, retry_count, next_retry_at",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(stale_threshold)
+        .fetch_all(&self.pool)
+        .await?;
+        let deliveries = rows
+            .into_iter()
+            .map(|row| {
+                Ok::<_, sqlx::Error>(WebhookDelivery {
+                    id: row.try_get(0)?,
+                    identifier: row.try_get(1)?,
+                    url: row.try_get(2)?,
+                    payload: row.try_get(3)?,
+                    created_at: row.try_get(4)?,
+                    retry_count: row.try_get(5)?,
+                    next_retry_at: row.try_get(6)?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(deliveries)
+    }
+
+    async fn update_webhook_delivery_success(
+        &self,
+        id: i64,
+        succeeded_at: i64,
+    ) -> Result<(), WebhookRepositoryError> {
+        sqlx::query("UPDATE webhook_deliveries SET succeeded_at = $2 WHERE id = $1")
+            .bind(id)
+            .bind(succeeded_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn update_webhook_delivery_failure(
+        &self,
+        id: i64,
+        retry_count: i32,
+        next_retry_at: i64,
+        status_code: Option<i32>,
+        body: Option<&str>,
+    ) -> Result<(), WebhookRepositoryError> {
+        sqlx::query(
+            "UPDATE webhook_deliveries
+             SET retry_count = $2, next_retry_at = $3, claimed_at = NULL,
+                 last_error_status_code = $4, last_error_body = $5
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(retry_count)
+        .bind(next_retry_at)
+        .bind(status_code)
+        .bind(body)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn unclaim_webhook_deliveries(&self, ids: &[i64]) -> Result<(), WebhookRepositoryError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
+        let sql = format!(
+            "UPDATE webhook_deliveries SET claimed_at = NULL WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id);
+        }
+        query.execute(&self.pool).await?;
+        Ok(())
+    }
+
+    async fn delete_webhook_deliveries_older_than(
+        &self,
+        before: i64,
+    ) -> Result<u64, WebhookRepositoryError> {
+        let result = sqlx::query("DELETE FROM webhook_deliveries WHERE created_at < $1")
+            .bind(before)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }

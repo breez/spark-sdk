@@ -149,4 +149,24 @@ pub trait LnurlRepository {
         key: &str,
         default_value: &str,
     ) -> Result<String, LnurlRepositoryError>;
+
+    /// Get data needed to build webhook payloads for the given payment hashes.
+    /// Joins invoices, users, `sender_comments`, and `domain_webhooks`.
+    /// Only returns rows where the invoice has a domain with a configured webhook.
+    async fn get_webhook_payloads(
+        &self,
+        payment_hashes: &[String],
+    ) -> Result<Vec<WebhookPayloadData>, LnurlRepositoryError>;
+}
+
+/// Data returned by the webhook enqueue query.
+pub struct WebhookPayloadData {
+    pub payment_hash: String,
+    pub user_pubkey: String,
+    pub invoice: String,
+    pub preimage: String,
+    pub amount_received_sat: Option<i64>,
+    pub lightning_address: Option<String>,
+    pub sender_comment: Option<String>,
+    pub webhook_url: String,
 }

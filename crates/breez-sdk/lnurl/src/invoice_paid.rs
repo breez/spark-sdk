@@ -1,12 +1,14 @@
+use std::str::FromStr;
+
 use bitcoin::hashes::{Hash, sha256};
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::PaidInvoice;
-use std::str::FromStr;
 use tokio::sync::watch;
 use tracing::{debug, error};
 
 use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError};
 use crate::time::now_millis;
+use crate::webhooks::{WebhookRepository, WebhookService};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandleInvoicePaidError {
@@ -36,13 +38,14 @@ fn verify_preimage(payment_hash: &str, preimage: &str) -> Result<(), HandleInvoi
 /// Handle an invoice being paid by storing the preimage and queueing for background processing.
 pub async fn handle_invoice_paid<DB>(
     db: &DB,
+    webhook_service: &WebhookService<DB>,
     payment_hash: &str,
     preimage: &str,
     amount_received_sat: Option<i64>,
     trigger: &watch::Sender<()>,
 ) -> Result<(), HandleInvoicePaidError>
 where
-    DB: LnurlRepository + Clone + Send + Sync + 'static,
+    DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
 {
     verify_preimage(payment_hash, preimage)?;
 
@@ -67,6 +70,16 @@ where
         crate::zap::enqueue_zap_receipt(db, payment_hash).await?;
     }
 
+    // Notify for all payment hashes, not just newly-affected ones, so that
+    // webhooks are delivered even if the server crashed after storing preimages
+    // but before enqueueing webhooks. Idempotent via ON CONFLICT DO NOTHING.
+    if let Err(e) =
+        crate::webhook_notify::notify_webhooks(db, webhook_service, &[payment_hash.to_string()])
+            .await
+    {
+        error!("Failed to enqueue webhook for {}: {}", payment_hash, e);
+    }
+
     if trigger.send(()).is_err() {
         error!("Failed to trigger background processor - receiver dropped");
     }
@@ -81,12 +94,13 @@ where
 /// have a preimage.
 pub async fn handle_invoices_paid<DB>(
     db: &DB,
+    webhook_service: &WebhookService<DB>,
     items: &[PaidInvoice],
     user_pubkey: &str,
     trigger: &watch::Sender<()>,
 ) -> Result<(), HandleInvoicePaidError>
 where
-    DB: LnurlRepository + Clone + Send + Sync + 'static,
+    DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
 {
     let now = now_millis();
     let mut invoices = Vec::with_capacity(items.len());
@@ -143,12 +157,22 @@ where
         return Ok(());
     }
 
+    let payment_hashes: Vec<String> = invoices.iter().map(|i| i.payment_hash.clone()).collect();
     let affected = db.upsert_invoices_paid(&invoices).await?;
 
     if !affected.is_empty() {
         debug!("Stored preimages for {} invoices", affected.len());
 
         crate::zap::enqueue_zap_receipts(db, &affected).await?;
+    }
+
+    // Notify for all payment hashes, not just newly-affected ones, so that
+    // webhooks are delivered even if the server crashed after storing preimages
+    // but before enqueueing webhooks. Idempotent via ON CONFLICT DO NOTHING.
+    if let Err(e) =
+        crate::webhook_notify::notify_webhooks(db, webhook_service, &payment_hashes).await
+    {
+        error!("Failed to enqueue webhooks: {}", e);
     }
 
     if trigger.send(()).is_err() {
@@ -226,9 +250,10 @@ mod shared_tests {
 
     pub async fn invoices_paid_creates_invoice_when_only_comment_exists<DB>(db: &DB)
     where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
     {
         let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
 
         let preimage_bytes = [1u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
@@ -252,6 +277,7 @@ mod shared_tests {
 
         handle_invoices_paid(
             db,
+            &webhook_service,
             &[PaidInvoice {
                 preimage: preimage_hex.clone(),
                 invoice: invoice_str.clone(),
@@ -274,9 +300,10 @@ mod shared_tests {
 
     pub async fn invoices_paid_creates_invoice_when_only_zap_exists<DB>(db: &DB)
     where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
     {
         let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
 
         let preimage_bytes = [2u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
@@ -303,6 +330,7 @@ mod shared_tests {
 
         handle_invoices_paid(
             db,
+            &webhook_service,
             &[PaidInvoice {
                 preimage: preimage_hex.clone(),
                 invoice: invoice_str.clone(),
@@ -325,9 +353,10 @@ mod shared_tests {
 
     pub async fn invoices_paid_ignores_unknown_payment_hash<DB>(db: &DB)
     where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
     {
         let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
 
         let preimage_bytes = [3u8; 32];
         let (preimage_hex, payment_hash, invoice_str) = generate_test_invoice(&preimage_bytes);
@@ -335,6 +364,7 @@ mod shared_tests {
 
         handle_invoices_paid(
             db,
+            &webhook_service,
             &[PaidInvoice {
                 preimage: preimage_hex,
                 invoice: invoice_str,
@@ -356,9 +386,10 @@ mod shared_tests {
 
     pub async fn invoices_paid_filters_mixed_batch<DB>(db: &DB)
     where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
+        DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
     {
         let (trigger, _rx) = watch::channel(());
+        let webhook_service = WebhookService::new(db.clone());
         let user_pubkey = "test_user_pubkey";
 
         let known_preimage = [4u8; 32];
@@ -377,6 +408,7 @@ mod shared_tests {
 
         handle_invoices_paid(
             db,
+            &webhook_service,
             &[
                 PaidInvoice {
                     preimage: known_hex.clone(),
@@ -438,7 +470,6 @@ mod shared_tests {
             "should return the first value, not the new default"
         );
     }
-
 }
 
 #[cfg(test)]
@@ -489,7 +520,6 @@ mod sqlite_tests {
         let db = setup_test_db().await;
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
-
 }
 
 // PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
@@ -567,5 +597,4 @@ mod postgres_tests {
         };
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
-
 }

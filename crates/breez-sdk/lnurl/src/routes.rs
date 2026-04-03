@@ -102,7 +102,7 @@ pub struct LnurlServer<DB> {
 
 impl<DB> LnurlServer<DB>
 where
-    DB: LnurlRepository + Clone + Send + Sync + 'static,
+    DB: LnurlRepository + crate::webhooks::WebhookRepository + Clone + Send + Sync + 'static,
 {
     pub async fn available(
         Host(host): Host,
@@ -376,6 +376,7 @@ where
         if let Some(preimage) = &preimage_from_receipt {
             match handle_invoice_paid(
                 &state.db,
+                &state.webhook_service,
                 &payment_hash,
                 preimage,
                 None,
@@ -740,7 +741,7 @@ where
             }
         }
 
-        // Store invoice for LUD-21 verify support (webhook provides payment updates)
+        // Store invoice for LUD-21 verify support and webhook delivery
         if let Err(e) = create_invoice(
             &state.db,
             &payment_hash,
@@ -853,6 +854,7 @@ where
         // Use the central invoice paid handler
         handle_invoice_paid(
             &state.db,
+            &state.webhook_service,
             &payment_hash_hex,
             &payload.preimage,
             None,
@@ -910,6 +912,7 @@ where
 
         handle_invoices_paid(
             &state.db,
+            &state.webhook_service,
             &payload.invoices,
             &pubkey.to_string(),
             &state.invoice_paid_trigger,
@@ -946,6 +949,7 @@ where
     ) -> Result<(), (StatusCode, Json<Value>)> {
         process_webhook(
             &state.db,
+            &state.webhook_service,
             &state.webhook_secret,
             &state.invoice_paid_trigger,
             &headers,
@@ -958,13 +962,14 @@ where
 #[allow(clippy::too_many_lines)]
 async fn process_webhook<DB>(
     db: &DB,
+    webhook_service: &crate::webhooks::WebhookService<DB>,
     webhook_secret: &str,
     invoice_paid_trigger: &tokio::sync::watch::Sender<()>,
     headers: &HeaderMap,
     body: &Bytes,
 ) -> Result<(), (StatusCode, Json<Value>)>
 where
-    DB: LnurlRepository + Clone + Send + Sync + 'static,
+    DB: LnurlRepository + crate::webhooks::WebhookRepository + Clone + Send + Sync + 'static,
 {
     // Verify HMAC-SHA256 signature
     let signature_header = headers
@@ -1078,8 +1083,15 @@ where
     };
 
     // Handle the invoice paid event
-    if let Err(e) =
-        handle_invoice_paid(db, &payment_hash, &payment_preimage, amount_received_sat, invoice_paid_trigger).await
+    if let Err(e) = handle_invoice_paid(
+        db,
+        webhook_service,
+        &payment_hash,
+        &payment_preimage,
+        amount_received_sat,
+        invoice_paid_trigger,
+    )
+    .await
     {
         error!(
             "failed to handle webhook invoice paid for {}: {}",
@@ -1347,6 +1359,7 @@ mod tests {
     use super::*;
     use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt};
     use crate::user::User;
+    use crate::webhooks::repository::WebhookRepositoryError;
     use crate::zap::Zap;
     use axum::body::Bytes;
     use axum::http::{HeaderMap, StatusCode};
@@ -1452,7 +1465,13 @@ mod tests {
             &self,
             _limit: u32,
         ) -> Result<Vec<PendingZapReceipt>, LnurlRepositoryError> {
-            Ok(self.pending_zap_receipts.lock().unwrap().values().cloned().collect())
+            Ok(self
+                .pending_zap_receipts
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect())
         }
         async fn update_pending_zap_receipt_retry(
             &self,
@@ -1466,7 +1485,10 @@ mod tests {
             &self,
             payment_hash: &str,
         ) -> Result<(), LnurlRepositoryError> {
-            self.pending_zap_receipts.lock().unwrap().remove(payment_hash);
+            self.pending_zap_receipts
+                .lock()
+                .unwrap()
+                .remove(payment_hash);
             Ok(())
         }
         async fn filter_known_payment_hashes(
@@ -1492,8 +1514,8 @@ mod tests {
             pending: &[PendingZapReceipt],
         ) -> Result<(), LnurlRepositoryError> {
             let mut store = self.pending_zap_receipts.lock().unwrap();
-            for np in pending {
-                store.insert(np.payment_hash.clone(), np.clone());
+            for p in pending {
+                store.insert(p.payment_hash.clone(), p.clone());
             }
             Ok(())
         }
@@ -1503,6 +1525,57 @@ mod tests {
             default_value: &str,
         ) -> Result<String, LnurlRepositoryError> {
             Ok(default_value.to_string())
+        }
+        async fn get_webhook_payloads(
+            &self,
+            _: &[String],
+        ) -> Result<Vec<crate::repository::WebhookPayloadData>, LnurlRepositoryError> {
+            Ok(vec![])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::webhooks::WebhookRepository for MockRepository {
+        async fn insert_webhook_deliveries(
+            &self,
+            _: &[crate::webhooks::NewWebhookDelivery],
+        ) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn take_pending_webhook_deliveries(
+            &self,
+        ) -> Result<Vec<crate::webhooks::repository::WebhookDelivery>, WebhookRepositoryError>
+        {
+            Ok(vec![])
+        }
+        async fn update_webhook_delivery_success(
+            &self,
+            _: i64,
+            _: i64,
+        ) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn update_webhook_delivery_failure(
+            &self,
+            _: i64,
+            _: i32,
+            _: i64,
+            _: Option<i32>,
+            _: Option<&str>,
+        ) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn unclaim_webhook_deliveries(
+            &self,
+            _: &[i64],
+        ) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn delete_webhook_deliveries_older_than(
+            &self,
+            _: i64,
+        ) -> Result<u64, WebhookRepositoryError> {
+            Ok(0)
         }
     }
 
@@ -1593,7 +1666,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
 
         let payment_hash = compute_payment_hash(TEST_PREIMAGE_HEX);
@@ -1606,7 +1687,12 @@ mod tests {
             .unwrap();
         assert_eq!(invoice.preimage.as_deref(), Some(TEST_PREIMAGE_HEX));
 
-        assert!(repo.pending_zap_receipts.lock().unwrap().contains_key(&payment_hash));
+        assert!(
+            repo.pending_zap_receipts
+                .lock()
+                .unwrap()
+                .contains_key(&payment_hash)
+        );
     }
 
     #[tokio::test]
@@ -1616,7 +1702,15 @@ mod tests {
         let headers = HeaderMap::new();
         let body = Bytes::from(b"{}".to_vec());
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1638,7 +1732,15 @@ mod tests {
         headers.insert("X-Spark-Signature", "deadbeef".repeat(8).parse().unwrap());
         let body = Bytes::from(body_bytes);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1654,7 +1756,15 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-Spark-Signature", "not-valid-hex!".parse().unwrap());
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1672,7 +1782,15 @@ mod tests {
         headers.insert("X-Spark-Signature", sig.parse().unwrap());
         let body = Bytes::from(body_bytes.to_vec());
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1687,7 +1805,15 @@ mod tests {
         let payload = make_webhook_payload("SOME_OTHER_EVENT", None, None);
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1703,7 +1829,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1722,7 +1856,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1741,7 +1883,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1760,7 +1910,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1776,7 +1934,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
 
         // Invoice should NOT have been updated
@@ -1818,10 +1984,18 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
 
-        // No pending zap receipt entry should be created for an already-paid invoice
+        // No pending zap receipt should be created for an already-paid invoice
         assert!(repo.pending_zap_receipts.lock().unwrap().is_empty());
     }
 
@@ -1837,7 +2011,15 @@ mod tests {
         );
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
 
         // The watch channel should have been notified
@@ -1857,7 +2039,15 @@ mod tests {
         // Sign with a different secret than the server expects
         let (headers, body) = signed_headers_and_body("wrong_secret", &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         let Err((status, _)) = result else {
             panic!("expected error");
         };
@@ -1885,7 +2075,15 @@ mod tests {
         });
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1913,7 +2111,15 @@ mod tests {
         });
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1941,7 +2147,15 @@ mod tests {
         });
         let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
 
-        let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
         assert!(result.is_ok());
     }
 }
