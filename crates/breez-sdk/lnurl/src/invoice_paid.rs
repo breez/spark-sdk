@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tokio::sync::watch;
 use tracing::{debug, error};
 
-use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError, PendingZapReceipt};
+use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError};
 use crate::time::now_millis;
 
 #[derive(Debug, thiserror::Error)]
@@ -56,30 +56,15 @@ where
         return Ok(());
     };
 
-    // Check if already paid
-    if invoice.preimage.is_some() {
-        debug!("Invoice {} already has preimage, skipping", payment_hash);
-        return Ok(());
+    if invoice.preimage.is_none() {
+        invoice.preimage = Some(preimage.to_string());
+        invoice.updated_at = now;
+        db.upsert_invoice(&invoice).await?;
+        debug!("Stored preimage for invoice {}", payment_hash);
+
+        crate::zap::enqueue_zap_receipt(db, payment_hash).await?;
     }
 
-    // Store the preimage
-    invoice.preimage = Some(preimage.to_string());
-    invoice.updated_at = now;
-    db.upsert_invoice(&invoice).await?;
-    debug!("Stored preimage for invoice {}", payment_hash);
-
-    // Queue for background processing (zap receipt publishing)
-    let pending = PendingZapReceipt {
-        payment_hash: payment_hash.to_string(),
-        created_at: now,
-        retry_count: 0,
-        next_retry_at: now, // Process immediately
-    };
-    db.insert_pending_zap_receipt(&pending).await?;
-    debug!("Queued invoice {} for background processing", payment_hash);
-
-    // Trigger the background processor
-    // Using watch channel so multiple triggers result in a single processing run
     if trigger.send(()).is_err() {
         error!("Failed to trigger background processor - receiver dropped");
     }
@@ -155,28 +140,13 @@ where
     }
 
     let affected = db.upsert_invoices_paid(&invoices).await?;
-    if affected.is_empty() {
-        return Ok(());
+
+    if !affected.is_empty() {
+        debug!("Stored preimages for {} invoices", affected.len());
+
+        crate::zap::enqueue_zap_receipts(db, &affected).await?;
     }
-    debug!("Stored preimages for {} invoices", affected.len());
 
-    let pending_items: Vec<PendingZapReceipt> = affected
-        .iter()
-        .map(|payment_hash| PendingZapReceipt {
-            payment_hash: payment_hash.clone(),
-            created_at: now,
-            retry_count: 0,
-            next_retry_at: now,
-        })
-        .collect();
-
-    db.insert_pending_zap_receipt_batch(&pending_items).await?;
-    debug!(
-        "Queued {} invoices for background processing",
-        pending_items.len()
-    );
-
-    // Trigger the background processor once
     if trigger.send(()).is_err() {
         error!("Failed to trigger background processor - receiver dropped");
     }
@@ -462,80 +432,6 @@ mod shared_tests {
         );
     }
 
-    pub async fn take_pending_zap_receipts_claims_items<DB>(db: &DB)
-    where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
-    {
-        let now = now_millis();
-
-        let item = PendingZapReceipt {
-            payment_hash: "claim_test_hash".to_string(),
-            created_at: now,
-            retry_count: 0,
-            next_retry_at: now,
-        };
-        db.insert_pending_zap_receipt(&item).await.unwrap();
-
-        // First call claims the item
-        let claimed = db.take_pending_zap_receipts(100).await.unwrap();
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0].payment_hash, "claim_test_hash");
-
-        // Second call cannot claim the same item (it was just claimed)
-        let claimed_again = db.take_pending_zap_receipts(100).await.unwrap();
-        assert!(
-            claimed_again.is_empty(),
-            "recently claimed items should not be claimable again"
-        );
-    }
-
-    pub async fn take_pending_zap_receipts_respects_next_retry_at<DB>(db: &DB)
-    where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
-    {
-        let future_item = PendingZapReceipt {
-            payment_hash: "future_hash".to_string(),
-            created_at: now_millis(),
-            retry_count: 1,
-            next_retry_at: now_millis().saturating_add(999_999_999),
-        };
-        db.insert_pending_zap_receipt(&future_item).await.unwrap();
-
-        let claimed = db.take_pending_zap_receipts(100).await.unwrap();
-        assert!(
-            claimed.is_empty(),
-            "items with future next_retry_at should not be claimed"
-        );
-    }
-
-    pub async fn take_pending_zap_receipts_respects_limit<DB>(db: &DB)
-    where
-        DB: LnurlRepository + Clone + Send + Sync + 'static,
-    {
-        let now = now_millis();
-
-        for i in 0..5 {
-            let item = PendingZapReceipt {
-                payment_hash: format!("limit_test_{i}"),
-                created_at: now,
-                retry_count: 0,
-                next_retry_at: now,
-            };
-            db.insert_pending_zap_receipt(&item).await.unwrap();
-        }
-
-        // Request at most 2
-        let claimed = db.take_pending_zap_receipts(2).await.unwrap();
-        assert_eq!(claimed.len(), 2, "should only return up to the limit");
-
-        // Remaining 3 are still unclaimed
-        let claimed2 = db.take_pending_zap_receipts(10).await.unwrap();
-        assert_eq!(
-            claimed2.len(),
-            3,
-            "should claim the remaining unclaimed items"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -587,23 +483,6 @@ mod sqlite_tests {
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
 
-    #[tokio::test]
-    async fn take_pending_zap_receipts_claims_items() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_claims_items(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_limit() {
-        let db = setup_test_db().await;
-        shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
-    }
 }
 
 // PostgreSQL tests - only run when LNURL_TEST_POSTGRES_URL is set.
@@ -617,11 +496,6 @@ mod postgres_tests {
         let pool = sqlx::PgPool::connect(&url).await.ok()?;
         crate::postgresql::run_migrations(&pool).await.ok()?;
 
-        // Clean tables so each test starts fresh
-        sqlx::query("DELETE FROM pending_zap_receipts")
-            .execute(&pool)
-            .await
-            .ok()?;
         sqlx::query("DELETE FROM invoices")
             .execute(&pool)
             .await
@@ -687,27 +561,4 @@ mod postgres_tests {
         shared_tests::get_or_create_setting_returns_existing_on_subsequent_calls(&db).await;
     }
 
-    #[tokio::test]
-    async fn take_pending_zap_receipts_claims_items() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::take_pending_zap_receipts_claims_items(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_next_retry_at() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
-    }
-
-    #[tokio::test]
-    async fn take_pending_zap_receipts_respects_limit() {
-        let Some(db) = setup_test_db().await else {
-            return;
-        };
-        shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
-    }
 }

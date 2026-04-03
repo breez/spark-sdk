@@ -31,7 +31,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
-mod background;
 mod error;
 mod invoice_paid;
 mod postgresql;
@@ -275,8 +274,12 @@ where
     // Create watch channel for triggering background processing
     let (invoice_paid_trigger, invoice_paid_rx) = watch::channel(());
 
-    // Start background processor for handling paid invoices.
-    background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
+    // Start background processor for publishing zap receipts.
+    zap::start_background_processor(
+        repository.clone(),
+        nostr_keys.as_ref(),
+        invoice_paid_rx,
+    );
 
     // Get or create a shared webhook secret persisted in the database.
     // All instances share the same secret so webhooks verify correctly
