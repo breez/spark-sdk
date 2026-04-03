@@ -147,6 +147,29 @@ class SqliteStorage {
     }
   }
 
+  setCachedItemSafe(key, value, oldValue) {
+    try {
+      const tx = this.db.transaction(() => {
+        const row = this.db
+          .prepare("SELECT value FROM settings WHERE key = ?")
+          .get(key);
+        if (row !== undefined && row.value !== oldValue) {
+          throw new StorageError("DataTooOld");
+        }
+        this.db
+          .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+          .run(key, value);
+      });
+      tx();
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error instanceof StorageError ? error : new StorageError(
+        `Failed to set cached item safely '${key}': ${error.message}`,
+        error
+      ));
+    }
+  }
+
   deleteCachedItem(key) {
     try {
       const stmt = this.db.prepare("DELETE FROM settings WHERE key = ?");

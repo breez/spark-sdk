@@ -109,6 +109,36 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(crate) fn get_cached_item_inner(
+        conn: &Connection,
+        key: &str,
+    ) -> Result<Option<String>, StorageError> {
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?")?;
+
+        let result = stmt.query_row(params![key], |row| {
+            let value_str: String = row.get(0)?;
+            Ok(value_str)
+        });
+
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) fn set_cached_item_inner(
+        conn: &Connection,
+        key: &str,
+        value: &str,
+    ) -> Result<(), StorageError> {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn current_migrations() -> Vec<&'static str> {
         vec![
@@ -336,7 +366,7 @@ impl SqliteStorage {
 /// Database busy/locked errors are mapped to `Connection` (transient),
 /// other errors are mapped to `Implementation`.
 #[allow(clippy::needless_pass_by_value)]
-fn map_sqlite_error(e: rusqlite::Error) -> StorageError {
+pub(crate) fn map_sqlite_error(e: rusqlite::Error) -> StorageError {
     match e {
         rusqlite::Error::SqliteFailure(err, _)
             if err.code == rusqlite::ErrorCode::DatabaseBusy
@@ -712,30 +742,30 @@ impl Storage for SqliteStorage {
 
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
         let connection = self.get_connection()?;
+        Self::set_cached_item_inner(&connection, &key, &value)
+    }
 
-        connection.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            params![key, value],
-        )?;
-
+    async fn set_cached_item_safe(
+        &self,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.get_connection()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(current) = Self::get_cached_item_inner(&tx, &key)?
+            && current != old_value
+        {
+            return Err(StorageError::DataTooOld);
+        }
+        Self::set_cached_item_inner(&tx, &key, &value)?;
+        tx.commit()?;
         Ok(())
     }
 
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
         let connection = self.get_connection()?;
-
-        let mut stmt = connection.prepare("SELECT value FROM settings WHERE key = ?")?;
-
-        let result = stmt.query_row(params![key], |row| {
-            let value_str: String = row.get(0)?;
-            Ok(value_str)
-        });
-
-        match result {
-            Ok(value) => Ok(Some(value)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Self::get_cached_item_inner(&connection, &key)
     }
 
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {

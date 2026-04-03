@@ -608,6 +608,46 @@ class IndexedDBStorage {
     });
   }
 
+  async setCachedItemSafe(key, value, oldValue) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("settings", "readwrite");
+      const store = transaction.objectStore("settings");
+      const getRequest = store.get(key);
+
+      getRequest.onsuccess = () => {
+        const current = getRequest.result;
+        if (current !== undefined && current.value !== oldValue) {
+          transaction.abort();
+          reject(new StorageError("DataTooOld"));
+          return;
+        }
+        const putRequest = store.put({ key, value });
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => {
+          reject(
+            new StorageError(
+              `Failed to set cached item safely '${key}': ${putRequest.error?.message || "Unknown error"}`,
+              putRequest.error
+            )
+          );
+        };
+      };
+
+      getRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get cached item '${key}': ${getRequest.error?.message || "Unknown error"}`,
+            getRequest.error
+          )
+        );
+      };
+    });
+  }
+
   async deleteCachedItem(key) {
     if (!this.db) {
       throw new StorageError("Database not initialized");

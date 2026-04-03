@@ -33,6 +33,7 @@ base64.workspace = true
 bip39.workspace = true
 bitcoin.workspace = true
 bitflags.workspace = true
+breez-plugins.workspace = true
 breez-sdk-common.workspace = true
 platform-utils.workspace = true
 chrono.workspace = true
@@ -51,7 +52,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
-uniffi = { workspace = true, optional = true }
+uniffi = { workspace = true, features = ["tokio"], optional = true }
 x509-parser = { version = "0.16.0" }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }

@@ -101,6 +101,9 @@ pub enum StorageError {
 
     #[error("Not found")]
     NotFound,
+
+    #[error("Could not write to storage: value has changed since last read")]
+    DataTooOld,
 }
 
 impl From<serde_json::Error> for StorageError {
@@ -271,6 +274,16 @@ pub trait Storage: Send + Sync {
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError>;
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError>;
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError>;
+    /// Writes a value only if the current stored value matches `old_value`.
+    /// Returns [`StorageError::DataTooOld`] if the current value differs.
+    /// Implementations should use an atomic operation (e.g. a database transaction)
+    /// to avoid races between the read and the write.
+    async fn set_cached_item_safe(
+        &self,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<(), StorageError>;
     /// Lists payments with optional filters and pagination
     ///
     /// # Arguments

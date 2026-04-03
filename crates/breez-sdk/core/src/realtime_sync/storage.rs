@@ -87,7 +87,7 @@ struct ContactSyncData {
 }
 
 pub struct SyncedStorage {
-    inner: Arc<dyn Storage>,
+    pub(crate) inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
     event_emitter: Arc<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -468,6 +468,16 @@ impl Storage for SyncedStorage {
         }
         self.inner.set_cached_item(key, value).await
     }
+
+    async fn set_cached_item_safe(
+        &self,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<(), StorageError> {
+        self.inner.set_cached_item_safe(key, value, old_value).await
+    }
+
     async fn list_payments(
         &self,
         request: StorageListPaymentsRequest,

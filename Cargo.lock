@@ -671,6 +671,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "breez-plugins"
+version = "0.1.0"
+source = "git+https://github.com/breez/sdk-plugins#76f92919186963a8c18dce76bc5807355205cdb9"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "hex",
+ "log",
+ "sdk-macros",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "breez-sdk-bench"
 version = "0.1.0"
 dependencies = [
@@ -781,6 +796,7 @@ dependencies = [
  "bip39",
  "bitcoin",
  "bitflags 2.10.0",
+ "breez-plugins",
  "breez-sdk-common",
  "breez-sdk-spark",
  "built",
@@ -4640,6 +4656,16 @@ checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
  "untrusted",
+]
+
+[[package]]
+name = "sdk-macros"
+version = "0.7.1"
+source = "git+https://github.com/breez/breez-sdk?rev=6ad80932b9949fdbfb60d85c6c7e41c117081472#6ad80932b9949fdbfb60d85c6c7e41c117081472"
+dependencies = [
+ "proc-macro2",
+ "quote 1.0.40",
+ "syn 2.0.105",
 ]
 
 [[package]]

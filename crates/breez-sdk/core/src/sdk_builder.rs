@@ -2,8 +2,10 @@
     all(target_family = "wasm", target_os = "unknown"),
     allow(clippy::arc_with_non_send_sync)
 )]
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use crate::plugins::storage::StorageController;
+use breez_plugins::{Plugin, PluginStorage};
 use breez_sdk_common::{
     breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
     buy::moonpay::MoonpayProvider,
@@ -14,7 +16,7 @@ use platform_utils::DefaultHttpClient;
 use spark_wallet::Signer;
 use spark_wallet::{SparkWalletConfig, TokenOutputStore, TreeStore};
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
@@ -72,6 +74,7 @@ pub struct SdkBuilder {
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
+    plugins: Option<HashMap<String, Arc<dyn Plugin<BreezSdk>>>>,
 }
 
 impl SdkBuilder {
@@ -103,6 +106,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
+            plugins: None,
         }
     }
 
@@ -127,6 +131,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
+            plugins: None,
         }
     }
 
@@ -280,6 +285,16 @@ impl SdkBuilder {
         self
     }
 
+    /// Sets a list of plugins to bootstrap
+    ///
+    /// # Arguments
+    /// - `plugins`: A list of plugins, indexed by unique plugin ID
+    #[must_use]
+    pub fn with_plugins(mut self, plugins: HashMap<String, Arc<dyn Plugin<BreezSdk>>>) -> Self {
+        self.plugins = Some(plugins);
+        self
+    }
+
     /// Builds a [`SparkWalletConfig`](spark_wallet::SparkWalletConfig) from a
     /// [`SparkConfig`](crate::models::SparkConfig).
     fn build_spark_wallet_config(
@@ -336,7 +351,7 @@ impl SdkBuilder {
 
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
-    pub async fn build(self) -> Result<BreezSdk, SdkError> {
+    pub async fn build(self) -> Result<Arc<BreezSdk>, SdkError> {
         // Validate configuration
         self.config.validate()?;
 
@@ -648,7 +663,7 @@ impl SdkBuilder {
             .await;
 
         // Create the SDK instance
-        let sdk = BreezSdk::init_and_start(BreezSdkParams {
+        let sdk = Arc::new(BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
             storage,
             chain_service,
@@ -663,8 +678,33 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
-        })?;
+        })?);
         debug!("Initialized and started breez sdk.");
+
+        if let Some(plugins) = self.plugins {
+            for (plugin_id, plugin) in plugins {
+                let password = match sdk.spark_wallet.sign_message(&plugin_id).await {
+                    Ok(signature) => signature,
+                    Err(err) => {
+                        warn!("Could not create pluign passphrase for {plugin_id}: {err}");
+                        continue;
+                    }
+                };
+                let plugin_storage = match PluginStorage::new(
+                    Box::new(StorageController::new(sdk.storage.clone())),
+                    &password.serialize_compact(),
+                    plugin_id.clone(),
+                ) {
+                    Ok(plugin_storage) => plugin_storage,
+                    Err(err) => {
+                        warn!("Could not instantiate plugin storage for {plugin_id}: {err}");
+                        continue;
+                    }
+                };
+                plugin.attach(sdk.clone(), plugin_storage).await;
+                debug!("Successfully attached plugin {plugin_id}");
+            }
+        }
 
         Ok(sdk)
     }

@@ -54,6 +54,7 @@ bip39 = "2.2.0"
 bitcoin = { version = "0.32.6", features = ["serde"] }
 bitflags = "2.10.0"
 bitreq = { version = "0.3.4" }
+breez-plugins = { git = "https://github.com/breez/sdk-plugins" }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
 built = { version = "0.8.0", features = ["git2"] }

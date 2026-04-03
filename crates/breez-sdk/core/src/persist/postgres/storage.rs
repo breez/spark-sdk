@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use deadpool_postgres::Pool;
+use deadpool_postgres::{Pool, Transaction};
 use macros::async_trait;
 use tokio_postgres::{Row, types::ToSql};
 use tracing::warn;
@@ -33,7 +33,7 @@ const MIGRATIONS_TABLE: &str = "schema_migrations";
 
 /// PostgreSQL-based storage implementation using connection pooling
 pub(crate) struct PostgresStorage {
-    pool: Pool,
+    pub pool: Pool,
 }
 
 impl PostgresStorage {
@@ -76,6 +76,30 @@ impl PostgresStorage {
 
     async fn migrate(&self) -> Result<(), StorageError> {
         run_migrations(&self.pool, MIGRATIONS_TABLE, &Self::migrations()).await
+    }
+
+    pub(crate) async fn get_cached_item_inner(
+        tx: &Transaction<'_>,
+        key: String,
+    ) -> Result<Option<String>, StorageError> {
+        let row = tx
+            .query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
+            .await?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    pub(crate) async fn set_cached_item_inner(
+        tx: &Transaction<'_>,
+        key: String,
+        value: String,
+    ) -> Result<(), StorageError> {
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES ($1, $2)
+                 ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
+            &[&key, &value],
+        )
+        .await?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -661,6 +685,24 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    async fn set_cached_item_safe(
+        &self,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<(), StorageError> {
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+        let tx = client.transaction().await.map_err(map_db_error)?;
+        if let Some(current) = Self::get_cached_item_inner(&tx, key.clone()).await? {
+            if current != old_value {
+                return Err(StorageError::DataTooOld);
+            }
+        }
+        Self::set_cached_item_inner(&tx, key, value).await?;
+        tx.commit().await.map_err(map_db_error)?;
+        Ok(())
+    }
+
     async fn set_cached_item(&self, key: String, value: String) -> Result<(), StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
 
@@ -676,13 +718,16 @@ impl Storage for PostgresStorage {
     }
 
     async fn get_cached_item(&self, key: String) -> Result<Option<String>, StorageError> {
-        let client = self.pool.get().await.map_err(map_pool_error)?;
-
-        let row = client
-            .query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
-            .await?;
-
-        Ok(row.map(|r| r.get(0)))
+        let mut client = self.pool.get().await.map_err(map_pool_error)?;
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+        let value = Self::get_cached_item_inner(&tx, key).await?;
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::Connection(e.to_string()))?;
+        Ok(value)
     }
 
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {

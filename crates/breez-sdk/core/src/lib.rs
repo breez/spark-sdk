@@ -11,6 +11,7 @@ mod models;
 #[cfg(feature = "passkey")]
 pub mod passkey;
 mod persist;
+mod plugins;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;

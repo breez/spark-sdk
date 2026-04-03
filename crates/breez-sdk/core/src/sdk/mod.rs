@@ -144,7 +144,7 @@ pub fn init_logging(
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
+pub async fn connect(request: crate::ConnectRequest) -> Result<Arc<BreezSdk>, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
         .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
@@ -167,7 +167,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,
-) -> Result<BreezSdk, SdkError> {
+) -> Result<Arc<BreezSdk>, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new_with_signer(request.config, request.signer)
         .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;

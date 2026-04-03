@@ -103,6 +103,28 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
+    async fn set_cached_item_safe(
+        &self,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<(), StorageError> {
+        let promise = self
+            .storage
+            .set_cached_item_safe(key, value, old_value)
+            .map_err(js_error_to_storage_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(|e| {
+            let msg = get_detailed_js_error(&e);
+            if msg.contains("DataTooOld") {
+                StorageError::DataTooOld
+            } else {
+                StorageError::Implementation(msg)
+            }
+        })?;
+        Ok(())
+    }
+
     async fn delete_cached_item(&self, key: String) -> Result<(), StorageError> {
         let promise = self
             .storage
@@ -474,6 +496,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
 const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCachedItem: (key: string) => Promise<string | null>;
     setCachedItem: (key: string, value: string) => Promise<void>;
+    setCachedItemSafe: (key: string, value: string, oldValue: string) => Promise<void>;
     deleteCachedItem: (key: string) => Promise<void>;
     listPayments: (request: StorageListPaymentsRequest) => Promise<Payment[]>;
     insertPayment: (payment: Payment) => Promise<void>;
@@ -511,6 +534,14 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = setCachedItem, catch)]
     pub fn set_cached_item(this: &Storage, key: String, value: String) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = setCachedItemSafe, catch)]
+    pub fn set_cached_item_safe(
+        this: &Storage,
+        key: String,
+        value: String,
+        old_value: String,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = deleteCachedItem, catch)]
     pub fn delete_cached_item(this: &Storage, key: String) -> Result<Promise, JsValue>;

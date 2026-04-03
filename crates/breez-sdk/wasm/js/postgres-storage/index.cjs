@@ -154,6 +154,35 @@ class PostgresStorage {
     }
   }
 
+  async setCachedItemSafe(key, value, oldValue) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        "SELECT value FROM settings WHERE key = $1 FOR UPDATE",
+        [key]
+      );
+      if (result.rows.length > 0 && result.rows[0].value !== oldValue) {
+        await client.query("ROLLBACK");
+        throw new StorageError("DataTooOld");
+      }
+      await client.query(
+        `INSERT INTO settings (key, value) VALUES ($1, $2)
+         ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value`,
+        [key, value]
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error instanceof StorageError ? error : new StorageError(
+        `Failed to set cached item safely '${key}': ${error.message}`,
+        error
+      );
+    } finally {
+      client.release();
+    }
+  }
+
   async deleteCachedItem(key) {
     try {
       await this.pool.query("DELETE FROM settings WHERE key = $1", [key]);
