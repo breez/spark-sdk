@@ -11,10 +11,10 @@ const BASE_RETRY_DELAY_MS: i64 = 30_000; // 30 seconds
 const RETRY_MULTIPLIER: f64 = 1.5;
 const MAX_RETRY_DURATION_MS: i64 = 14 * 24 * 60 * 60 * 1000; // 14 days
 
-/// Maximum number of newly paid items to claim and process per poll cycle.
-const NEWLY_PAID_BATCH_LIMIT: u32 = 4;
+/// Maximum number of pending zap receipt items to claim and process per poll cycle.
+const ZAP_RECEIPT_BATCH_LIMIT: u32 = 4;
 
-/// Start the background processor that handles the `newly_paid` queue.
+/// Start the background processor that handles the `pending_zap_receipts` queue.
 /// This processor publishes zap receipts for paid invoices with retry logic.
 pub fn start_background_processor<DB>(
     db: DB,
@@ -27,7 +27,7 @@ pub fn start_background_processor<DB>(
         debug!("Background processor started");
 
         // Process any pending items on startup
-        process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
+        process_pending_zap_receipts_queue(&db, nostr_keys.as_ref()).await;
 
         // Wait for triggers
         loop {
@@ -44,22 +44,22 @@ pub fn start_background_processor<DB>(
                 }
             }
 
-            process_newly_paid_queue(&db, nostr_keys.as_ref()).await;
+            process_pending_zap_receipts_queue(&db, nostr_keys.as_ref()).await;
         }
     });
 }
 
-/// Process pending items in the `newly_paid` queue, fetching in batches until
+/// Process pending items in the `pending_zap_receipts` queue, fetching in batches until
 /// the queue is drained.
-async fn process_newly_paid_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
+async fn process_pending_zap_receipts_queue<DB>(db: &DB, nostr_keys: Option<&nostr::Keys>)
 where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     loop {
-        let pending = match db.take_pending_newly_paid(NEWLY_PAID_BATCH_LIMIT).await {
+        let pending = match db.take_pending_zap_receipts(ZAP_RECEIPT_BATCH_LIMIT).await {
             Ok(pending) => pending,
             Err(e) => {
-                error!("Failed to get pending newly paid: {}", e);
+                error!("Failed to get pending zap receipts: {}", e);
                 return;
             }
         };
@@ -69,34 +69,34 @@ where
         }
 
         let count = pending.len();
-        debug!("Background processor: processing {count} newly paid items");
+        debug!("Background processor: processing {count} pending zap receipts");
 
         for item in pending {
-            process_newly_paid_item(db, nostr_keys, &item).await;
+            process_pending_zap_receipt_item(db, nostr_keys, &item).await;
         }
 
         // If we got fewer than the limit, the queue is drained.
-        if count < NEWLY_PAID_BATCH_LIMIT as usize {
+        if count < ZAP_RECEIPT_BATCH_LIMIT as usize {
             return;
         }
     }
 }
 
-/// Process a single `newly_paid` item: publish zap receipt if applicable.
+/// Process a single pending zap receipt item: publish zap receipt if applicable.
 #[allow(clippy::too_many_lines)]
-async fn process_newly_paid_item<DB>(
+async fn process_pending_zap_receipt_item<DB>(
     db: &DB,
     nostr_keys: Option<&nostr::Keys>,
-    item: &crate::repository::NewlyPaid,
+    item: &crate::repository::PendingZapReceipt,
 ) where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let payment_hash = &item.payment_hash;
 
     let Some(nostr_keys) = nostr_keys else {
-        if let Err(e) = db.delete_newly_paid(payment_hash).await {
+        if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
             error!(
-                "Failed to delete expired newly paid {}: {}",
+                "Failed to delete pending zap receipt {}: {}",
                 payment_hash, e
             );
         }
@@ -111,9 +111,9 @@ async fn process_newly_paid_item<DB>(
             "Payment hash {} exceeded max retry duration, removing from queue",
             payment_hash
         );
-        if let Err(e) = db.delete_newly_paid(payment_hash).await {
+        if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
             error!(
-                "Failed to delete expired newly paid {}: {}",
+                "Failed to delete expired pending zap receipt {}: {}",
                 payment_hash, e
             );
         }
@@ -138,8 +138,8 @@ async fn process_newly_paid_item<DB>(
             "No zap found for payment hash {}, removing from queue",
             payment_hash
         );
-        if let Err(e) = db.delete_newly_paid(payment_hash).await {
-            error!("Failed to delete newly paid {}: {}", payment_hash, e);
+        if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
+            error!("Failed to delete pending zap receipt {}: {}", payment_hash, e);
         }
         return;
     };
@@ -150,8 +150,8 @@ async fn process_newly_paid_item<DB>(
             "Zap receipt already exists for payment hash {}, removing from queue",
             payment_hash
         );
-        if let Err(e) = db.delete_newly_paid(payment_hash).await {
-            error!("Failed to delete newly paid {}: {}", payment_hash, e);
+        if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
+            error!("Failed to delete pending zap receipt {}: {}", payment_hash, e);
         }
         return;
     }
@@ -161,8 +161,8 @@ async fn process_newly_paid_item<DB>(
             "Invoice not found for payment hash {}, removing from queue",
             payment_hash
         );
-        if let Err(e) = db.delete_newly_paid(payment_hash).await {
-            error!("Failed to delete newly paid {}: {}", payment_hash, e);
+        if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
+            error!("Failed to delete pending zap receipt {}: {}", payment_hash, e);
         }
         return;
     };
@@ -180,8 +180,8 @@ async fn process_newly_paid_item<DB>(
     match publish_zap_receipt(db, nostr_keys, &zap, &invoice.invoice, preimage).await {
         Ok(()) => {
             debug!("Successfully published zap receipt for {}", payment_hash);
-            if let Err(e) = db.delete_newly_paid(payment_hash).await {
-                error!("Failed to delete newly paid {}: {}", payment_hash, e);
+            if let Err(e) = db.delete_pending_zap_receipt(payment_hash).await {
+                error!("Failed to delete pending zap receipt {}: {}", payment_hash, e);
             }
         }
         Err(e) => {
@@ -197,11 +197,11 @@ async fn process_newly_paid_item<DB>(
             let next_retry_at = now.saturating_add(delay_ms);
 
             if let Err(e) = db
-                .update_newly_paid_retry(payment_hash, retry_count, next_retry_at)
+                .update_pending_zap_receipt_retry(payment_hash, retry_count, next_retry_at)
                 .await
             {
                 error!(
-                    "Failed to update retry for newly paid {}: {}",
+                    "Failed to update retry for pending zap receipt {}: {}",
                     payment_hash, e
                 );
             }

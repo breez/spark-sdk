@@ -5,7 +5,7 @@ use std::str::FromStr;
 use tokio::sync::watch;
 use tracing::{debug, error};
 
-use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError, NewlyPaid};
+use crate::repository::{Invoice, LnurlRepository, LnurlRepositoryError, PendingZapReceipt};
 use crate::time::now_millis;
 
 #[derive(Debug, thiserror::Error)]
@@ -69,13 +69,13 @@ where
     debug!("Stored preimage for invoice {}", payment_hash);
 
     // Queue for background processing (zap receipt publishing)
-    let newly_paid = NewlyPaid {
+    let pending = PendingZapReceipt {
         payment_hash: payment_hash.to_string(),
         created_at: now,
         retry_count: 0,
         next_retry_at: now, // Process immediately
     };
-    db.insert_newly_paid(&newly_paid).await?;
+    db.insert_pending_zap_receipt(&pending).await?;
     debug!("Queued invoice {} for background processing", payment_hash);
 
     // Trigger the background processor
@@ -160,9 +160,9 @@ where
     }
     debug!("Stored preimages for {} invoices", affected.len());
 
-    let newly_paid_items: Vec<NewlyPaid> = affected
+    let pending_items: Vec<PendingZapReceipt> = affected
         .iter()
-        .map(|payment_hash| NewlyPaid {
+        .map(|payment_hash| PendingZapReceipt {
             payment_hash: payment_hash.clone(),
             created_at: now,
             retry_count: 0,
@@ -170,10 +170,10 @@ where
         })
         .collect();
 
-    db.insert_newly_paid_batch(&newly_paid_items).await?;
+    db.insert_pending_zap_receipt_batch(&pending_items).await?;
     debug!(
         "Queued {} invoices for background processing",
-        newly_paid_items.len()
+        pending_items.len()
     );
 
     // Trigger the background processor once
@@ -462,74 +462,74 @@ mod shared_tests {
         );
     }
 
-    pub async fn take_pending_newly_paid_claims_items<DB>(db: &DB)
+    pub async fn take_pending_zap_receipts_claims_items<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
         let now = now_millis();
 
-        let item = NewlyPaid {
+        let item = PendingZapReceipt {
             payment_hash: "claim_test_hash".to_string(),
             created_at: now,
             retry_count: 0,
             next_retry_at: now,
         };
-        db.insert_newly_paid(&item).await.unwrap();
+        db.insert_pending_zap_receipt(&item).await.unwrap();
 
         // First call claims the item
-        let claimed = db.take_pending_newly_paid(100).await.unwrap();
+        let claimed = db.take_pending_zap_receipts(100).await.unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].payment_hash, "claim_test_hash");
 
         // Second call cannot claim the same item (it was just claimed)
-        let claimed_again = db.take_pending_newly_paid(100).await.unwrap();
+        let claimed_again = db.take_pending_zap_receipts(100).await.unwrap();
         assert!(
             claimed_again.is_empty(),
             "recently claimed items should not be claimable again"
         );
     }
 
-    pub async fn take_pending_newly_paid_respects_next_retry_at<DB>(db: &DB)
+    pub async fn take_pending_zap_receipts_respects_next_retry_at<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
-        let future_item = NewlyPaid {
+        let future_item = PendingZapReceipt {
             payment_hash: "future_hash".to_string(),
             created_at: now_millis(),
             retry_count: 1,
             next_retry_at: now_millis().saturating_add(999_999_999),
         };
-        db.insert_newly_paid(&future_item).await.unwrap();
+        db.insert_pending_zap_receipt(&future_item).await.unwrap();
 
-        let claimed = db.take_pending_newly_paid(100).await.unwrap();
+        let claimed = db.take_pending_zap_receipts(100).await.unwrap();
         assert!(
             claimed.is_empty(),
             "items with future next_retry_at should not be claimed"
         );
     }
 
-    pub async fn take_pending_newly_paid_respects_limit<DB>(db: &DB)
+    pub async fn take_pending_zap_receipts_respects_limit<DB>(db: &DB)
     where
         DB: LnurlRepository + Clone + Send + Sync + 'static,
     {
         let now = now_millis();
 
         for i in 0..5 {
-            let item = NewlyPaid {
+            let item = PendingZapReceipt {
                 payment_hash: format!("limit_test_{i}"),
                 created_at: now,
                 retry_count: 0,
                 next_retry_at: now,
             };
-            db.insert_newly_paid(&item).await.unwrap();
+            db.insert_pending_zap_receipt(&item).await.unwrap();
         }
 
         // Request at most 2
-        let claimed = db.take_pending_newly_paid(2).await.unwrap();
+        let claimed = db.take_pending_zap_receipts(2).await.unwrap();
         assert_eq!(claimed.len(), 2, "should only return up to the limit");
 
         // Remaining 3 are still unclaimed
-        let claimed2 = db.take_pending_newly_paid(10).await.unwrap();
+        let claimed2 = db.take_pending_zap_receipts(10).await.unwrap();
         assert_eq!(
             claimed2.len(),
             3,
@@ -588,21 +588,21 @@ mod sqlite_tests {
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_claims_items() {
+    async fn take_pending_zap_receipts_claims_items() {
         let db = setup_test_db().await;
-        shared_tests::take_pending_newly_paid_claims_items(&db).await;
+        shared_tests::take_pending_zap_receipts_claims_items(&db).await;
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_respects_next_retry_at() {
+    async fn take_pending_zap_receipts_respects_next_retry_at() {
         let db = setup_test_db().await;
-        shared_tests::take_pending_newly_paid_respects_next_retry_at(&db).await;
+        shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_respects_limit() {
+    async fn take_pending_zap_receipts_respects_limit() {
         let db = setup_test_db().await;
-        shared_tests::take_pending_newly_paid_respects_limit(&db).await;
+        shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
     }
 }
 
@@ -618,7 +618,7 @@ mod postgres_tests {
         crate::postgresql::run_migrations(&pool).await.ok()?;
 
         // Clean tables so each test starts fresh
-        sqlx::query("DELETE FROM newly_paid")
+        sqlx::query("DELETE FROM pending_zap_receipts")
             .execute(&pool)
             .await
             .ok()?;
@@ -688,26 +688,26 @@ mod postgres_tests {
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_claims_items() {
+    async fn take_pending_zap_receipts_claims_items() {
         let Some(db) = setup_test_db().await else {
             return;
         };
-        shared_tests::take_pending_newly_paid_claims_items(&db).await;
+        shared_tests::take_pending_zap_receipts_claims_items(&db).await;
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_respects_next_retry_at() {
+    async fn take_pending_zap_receipts_respects_next_retry_at() {
         let Some(db) = setup_test_db().await else {
             return;
         };
-        shared_tests::take_pending_newly_paid_respects_next_retry_at(&db).await;
+        shared_tests::take_pending_zap_receipts_respects_next_retry_at(&db).await;
     }
 
     #[tokio::test]
-    async fn take_pending_newly_paid_respects_limit() {
+    async fn take_pending_zap_receipts_respects_limit() {
         let Some(db) = setup_test_db().await else {
             return;
         };
-        shared_tests::take_pending_newly_paid_respects_limit(&db).await;
+        shared_tests::take_pending_zap_receipts_respects_limit(&db).await;
     }
 }

@@ -1326,7 +1326,7 @@ fn sanitize_domain<DB>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, NewlyPaid};
+    use crate::repository::{Invoice, LnurlRepositoryError, LnurlSenderComment, PendingZapReceipt};
     use crate::user::User;
     use crate::zap::Zap;
     use axum::body::Bytes;
@@ -1342,7 +1342,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct MockRepository {
         invoices: std::sync::Arc<Mutex<HashMap<String, Invoice>>>,
-        newly_paid: std::sync::Arc<Mutex<HashMap<String, NewlyPaid>>>,
+        pending_zap_receipts: std::sync::Arc<Mutex<HashMap<String, PendingZapReceipt>>>,
     }
 
     #[async_trait::async_trait]
@@ -1419,23 +1419,23 @@ mod tests {
                 self.invoices.lock().unwrap().get(payment_hash).cloned(),
             ))
         }
-        async fn insert_newly_paid(
+        async fn insert_pending_zap_receipt(
             &self,
-            newly_paid: &NewlyPaid,
+            pending: &PendingZapReceipt,
         ) -> Result<(), LnurlRepositoryError> {
-            self.newly_paid
+            self.pending_zap_receipts
                 .lock()
                 .unwrap()
-                .insert(newly_paid.payment_hash.clone(), newly_paid.clone());
+                .insert(pending.payment_hash.clone(), pending.clone());
             Ok(())
         }
-        async fn take_pending_newly_paid(
+        async fn take_pending_zap_receipts(
             &self,
             _limit: u32,
-        ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
-            Ok(self.newly_paid.lock().unwrap().values().cloned().collect())
+        ) -> Result<Vec<PendingZapReceipt>, LnurlRepositoryError> {
+            Ok(self.pending_zap_receipts.lock().unwrap().values().cloned().collect())
         }
-        async fn update_newly_paid_retry(
+        async fn update_pending_zap_receipt_retry(
             &self,
             _: &str,
             _: i32,
@@ -1443,8 +1443,11 @@ mod tests {
         ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
-        async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError> {
-            self.newly_paid.lock().unwrap().remove(payment_hash);
+        async fn delete_pending_zap_receipt(
+            &self,
+            payment_hash: &str,
+        ) -> Result<(), LnurlRepositoryError> {
+            self.pending_zap_receipts.lock().unwrap().remove(payment_hash);
             Ok(())
         }
         async fn filter_known_payment_hashes(
@@ -1465,12 +1468,12 @@ mod tests {
             }
             Ok(updated)
         }
-        async fn insert_newly_paid_batch(
+        async fn insert_pending_zap_receipt_batch(
             &self,
-            newly_paid: &[NewlyPaid],
+            pending: &[PendingZapReceipt],
         ) -> Result<(), LnurlRepositoryError> {
-            let mut store = self.newly_paid.lock().unwrap();
-            for np in newly_paid {
+            let mut store = self.pending_zap_receipts.lock().unwrap();
+            for np in pending {
                 store.insert(np.payment_hash.clone(), np.clone());
             }
             Ok(())
@@ -1582,7 +1585,7 @@ mod tests {
             .unwrap();
         assert_eq!(invoice.preimage.as_deref(), Some(TEST_PREIMAGE_HEX));
 
-        assert!(repo.newly_paid.lock().unwrap().contains_key(&payment_hash));
+        assert!(repo.pending_zap_receipts.lock().unwrap().contains_key(&payment_hash));
     }
 
     #[tokio::test]
@@ -1795,8 +1798,8 @@ mod tests {
         let result = process_webhook(&repo, TEST_WEBHOOK_SECRET, &trigger, &headers, &body).await;
         assert!(result.is_ok());
 
-        // No newly_paid entry should be created for an already-paid invoice
-        assert!(repo.newly_paid.lock().unwrap().is_empty());
+        // No pending zap receipt entry should be created for an already-paid invoice
+        assert!(repo.pending_zap_receipts.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

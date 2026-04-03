@@ -1,7 +1,7 @@
 use lnurl_models::ListMetadataMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::repository::{Invoice, LnurlSenderComment, NewlyPaid};
+use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt};
 use crate::zap::Zap;
 use crate::{
     repository::LnurlRepositoryError,
@@ -423,26 +423,29 @@ impl crate::repository::LnurlRepository for LnurlRepository {
 
         Ok((zap, invoice))
     }
-    async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError> {
+    async fn insert_pending_zap_receipt(
+        &self,
+        pending: &PendingZapReceipt,
+    ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "INSERT INTO newly_paid (payment_hash, created_at, retry_count, next_retry_at)
+            "INSERT INTO pending_zap_receipts (payment_hash, created_at, retry_count, next_retry_at)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT(payment_hash) DO NOTHING",
         )
-        .bind(&newly_paid.payment_hash)
-        .bind(newly_paid.created_at)
-        .bind(newly_paid.retry_count)
-        .bind(newly_paid.next_retry_at)
+        .bind(&pending.payment_hash)
+        .bind(pending.created_at)
+        .bind(pending.retry_count)
+        .bind(pending.next_retry_at)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    async fn insert_newly_paid_batch(
+    async fn insert_pending_zap_receipt_batch(
         &self,
-        newly_paid: &[NewlyPaid],
+        pending: &[PendingZapReceipt],
     ) -> Result<(), LnurlRepositoryError> {
-        if newly_paid.is_empty() {
+        if pending.is_empty() {
             return Ok(());
         }
         let mut tx = self
@@ -450,9 +453,9 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .begin()
             .await
             .map_err(|e| LnurlRepositoryError::General(e.into()))?;
-        for item in newly_paid {
+        for item in pending {
             sqlx::query(
-                "INSERT INTO newly_paid (payment_hash, created_at, retry_count, next_retry_at)
+                "INSERT INTO pending_zap_receipts (payment_hash, created_at, retry_count, next_retry_at)
                  VALUES ($1, $2, $3, $4)
                  ON CONFLICT(payment_hash) DO NOTHING",
             )
@@ -469,17 +472,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn take_pending_newly_paid(
+    async fn take_pending_zap_receipts(
         &self,
         limit: u32,
-    ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError> {
+    ) -> Result<Vec<PendingZapReceipt>, LnurlRepositoryError> {
         let now = now_millis();
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let rows = sqlx::query(
-            "UPDATE newly_paid
+            "UPDATE pending_zap_receipts
              SET claimed_at = $2
              WHERE payment_hash IN (
-                 SELECT payment_hash FROM newly_paid
+                 SELECT payment_hash FROM pending_zap_receipts
                  WHERE next_retry_at <= $1
                    AND COALESCE(claimed_at, 0) < $3
                  ORDER BY next_retry_at ASC
@@ -493,10 +496,10 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         .bind(i64::from(limit))
         .fetch_all(&self.pool)
         .await?;
-        let newly_paid = rows
+        let pending = rows
             .into_iter()
             .map(|row| {
-                Ok::<_, sqlx::Error>(NewlyPaid {
+                Ok::<_, sqlx::Error>(PendingZapReceipt {
                     payment_hash: row.try_get(0)?,
                     created_at: row.try_get(1)?,
                     retry_count: row.try_get(2)?,
@@ -504,17 +507,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(newly_paid)
+        Ok(pending)
     }
 
-    async fn update_newly_paid_retry(
+    async fn update_pending_zap_receipt_retry(
         &self,
         payment_hash: &str,
         retry_count: i32,
         next_retry_at: i64,
     ) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
-            "UPDATE newly_paid
+            "UPDATE pending_zap_receipts
              SET retry_count = $2, next_retry_at = $3, claimed_at = NULL
              WHERE payment_hash = $1",
         )
@@ -526,8 +529,11 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
-    async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError> {
-        sqlx::query("DELETE FROM newly_paid WHERE payment_hash = $1")
+    async fn delete_pending_zap_receipt(
+        &self,
+        payment_hash: &str,
+    ) -> Result<(), LnurlRepositoryError> {
+        sqlx::query("DELETE FROM pending_zap_receipts WHERE payment_hash = $1")
             .bind(payment_hash)
             .execute(&self.pool)
             .await?;

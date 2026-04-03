@@ -30,7 +30,7 @@ pub struct Invoice {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewlyPaid {
+pub struct PendingZapReceipt {
     pub payment_hash: String,
     pub created_at: i64,
     pub retry_count: i32,
@@ -104,33 +104,39 @@ pub trait LnurlRepository {
         &self,
         payment_hash: &str,
     ) -> Result<(Option<Zap>, Option<Invoice>), LnurlRepositoryError>;
-    /// Insert a newly paid invoice into the queue
-    async fn insert_newly_paid(&self, newly_paid: &NewlyPaid) -> Result<(), LnurlRepositoryError>;
-
-    /// Batch insert newly paid invoices into the queue
-    async fn insert_newly_paid_batch(
+    /// Insert a pending zap receipt into the queue
+    async fn insert_pending_zap_receipt(
         &self,
-        newly_paid: &[NewlyPaid],
+        pending: &PendingZapReceipt,
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Get newly paid invoices ready for processing (`next_retry_at` <= now),
+    /// Batch insert pending zap receipts into the queue
+    async fn insert_pending_zap_receipt_batch(
+        &self,
+        pending: &[PendingZapReceipt],
+    ) -> Result<(), LnurlRepositoryError>;
+
+    /// Get pending zap receipts ready for processing (`next_retry_at` <= now),
     /// atomically claiming them. Items already claimed by another instance
     /// within the last 5 minutes are skipped.
-    async fn take_pending_newly_paid(
+    async fn take_pending_zap_receipts(
         &self,
         limit: u32,
-    ) -> Result<Vec<NewlyPaid>, LnurlRepositoryError>;
+    ) -> Result<Vec<PendingZapReceipt>, LnurlRepositoryError>;
 
-    /// Update retry count and next retry time for a newly paid invoice
-    async fn update_newly_paid_retry(
+    /// Update retry count and next retry time for a pending zap receipt
+    async fn update_pending_zap_receipt_retry(
         &self,
         payment_hash: &str,
         retry_count: i32,
         next_retry_at: i64,
     ) -> Result<(), LnurlRepositoryError>;
 
-    /// Delete a newly paid invoice from the queue
-    async fn delete_newly_paid(&self, payment_hash: &str) -> Result<(), LnurlRepositoryError>;
+    /// Delete a pending zap receipt from the queue
+    async fn delete_pending_zap_receipt(
+        &self,
+        payment_hash: &str,
+    ) -> Result<(), LnurlRepositoryError>;
 
     /// Get or create a setting. If the key doesn't exist, insert the default value.
     /// Returns the current value (either existing or newly inserted).
