@@ -74,4 +74,3 @@ open-core-rustdocs:
 
 update-lockfiles:
 	./scripts/update-lock-files.sh
-ulf: update-lockfiles
