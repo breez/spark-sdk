@@ -23,3 +23,6 @@ pub use tree_store::{
 // Re-export pool infrastructure for downstream crates
 pub use migrations::run_migrations;
 pub use pool::{create_pool, map_db_error, map_pool_error};
+
+pub use deadpool_postgres;
+pub use tokio_postgres;
