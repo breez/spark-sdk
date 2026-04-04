@@ -325,7 +325,7 @@ checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 [[package]]
 name = "bitreq"
 version = "0.3.4"
-source = "git+https://github.com/hydra-yse/corepc?branch=yse-bitreq-rustls#7df187761925735233a2d909b2a606ec48efcd73"
+source = "git+https://github.com/breez/corepc?branch=yse-bitreq-rustls#d052f8f0efd05459dd4ae157a2d68d2044ac824c"
 dependencies = [
  "rustls",
  "rustls-webpki 0.101.7",
