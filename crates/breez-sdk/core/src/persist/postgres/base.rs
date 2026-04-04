@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use spark_postgres::deadpool_postgres;
+use spark_postgres::tokio_postgres;
 use spark_wallet::TreeStore;
 
 use crate::persist::StorageError;

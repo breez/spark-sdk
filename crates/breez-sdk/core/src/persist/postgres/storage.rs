@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 
-use deadpool_postgres::Pool;
 use macros::async_trait;
+use spark_postgres::deadpool_postgres;
+use spark_postgres::tokio_postgres;
+
+use deadpool_postgres::Pool;
 use tokio_postgres::{Row, types::ToSql};
 use tracing::warn;
 

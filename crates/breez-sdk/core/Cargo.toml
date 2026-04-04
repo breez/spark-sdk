@@ -13,8 +13,6 @@ passkey = ["dep:nostr", "dep:nostr-sdk"]
 # PostgreSQL storage backend (optional, for server-side use cases)
 postgres = [
     "dep:spark-postgres",
-    "dep:tokio-postgres",
-    "dep:deadpool-postgres",
 ]
 
 [lib]
@@ -60,8 +58,6 @@ k256 = { workspace = true, features = ["arithmetic"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
-tokio-postgres = { workspace = true, optional = true }
-deadpool-postgres = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
