@@ -415,6 +415,7 @@ pub enum TokenTransactionType {
     Transfer,
     Mint,
     Burn,
+    Unknown,
 }
 
 impl fmt::Display for TokenTransactionType {
@@ -423,19 +424,21 @@ impl fmt::Display for TokenTransactionType {
             TokenTransactionType::Transfer => write!(f, "transfer"),
             TokenTransactionType::Mint => write!(f, "mint"),
             TokenTransactionType::Burn => write!(f, "burn"),
+            TokenTransactionType::Unknown => write!(f, "unknown"),
         }
     }
 }
 
-impl FromStr for TokenTransactionType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "transfer" => Ok(TokenTransactionType::Transfer),
-            "mint" => Ok(TokenTransactionType::Mint),
-            "burn" => Ok(TokenTransactionType::Burn),
-            _ => Err(format!("Invalid token transaction type '{s}'")),
+impl From<&str> for TokenTransactionType {
+    fn from(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
+            "transfer" => Self::Transfer,
+            "mint" => Self::Mint,
+            "burn" => Self::Burn,
+            other => {
+                tracing::warn!("Unknown TokenTransactionType: {other}");
+                Self::Unknown
+            }
         }
     }
 }
@@ -471,6 +474,8 @@ pub enum SparkHtlcStatus {
     PreimageShared,
     /// The HTLC has been returned to the sender due to expiry
     Returned,
+
+    Unknown,
 }
 
 impl fmt::Display for SparkHtlcStatus {
@@ -479,19 +484,21 @@ impl fmt::Display for SparkHtlcStatus {
             SparkHtlcStatus::WaitingForPreimage => write!(f, "WaitingForPreimage"),
             SparkHtlcStatus::PreimageShared => write!(f, "PreimageShared"),
             SparkHtlcStatus::Returned => write!(f, "Returned"),
+            SparkHtlcStatus::Unknown => write!(f, "Unknown"),
         }
     }
 }
 
-impl FromStr for SparkHtlcStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "WaitingForPreimage" => Ok(SparkHtlcStatus::WaitingForPreimage),
-            "PreimageShared" => Ok(SparkHtlcStatus::PreimageShared),
-            "Returned" => Ok(SparkHtlcStatus::Returned),
-            _ => Err("Invalid Spark HTLC status".to_string()),
+impl From<&str> for SparkHtlcStatus {
+    fn from(value: &str) -> Self {
+        match value {
+            "WaitingForPreimage" => Self::WaitingForPreimage,
+            "PreimageShared" => Self::PreimageShared,
+            "Returned" => Self::Returned,
+            other => {
+                tracing::warn!("Unrecognized SparkHtlcStatus: {other}");
+                Self::Unknown
+            }
         }
     }
 }

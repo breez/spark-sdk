@@ -1,5 +1,4 @@
 use std::fmt;
-use std::str::FromStr;
 
 use flashnet::{BTC_ASSET_ADDRESS, Pool};
 use serde::{Deserialize, Serialize};
@@ -94,6 +93,8 @@ pub enum ConversionStatus {
     RefundNeeded,
     /// The conversion failed and a refund was made
     Refunded,
+
+    Unknown,
 }
 
 impl fmt::Display for ConversionStatus {
@@ -104,21 +105,23 @@ impl fmt::Display for ConversionStatus {
             ConversionStatus::Failed => write!(f, "failed"),
             ConversionStatus::RefundNeeded => write!(f, "refund_needed"),
             ConversionStatus::Refunded => write!(f, "refunded"),
+            ConversionStatus::Unknown => write!(f, "unknown"),
         }
     }
 }
 
-impl FromStr for ConversionStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(ConversionStatus::Pending),
-            "completed" => Ok(ConversionStatus::Completed),
-            "failed" => Ok(ConversionStatus::Failed),
-            "refund_needed" => Ok(ConversionStatus::RefundNeeded),
-            "refunded" => Ok(ConversionStatus::Refunded),
-            _ => Err(format!("Invalid conversion status '{s}'")),
+impl From<&str> for ConversionStatus {
+    fn from(value: &str) -> Self {
+        match value {
+            "pending" => Self::Pending,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "refund_needed" => Self::RefundNeeded,
+            "refunded" => Self::Refunded,
+            other => {
+                tracing::warn!("Unrecognized ConversionStatus: {other}");
+                Self::Unknown
+            }
         }
     }
 }

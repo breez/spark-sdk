@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
-    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus,
+    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
@@ -1400,16 +1400,15 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let description: Option<String> = row.get(13);
             let preimage: Option<String> = row.get(14);
             let htlc_status_str: Option<String> = row.get(15);
-            let htlc_status: SparkHtlcStatus = htlc_status_str
-                .ok_or_else(|| {
-                    StorageError::Implementation(
-                        "htlc_status is required for Lightning payments".to_string(),
-                    )
-                })
-                .and_then(|s| {
-                    s.parse()
-                        .map_err(|e: String| StorageError::Serialization(e))
-                })?;
+            let htlc_status: SparkHtlcStatus = SparkHtlcStatus::from(
+                htlc_status_str
+                    .ok_or_else(|| {
+                        StorageError::Implementation(
+                            "htlc_status is required for Lightning payments".to_string(),
+                        )
+                    })?
+                    .as_str(),
+            );
             let htlc_expiry_time: i64 = row.get(16);
             let htlc_details = SparkHtlcDetails {
                 payment_hash,
@@ -1464,9 +1463,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         }
         (_, _, _, _, Some(metadata)) => {
             let tx_type_str: String = row.get(22);
-            let tx_type = tx_type_str
-                .parse()
-                .map_err(|e: String| StorageError::Serialization(e))?;
+            let tx_type = TokenTransactionType::from(tx_type_str.as_str());
             let invoice_details_json: Option<serde_json::Value> = row.get(23);
             let invoice_details = from_json_opt(invoice_details_json)?;
             let conversion_info_json: Option<serde_json::Value> = row.get(19);
@@ -1513,17 +1510,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         }),
         conversion_details: {
             let conversion_status_str: Option<String> = row.get(30);
-            conversion_status_str
-                .map(|s| {
-                    s.parse::<ConversionStatus>()
-                        .map(|status| ConversionDetails {
-                            status,
-                            from: None,
-                            to: None,
-                        })
-                        .map_err(StorageError::Serialization)
-                })
-                .transpose()?
+            conversion_status_str.map(|s| ConversionDetails {
+                status: ConversionStatus::from(s.as_str()),
+                from: None,
+                to: None,
+            })
         },
     })
 }

@@ -1564,8 +1564,7 @@ impl FromSql for TokenTransactionType {
         match value {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let tx_type: TokenTransactionType =
-                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                let tx_type = TokenTransactionType::from(s);
                 Ok(tx_type)
             }
             _ => Err(FromSqlError::InvalidType),
@@ -1584,8 +1583,7 @@ impl FromSql for SparkHtlcStatus {
         match value {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let status: SparkHtlcStatus =
-                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                let status = SparkHtlcStatus::from(s);
                 Ok(status)
             }
             _ => Err(FromSqlError::InvalidType),
@@ -1604,8 +1602,7 @@ impl FromSql for ConversionStatus {
         match value {
             ValueRef::Text(i) => {
                 let s = std::str::from_utf8(i).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                let status: ConversionStatus =
-                    s.parse().map_err(|_: String| FromSqlError::InvalidType)?;
+                let status = ConversionStatus::from(s);
                 Ok(status)
             }
             _ => Err(FromSqlError::InvalidType),
