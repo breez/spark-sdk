@@ -1,0 +1,35 @@
+[package]
+name = "spark-postgres"
+version.workspace = true
+edition = "2024"
+
+[features]
+test-utils = ["spark-wallet/test-utils"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+deadpool.workspace = true
+deadpool-postgres.workspace = true
+macros.workspace = true
+platform-utils.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spark-wallet.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+spark-postgres = { workspace = true, features = ["test-utils"] }
+testcontainers.workspace = true
+testcontainers-modules = { workspace = true, features = ["postgres"] }

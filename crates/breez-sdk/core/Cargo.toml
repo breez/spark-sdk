@@ -12,12 +12,7 @@ test-utils = ["spark-wallet/test-utils"]
 passkey = ["dep:nostr", "dep:nostr-sdk"]
 # PostgreSQL storage backend (optional, for server-side use cases)
 postgres = [
-    "dep:tokio-postgres",
-    "dep:deadpool-postgres",
-    "dep:deadpool",
-    "dep:tokio-postgres-rustls",
-    "dep:rustls",
-    "dep:webpki-roots",
+    "dep:spark-postgres",
 ]
 
 [lib]
@@ -46,6 +41,7 @@ nostr-sdk = { workspace = true, optional = true }
 openssl = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+spark-postgres = { workspace = true, optional = true }
 spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -62,12 +58,6 @@ k256 = { workspace = true, features = ["arithmetic"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
-tokio-postgres = { workspace = true, optional = true }
-tokio-postgres-rustls = { workspace = true, optional = true }
-deadpool-postgres = { workspace = true, optional = true }
-deadpool = { workspace = true, optional = true }
-rustls = { workspace = true, optional = true }
-webpki-roots = { workspace = true, optional = true }
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]

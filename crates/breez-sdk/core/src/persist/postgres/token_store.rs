@@ -7,6 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use spark_postgres::deadpool_postgres;
+use spark_postgres::tokio_postgres;
+
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use platform_utils::time::SystemTime;

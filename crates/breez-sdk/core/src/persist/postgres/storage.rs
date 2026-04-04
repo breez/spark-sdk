@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 
-use deadpool_postgres::Pool;
 use macros::async_trait;
+use spark_postgres::deadpool_postgres;
+use spark_postgres::tokio_postgres;
+
+use deadpool_postgres::Pool;
 use tokio_postgres::{Row, types::ToSql};
 use tracing::warn;
 
@@ -1531,7 +1534,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persist::postgres::base::parse_pem_to_root_store;
+    use spark_postgres::pool::parse_pem_to_root_store;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
 
