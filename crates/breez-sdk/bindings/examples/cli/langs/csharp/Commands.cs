@@ -608,7 +608,7 @@ public static class Commands
         if (prepareResponse.conversionEstimate != null)
         {
             var est = prepareResponse.conversionEstimate;
-            Console.WriteLine($"Estimated conversion of {est.amount} with a {est.fee} fee");
+            Console.WriteLine($"Estimated conversion of {est.amountIn} → {est.amountOut} with a {est.fee} fee");
             var line = readline("Do you want to continue (y/n) [y]: ");
             if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
             {
@@ -688,10 +688,11 @@ public static class Commands
         bool? validateSuccessUrl = validateStr != null ? validateStr.ToLower() == "true" : null;
 
         var prepareResponse = await sdk.PrepareLnurlPay(request: new PrepareLnurlPayRequest(
-            amountSats: amountSats,
+            amount: amountSats,
             payRequest: payRequest,
             comment: comment,
             validateSuccessActionUrl: validateSuccessUrl,
+            tokenIdentifier: null,
             conversionOptions: conversionOptions,
             feePolicy: feePolicy
         ));
@@ -700,7 +701,7 @@ public static class Commands
         if (prepareResponse.conversionEstimate != null)
         {
             var est = prepareResponse.conversionEstimate;
-            Console.WriteLine($"Estimated conversion of {est.amount} token base units with a {est.fee} token base units fee");
+            Console.WriteLine($"Estimated conversion of {est.amountIn} token base units → {est.amountOut} sats with a {est.fee} token base units fee");
             var line = readline("Do you want to continue (y/n) [y]: ");
             if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
             {

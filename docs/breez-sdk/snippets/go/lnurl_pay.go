@@ -3,6 +3,7 @@ package example
 import (
 	"errors"
 	"log"
+	"math/big"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -27,26 +28,17 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 
 	switch inputType := input.(type) {
 	case breez_sdk_spark.InputTypeLightningAddress:
-		amountSats := uint64(5_000)
+		amountSats := new(big.Int).SetInt64(5_000)
 		optionalComment := "<comment>"
 		optionalValidateSuccessActionUrl := true
-		// Optionally set to use token funds to pay via token conversion
-		optionalMaxSlippageBps := uint32(50)
-		optionalCompletionTimeoutSecs := uint32(30)
-		optionalConversionOptions := breez_sdk_spark.ConversionOptions{
-			ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
-				FromTokenIdentifier: "<token identifier>",
-			},
-			MaxSlippageBps:        &optionalMaxSlippageBps,
-			CompletionTimeoutSecs: &optionalCompletionTimeoutSecs,
-		}
 
 		request := breez_sdk_spark.PrepareLnurlPayRequest{
-			AmountSats:               amountSats,
+			Amount:                   amountSats,
 			PayRequest:               inputType.Field0.PayRequest,
 			Comment:                  &optionalComment,
 			ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
-			ConversionOptions:        &optionalConversionOptions,
+			TokenIdentifier:          nil,
+			ConversionOptions:        nil,
 			FeePolicy:                nil,
 		}
 
@@ -62,11 +54,6 @@ func PrepareLnurlPay(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareLnu
 		}
 
 		// If the fees are acceptable, continue to create the LNURL Pay
-		if prepareResponse.ConversionEstimate != nil {
-			log.Printf("Estimated conversion amount: %v token base units", prepareResponse.ConversionEstimate.Amount)
-			log.Printf("Estimated conversion fee: %v token base units", prepareResponse.ConversionEstimate.Fee)
-		}
-
 		feeSats := prepareResponse.FeeSats
 		log.Printf("Fees: %v sats", feeSats)
 		return &prepareResponse, nil
@@ -103,16 +90,17 @@ func PrepareLnurlPayFeesIncluded(sdk *breez_sdk_spark.BreezSdk, payRequest breez
 	// By default (FeePolicyFeesExcluded), fees are added on top of the amount.
 	// Use FeePolicyFeesIncluded to deduct fees from the amount instead.
 	// The receiver gets amount minus fees.
-	amountSats := uint64(5_000)
+	amountSats := new(big.Int).SetInt64(5_000)
 	optionalComment := "<comment>"
 	optionalValidateSuccessActionUrl := true
 	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
 
 	request := breez_sdk_spark.PrepareLnurlPayRequest{
-		AmountSats:               amountSats,
+		Amount:                   amountSats,
 		PayRequest:               payRequest,
 		Comment:                  &optionalComment,
 		ValidateSuccessActionUrl: &optionalValidateSuccessActionUrl,
+		TokenIdentifier:          nil,
 		ConversionOptions:        nil,
 		FeePolicy:                &feePolicy,
 	}

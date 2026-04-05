@@ -840,10 +840,11 @@ pub enum FeePolicy {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareLnurlPayRequest)]
 pub struct PrepareLnurlPayRequest {
-    pub amount_sats: u64,
+    pub amount: u128,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
     pub validate_success_action_url: Option<bool>,
+    pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
 }
@@ -857,6 +858,7 @@ pub struct PrepareLnurlPayResponse {
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
     pub conversion_estimate: Option<ConversionEstimate>,
+    pub token_identifier: Option<String>,
     pub fee_policy: FeePolicy,
 }
 
@@ -1280,7 +1282,8 @@ pub struct OptimizationProgress {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]
 pub struct ConversionEstimate {
     pub options: ConversionOptions,
-    pub amount: u128,
+    pub amount_in: u128,
+    pub amount_out: u128,
     pub fee: u128,
     pub amount_adjustment: Option<AmountAdjustmentReason>,
 }

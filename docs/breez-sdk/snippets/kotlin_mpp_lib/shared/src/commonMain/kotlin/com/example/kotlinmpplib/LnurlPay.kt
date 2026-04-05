@@ -1,6 +1,7 @@
 package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
+import com.ionspin.kotlin.bignum.integer.BigInteger
 
 class LnurlPay {
     suspend fun prepareLnurlPay(sdk: BreezSdk) {
@@ -12,38 +13,24 @@ class LnurlPay {
         try {
             val inputType = sdk.parse(lnurlPayUrl)
             if (inputType is InputType.LightningAddress) {
-                val amountSats = 5_000.toULong()
+                val amountSats = BigInteger.fromLong(5_000L)
                 val optionalComment = "<comment>"
                 val payRequest = inputType.v1.payRequest
                 val optionalValidateSuccessActionUrl = true
-                // Optionally set to use token funds to pay via token conversion
-                val optionalMaxSlippageBps = 50u
-                val optionalCompletionTimeoutSecs = 30u
-                val optionalConversionOptions = ConversionOptions(
-                    conversionType = ConversionType.ToBitcoin(
-                        "<token identifier>"
-                    ),
-                    maxSlippageBps = optionalMaxSlippageBps,
-                    completionTimeoutSecs = optionalCompletionTimeoutSecs
-                )
 
                 val req = PrepareLnurlPayRequest(
-                    amountSats = amountSats,
+                    amount = amountSats,
                     payRequest = payRequest,
                     comment = optionalComment,
                     validateSuccessActionUrl = optionalValidateSuccessActionUrl,
-                    conversionOptions = optionalConversionOptions,
+                    tokenIdentifier = null,
+                    conversionOptions = null,
                     feePolicy = null,
                 )
                 val prepareResponse = sdk.prepareLnurlPay(req)
 
                 // If the fees are acceptable, continue to create the LNURL Pay
-                prepareResponse.conversionEstimate?.let { conversionEstimate ->
-                    // Log.v("Breez", "Estimated conversion amount: ${conversionEstimate.amount} token base units")
-                    // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token base units")
-                }
-
-                val feeSats = prepareResponse.feeSats;
+                val feeSats = prepareResponse.feeSats
                 // Log.v("Breez", "Fees: ${feeSats} sats")
             }
         } catch (e: Exception) {
@@ -70,13 +57,14 @@ class LnurlPay {
         // The receiver gets amount minus fees.
         val optionalComment = "<comment>"
         val optionalValidateSuccessActionUrl = true
-        val amountSats = 5_000.toULong()
+        val amountSats = BigInteger.fromLong(5_000L)
 
         val req = PrepareLnurlPayRequest(
-            amountSats = amountSats,
+            amount = amountSats,
             payRequest = payRequest,
             comment = optionalComment,
             validateSuccessActionUrl = optionalValidateSuccessActionUrl,
+            tokenIdentifier = null,
             conversionOptions = null,
             feePolicy = FeePolicy.FEES_INCLUDED,
         )

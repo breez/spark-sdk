@@ -134,8 +134,8 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
 
     // If the fees are acceptable, continue to create the Send Payment
     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
-        info!("Estimated conversion amount: {} token base units", conversion_estimate.amount);
-        info!("Estimated conversion fee: {} token base units", conversion_estimate.fee);
+        info!("Estimated conversion: {} token units → {} sats", conversion_estimate.amount_in, conversion_estimate.amount_out);
+        info!("Estimated conversion fee: {} token units", conversion_estimate.fee);
     }
     // ANCHOR_END: prepare-send-payment-with-conversion
     Ok(())
@@ -229,5 +229,56 @@ async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
     info!("Amount: {}", prepare_response.amount);
     // The receiver gets amount - fees (fees are available in prepare_response.payment_method)
     // ANCHOR_END: prepare-send-payment-fees-included
+    Ok(())
+}
+
+async fn prepare_send_payment_send_all(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: prepare-send-payment-send-all
+    // To send the entire token balance plus any remaining sats,
+    // provide the full token balance as the amount with ToBitcoin
+    // conversion options and FeesIncluded. The SDK converts all
+    // tokens to sats, combines with existing sat balance, and
+    // deducts fees — draining the wallet completely.
+    let payment_request = "<payment request>".to_string();
+    let token_identifier = "<token identifier>".to_string();
+
+    let info = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+
+    let token_balance = info
+        .token_balances
+        .get(&token_identifier)
+        .ok_or_else(|| anyhow::anyhow!("Token balance not found"))?;
+
+    let conversion_options = Some(ConversionOptions {
+        conversion_type: ConversionType::ToBitcoin {
+            from_token_identifier: token_identifier.clone(),
+        },
+        max_slippage_bps: None,
+        completion_timeout_secs: None,
+    });
+
+    let prepare_response = sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request,
+            amount: Some(token_balance.balance),
+            token_identifier: Some(token_identifier),
+            conversion_options,
+            fee_policy: Some(FeePolicy::FeesIncluded),
+        })
+        .await?;
+
+    // The response amount is the estimated total sats available
+    // (converted sats + existing sat balance)
+    info!("Total sats available: {}", prepare_response.amount);
+
+    if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
+        info!("Converting {} token units → ~{} sats", conversion_estimate.amount_in, conversion_estimate.amount_out);
+        info!("Conversion fee: {} token units", conversion_estimate.fee);
+    }
+    // ANCHOR_END: prepare-send-payment-send-all
     Ok(())
 }

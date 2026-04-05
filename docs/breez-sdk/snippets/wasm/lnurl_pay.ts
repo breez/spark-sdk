@@ -2,7 +2,6 @@ import type {
   BreezSdk,
   LnurlPayRequestDetails,
   PrepareLnurlPayResponse,
-  ConversionOptions,
   FeePolicy
 } from '@breeztech/breez-sdk-spark'
 
@@ -15,38 +14,22 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
 
   const input = await sdk.parse(lnurlPayUrl)
   if (input.type === 'lightningAddress') {
-    const amountSats = 5_000
+    const amountSats = BigInt(5_000)
     const optionalComment = '<comment>'
     const payRequest = input.payRequest
     const optionalValidateSuccessActionUrl = true
-    // Optionally set to use token funds to pay via token conversion
-    const optionalMaxSlippageBps = 50
-    const optionalCompletionTimeoutSecs = 30
-    const optionalConversionOptions: ConversionOptions = {
-      conversionType: {
-        type: 'toBitcoin',
-        fromTokenIdentifier: '<token identifier>'
-      },
-      maxSlippageBps: optionalMaxSlippageBps,
-      completionTimeoutSecs: optionalCompletionTimeoutSecs
-    }
 
     const prepareResponse = await sdk.prepareLnurlPay({
-      amountSats,
+      amount: amountSats,
       payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-      conversionOptions: optionalConversionOptions,
+      tokenIdentifier: undefined,
+      conversionOptions: undefined,
       feePolicy: undefined
     })
 
     // If the fees are acceptable, continue to create the LNURL Pay
-    if (prepareResponse.conversionEstimate !== undefined) {
-      const conversionEstimate = prepareResponse.conversionEstimate
-      console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
-      console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
-    }
-
     const feeSats = prepareResponse.feeSats
     console.log(`Fees: ${feeSats} sats`)
   }
@@ -60,14 +43,15 @@ const examplePrepareLnurlPayFeesIncluded = async (sdk: BreezSdk, payRequest: Lnu
   // The receiver gets amount minus fees.
   const optionalComment = '<comment>'
   const optionalValidateSuccessActionUrl = true
-  const amountSats = 5_000
+  const amountSats = BigInt(5_000)
   const feePolicy: FeePolicy = 'feesIncluded'
 
   const prepareResponse = await sdk.prepareLnurlPay({
-    amountSats,
+    amount: amountSats,
     payRequest,
     comment: optionalComment,
     validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+    tokenIdentifier: undefined,
     conversionOptions: undefined,
     feePolicy
   })

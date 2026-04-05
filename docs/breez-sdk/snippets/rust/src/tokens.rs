@@ -196,8 +196,8 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
 
     // If the fees are acceptable, continue to send the token payment
     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
-        info!("Estimated conversion amount: {} sats", conversion_estimate.amount);
-        info!("Estimated conversion fee: {} sats", conversion_estimate.fee);
+        info!("Estimated conversion: {} token units → {} sats", conversion_estimate.amount_in, conversion_estimate.amount_out);
+        info!("Estimated conversion fee: {} token units", conversion_estimate.fee);
     }
     // ANCHOR_END: prepare-send-payment-with-conversion
     Ok(())

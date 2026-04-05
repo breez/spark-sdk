@@ -458,7 +458,7 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 		if _, ok := est.Options.ConversionType.(breez_sdk_spark.ConversionTypeFromBitcoin); ok {
 			units = "sats"
 		}
-		fmt.Printf("Estimated conversion of %v %s with a %v %s fee\n", est.Amount, units, est.Fee, units)
+		fmt.Printf("Estimated conversion of %v %s → %v %s with a %v %s fee\n", est.AmountIn, units, est.AmountOut, units, est.Fee, units)
 		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
 		if err != nil {
 			return err
@@ -543,7 +543,7 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	}
 
 	prepareReq := breez_sdk_spark.PrepareLnurlPayRequest{
-		AmountSats: amountSats,
+		Amount: new(big.Int).SetUint64(amountSats),
 		PayRequest: payRequest,
 	}
 	if *comment != "" {
@@ -586,7 +586,7 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	// Show conversion estimate and confirm
 	if prepareResponse.ConversionEstimate != nil {
 		est := prepareResponse.ConversionEstimate
-		fmt.Printf("Estimated conversion of %v token base units with a %v token base units fee\n", est.Amount, est.Fee)
+		fmt.Printf("Estimated conversion of %v token base units → %v sats with a %v token base units fee\n", est.AmountIn, est.AmountOut, est.Fee)
 		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
 		if err != nil {
 			return err

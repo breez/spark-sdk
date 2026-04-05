@@ -135,9 +135,9 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
   // If the fees are acceptable, continue to create the Send Payment
   if (response.conversionEstimate != null) {
     print(
-        "Estimated conversion amount: ${response.conversionEstimate!.amount} token base units");
+        "Estimated conversion: ${response.conversionEstimate!.amountIn} token units → ${response.conversionEstimate!.amountOut} sats");
     print(
-        "Estimated conversion fee: ${response.conversionEstimate!.fee} token base units");
+        "Estimated conversion fee: ${response.conversionEstimate!.fee} token units");
   }
   // ANCHOR_END: prepare-send-payment-with-conversion
   return response;
@@ -213,5 +213,50 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
   print("Amount: ${response.amount}");
   // The receiver gets amount - fees (fees are available in response.paymentMethod)
   // ANCHOR_END: prepare-send-payment-fees-included
+  return response;
+}
+
+Future<PrepareSendPaymentResponse> prepareSendPaymentSendAll(
+    BreezSdk sdk) async {
+  // ANCHOR: prepare-send-payment-send-all
+  // To send the entire token balance plus any remaining sats,
+  // provide the full token balance as the amount with ToBitcoin
+  // conversion options and FeesIncluded. The SDK converts all
+  // tokens to sats, combines with existing sat balance, and
+  // deducts fees — draining the wallet completely.
+  String paymentRequest = "<payment request>";
+  String tokenIdentifier = "<token identifier>";
+
+  final info = await sdk.getInfo(request: GetInfoRequest(ensureSynced: false));
+  final tokenBalance = info.tokenBalances[tokenIdentifier];
+  if (tokenBalance == null) {
+    throw Exception("Token balance not found");
+  }
+
+  final conversionOptions = ConversionOptions(
+    conversionType: ConversionType.toBitcoin(
+      fromTokenIdentifier: tokenIdentifier,
+    ),
+  );
+
+  final request = PrepareSendPaymentRequest(
+      paymentRequest: paymentRequest,
+      amount: tokenBalance.balance,
+      tokenIdentifier: tokenIdentifier,
+      conversionOptions: conversionOptions,
+      feePolicy: FeePolicy.feesIncluded);
+  final response = await sdk.prepareSendPayment(request: request);
+
+  // The response amount is the estimated total sats available
+  // (converted sats + existing sat balance)
+  print("Total sats available: ${response.amount}");
+
+  if (response.conversionEstimate != null) {
+    print(
+        "Converting ${response.conversionEstimate!.amountIn} token units → ~${response.conversionEstimate!.amountOut} sats");
+    print(
+        "Conversion fee: ${response.conversionEstimate!.fee} token units");
+  }
+  // ANCHOR_END: prepare-send-payment-send-all
   return response;
 }

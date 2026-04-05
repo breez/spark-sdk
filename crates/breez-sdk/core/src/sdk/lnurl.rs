@@ -1,5 +1,5 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
-use tracing::info;
+use tracing::{info, trace};
 
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
@@ -20,25 +20,79 @@ use super::{BreezSdk, helpers::process_success_action};
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    #[allow(clippy::too_many_lines)]
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         let fee_policy = request.fee_policy.unwrap_or_default();
-        let amount_sats = request.amount_sats;
 
-        if fee_policy == FeePolicy::FeesIncluded && request.conversion_options.is_some() {
+        // Check if this is a send-all with conversion using the same stable balance check
+        let is_send_all_with_conversion = match &self.stable_balance {
+            Some(sb) => {
+                sb.is_send_all_with_conversion(
+                    request.token_identifier.as_ref(),
+                    Some(request.amount),
+                    request.conversion_options.as_ref(),
+                    fee_policy,
+                )
+                .await?
+            }
+            None => false,
+        };
+
+        // token_identifier with conversion is only valid for send-all
+        if request.token_identifier.is_some() && !is_send_all_with_conversion {
             return Err(SdkError::InvalidInput(
-                "FeesIncluded cannot be combined with token conversion".to_string(),
+                "Token identifier with conversion is only supported for send-all".to_string(),
             ));
         }
 
+        // For send-all with conversion, estimate total sats first.
+        // Deduct the max slippage so the LNURL invoice is smaller than the worst-case
+        // conversion output — the conversion will fail if slippage exceeds this guard,
+        // so we're guaranteed to have enough sats to pay the invoice.
+        let amount = if is_send_all_with_conversion {
+            let (total_sats, _) = self
+                .estimate_total_sats_with_conversion(
+                    request.conversion_options.as_ref(),
+                    request.token_identifier.as_ref(),
+                    request.amount,
+                )
+                .await?;
+            let max_slippage_bps = u128::from(
+                request
+                    .conversion_options
+                    .as_ref()
+                    .and_then(|co| co.max_slippage_bps)
+                    .unwrap_or(crate::token_conversion::DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
+            );
+            let slippage_buffer = total_sats
+                .saturating_mul(max_slippage_bps)
+                .saturating_div(10_000);
+            let amount_after_slippage = total_sats.saturating_sub(slippage_buffer);
+            trace!(
+                "[SEND-ALL] prepare_lnurl: token_amount={}, estimated_total_sats={}, slippage_bps={}, slippage_buffer={}, amount_for_invoice={}",
+                request.amount,
+                total_sats,
+                max_slippage_bps,
+                slippage_buffer,
+                amount_after_slippage
+            );
+            amount_after_slippage
+        } else {
+            request.amount
+        };
+
         // FeesIncluded uses the double-query approach
         if fee_policy == FeePolicy::FeesIncluded {
-            return self
-                .prepare_lnurl_pay_fees_included(request, amount_sats)
-                .await;
+            return self.prepare_lnurl_pay_fees_included(request, amount).await;
         }
+
+        // Regular send (no FeesIncluded, no conversion)
+        let amount_sats: u64 = amount
+            .try_into()
+            .map_err(|_| SdkError::InvalidInput("Amount too large for LNURL".to_string()))?;
 
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
@@ -60,7 +114,7 @@ impl BreezSdk {
             .prepare_send_payment(crate::PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 amount: Some(u128::from(amount_sats)),
-                token_identifier: None,
+                token_identifier: request.token_identifier.clone(),
                 conversion_options: request.conversion_options.clone(),
                 fee_policy: None,
             })
@@ -85,6 +139,7 @@ impl BreezSdk {
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
             conversion_estimate: prepare_response.conversion_estimate,
+            token_identifier: prepare_response.token_identifier,
             fee_policy,
         })
     }
@@ -108,6 +163,7 @@ impl BreezSdk {
         };
 
         // Calculate amount override for FeesIncluded operations
+        let has_conversion = request.prepare_response.conversion_estimate.is_some();
         let amount_override = if is_fees_included {
             // Re-estimate current fee for the invoice
             let current_fee = self
@@ -132,11 +188,16 @@ impl BreezSdk {
 
             // Protect against excessive fee overpayment.
             // Allow overpayment up to 100% of actual fee, with a minimum of 1 sat.
-            let max_allowed_overpayment = current_fee.max(1);
-            if overpayment > max_allowed_overpayment {
-                return Err(SdkError::Generic(format!(
-                    "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
-                )));
+            // With conversion, skip this check — the slippage buffer deducted at prepare
+            // time means the actual post-conversion balance may exceed the invoice amount,
+            // and we want to overpay the invoice to send everything.
+            if !has_conversion {
+                let max_allowed_overpayment = current_fee.max(1);
+                if overpayment > max_allowed_overpayment {
+                    return Err(SdkError::Generic(format!(
+                        "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
+                    )));
+                }
             }
 
             if overpayment > 0 {
@@ -152,6 +213,15 @@ impl BreezSdk {
             None
         };
 
+        // For send-all with conversion, pass through FeesIncluded so the conversion
+        // flow queries actual balance post-conversion. Otherwise use FeesExcluded.
+        let has_conversion = request.prepare_response.conversion_estimate.is_some();
+        let internal_fee_policy = if is_fees_included && has_conversion {
+            FeePolicy::FeesIncluded
+        } else {
+            FeePolicy::FeesExcluded
+        };
+
         let mut payment = Box::pin(self.maybe_convert_token_send_payment(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
@@ -161,9 +231,9 @@ impl BreezSdk {
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
                     amount: u128::from(receiver_amount_sats),
-                    token_identifier: None,
+                    token_identifier: request.prepare_response.token_identifier,
                     conversion_estimate: request.prepare_response.conversion_estimate,
-                    fee_policy: FeePolicy::FeesExcluded, // Always FeesExcluded for internal handling
+                    fee_policy: internal_fee_policy,
                 },
                 options: None,
                 idempotency_key: request.idempotency_key,
@@ -378,16 +448,33 @@ impl BreezSdk {
     /// 3. Calculates actual send amount (amount - estimated fee)
     /// 4. Second query: gets invoice for actual amount
     /// 5. Returns the prepare response with the second invoice
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn prepare_lnurl_pay_fees_included(
         &self,
         request: PrepareLnurlPayRequest,
-        amount_sats: u64,
+        amount: u128,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        let amount_sats: u64 = amount
+            .try_into()
+            .map_err(|_| SdkError::InvalidInput("Amount too large".to_string()))?;
         if amount_sats == 0 {
             return Err(SdkError::InvalidInput(
                 "Amount must be greater than 0".to_string(),
             ));
         }
+
+        // Compute conversion estimate if this is a send-all-with-conversion
+        let token_identifier = request.token_identifier.clone();
+        let conversion_estimate = if request.conversion_options.is_some() {
+            self.estimate_conversion(
+                request.conversion_options.as_ref(),
+                token_identifier.as_ref(),
+                crate::token_conversion::ConversionAmount::AmountIn(request.amount),
+            )
+            .await?
+        } else {
+            None
+        };
 
         // 1. Validate amount is within LNURL limits
         let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
@@ -489,7 +576,8 @@ impl BreezSdk {
             invoice_details,
             fee_sats: first_fee,
             success_action: success_data.success_action.map(From::from),
-            conversion_estimate: None,
+            conversion_estimate,
+            token_identifier,
             fee_policy: FeePolicy::FeesIncluded,
         })
     }

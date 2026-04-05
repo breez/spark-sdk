@@ -447,7 +447,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     // Show conversion estimate if applicable
     prepareResponse.conversionEstimate?.let { conversionEstimate ->
         val units = if (conversionEstimate.options.conversionType == ConversionType.FromBitcoin) "sats" else "token base units"
-        println("Estimated conversion of ${conversionEstimate.amount} $units with a ${conversionEstimate.fee} $units fee")
+        println("Estimated conversion of ${conversionEstimate.amountIn} $units → ${conversionEstimate.amountOut} $units with a ${conversionEstimate.fee} $units fee")
         val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
         if (line != "y") {
             println("Payment cancelled")
@@ -526,10 +526,11 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
 
     val prepareResponse = sdk.prepareLnurlPay(
         PrepareLnurlPayRequest(
-            amountSats = amountSats,
+            amount = BigInteger.fromLong(amountSats.toLong()),
             payRequest = payRequest,
             comment = comment,
             validateSuccessActionUrl = validateSuccessUrl,
+            tokenIdentifier = null,
             conversionOptions = conversionOptions,
             feePolicy = feePolicy,
         )
@@ -537,7 +538,7 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
 
     // Show conversion estimate if applicable
     prepareResponse.conversionEstimate?.let { conversionEstimate ->
-        println("Estimated conversion of ${conversionEstimate.amount} token base units with a ${conversionEstimate.fee} token base units fee")
+        println("Estimated conversion of ${conversionEstimate.amountIn} token base units → ${conversionEstimate.amountOut} sats with a ${conversionEstimate.fee} token base units fee")
         val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
         if (line != "y") {
             println("Payment cancelled")

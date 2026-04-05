@@ -145,7 +145,8 @@ pub(crate) use self::queue::PendingConversion;
 
 use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
 use crate::models::{
-    ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
+    ConversionDetails, ConversionStatus, FeePolicy, Payment, PaymentMethod, PaymentType,
+    StableBalanceToken,
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
 use crate::{
@@ -308,6 +309,60 @@ impl StableBalance {
             .await
             .as_ref()
             .map(|t| t.label.clone())
+    }
+
+    /// Checks whether the given request parameters constitute a send-all-with-conversion.
+    ///
+    /// Returns `true` when:
+    /// - Fee policy is `FeesIncluded`
+    /// - The active token matches the request's `token_identifier` and `from_token_identifier`
+    /// - The amount equals the full token balance
+    ///
+    /// Returns an error if the amount doesn't match the full token balance (partial send
+    /// masquerading as send-all).
+    pub(crate) async fn is_send_all_with_conversion(
+        &self,
+        token_identifier: Option<&String>,
+        amount: Option<u128>,
+        conversion_options: Option<&ConversionOptions>,
+        fee_policy: FeePolicy,
+    ) -> Result<bool, SdkError> {
+        if fee_policy != FeePolicy::FeesIncluded {
+            return Ok(false);
+        }
+
+        let (
+            Some(token_id),
+            Some(amount),
+            Some(ConversionOptions {
+                conversion_type:
+                    ConversionType::ToBitcoin {
+                        from_token_identifier,
+                    },
+                ..
+            }),
+        ) = (token_identifier, amount, conversion_options)
+        else {
+            return Ok(false);
+        };
+
+        let active_token_id = self.get_active_token_identifier().await;
+        if active_token_id.as_ref() != Some(token_id) || token_id != from_token_identifier {
+            return Ok(false);
+        }
+
+        let token_balances = self.spark_wallet.get_token_balances().await?;
+        let token_balance = token_balances
+            .get(from_token_identifier)
+            .map_or(0, |tb| tb.balance);
+
+        if amount != token_balance {
+            return Err(SdkError::InvalidInput(format!(
+                "Send-all amount ({amount}) must equal the full token balance ({token_balance})"
+            )));
+        }
+
+        Ok(true)
     }
 
     /// Acquires a payment guard that suppresses auto-convert while held.

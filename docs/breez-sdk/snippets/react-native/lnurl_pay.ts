@@ -3,8 +3,7 @@ import {
   InputType_Tags,
   type LnurlPayRequestDetails,
   FeePolicy,
-  type PrepareLnurlPayResponse,
-  ConversionType
+  type PrepareLnurlPayResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 
 const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
@@ -20,33 +19,18 @@ const examplePrepareLnurlPay = async (sdk: BreezSdk) => {
     const optionalComment = '<comment>'
     const payRequest = input.inner[0].payRequest
     const optionalValidateSuccessActionUrl = true
-    // Optionally set to use token funds to pay via token conversion
-    const optionalMaxSlippageBps = 50
-    const optionalCompletionTimeoutSecs = 30
-    const optionalConversionOptions = {
-      conversionType: new ConversionType.ToBitcoin({
-        fromTokenIdentifier: '<token identifier>'
-      }),
-      maxSlippageBps: optionalMaxSlippageBps,
-      completionTimeoutSecs: optionalCompletionTimeoutSecs
-    }
 
     const prepareResponse = await sdk.prepareLnurlPay({
-      amountSats,
+      amount: amountSats,
       payRequest,
       comment: optionalComment,
       validateSuccessActionUrl: optionalValidateSuccessActionUrl,
-      conversionOptions: optionalConversionOptions,
+      tokenIdentifier: undefined,
+      conversionOptions: undefined,
       feePolicy: undefined
     })
 
     // If the fees are acceptable, continue to create the LNURL Pay
-    if (prepareResponse.conversionEstimate !== undefined) {
-      const conversionEstimate = prepareResponse.conversionEstimate
-      console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
-      console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
-    }
-
     const feeSats = prepareResponse.feeSats
     console.log(`Fees: ${feeSats} sats`)
   }
@@ -74,10 +58,11 @@ const examplePrepareLnurlPayFeesIncluded = async (sdk: BreezSdk, payRequest: Lnu
   const amountSats = BigInt(5_000)
 
   const prepareResponse = await sdk.prepareLnurlPay({
-    amountSats,
+    amount: amountSats,
     payRequest,
     comment: optionalComment,
     validateSuccessActionUrl: optionalValidateSuccessActionUrl,
+    tokenIdentifier: undefined,
     conversionOptions: undefined,
     feePolicy: FeePolicy.FeesIncluded
   })

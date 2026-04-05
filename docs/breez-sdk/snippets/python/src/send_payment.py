@@ -3,6 +3,7 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     FeePolicy,
+    GetInfoRequest,
     OnchainConfirmationSpeed,
     PrepareSendPaymentRequest,
     PrepareSendPaymentResponse,
@@ -161,10 +162,11 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
         if prepare_response.conversion_estimate is not None:
             conversion_estimate = prepare_response.conversion_estimate
             logging.debug(
-                f"Estimated conversion amount: {conversion_estimate.amount} token base units"
+                f"Estimated conversion: {conversion_estimate.amount_in}"
+                f" token units → {conversion_estimate.amount_out} sats"
             )
             logging.debug(
-                f"Estimated conversion fee: {conversion_estimate.fee} token base units"
+                f"Estimated conversion fee: {conversion_estimate.fee} token units"
             )
     except Exception as error:
         logging.error(error)
@@ -259,3 +261,52 @@ async def prepare_send_payment_fees_included(sdk: BreezSdk):
         logging.error(error)
         raise
     # ANCHOR_END: prepare-send-payment-fees-included
+
+
+async def prepare_send_payment_send_all(sdk: BreezSdk):
+    # ANCHOR: prepare-send-payment-send-all
+    # To send the entire token balance plus any remaining sats,
+    # provide the full token balance as the amount with ToBitcoin
+    # conversion options and FeesIncluded. The SDK converts all
+    # tokens to sats, combines with existing sat balance, and
+    # deducts fees — draining the wallet completely.
+    payment_request = "<payment request>"
+    token_identifier = "<token identifier>"
+    try:
+        info = await sdk.get_info(request=GetInfoRequest(ensure_synced=False))
+        token_balance = info.token_balances.get(token_identifier)
+        if token_balance is None:
+            raise ValueError("Token balance not found")
+
+        conversion_options = ConversionOptions(
+            conversion_type=ConversionType.TO_BITCOIN(
+                from_token_identifier=token_identifier
+            ),
+        )
+
+        request = PrepareSendPaymentRequest(
+            payment_request=payment_request,
+            amount=token_balance.balance,
+            token_identifier=token_identifier,
+            conversion_options=conversion_options,
+            fee_policy=FeePolicy.FEES_INCLUDED,
+        )
+        prepare_response = await sdk.prepare_send_payment(request=request)
+
+        # The response amount is the estimated total sats available
+        # (converted sats + existing sat balance)
+        logging.debug(f"Total sats available: {prepare_response.amount}")
+
+        if prepare_response.conversion_estimate is not None:
+            conversion_estimate = prepare_response.conversion_estimate
+            logging.debug(
+                f"Converting {conversion_estimate.amount_in}"
+                f" token units → ~{conversion_estimate.amount_out} sats"
+            )
+            logging.debug(
+                f"Conversion fee: {conversion_estimate.fee} token units"
+            )
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: prepare-send-payment-send-all

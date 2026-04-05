@@ -659,7 +659,7 @@ pub(crate) async fn execute_command(
                     };
                 println!(
                     "Estimated conversion of {} {} with a {} {} fee",
-                    conversion_estimate.amount, units, conversion_estimate.fee, units
+                    conversion_estimate.amount_out, units, conversion_estimate.fee, units
                 );
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
@@ -713,14 +713,15 @@ pub(crate) async fn execute_command(
                     let max_sendable = pay_request.max_sendable / 1000;
                     let prompt =
                         format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ");
-                    let amount_sats = rl.readline(&prompt)?.parse::<u64>()?;
+                    let amount = rl.readline(&prompt)?.parse::<u128>()?;
 
                     let prepare_response = sdk
                         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                            amount_sats,
+                            amount,
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,
+                            token_identifier: None,
                             conversion_options,
                             fee_policy,
                         })
@@ -729,7 +730,7 @@ pub(crate) async fn execute_command(
                     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
                         println!(
                             "Estimated conversion of {} token base units with a {} token base units fee",
-                            conversion_estimate.amount, conversion_estimate.fee
+                            conversion_estimate.amount_out, conversion_estimate.fee
                         );
                         let line = rl
                             .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?

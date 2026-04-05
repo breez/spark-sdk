@@ -122,8 +122,8 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
         ))
 
     if let conversionEstimate = prepareResponse.conversionEstimate {
-        print("Estimated conversion amount: \(conversionEstimate.amount) token base units")
-        print("Estimated conversion fee: \(conversionEstimate.fee) token base units")
+        print("Estimated conversion: \(conversionEstimate.amountIn) token units → \(conversionEstimate.amountOut) sats")
+        print("Estimated conversion fee: \(conversionEstimate.fee) token units")
     }
     // ANCHOR_END: prepare-send-payment-with-conversion
 }
@@ -198,4 +198,49 @@ func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
     print("Amount: \(String(describing: prepareResponse.amount))")
     // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
     // ANCHOR_END: prepare-send-payment-fees-included
+}
+
+func prepareSendPaymentSendAll(sdk: BreezSdk) async throws {
+    // ANCHOR: prepare-send-payment-send-all
+    // To send the entire token balance plus any remaining sats,
+    // provide the full token balance as the amount with ToBitcoin
+    // conversion options and FeesIncluded. The SDK converts all
+    // tokens to sats, combines with existing sat balance, and
+    // deducts fees — draining the wallet completely.
+    let paymentRequest = "<payment request>"
+    let tokenIdentifier = "<token identifier>"
+
+    let info = try await sdk.getInfo(
+        request: GetInfoRequest(ensureSynced: false))
+
+    guard let tokenBalance = info.tokenBalances[tokenIdentifier] else {
+        throw SdkError.InvalidInput("Token balance not found")
+    }
+
+    let conversionOptions = ConversionOptions(
+        conversionType: ConversionType.toBitcoin(
+            fromTokenIdentifier: tokenIdentifier
+        ),
+        maxSlippageBps: nil,
+        completionTimeoutSecs: nil
+    )
+
+    let prepareResponse = try await sdk.prepareSendPayment(
+        request: PrepareSendPaymentRequest(
+            paymentRequest: paymentRequest,
+            amount: tokenBalance.balance,
+            tokenIdentifier: tokenIdentifier,
+            conversionOptions: conversionOptions,
+            feePolicy: .feesIncluded
+        ))
+
+    // The response amount is the estimated total sats available
+    // (converted sats + existing sat balance)
+    print("Total sats available: \(prepareResponse.amount)")
+
+    if let conversionEstimate = prepareResponse.conversionEstimate {
+        print("Converting \(conversionEstimate.amountIn) token units → ~\(conversionEstimate.amountOut) sats")
+        print("Conversion fee: \(conversionEstimate.fee) token units")
+    }
+    // ANCHOR_END: prepare-send-payment-send-all
 }

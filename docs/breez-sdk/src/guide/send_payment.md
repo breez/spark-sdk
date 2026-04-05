@@ -65,6 +65,10 @@ This is particularly useful when you want to spend your entire balance in a sing
 
 {{#tabs send_payment:prepare-send-payment-fees-included}}
 
+When [stable balance](./stable_balance.md) is active, you can send your entire wallet balance — both the token balance and any remaining sats — by combining {{#enum FeePolicy::FeesIncluded}} with {{#enum ConversionType::ToBitcoin}} conversion options. See [Sending entire balance](./stable_balance.md#sending-entire-balance) for details.
+
+{{#tabs send_payment:prepare-send-payment-send-all}}
+
 <h2 id="sending-payments">
     <a class="header" href="#sending-payments">Sending Payments</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.send_payment">API docs</a>

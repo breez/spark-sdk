@@ -329,10 +329,11 @@ async fn test_05_lnurl_payment_flow(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: payment_amount_sats,
+            amount: payment_amount_sats as u128,
             pay_request: details.pay_request,
             comment: Some(payment_comment.to_string()),
             validate_success_action_url: None,
+            token_identifier: None,
             conversion_options: None,
             fee_policy: None,
         })
@@ -483,10 +484,11 @@ async fn test_07_lnurl_send_all_payment(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: alice_balance,
+            amount: alice_balance.into(),
             pay_request: details.pay_request,
             comment: Some("FeesIncluded test from Alice".to_string()),
             validate_success_action_url: None,
+            token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
         })
@@ -632,10 +634,11 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     ) -> Result<u64> {
         let prepare = sdk
             .prepare_lnurl_pay(PrepareLnurlPayRequest {
-                amount_sats: amount,
+                amount: amount.into(),
                 pay_request: pay_request.clone(),
                 comment: None,
                 validate_success_action_url: None,
+                token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
             })
@@ -786,10 +789,11 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: target_balance,
+            amount: target_balance.into(),
             pay_request: details.pay_request,
             comment: Some("FeesIncluded with overpayment test".to_string()),
             validate_success_action_url: None,
+            token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
         })
@@ -1062,10 +1066,11 @@ async fn test_11_lnurl_spark_address_payment(
     let prepare_response = alice
         .sdk
         .prepare_lnurl_pay(PrepareLnurlPayRequest {
-            amount_sats: payment_amount_sats,
+            amount: payment_amount_sats as u128,
             pay_request: details.pay_request,
             comment: Some(payment_comment.to_string()),
             validate_success_action_url: None,
+            token_identifier: None,
             conversion_options: None,
             fee_policy: None,
         })

@@ -191,10 +191,10 @@ namespace BreezSdkSnippets
             // If the fees are acceptable, continue to send the token payment
             if (prepareResponse.conversionEstimate != null)
             {
-                Console.WriteLine("Estimated conversion amount: " +
-                    $"{prepareResponse.conversionEstimate.amount} sats");
+                Console.WriteLine("Estimated conversion: " +
+                    $"{prepareResponse.conversionEstimate.amountIn} token units → {prepareResponse.conversionEstimate.amountOut} sats");
                 Console.WriteLine("Estimated conversion fee: " +
-                    $"{prepareResponse.conversionEstimate.fee} sats");
+                    $"{prepareResponse.conversionEstimate.fee} token units");
             }
             // ANCHOR_END: prepare-send-payment-with-conversion
         }

@@ -106,6 +106,52 @@ class SendPayment {
         // ANCHOR_END: prepare-send-payment-fees-included
     }
 
+    suspend fun prepareSendPaymentSendAll(sdk: BreezSdk) {
+        // ANCHOR: prepare-send-payment-send-all
+        // To send the entire token balance plus any remaining sats,
+        // provide the full token balance as the amount with ToBitcoin
+        // conversion options and FeesIncluded. The SDK converts all
+        // tokens to sats, combines with existing sat balance, and
+        // deducts fees — draining the wallet completely.
+        val paymentRequest = "<payment request>"
+        val tokenIdentifier = "<token identifier>"
+
+        try {
+            val info = sdk.getInfo(GetInfoRequest(false))
+            val tokenBalance = info.tokenBalances[tokenIdentifier]
+                ?: throw Exception("Token balance not found")
+
+            val conversionOptions = ConversionOptions(
+                conversionType = ConversionType.ToBitcoin(
+                    tokenIdentifier
+                ),
+                maxSlippageBps = null,
+                completionTimeoutSecs = null
+            )
+
+            val req = PrepareSendPaymentRequest(
+                paymentRequest,
+                amount = tokenBalance.balance,
+                tokenIdentifier = tokenIdentifier,
+                conversionOptions = conversionOptions,
+                feePolicy = FeePolicy.FEES_INCLUDED,
+            )
+            val prepareResponse = sdk.prepareSendPayment(req)
+
+            // The response amount is the estimated total sats available
+            // (converted sats + existing sat balance)
+            // Log.v("Breez", "Total sats available: ${prepareResponse.amount}")
+
+            prepareResponse.conversionEstimate?.let { conversionEstimate ->
+                // Log.v("Breez", "Converting ${conversionEstimate.amountIn} token units → ~${conversionEstimate.amountOut} sats")
+                // Log.v("Breez", "Conversion fee: ${conversionEstimate.fee} token units")
+            }
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: prepare-send-payment-send-all
+    }
+
     suspend fun prepareSendPaymentSparkAddress(sdk: BreezSdk) {
         // ANCHOR: prepare-send-payment-spark-address
         val paymentRequest = "<spark address>"
@@ -194,8 +240,8 @@ class SendPayment {
 
             // If the fees are acceptable, continue to create the Send Payment
             prepareResponse.conversionEstimate?.let { conversionEstimate ->
-                // Log.v("Breez", "Estimated conversion amount: ${conversionEstimate.amount} token base units")
-                // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token base units")
+                // Log.v("Breez", "Estimated conversion: ${conversionEstimate.amountIn} token units → ${conversionEstimate.amountOut} sats")
+                // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token units")
             }
         } catch (e: Exception) {
             // handle error

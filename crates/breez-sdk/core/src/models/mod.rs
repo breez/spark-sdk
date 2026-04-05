@@ -690,7 +690,7 @@ pub struct StableBalanceConfig {
 
     /// Maximum slippage in basis points (1/100 of a percent).
     ///
-    /// Defaults to 50 bps (0.5%) if not set.
+    /// Defaults to 10 bps (0.1%) if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_slippage_bps: Option<u32>,
 }
@@ -1157,13 +1157,18 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    /// The amount to send in satoshis.
-    pub amount_sats: u64,
+    /// The amount to send.
+    /// For regular sends, this is in satoshis.
+    /// For send-all with conversion (`ToBitcoin`), this is the token amount in base units.
+    pub amount: u128,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub comment: Option<String>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub validate_success_action_url: Option<bool>,
+    /// The token identifier when sending a token amount with conversion.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
     /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
@@ -1186,6 +1191,8 @@ pub struct PrepareLnurlPayResponse {
     pub success_action: Option<SuccessAction>,
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
+    /// The token identifier for send-all-with-conversion flows
+    pub token_identifier: Option<String>,
     /// How fees are handled for this payment.
     pub fee_policy: FeePolicy,
 }

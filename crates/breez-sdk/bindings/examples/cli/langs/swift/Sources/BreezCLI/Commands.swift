@@ -464,7 +464,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
         } else {
             units = "token base units"
         }
-        print("Estimated conversion of \(estimate.amount) \(units) with a \(estimate.fee) \(units) fee")
+        print("Estimated conversion of \(estimate.amountIn) \(units) → \(estimate.amountOut) \(units) with a \(estimate.fee) \(units) fee")
         let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
         if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
             print("Payment cancelled")
@@ -531,16 +531,17 @@ func handleLnurlPay(_ sdk: BreezSdk, _ args: [String]) async throws {
     }
 
     let prepareResponse = try await sdk.prepareLnurlPay(request: PrepareLnurlPayRequest(
-        amountSats: amountSats,
+        amount: BInt(amountSats),
         payRequest: payRequest,
         comment: comment,
         validateSuccessActionUrl: validateSuccessUrl,
+        tokenIdentifier: nil,
         conversionOptions: conversionOptions,
         feePolicy: feePolicy
     ))
 
     if let estimate = prepareResponse.conversionEstimate {
-        print("Estimated conversion of \(estimate.amount) token base units with a \(estimate.fee) token base units fee")
+        print("Estimated conversion of \(estimate.amountIn) token base units → \(estimate.amountOut) sats with a \(estimate.fee) token base units fee")
         let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
         if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
             print("Payment cancelled")

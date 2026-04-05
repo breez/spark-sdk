@@ -195,10 +195,11 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
         if prepare_response.conversion_estimate is not None:
             conversion_estimate = prepare_response.conversion_estimate
             logging.debug(
-                f"Estimated conversion amount: {conversion_estimate.amount} sats"
+                f"Estimated conversion: {conversion_estimate.amount_in}"
+                f" token units → {conversion_estimate.amount_out} sats"
             )
             logging.debug(
-                f"Estimated conversion fee: {conversion_estimate.fee} sats"
+                f"Estimated conversion fee: {conversion_estimate.fee} token units"
             )
     except Exception as error:
         logging.error(error)
