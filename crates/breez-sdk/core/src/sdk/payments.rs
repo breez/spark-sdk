@@ -776,13 +776,13 @@ impl BreezSdk {
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
-                self.send_spark_address(
+                Box::pin(self.send_spark_address(
                     address,
                     token_identifier,
                     amount,
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
-                )
+                ))
                 .await
             }
             SendPaymentMethod::SparkInvoice {
