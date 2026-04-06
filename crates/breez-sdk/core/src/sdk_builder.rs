@@ -12,7 +12,7 @@ use platform_utils::DefaultHttpClient;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-use spark_wallet::{SparkWalletConfig, TokenOutputStore, TreeStore};
+use spark_wallet::{InMemorySessionManager, SparkWalletConfig, TokenOutputStore, TreeStore};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -31,6 +31,7 @@ use crate::{
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator},
+    session_manager::BreezSessionManager,
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
@@ -543,9 +544,13 @@ impl SdkBuilder {
                 Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
         }
 
+        let session_manager = Arc::new(BreezSessionManager::new(Arc::new(
+            InMemorySessionManager::default(),
+        )));
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
-                .with_cancellation_token(shutdown_sender.subscribe());
+                .with_cancellation_token(shutdown_sender.subscribe())
+                .with_session_manager(session_manager);
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
