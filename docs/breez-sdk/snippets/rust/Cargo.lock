@@ -400,8 +400,6 @@ dependencies = [
  "breez-sdk-common",
  "built",
  "chrono",
- "deadpool",
- "deadpool-postgres",
  "flashnet",
  "frost-secp256k1-tr-unofficial",
  "hex",
@@ -413,19 +411,16 @@ dependencies = [
  "platform-utils",
  "rusqlite",
  "rusqlite_migration",
- "rustls",
  "serde",
  "serde_json",
+ "spark-postgres",
  "spark-wallet",
  "thiserror 2.0.17",
  "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
  "tracing",
  "tracing-subscriber",
  "utils",
  "uuid",
- "webpki-roots 1.0.5",
  "x509-cert",
 ]
 
@@ -3088,6 +3083,29 @@ dependencies = [
  "unicode-normalization",
  "utils",
  "uuid",
+]
+
+[[package]]
+name = "spark-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "deadpool",
+ "deadpool-postgres",
+ "macros",
+ "platform-utils",
+ "rustls",
+ "serde",
+ "serde_json",
+ "spark-wallet",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "uuid",
+ "webpki-roots 1.0.5",
 ]
 
 [[package]]

@@ -743,8 +743,6 @@ dependencies = [
  "breez-sdk-spark",
  "built",
  "chrono",
- "deadpool",
- "deadpool-postgres",
  "flashnet",
  "frost-secp256k1-tr-unofficial",
  "hex",
@@ -757,7 +755,6 @@ dependencies = [
  "rcgen",
  "rusqlite",
  "rusqlite_migration",
- "rustls",
  "serde",
  "serde_json",
  "spark-postgres",
@@ -772,7 +769,6 @@ dependencies = [
  "utils",
  "uuid",
  "wasm-bindgen-test",
- "webpki-roots 1.0.2",
  "x509-cert",
 ]
 
@@ -4770,7 +4766,7 @@ dependencies = [
  "macros",
  "platform-utils",
  "rcgen",
- "rustls 0.23.31",
+ "rustls",
  "serde",
  "serde_json",
  "spark-postgres",
