@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::OperatorRpcError;
@@ -91,6 +92,7 @@ impl OperatorAuth {
             expiration: verify_resp.expiration_timestamp.try_into().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid expiration timestamp".to_string())
             })?,
+            headers: HashMap::new(),
         };
         Ok(session)
     }

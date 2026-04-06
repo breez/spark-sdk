@@ -17,6 +17,7 @@ pub enum SessionManagerError {
 pub struct Session {
     pub token: String,
     pub expiration: u64,
+    pub headers: HashMap<String, String>,
 }
 
 impl Session {
@@ -25,6 +26,10 @@ impl Session {
             return false;
         };
         self.expiration > duration.as_secs()
+    }
+
+    pub fn set_headers(&mut self, headers: HashMap<String, String>) {
+        self.headers = headers;
     }
 }
 

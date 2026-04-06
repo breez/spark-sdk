@@ -722,10 +722,21 @@ impl TryFrom<Session> for OperatorSessionInterceptor {
     type Error = OperatorRpcError;
 
     fn try_from(session: Session) -> std::result::Result<Self, Self::Error> {
+        let mut headers = Vec::new();
+        for (key, value) in session.headers {
+            let metadata_key = key
+                .parse::<tonic::metadata::MetadataKey<Ascii>>()
+                .map_err(|_| OperatorRpcError::Generic(format!("Invalid metadata key: {key}")))?;
+            let metadata_value = value.parse::<MetadataValue<Ascii>>().map_err(|_| {
+                OperatorRpcError::Generic(format!("Invalid metadata value for key: {key}"))
+            })?;
+            headers.push((metadata_key, metadata_value));
+        }
         Ok(OperatorSessionInterceptor {
             token: session.token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())
             })?,
+            headers,
         })
     }
 }
@@ -733,12 +744,16 @@ impl TryFrom<Session> for OperatorSessionInterceptor {
 #[derive(Clone, Debug)]
 struct OperatorSessionInterceptor {
     token: MetadataValue<Ascii>,
+    headers: Vec<(tonic::metadata::MetadataKey<Ascii>, MetadataValue<Ascii>)>,
 }
 
 impl Interceptor for OperatorSessionInterceptor {
     fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
         req.metadata_mut()
             .insert("authorization", self.token.clone());
+        for (key, value) in &self.headers {
+            req.metadata_mut().insert(key, value.clone());
+        }
         Ok(req)
     }
 }
