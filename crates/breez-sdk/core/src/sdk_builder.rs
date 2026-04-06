@@ -550,7 +550,7 @@ impl SdkBuilder {
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
-                .with_session_manager(session_manager);
+                .with_session_manager(session_manager.clone());
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -668,6 +668,7 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
+            session_manager,
         })?;
         debug!("Initialized and started breez sdk.");
 

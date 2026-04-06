@@ -5,6 +5,10 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
+use crate::Network;
+use crate::session_manager::{
+    BreezSessionManager, KEY_BREEZ_JWT, calculate_expiry, is_jwt_expired, jwt_exp,
+};
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -27,7 +31,33 @@ use super::{
     parse_input,
 };
 
+const JWT_REFRESH_RETRY_SECS: u64 = 10;
+
 impl BreezSdk {
+    async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
+        let mut token = self.session_manager.token.read().await.clone();
+
+        if token.is_none() {
+            token = self
+                .storage
+                .get_cached_item(KEY_BREEZ_JWT.to_string())
+                .await
+                .ok()
+                .flatten();
+            if let Some(token) = &token
+                && !is_jwt_expired(token)
+            {
+                *self.session_manager.token.write().await = Some(token.clone());
+            }
+        }
+
+        Duration::from_secs(match (token, refresh_counter) {
+            (None, counter) if counter < 3 => 0,
+            (None, _) => JWT_REFRESH_RETRY_SECS,
+            (Some(token), _) => jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry),
+        })
+    }
+
     pub(super) fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
@@ -35,6 +65,10 @@ impl BreezSdk {
         let sync_coordinator = sdk.sync_coordinator.clone();
         let mut sync_trigger_receiver = sdk.sync_coordinator.subscribe();
         let mut last_sync_time = SystemTime::now();
+        let (should_refresh_jwt, mut refresh_counter) = (
+            matches!(sdk.config.network, Network::Mainnet) && sdk.config.api_key.is_some(),
+            0,
+        );
 
         let sync_interval = u64::from(self.config.sync_interval_secs);
         let span = tracing::Span::current();
@@ -91,6 +125,28 @@ impl BreezSdk {
                             last_sync_time = SystemTime::now();
                         }
                     }
+
+                    () = tokio::time::sleep(sdk.jwt_interval(refresh_counter).await), if should_refresh_jwt => {
+                        refresh_counter = refresh_counter.saturating_add(1);
+                        let api_key = sdk.config.api_key.as_ref().unwrap();
+                        let token = match BreezSessionManager::new_jwt(api_key).await {
+                            Ok(token) => token,
+                            Err(err) => {
+                                warn!("Could not fetch new JWT: {err}");
+                                continue;
+                            }
+                        };
+                        *sdk.session_manager.token.write().await = Some(token.clone());
+                        if let Err(err) = sdk
+                            .storage
+                            .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
+                            .await
+                        {
+                            warn!("Could not persist JWT: {err}");
+                        }
+                        refresh_counter = 0;
+                    }
+
                     // Ensure we sync at least the configured interval
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
                         let now = SystemTime::now();

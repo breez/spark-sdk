@@ -27,10 +27,6 @@ impl Session {
         };
         self.expiration > duration.as_secs()
     }
-
-    pub fn set_headers(&mut self, headers: HashMap<String, String>) {
-        self.headers = headers;
-    }
 }
 
 #[macros::async_trait]
