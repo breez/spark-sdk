@@ -14,6 +14,7 @@
 import {
   Seed,
   type Seed as SeedType,
+  PasskeyPrfProvider,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
@@ -24,6 +25,8 @@ import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
 /** Passkey PRF provider type, matching the Rust CLI's PasskeyProvider enum. */
 export enum PasskeyProvider {
+  /** Platform-native passkey (iOS AuthenticationServices / Android CredentialManager). */
+  Platform = 'platform',
   File = 'file',
   YubiKey = 'yubikey',
   Fido2 = 'fido2',
@@ -38,6 +41,8 @@ export enum PasskeyProvider {
  */
 export function parsePasskeyProvider(s: string): PasskeyProvider {
   switch (s.toLowerCase()) {
+    case 'platform':
+      return PasskeyProvider.Platform
     case 'file':
       return PasskeyProvider.File
     case 'yubikey':
@@ -45,7 +50,7 @@ export function parsePasskeyProvider(s: string): PasskeyProvider {
     case 'fido2':
       return PasskeyProvider.Fido2
     default:
-      throw new Error(`Invalid passkey provider '${s}' (valid: file, yubikey, fido2)`)
+      throw new Error(`Invalid passkey provider '${s}' (valid: platform, file, yubikey, fido2)`)
   }
 }
 
@@ -221,6 +226,8 @@ export async function buildPrfProvider(
   dataDir: string,
 ): Promise<{ derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> }> {
   switch (provider) {
+    case PasskeyProvider.Platform:
+      return new PasskeyPrfProvider()
     case PasskeyProvider.File:
       return FilePrfProvider.create(dataDir)
     case PasskeyProvider.YubiKey:
@@ -237,11 +244,30 @@ export async function buildPrfProvider(
 // ---------------------------------------------------------------------------
 
 /**
+ * Check if an error indicates the user needs to create a passkey.
+ */
+function isPasskeyCreationNeeded(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error)
+  // Also check the error code (RN native modules set .code on rejections)
+  const code = (error as { code?: string })?.code ?? ''
+  const combined = `${code} ${msg}`.toLowerCase()
+  return combined.includes('cancelled')
+    || combined.includes('canceled')
+    || combined.includes('no_credential')
+    || combined.includes('nocredential')
+    || combined.includes('not found')
+    || combined.includes('no credentials')
+}
+
+/**
  * Resolve a wallet seed using the given PRF provider.
  *
- * Note: Full passkey functionality (Nostr label listing/storing) is not
- * yet supported in the React Native SDK. This stub derives a seed from the
- * PRF provider and returns it as a Seed.Entropy variant.
+ * For Platform providers: if the user cancels or has no credential,
+ * automatically creates a new passkey and retries — matching the
+ * glow-web onboarding flow.
+ *
+ * Note: Full Nostr label listing/storing is not yet supported in the
+ * React Native SDK. Only basic seed derivation is available.
  *
  * @param provider - The PRF provider to use
  * @param _breezApiKey - Optional Breez API key (unused - Nostr not yet supported)
@@ -252,19 +278,38 @@ export async function buildPrfProvider(
  *          labels is populated when listLabels is true
  */
 export async function resolvePasskeySeed(
-  provider: { derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> },
+  provider: {
+    derivePrfSeed: (salt: string) => Promise<ArrayBuffer>
+    isPrfAvailable: () => Promise<boolean>
+    createPasskey?: () => Promise<void>
+  },
   _breezApiKey: string | undefined,
   label: string | undefined,
   _listLabels: boolean,
   _storeLabel: boolean,
 ): Promise<{ seed: SeedType; labels?: string[] }> {
-  // Derive seed bytes from the PRF provider
-  const seedBytes = await provider.derivePrfSeed(label ?? 'Default')
+  const salt = label ?? 'Default'
 
-  // Note: Passkey label listing/storing via Nostr is not yet supported
-  // in React Native. Only basic seed derivation is available.
+  try {
+    // Try to derive seed with existing passkey
+    const seedBytes = await provider.derivePrfSeed(salt)
+    const seed = new Seed.Entropy(seedBytes)
+    return { seed }
+  } catch (firstError) {
+    const errCode = (firstError as { code?: string })?.code ?? 'unknown'
+    const errMsg = firstError instanceof Error ? firstError.message : String(firstError)
+    console.log(`[Passkey] First attempt failed: code=${errCode}, message=${errMsg}`)
+    console.log(`[Passkey] Creation needed: ${isPasskeyCreationNeeded(firstError)}, hasCreate: ${!!provider.createPasskey}`)
 
-  // Use Entropy variant since we have raw bytes
-  const seed = new Seed.Entropy(seedBytes)
-  return { seed }
+    // If user cancelled or no credential, try creating a new passkey
+    if (isPasskeyCreationNeeded(firstError) && provider.createPasskey) {
+      console.log('[Passkey] No existing credential, creating new passkey...')
+      await provider.createPasskey()
+      console.log('[Passkey] Passkey created, deriving seed...')
+      const seedBytes = await provider.derivePrfSeed(salt)
+      const seed = new Seed.Entropy(seedBytes)
+      return { seed }
+    }
+    throw firstError
+  }
 }

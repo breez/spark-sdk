@@ -5,6 +5,7 @@ import CommonCrypto
 // MARK: - Passkey provider types
 
 enum PasskeyProviderType: String {
+    case platform
     case file
     case yubikey
     case fido2
@@ -121,8 +122,19 @@ class Fido2PrfProvider: PasskeyPrfProvider {
 
 // MARK: - Provider factory
 
-func createPrfProvider(type: PasskeyProviderType, dataDir: String) throws -> PasskeyPrfProvider {
+func createPrfProvider(type: PasskeyProviderType, dataDir: String, rpId: String? = nil) throws -> PasskeyPrfProvider {
     switch type {
+    case .platform:
+        if #available(iOS 18.0, macOS 15.0, *) {
+            return PlatformPasskeyPrfProvider(
+                rpId: rpId ?? "keys.breez.technology",
+                rpName: "Breez SDK"
+            )
+        } else {
+            throw PasskeyPrfError.Generic(
+                "Platform passkey PRF requires iOS 18.0+ or macOS 15.0+"
+            )
+        }
     case .file:
         return try FilePrfProvider(dataDir: dataDir)
     case .yubikey:
