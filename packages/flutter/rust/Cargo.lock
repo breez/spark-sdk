@@ -491,11 +491,11 @@ dependencies = [
 name = "breez_sdk_spark_flutter"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "breez-sdk-spark",
  "extend",
  "flutter_rust_bridge",
- "futures",
  "tokio",
 ]
 

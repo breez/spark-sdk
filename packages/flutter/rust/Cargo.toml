@@ -9,6 +9,7 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+anyhow = "1"
 async-trait = "0.1.88"
 # Replaced with release commit during publishing
 breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [
@@ -16,7 +17,6 @@ breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [
 ] }
 extend = "1.2.0"
 flutter_rust_bridge = "=2.11.1"
-futures = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

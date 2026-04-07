@@ -21,6 +21,10 @@
       "./deno": "./deno/breez_sdk_spark_wasm.js",
       "./nodejs": "./nodejs/index.js",
       "./web": "./web/index.js",
+      "./passkey-prf-provider": {
+        "import": "./web/passkey-prf-provider/index.js",
+        "default": "./web/passkey-prf-provider/index.js"
+      },
       ".": {
         "node": "./nodejs/index.js",
         "deno": "./deno/breez_sdk_spark_wasm.js",
