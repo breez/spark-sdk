@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use platform_utils::{
@@ -7,7 +8,7 @@ use platform_utils::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Global semaphore to limit concurrent faucet requests.
 /// This enables test parallelization while preventing faucet rate limiting.
@@ -117,6 +118,8 @@ impl RegtestFaucet {
     /// # Returns
     /// The transaction hash of the funding transaction
     pub async fn fund_address(&self, address: &str, amount_sats: u64) -> Result<String> {
+        const MAX_RETRIES: u32 = 3;
+
         // Acquire semaphore permit to limit concurrent faucet requests
         let _permit = FAUCET_SEMAPHORE
             .acquire()
@@ -128,6 +131,30 @@ impl RegtestFaucet {
             amount_sats, address
         );
 
+        let mut last_error = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let backoff = Duration::from_secs(2u64.pow(attempt));
+                warn!(
+                    "Faucet request failed, retrying in {}s (attempt {}/{})",
+                    backoff.as_secs(),
+                    attempt + 1,
+                    MAX_RETRIES + 1,
+                );
+                tokio::time::sleep(backoff).await;
+            }
+
+            match self.try_fund_address(address, amount_sats).await {
+                Ok(txid) => return Ok(txid),
+                Err(e) => last_error = Some(e),
+            }
+        }
+
+        Err(last_error.unwrap())
+    }
+
+    async fn try_fund_address(&self, address: &str, amount_sats: u64) -> Result<String> {
         let request_body = GraphQLRequest {
             operation_name: "RequestRegtestFunds".to_string(),
             variables: FaucetVariables {
