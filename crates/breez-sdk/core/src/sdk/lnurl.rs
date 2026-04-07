@@ -27,39 +27,27 @@ impl BreezSdk {
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         let fee_policy = request.fee_policy.unwrap_or_default();
 
-        // Check if this is a send-all with conversion using the same stable balance check
-        let is_send_all_with_conversion = match &self.stable_balance {
-            Some(sb) => {
-                sb.is_send_all_with_conversion(
-                    request.token_identifier.as_ref(),
-                    Some(request.amount),
-                    request.conversion_options.as_ref(),
-                    fee_policy,
-                )
-                .await?
-            }
-            None => false,
-        };
+        // For token conversions, the helper returns the raw estimated sats.
+        // For plain LNURL pay (no conversion) it returns request.amount unchanged.
+        let (estimated_sats, conversion_estimate) = self
+            .estimate_sats_from_token_conversion(
+                request.conversion_options.as_ref(),
+                request.token_identifier.as_ref(),
+                request.amount,
+                fee_policy,
+            )
+            .await?;
+        let is_token_conversion = conversion_estimate.is_some();
 
-        // token_identifier with conversion is only valid for send-all
-        if request.token_identifier.is_some() && !is_send_all_with_conversion {
-            return Err(SdkError::InvalidInput(
-                "Token identifier with conversion is only supported for send-all".to_string(),
-            ));
-        }
-
-        // For send-all with conversion, estimate total sats first.
-        // Deduct the max slippage so the LNURL invoice is smaller than the worst-case
-        // conversion output — the conversion will fail if slippage exceeds this guard,
-        // so we're guaranteed to have enough sats to pay the invoice.
-        let amount = if is_send_all_with_conversion {
-            let (total_sats, _) = self
-                .estimate_total_sats_with_conversion(
-                    request.conversion_options.as_ref(),
-                    request.token_identifier.as_ref(),
-                    request.amount,
-                )
-                .await?;
+        // Apply a slippage buffer only on the AmountIn conversion path
+        // (token_identifier set, variable sat output) so the LNURL invoice is sized
+        // below the worst-case conversion output and is guaranteed payable. The
+        // MinAmountOut path (no token_identifier) needs no buffer because the
+        // converter is invoked with MinAmountOut(invoice + fees) at execution time
+        // and is guaranteed to deliver enough sats or fail. The actual sats sent at
+        // execution time come from `complete_conversion_and_send` using the real
+        // post-conversion balance and may overpay this invoice.
+        let (amount, fee_policy) = if is_token_conversion && request.token_identifier.is_some() {
             let max_slippage_bps = u128::from(
                 request
                     .conversion_options
@@ -67,26 +55,28 @@ impl BreezSdk {
                     .and_then(|co| co.max_slippage_bps)
                     .unwrap_or(crate::token_conversion::DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
             );
-            let slippage_buffer = total_sats
+            let slippage_buffer = estimated_sats
                 .saturating_mul(max_slippage_bps)
                 .saturating_div(10_000);
-            let amount_after_slippage = total_sats.saturating_sub(slippage_buffer);
+            let amount_after_slippage = estimated_sats.saturating_sub(slippage_buffer);
             trace!(
-                "[SEND-ALL] prepare_lnurl: token_amount={}, estimated_total_sats={}, slippage_bps={}, slippage_buffer={}, amount_for_invoice={}",
+                "prepare_lnurl: token_amount={}, estimated_sats={}, slippage_bps={}, slippage_buffer={}, amount_for_invoice={}",
                 request.amount,
-                total_sats,
+                estimated_sats,
                 max_slippage_bps,
                 slippage_buffer,
                 amount_after_slippage
             );
-            amount_after_slippage
+            (amount_after_slippage, FeePolicy::FeesIncluded)
         } else {
-            request.amount
+            (estimated_sats, fee_policy)
         };
 
         // FeesIncluded uses the double-query approach
         if fee_policy == FeePolicy::FeesIncluded {
-            return self.prepare_lnurl_pay_fees_included(request, amount).await;
+            return self
+                .prepare_lnurl_pay_fees_included(request, amount, conversion_estimate)
+                .await;
         }
 
         // Regular send (no FeesIncluded, no conversion)
@@ -453,6 +443,7 @@ impl BreezSdk {
         &self,
         request: PrepareLnurlPayRequest,
         amount: u128,
+        conversion_estimate: Option<crate::ConversionEstimate>,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         let amount_sats: u64 = amount
             .try_into()
@@ -463,18 +454,7 @@ impl BreezSdk {
             ));
         }
 
-        // Compute conversion estimate if this is a send-all-with-conversion
         let token_identifier = request.token_identifier.clone();
-        let conversion_estimate = if request.conversion_options.is_some() {
-            self.estimate_conversion(
-                request.conversion_options.as_ref(),
-                token_identifier.as_ref(),
-                crate::token_conversion::ConversionAmount::AmountIn(request.amount),
-            )
-            .await?
-        } else {
-            None
-        };
 
         // 1. Validate amount is within LNURL limits
         let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);

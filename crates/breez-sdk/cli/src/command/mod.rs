@@ -188,6 +188,10 @@ pub enum Command {
         #[arg(short = 'i', long)]
         idempotency_key: Option<String>,
 
+        /// If provided, the amount can be provide in the token units.
+        #[arg(short = 't', long)]
+        token_identifier: Option<String>,
+
         // If provided, the payment will include a token conversion step, converting from the
         // specified token to Bitcoin to fulfill the payment.
         #[arg(long = "from-token")]
@@ -658,8 +662,8 @@ pub(crate) async fn execute_command(
                         "token base units"
                     };
                 println!(
-                    "Estimated conversion of {} {} with a {} {} fee",
-                    conversion_estimate.amount_out, units, conversion_estimate.fee, units
+                    "Estimated conversion of {} {} with a {} token base units fee",
+                    conversion_estimate.amount_out, units, conversion_estimate.fee
                 );
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
@@ -687,6 +691,7 @@ pub(crate) async fn execute_command(
             comment,
             validate_success_url,
             idempotency_key,
+            token_identifier,
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
             fees_included,
@@ -711,8 +716,13 @@ pub(crate) async fn execute_command(
                 | InputType::LnurlPay(pay_request) => {
                     let min_sendable = pay_request.min_sendable.div_ceil(1000);
                     let max_sendable = pay_request.max_sendable / 1000;
-                    let prompt =
-                        format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ");
+                    let prompt = if token_identifier.is_none() {
+                        format!("Amount to pay (min {min_sendable} sat, max {max_sendable} sat): ")
+                    } else {
+                        format!(
+                            "Amount to pay (min {min_sendable} sat, max {max_sendable} sat) in token units: "
+                        )
+                    };
                     let amount = rl.readline(&prompt)?.parse::<u128>()?;
 
                     let prepare_response = sdk
@@ -721,16 +731,23 @@ pub(crate) async fn execute_command(
                             comment,
                             pay_request,
                             validate_success_action_url: validate_success_url,
-                            token_identifier: None,
+                            token_identifier,
                             conversion_options,
                             fee_policy,
                         })
                         .await?;
 
                     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
+                        let units = if conversion_estimate.options.conversion_type
+                            == ConversionType::FromBitcoin
+                        {
+                            "token base units"
+                        } else {
+                            "sats"
+                        };
                         println!(
-                            "Estimated conversion of {} token base units with a {} token base units fee",
-                            conversion_estimate.amount_out, conversion_estimate.fee
+                            "Estimated conversion of {} {} with a {} token base units fee",
+                            conversion_estimate.amount_out, units, conversion_estimate.fee
                         );
                         let line = rl
                             .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
