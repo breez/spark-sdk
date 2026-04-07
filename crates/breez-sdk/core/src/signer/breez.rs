@@ -95,7 +95,7 @@ impl BreezSigner for BreezSignerImpl {
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         let rc_pub = derived.private_key.public_key(&self.secp).serialize();
-        ecies::encrypt(&rc_pub, message)
+        utils::ecies::encrypt(&rc_pub, message)
             .map_err(|err| SdkError::Generic(format!("Could not encrypt data: {err}")))
     }
 
@@ -110,7 +110,7 @@ impl BreezSigner for BreezSignerImpl {
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         let rc_prv = derived.private_key.secret_bytes();
-        ecies::decrypt(&rc_prv, message)
+        utils::ecies::decrypt(&rc_prv, message)
             .map_err(|err| SdkError::Generic(format!("Could not decrypt data: {err}")))
     }
 

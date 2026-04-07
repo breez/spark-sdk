@@ -1,8 +1,9 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use spark::Network;
-use strum::Display;
 
-#[derive(Clone, Copy, Debug, Display, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum BitcoinNetwork {
     /// Mainnet
     Bitcoin,
@@ -10,6 +11,18 @@ pub enum BitcoinNetwork {
     Testnet4,
     Signet,
     Regtest,
+}
+
+impl fmt::Display for BitcoinNetwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bitcoin => write!(f, "Bitcoin"),
+            Self::Testnet3 => write!(f, "Testnet3"),
+            Self::Testnet4 => write!(f, "Testnet4"),
+            Self::Signet => write!(f, "Signet"),
+            Self::Regtest => write!(f, "Regtest"),
+        }
+    }
 }
 
 impl From<bitcoin::Network> for BitcoinNetwork {

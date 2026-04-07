@@ -387,7 +387,7 @@ impl LightningService {
 
                 // Encrypt using ECIES with the operator's identity public key
                 let public_key_bytes = operator.identity_public_key.serialize_uncompressed();
-                let encrypted = ecies::encrypt(&public_key_bytes, &proto_bytes)
+                let encrypted = utils::ecies::encrypt(&public_key_bytes, &proto_bytes)
                     .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))?;
 
                 let operator_identifier = hex::encode(operator.identifier.serialize());

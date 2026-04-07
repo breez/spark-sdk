@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use jwt::{Claims, Header, Token};
+use base64::Engine;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
 
@@ -69,11 +69,18 @@ impl FlashnetClient {
         let verify_response = self.auth_verify(verify_request).await?;
         trace!("Received verify from flashnet",);
 
-        let token: Token<Header, Claims, _> =
-            Token::parse_unverified(&verify_response.access_token).map_err(|e| {
-                FlashnetError::Generic(format!("Failed to parse access token: {e:?}"))
-            })?;
-        let ttl_ms = match token.claims().registered.expiration {
+        let exp = verify_response
+            .access_token
+            .split('.')
+            .nth(1)
+            .and_then(|payload| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(payload)
+                    .ok()
+            })
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|json| json.get("exp").and_then(serde_json::Value::as_u64));
+        let ttl_ms = match exp {
             Some(exp) => {
                 let expires = Duration::from_secs(exp);
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
@@ -138,9 +145,7 @@ impl FlashnetClient {
     {
         let query_string = match query {
             Some(q) => {
-                let qs_config =
-                    serde_qs::Config::new().array_format(serde_qs::ArrayFormat::Unindexed);
-                let qs = qs_config.serialize_string(&q).map_err(|e| {
+                let qs = serde_urlencoded::to_string(&q).map_err(|e| {
                     FlashnetError::Generic(format!("Failed to serialize query parameters: {e}"))
                 })?;
                 format!("?{qs}")

@@ -66,8 +66,8 @@ impl From<ServiceConnectivityError> for ParseError {
     }
 }
 
-impl From<regex::Error> for ParseError {
-    fn from(value: regex::Error) -> Self {
+impl From<regex_lite::Error> for ParseError {
+    fn from(value: regex_lite::Error) -> Self {
         Self::InvalidExternalInputParser(format!("Couldn't parse regex: {value}"))
     }
 }

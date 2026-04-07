@@ -5,8 +5,7 @@ version.workspace = true
 
 [features]
 browser-tests = ["passkey"]                 # Enable browser wasm-pack tests
-uniffi = ["dep:uniffi", "openssl-vendored"]
-openssl-vendored = ["openssl"]
+uniffi = ["dep:uniffi"]
 test-utils = ["spark-wallet/test-utils"]
 # Passkey functionality
 passkey = ["dep:nostr", "dep:nostr-sdk"]
@@ -31,14 +30,13 @@ bitflags.workspace = true
 breez-sdk-common.workspace = true
 platform-utils.workspace = true
 chrono.workspace = true
-ecies.workspace = true
+utils.workspace = true
 flashnet.workspace = true
 hex.workspace = true
 lnurl-models.workspace = true
 macros.workspace = true
 nostr = { workspace = true, optional = true }
 nostr-sdk = { workspace = true, optional = true }
-openssl = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-postgres = { workspace = true, optional = true }
@@ -48,7 +46,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
-x509-parser = { version = "0.16.0" }
+x509-cert = { version = "0.2", default-features = false }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }
 k256 = { workspace = true, features = ["arithmetic"] }

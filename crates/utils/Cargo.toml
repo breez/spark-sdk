@@ -1,0 +1,22 @@
+[package]
+name = "utils"
+edition = "2024"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+hkdf.workspace = true
+rand.workspace = true
+secp256k1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+# Wasm dependencies
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

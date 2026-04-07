@@ -620,7 +620,7 @@ impl TransferService {
         let public_key_bytes = public_key.serialize_uncompressed();
 
         // Use ECIES to encrypt the data
-        ecies::encrypt(&public_key_bytes, data)
+        utils::ecies::encrypt(&public_key_bytes, data)
             .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))
     }
 

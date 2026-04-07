@@ -12,7 +12,6 @@ crate-type = ["cdylib", "staticlib"]
 async-trait = "0.1.88"
 # Replaced with release commit during publishing
 breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [
-    "openssl-vendored",
     "passkey",
 ] }
 extend = "1.2.0"
