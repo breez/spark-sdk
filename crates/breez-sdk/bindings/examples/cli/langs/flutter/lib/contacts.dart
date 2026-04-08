@@ -95,9 +95,10 @@ Future<void> _handleDelete(BreezSdk sdk, List<String> args) async {
 // --- list ---
 
 Future<void> _handleList(BreezSdk sdk, List<String> args) async {
-  final parser = ArgParser()
-    ..addOption('offset')
-    ..addOption('limit');
+  final parser =
+      ArgParser()
+        ..addOption('offset')
+        ..addOption('limit');
   if (args.contains('help') || args.contains('--help')) {
     print('Usage: contacts list [options]');
     print(parser.usage);
@@ -108,8 +109,6 @@ Future<void> _handleList(BreezSdk sdk, List<String> args) async {
   final limitStr = results.option('limit');
   final offset = offsetStr != null ? int.parse(offsetStr) : null;
   final limit = limitStr != null ? int.parse(limitStr) : null;
-  final result = await sdk.listContacts(
-    request: ListContactsRequest(offset: offset, limit: limit),
-  );
+  final result = await sdk.listContacts(request: ListContactsRequest(offset: offset, limit: limit));
   printValue(result);
 }
