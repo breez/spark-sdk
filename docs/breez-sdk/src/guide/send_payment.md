@@ -103,18 +103,16 @@ In the optional send payment options for Spark addresses, you can set:
 
 ## Event Flows
 
-Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.html) for how to subscribe to events.
+Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [listening to events](/guide/events.html) for how to subscribe to events. 
 
-| Event      | Description                                    | UX Suggestion                                                                                                                         |
-| ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Synced** | The SDK has synced payments in the background. | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
+The {{#enum SdkEvent::Synced}} event is also emitted as the SDK syncs in the background. See [fetching the balance](/guide/get_info.md) for the recommended pattern for refreshing the balance and payments list.
 
 #### Lightning
 
 | Event                | Description                                                                       | UX Suggestion                                    |
 | -------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer has been started. Awaiting Lightning payment completion.       | Show payment as pending.                         |
-| **PaymentSucceeded** | The Lightning invoice has been paid either over Lightning or via a Spark transfer | Update the balance and show payment as complete. |
+| **PaymentSucceeded** | The Lightning invoice has been paid either over Lightning or via a Spark transfer | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
 | **PaymentFailed**    | The attempt to pay the Lightning invoice failed.                                  |                                                  |
 
 #### Bitcoin
@@ -122,10 +120,10 @@ Once a send payment is initiated, you can follow and react to the different paym
 | Event                | Description                                                                   | UX Suggestion                                    |
 | -------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer has been started. Awaiting on-chain withdrawal completion. | Show payment as pending.                         |
-| **PaymentSucceeded** | The payment amount was successfully withdrawn on-chain.                       | Update the balance and show payment as complete. |
+| **PaymentSucceeded** | The payment amount was successfully withdrawn on-chain.                       | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
 
 #### Spark
 
 | Event                | Description                     | UX Suggestion                                    |
 | -------------------- | ------------------------------- | ------------------------------------------------ |
-| **PaymentSucceeded** | The Spark transfer is complete. | Update the balance and show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is complete. | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |

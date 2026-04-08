@@ -55,18 +55,16 @@ Spark invoices are single-use and may impose restrictions on the payment, such a
 
 ## Event Flows
 
-Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [Listening to events](/guide/events.md) for how to subscribe to events.
+Once a receive payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [listening to events](/guide/events.md) for how to subscribe to events. 
 
-| Event      | Description                                    | UX Suggestion                                                                                                                         |
-| ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Synced** | The SDK has synced payments in the background. | Update the payments list and balance. See [listing payments](/guide/list_payments.md) and [fetching the balance](/guide/get_info.md). |
+The {{#enum SdkEvent::Synced}} event is also emitted as the SDK syncs in the background. See [fetching the balance](/guide/get_info.md) for the recommended pattern for refreshing the balance and payments list.
 
 #### Lightning
 
 | Event                | Description                                                       | UX Suggestion                                    |
 | -------------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer was detected and the claim process will start. | Show payment as pending.                         |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Update the balance and show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.        | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
 
 #### Bitcoin
 
@@ -78,11 +76,11 @@ The following events are emitted in order during the deposit lifecycle. See [Lis
 | **ClaimedDeposits**   | The SDK successfully claimed confirmed deposits.                                                                                         |                                                                                                             |
 | **UnclaimedDeposits** | Claiming failed (e.g. fee exceeded the configured maximum or the UTXO could not be found).                                               | Allow the user to manually claim or refund. See [Claiming on-chain deposits](/guide/onchain_claims.md). |
 | **PaymentPending**    | The Spark transfer was detected and the claim process will start.                                                                        | Show payment as pending.                                                                                    |
-| **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                               | Update the balance and show payment as complete.                                                            |
+| **PaymentSucceeded**  | The Spark transfer is claimed and the payment is complete.                                                                               | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md).                                                            |
 
 #### Spark
 
 | Event                | Description                                                                                                                                                                                          | UX Suggestion                                    |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | **PaymentPending**   | The Spark transfer was detected and the claim process will start. For Spark HTLC payments, the claim will only start once the HTLC is claimed. For more details see [Spark HTLC payments](htlcs.md). | Show payment as pending.                         |
-| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.                                                                                                                                           | Update the balance and show payment as complete. |
+| **PaymentSucceeded** | The Spark transfer is claimed and the payment is complete.                                                                                                                                           | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
