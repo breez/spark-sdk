@@ -11,13 +11,22 @@ Once connected, you can retrieve the current state of the SDK at any time using 
 
 {{#tabs getting_started:fetch-balance}}
 
+## Fetching the balance
+
+The SDK keeps a **cached balance** in local storage and {{#name get_info}} reads from this cache for a low-latency response. The cache is refreshed automatically by the SDK's background sync.
+
+The recommended pattern is:
+
+1. Call {{#name get_info}} with {{#name ensure_synced}} = **false** whenever you need to render the balance.
+2. Subscribe to events and call {{#name get_info}} again on each {{#enum SdkEvent::Synced}} event to fetch the latest balance. See [Listening to events](/guide/events.md).
+
+| Event | Description | UX Suggestion |
+| ----- | ----------- | ------------- |
+| {{#enum SdkEvent::Synced}} | The SDK has synced with the network in the background. | Call {{#name get_info}} to refresh the displayed balance, and refresh the payments list. See [listing payments](/guide/list_payments.md). |
+
 <div class="warning">
 <h4>Developer note</h4>
-The SDK maintains a cached balance for fast responses and updates it on every change. The {{#name get_info}} call returns the value from this cache to provide a low-latency user experience.
 
-Right after startup, the cache may not yet reflect the latest state from the network. Depending on your use case you can use one of the following options to get the fully up to date balance:
-
-- If your application runs continuously in the background, call {{#name get_info}} after each {{#enum SdkEvent::Synced}} event.
-- If you're only briefly using the SDK to fetch the balance, call {{#name get_info}} with {{#name ensure_synced}} set to **true** before disconnecting.
+{{#name ensure_synced}} = **true** blocks until the SDK's **initial** sync after {{#name connect}} completes. This is useful for short-lived scripts that connect, read the balance once, and disconnect. It is **not** a "force a fresh sync now" call. In long-running applications, prefer {{#name ensure_synced}} = **false** combined with the {{#enum SdkEvent::Synced}} event listener pattern above.
 
 </div>
