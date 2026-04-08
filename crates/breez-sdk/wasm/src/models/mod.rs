@@ -509,6 +509,7 @@ pub enum TokenTransactionType {
     Transfer,
     Mint,
     Burn,
+    Unknown,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoicePaymentDetails)]
@@ -530,6 +531,7 @@ pub enum SparkHtlcStatus {
     WaitingForPreimage,
     PreimageShared,
     Returned,
+    Unknown,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentMethod)]
@@ -1305,6 +1307,7 @@ pub enum ConversionStatus {
     Failed,
     RefundNeeded,
     Refunded,
+    Unknown,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionInfo)]
