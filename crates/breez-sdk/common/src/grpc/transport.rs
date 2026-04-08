@@ -10,9 +10,9 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: &str) -> Result<Self> {
+    pub fn new(url: &str, user_agent: &str) -> Result<Self> {
         Ok(Self {
-            inner: Self::create_endpoint(url)?.connect_lazy(),
+            inner: Self::create_endpoint(url, user_agent)?.connect_lazy(),
         })
     }
 
@@ -20,14 +20,15 @@ impl GrpcClient {
         self.inner
     }
 
-    fn create_endpoint(server_url: &str) -> Result<tonic::transport::Endpoint> {
+    fn create_endpoint(server_url: &str, user_agent: &str) -> Result<tonic::transport::Endpoint> {
         Ok(
             tonic::transport::Endpoint::from_shared(server_url.to_string())?
                 .tls_config(ClientTlsConfig::new().with_webpki_roots())?
                 .http2_keep_alive_interval(Duration::new(5, 0))
                 .tcp_keepalive(Some(Duration::from_secs(5)))
                 .keep_alive_timeout(Duration::from_secs(5))
-                .keep_alive_while_idle(true),
+                .keep_alive_while_idle(true)
+                .user_agent(user_agent)?,
         )
     }
 }
