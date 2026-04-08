@@ -62,3 +62,4 @@
 - [Sending payments](guide/uxguide_send.md)
 - [Displaying payments](guide/uxguide_display.md)
 - [Seed & key management](guide/uxguide_seed.md)
+- [Passkey login](guide/uxguide_passkey.md)

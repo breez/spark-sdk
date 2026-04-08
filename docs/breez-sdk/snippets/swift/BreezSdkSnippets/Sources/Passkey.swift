@@ -2,7 +2,7 @@ import BreezSdkSpark
 import Foundation
 
 // ANCHOR: implement-prf-provider
-// In practice, implement using platform-specific passkey APIs.
+// Use the built-in PlatformPasskeyPrfProvider, or implement the interface for custom logic.
 class ExamplePasskeyPrfProvider: PasskeyPrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
         // Call platform passkey API with PRF extension
@@ -19,7 +19,8 @@ class ExamplePasskeyPrfProvider: PasskeyPrfProvider {
 
 func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
-    let prfProvider = ExamplePasskeyPrfProvider()
+    // Use the built-in platform PRF provider (or pass a custom implementation)
+    let prfProvider = PlatformPasskeyPrfProvider()
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: nil)
 
     // Derive the wallet from the passkey (pass nil for the default wallet)
@@ -38,7 +39,7 @@ func connectWithPasskey() async throws -> BreezSdk {
 
 func listLabels() async throws -> [String] {
     // ANCHOR: list-labels
-    let prfProvider = ExamplePasskeyPrfProvider()
+    let prfProvider = PlatformPasskeyPrfProvider()
     let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
 
@@ -54,7 +55,7 @@ func listLabels() async throws -> [String] {
 
 func storeLabel() async throws {
     // ANCHOR: store-label
-    let prfProvider = ExamplePasskeyPrfProvider()
+    let prfProvider = PlatformPasskeyPrfProvider()
     let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
     let passkey = Passkey(prfProvider: prfProvider, relayConfig: relayConfig)
 

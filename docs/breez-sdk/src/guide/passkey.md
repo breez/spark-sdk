@@ -27,7 +27,13 @@ Declares which web origins can use the centralized RP ID for WebAuthn operations
 }
 ```
 
-To register your web origin, [contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to have it added to this file.
+**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your web origin. Breez manages the configuration files for registered apps.
+
+**Custom RP domain**: Host this file on your own domain at `/.well-known/webauthn`.
+
+**Requirements**:
+- Chrome 116+, Safari 18+, Edge 116+
+- HTTPS (localhost is exempt during development)
 
 #### Android: Asset Links
 
@@ -53,15 +59,29 @@ Establishes digital asset links between the domain and Android applications:
 ]
 ```
 
-Replace `com.example.yourapp` with your application package name and the fingerprint with your app's signing certificate SHA256 fingerprint. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a> for details.
+**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your Android app. Breez manages the configuration files for registered apps.
 
-To register your Android app, [contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) with the details outlined to have it added to this file.
+**Custom RP domain**: Host this file on your own domain at `/.well-known/assetlinks.json`. Replace `com.example.yourapp` with your application package name and the fingerprint with your app's signing certificate SHA256 fingerprint. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a> for details.
 
-#### iOS: Apple App Site Association
+**Requirements**:
+- Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible credential provider
+- `compileSdkVersion` must be at least 34 (required by the `androidx.credentials` library, not the device)
+
+<div class="warning">
+<h4>Android emulators</h4>
+Most Android emulator images ship with Google Play Services as the only available credential provider, and many don't have a passkey-capable provider at all. Physical devices are recommended for passkey testing.
+</div>
+
+<div class="warning">
+<h4>Credential provider requirement</h4>
+On Android 9-13, passkeys are provided via Google Play Services and require Google Password Manager to be present and up to date. Android 14+ adds native passkey support and can integrate with any installed credential provider. However, at least one credential provider must be installed for passkeys to function (e.g., Google Password Manager, Bitwarden, 1Password etc.).
+</div>
+
+#### iOS / macOS: Apple App Site Association
 
 **File**: `https://keys.breez.technology/.well-known/apple-app-site-association`
 
-Connects the domain to iOS applications for passkey sharing:
+Connects the domain to iOS and macOS applications for passkey sharing:
 
 ```json
 {
@@ -73,8 +93,6 @@ Connects the domain to iOS applications for passkey sharing:
 }
 ```
 
-Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your application bundle identifier.
-
 Your app must have the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability enabled. In Xcode, go to **Signing & Capabilities** → add **Associated Domains** → add the entry `webcredentials:keys.breez.technology`.
 
 <div class="warning">
@@ -82,7 +100,17 @@ Your app must have the <a target="_blank" href="https://developer.apple.com/docu
 If you're using Expo, the Breez SDK plugin can configure this automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
 </div>
 
-To register your iOS app, [contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) with the details outlined to have it added to this file.
+**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your iOS app. Breez manages the configuration files for registered apps.
+
+**Custom RP domain**: Host this file on your own domain at `/.well-known/apple-app-site-association`. Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your bundle identifier.
+
+**Requirements**:
+- iOS 18.0+, macOS 15.0+
+
+<div class="warning">
+<h4>Associated Domains entitlement must be enabled</h4>
+Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name is_prf_available}} returns `true` (the OS-level check can't verify entitlements at runtime).
+</div>
 
 ### Nostr relay configuration
 
@@ -93,18 +121,46 @@ The SDK uses Nostr relays to store and discover labels. Configure relay access b
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy. See the [Listing labels](#listing-labels) and [Storing a label](#storing-a-label) code examples below for usage.
 
-## Implementing the PRF provider
+## PRF providers
 
-Your application must implement the PRF provider to interface with platform passkey APIs.
+A PRF provider handles passkey credential registration, assertion, and PRF evaluation against the platform's authenticator. The SDK uses the seed it returns to deterministically derive wallet keys.
+
+### Built-in providers
+
+The SDK ships with PRF providers for the major platforms:
+
+| Platform | Provider |
+|----------|----------|
+| Web (browsers) | `WebAuthnPrfProvider` |
+| iOS / macOS | `PlatformPasskeyPrfProvider` |
+| React Native | `PasskeyPrfProvider` |
+| Flutter | `PasskeyPrfProvider` |
+
+Android (Kotlin), Kotlin Multiplatform, and other platforms not listed above need to implement their own provider; see [Custom providers](#custom-providers) below.
+
+**Constructor options** (all built-in providers):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| {{#name rp_id}} | `keys.breez.technology` | Relying Party ID. **Changing this breaks existing credentials.** |
+| {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
+| {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only) |
+| {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker (registration only) |
+
+Apps that share an RP ID, whether the default `keys.breez.technology` or a custom domain, recognize the same user's passkey without per-app enrollment. Users don't need to manually enroll a passkey before using a built-in provider; it auto-registers a new credential on first use if one doesn't already exist for the RP ID.
+
+Use a built-in provider with `Passkey` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below.
+
+### Custom providers
+
+If the built-in providers don't fit your needs, implement the `PasskeyPrfProvider` interface directly using platform-native APIs.
 
 {{#tabs passkey:implement-prf-provider}}
 
-### Platform considerations
+#### Platform considerations
 
 - **Web (browsers)**: Use the WebAuthn API with the `prf` extension. Browsers handle the salt transformation internally. Use discoverable credentials (`residentKey: 'required'`) with empty `allowCredentials` for assertion so the browser discovers the credential by RP ID.
-
 - **Android / iOS**: Use native passkey APIs with PRF support. Ensure the Associated Domains / Asset Links configuration is in place for `keys.breez.technology`.
-
 - **CLI / Desktop (CTAP2)**: Use the `hmac-secret` extension directly. Non-browser implementations must apply the WebAuthn salt transformation manually to produce the same PRF output as browsers:
 
   ```
@@ -112,6 +168,18 @@ Your application must implement the PRF provider to interface with platform pass
   ```
 
   This transformation is defined in the <a target="_blank" href="https://w3c.github.io/webauthn/#prf-extension">W3C WebAuthn PRF extension spec</a> and ensures that the same passkey + salt produces identical seeds across browser and native implementations.
+
+## Checking passkey availability
+
+Use {{#name is_prf_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
+
+```
+if (await prfProvider.isPrfAvailable()) {
+  // Show passkey as primary option
+} else {
+  // Show mnemonic flow only
+}
+```
 
 <h2 id="connecting-with-passkey">
     <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>
@@ -139,28 +207,6 @@ Discover labels associated to the passkey using Nostr.
 Publish a label to Nostr so it can be discovered later.
 
 {{#tabs passkey:store-label}}
-
-## Best practices
-
-### Cache the user-selected label
-
-Store the label locally (e.g., `localStorage` on web, `SharedPreferences` on Android, `UserDefaults` on iOS) if selected by the user. This allows the app to skip the label selection step on subsequent launches and go straight to passkey authentication.
-
-### Never store the derived mnemonic
-
-The mnemonic should always be re-derived from the passkey and label on each session. The passkey authentication (biometric, PIN, etc.) is the security boundary — storing the mnemonic would bypass it. On app restart, check for a cached label and prompt the user for passkey authentication to derive the seed.
-
-### Allow manual mnemonic backup
-
-Provide a way for users to reveal their derived 12-word mnemonic as an emergency backup. This should be user-initiated (e.g., behind a "Show recovery phrase" button) and derived on-demand via {{#name Passkey.get_wallet}} with the cached label. This gives users a safety net if they lose access to their passkey.
-
-### Offer a mnemonic fallback
-
-Not all devices support the PRF extension. Check {{#name Passkey.is_available}} at startup and present the appropriate flow — seedless for capable devices, traditional mnemonic backup/restore for others.
-
-### Handle label discovery failures
-
-When discovering labels, {{#name Passkey.list_labels}} may return an empty list if relays are unreachable or the label events have been pruned. Always allow manual label entry as a fallback alongside the Nostr-discovered list.
 
 ## Supported specs
 

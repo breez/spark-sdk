@@ -1,13 +1,14 @@
 import type { NostrRelayConfig } from '@breeztech/breez-sdk-spark-react-native'
 import {
   Passkey,
+  PasskeyPrfProvider,
   connect,
   defaultConfig,
   Network
 } from '@breeztech/breez-sdk-spark-react-native'
 
 // ANCHOR: implement-prf-provider
-// In practice, implement PRF provider using platform passkey APIs
+// Use the built-in PasskeyPrfProvider, or implement the interface for custom logic.
 class ExamplePasskeyPrfProvider {
   derivePrfSeed = async (salt: string): Promise<ArrayBuffer> => {
     // Call platform passkey API with PRF extension
@@ -24,7 +25,8 @@ class ExamplePasskeyPrfProvider {
 
 const exampleConnectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  // Use the built-in platform PRF provider (or pass a custom implementation)
+  const prfProvider = new PasskeyPrfProvider()
   const passkey = new Passkey(prfProvider, undefined)
 
   // Construct the wallet using the passkey (pass undefined for the default wallet)
@@ -38,7 +40,7 @@ const exampleConnectWithPasskey = async () => {
 
 const exampleListLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  const prfProvider = new PasskeyPrfProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined
@@ -57,7 +59,7 @@ const exampleListLabels = async (): Promise<string[]> => {
 
 const exampleStoreLabel = async () => {
   // ANCHOR: store-label
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  const prfProvider = new PasskeyPrfProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined
