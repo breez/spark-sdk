@@ -12,9 +12,10 @@
  */
 
 import {
-  Seed,
   type Seed as SeedType,
+  Passkey,
   PasskeyPrfProvider,
+  type NostrRelayConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
@@ -260,21 +261,20 @@ function isPasskeyCreationNeeded(error: unknown): boolean {
 }
 
 /**
- * Resolve a wallet seed using the given PRF provider.
+ * Resolve a wallet seed using the given PRF provider via the SDK's Passkey
+ * wrapper. The wrapper handles PRF→12-word BIP39 mnemonic derivation, and
+ * Nostr label storage / discovery, matching the WASM, Go, Python, and Rust CLIs.
  *
- * For Platform providers: if the user cancels or has no credential,
- * automatically creates a new passkey and retries — matching the
- * glow-web onboarding flow.
- *
- * Note: Full Nostr label listing/storing is not yet supported in the
- * React Native SDK. Only basic seed derivation is available.
+ * For Platform providers: if the user cancels or has no credential, this
+ * automatically calls createPasskey() and retries — matching the glow-web
+ * onboarding flow.
  *
  * @param provider - The PRF provider to use
- * @param _breezApiKey - Optional Breez API key (unused - Nostr not yet supported)
+ * @param breezApiKey - Optional Breez API key (enables NIP-42 auth on the Breez relay)
  * @param label - Optional label for seed derivation
- * @param _listLabels - Whether to list labels (not yet supported)
- * @param _storeLabel - Whether to publish the label (not yet supported)
- * @returns Object with { seed, labels? } - seed is the derived Seed,
+ * @param listLabels - Whether to query Nostr for labels published by this passkey
+ * @param storeLabel - Whether to publish the label to Nostr
+ * @returns Object with { seed, labels? } - seed is a 12-word mnemonic Seed,
  *          labels is populated when listLabels is true
  */
 export async function resolvePasskeySeed(
@@ -283,32 +283,54 @@ export async function resolvePasskeySeed(
     isPrfAvailable: () => Promise<boolean>
     createPasskey?: () => Promise<void>
   },
-  _breezApiKey: string | undefined,
+  breezApiKey: string | undefined,
   label: string | undefined,
-  _listLabels: boolean,
-  _storeLabel: boolean,
+  listLabels: boolean,
+  storeLabel: boolean,
 ): Promise<{ seed: SeedType; labels?: string[] }> {
-  const salt = label ?? 'Default'
+  const relayConfig: NostrRelayConfig = { breezApiKey, timeoutSecs: undefined }
+  // The Passkey constructor accepts any object implementing the
+  // PasskeyPrfProvider shape (derivePrfSeed + isPrfAvailable). FilePrfProvider,
+  // NotYetSupportedProvider, and the platform PasskeyPrfProvider all satisfy
+  // this — same trick the WASM CLI uses (see langs/wasm/src/passkey.js).
+  const passkey = new Passkey(provider as unknown as PasskeyPrfProvider, relayConfig)
+
+  const runFlow = async (): Promise<{ seed: SeedType; labels?: string[] }> => {
+    let returnedLabels: string[] | undefined
+
+    // --store-label: publish to Nostr
+    if (storeLabel && label) {
+      await passkey.storeLabel(label)
+    }
+
+    // --list-labels: query Nostr for all labels published by this identity
+    let resolvedLabel = label
+    if (listLabels) {
+      const labels = await passkey.listLabels()
+      returnedLabels = labels
+      // App.tsx currently does not prompt for selection; default to the
+      // explicit label if provided, otherwise the first discovered label.
+      resolvedLabel = label ?? labels[0]
+    }
+
+    const wallet = await passkey.getWallet(resolvedLabel)
+    return { seed: wallet.seed, labels: returnedLabels }
+  }
 
   try {
-    // Try to derive seed with existing passkey
-    const seedBytes = await provider.derivePrfSeed(salt)
-    const seed = new Seed.Entropy(seedBytes)
-    return { seed }
+    return await runFlow()
   } catch (firstError) {
     const errCode = (firstError as { code?: string })?.code ?? 'unknown'
     const errMsg = firstError instanceof Error ? firstError.message : String(firstError)
     console.log(`[Passkey] First attempt failed: code=${errCode}, message=${errMsg}`)
     console.log(`[Passkey] Creation needed: ${isPasskeyCreationNeeded(firstError)}, hasCreate: ${!!provider.createPasskey}`)
 
-    // If user cancelled or no credential, try creating a new passkey
+    // If user cancelled or no credential, try creating a new passkey then retry the flow.
     if (isPasskeyCreationNeeded(firstError) && provider.createPasskey) {
       console.log('[Passkey] No existing credential, creating new passkey...')
       await provider.createPasskey()
       console.log('[Passkey] Passkey created, deriving seed...')
-      const seedBytes = await provider.derivePrfSeed(salt)
-      const seed = new Seed.Entropy(seedBytes)
-      return { seed }
+      return await runFlow()
     }
     throw firstError
   }
