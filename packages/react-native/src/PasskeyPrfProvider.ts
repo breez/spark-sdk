@@ -3,6 +3,44 @@ import { NativeModules, Platform } from 'react-native';
 const { BreezSdkSparkPasskey } = NativeModules;
 
 /**
+ * Build a diagnostic error thrown when the native passkey module isn't
+ * reachable from JS. The most common cause on iOS is running on a version
+ * older than iOS 18 — the Swift class is marked `@available(iOS 18.0, *)`
+ * so the ObjC runtime cannot load it on earlier releases. On Android the
+ * native module should always load, so the fallback message blames linking.
+ */
+function passkeyModuleUnavailableError(operation: string): Error {
+  if (Platform.OS === 'ios') {
+    const version = parseFloat(String(Platform.Version));
+    if (!Number.isNaN(version) && version < 18) {
+      return new Error(
+        `Passkey PRF requires iOS 18.0 or later. ` +
+          `This device is running iOS ${Platform.Version}, where ` +
+          `ASAuthorizationPlatformPublicKeyCredentialPRFAssertionInput is not available. ` +
+          `${operation} is unsupported on this device.`
+      );
+    }
+    return new Error(
+      `Passkey PRF native module (BreezSdkSparkPasskey) failed to load on iOS. ` +
+        `This normally means the iOS deployment target is lower than 18.0 or ` +
+        `the pod was not linked. ${operation} is unavailable.`
+    );
+  }
+  if (Platform.OS === 'android') {
+    return new Error(
+      `Passkey PRF native module (BreezSdkSparkPasskey) is not registered. ` +
+        `Check that @breeztech/breez-sdk-spark-react-native is autolinked and ` +
+        `that BreezSdkSparkPasskeyModule appears in BreezSdkSparkReactNativePackage. ` +
+        `${operation} is unavailable.`
+    );
+  }
+  return new Error(
+    `Passkey PRF is only supported on iOS 18+ and Android 9+. ` +
+      `${operation} is not available on ${Platform.OS}.`
+  );
+}
+
+/**
  * Options for constructing a PasskeyPrfProvider.
  */
 export interface PasskeyPrfProviderOptions {
@@ -86,10 +124,7 @@ export class PasskeyPrfProvider {
    */
   async derivePrfSeed(salt: string): Promise<Uint8Array> {
     if (!BreezSdkSparkPasskey) {
-      throw new Error(
-        'BreezSdkSparkPasskey native module not found. ' +
-        'Ensure the react-native package is properly linked.'
-      );
+      throw passkeyModuleUnavailableError('derivePrfSeed');
     }
 
     const base64Result: string = await BreezSdkSparkPasskey.derivePrfSeed(
@@ -114,10 +149,7 @@ export class PasskeyPrfProvider {
    */
   async createPasskey(): Promise<void> {
     if (!BreezSdkSparkPasskey) {
-      throw new Error(
-        'BreezSdkSparkPasskey native module not found. ' +
-        'Ensure the react-native package is properly linked.'
-      );
+      throw passkeyModuleUnavailableError('createPasskey');
     }
 
     await BreezSdkSparkPasskey.createPasskey(
