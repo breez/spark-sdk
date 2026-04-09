@@ -21,8 +21,14 @@ impl Service<http::Request<tonic::body::BoxBody>> for Transport {
     }
 
     fn call(&mut self, mut req: http::Request<tonic::body::BoxBody>) -> Self::Future {
+        // Set both `User-Agent` and `X-User-Agent`. Chrome silently drops any
+        // script-set `User-Agent` on Fetch requests (crbug.com/571722), so we
+        // also send `X-User-Agent` to ensure the value reaches the server
+        // cross-browser. Firefox and Safari honor `User-Agent`.
         req.headers_mut()
             .insert("User-Agent", self.user_agent.clone());
+        req.headers_mut()
+            .insert("X-User-Agent", self.user_agent.clone());
         self.inner.call(req)
     }
 }
