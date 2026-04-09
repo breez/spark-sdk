@@ -179,7 +179,9 @@ const PASSKEY_CORE_CANONICAL: &str = "crates/breez-sdk/bindings/langs/shared/and
 
 const PASSKEY_CORE_MIRRORS: &[&str] = &[
     "packages/flutter/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
-    "packages/react-native/android/src/main/java/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
+    // NOTE: Under `src/main/kotlin/`, NOT `src/main/java/`. The java tree is
+    // owned by uniffi-bindgen-react-native (`yarn ubrn:clean` wipes it).
+    "packages/react-native/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
 ];
 
 fn sync_passkey_core_cmd(check: bool) -> Result<()> {
