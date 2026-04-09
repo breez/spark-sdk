@@ -41,6 +41,20 @@ jobs:
       - name: Run Format Check
         run: make fmt-check
 
+  passkey-core-sync:
+    name: Passkey core sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify CredentialManagerPrfCore copies are in sync
+        run: cargo xtask sync-passkey-core --check
+
   itest:
     name: Integration test
     runs-on: ubuntu-latest
