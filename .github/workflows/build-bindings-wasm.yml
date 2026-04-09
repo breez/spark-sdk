@@ -60,3 +60,4 @@ jobs:
             packages/wasm/deno
             packages/wasm/nodejs
             packages/wasm/web
+            packages/wasm/ssr
