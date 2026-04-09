@@ -712,6 +712,22 @@ pub struct Credentials {
     pub password: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListLeavesRequest)]
+pub struct ListLeavesRequest {
+    pub min_value_sats: Option<u64>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ListLeavesResponse)]
+pub struct ListLeavesResponse {
+    pub leaves: Vec<Leaf>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Leaf)]
+pub struct Leaf {
+    pub id: String,
+    pub value: u64,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]
 pub struct GetInfoRequest {
     pub ensure_synced: Option<bool>,

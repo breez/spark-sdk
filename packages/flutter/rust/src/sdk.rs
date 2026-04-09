@@ -60,6 +60,13 @@ impl BreezSdk {
         self.inner.get_info(request).await
     }
 
+    pub async fn list_leaves(
+        &self,
+        request: ListLeavesRequest,
+    ) -> Result<ListLeavesResponse, SdkError> {
+        self.inner.list_leaves(request).await
+    }
+
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,

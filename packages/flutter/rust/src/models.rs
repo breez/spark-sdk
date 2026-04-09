@@ -173,6 +173,22 @@ pub enum _Fee {
     Rate { sat_per_vbyte: u64 },
 }
 
+#[frb(mirror(ListLeavesRequest))]
+pub struct _ListLeavesRequest {
+    pub min_value_sats: Option<u64>,
+}
+
+#[frb(mirror(ListLeavesResponse))]
+pub struct _ListLeavesResponse {
+    pub leaves: Vec<Leaf>,
+}
+
+#[frb(mirror(Leaf))]
+pub struct _Leaf {
+    pub id: String,
+    pub value: u64,
+}
+
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
     pub ensure_synced: Option<bool>,

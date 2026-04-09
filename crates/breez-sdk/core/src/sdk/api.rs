@@ -97,6 +97,25 @@ impl BreezSdk {
         })
     }
 
+    /// Lists the leaves of the wallet, optionally filtered by minimum value
+    pub async fn list_leaves(
+        &self,
+        request: crate::models::ListLeavesRequest,
+    ) -> Result<crate::models::ListLeavesResponse, SdkError> {
+        let wallet_leaves = self.spark_wallet.list_leaves().await?;
+        let min_value = request.min_value_sats.unwrap_or(0);
+        let leaves = wallet_leaves
+            .available
+            .into_iter()
+            .filter(|leaf| leaf.value >= min_value)
+            .map(|leaf| crate::models::Leaf {
+                id: leaf.id.to_string(),
+                value: leaf.value,
+            })
+            .collect();
+        Ok(crate::models::ListLeavesResponse { leaves })
+    }
+
     /// List fiat currencies for which there is a known exchange rate,
     /// sorted by the canonical name of the currency.
     pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {

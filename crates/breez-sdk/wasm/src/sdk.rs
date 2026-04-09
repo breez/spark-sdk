@@ -114,6 +114,11 @@ impl BreezSdk {
         Ok(self.sdk.get_info(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "listLeaves")]
+    pub async fn list_leaves(&self, request: ListLeavesRequest) -> WasmResult<ListLeavesResponse> {
+        Ok(self.sdk.list_leaves(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "receivePayment")]
     pub async fn receive_payment(
         &self,

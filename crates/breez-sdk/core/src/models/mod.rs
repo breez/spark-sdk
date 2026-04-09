@@ -1001,6 +1001,32 @@ pub struct Credentials {
     pub password: String,
 }
 
+/// Request to list the leaves of the wallet
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListLeavesRequest {
+    /// Only return leaves with a value greater than or equal to this amount in satoshis
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub min_value_sats: Option<u64>,
+}
+
+/// Response containing the leaves of the wallet
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ListLeavesResponse {
+    pub leaves: Vec<Leaf>,
+}
+
+/// A leaf in the wallet's tree
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Leaf {
+    /// The unique identifier of the leaf
+    pub id: String,
+    /// The value of the leaf in satoshis
+    pub value: u64,
+}
+
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
