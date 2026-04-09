@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use spark_postgres::deadpool_postgres;
 use spark_postgres::tokio_postgres;
-use spark_wallet::TreeStore;
+use spark_wallet::{TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;
 
@@ -188,13 +188,22 @@ pub(super) async fn run_migrations(
         .map_err(StorageError::from)
 }
 
-// ── Tree store factory ────────────────────────────────────────────────────────
+// ── Store factories ───────────────────────────────────────────────────────────
 
 /// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_tree_store(
     pool: deadpool_postgres::Pool,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
     spark_postgres::create_postgres_tree_store_from_pool(pool)
+        .await
+        .map_err(StorageError::from)
+}
+
+/// Creates a `PostgresTokenStore` instance for use with the SDK, using an existing pool.
+pub(crate) async fn create_postgres_token_store(
+    pool: deadpool_postgres::Pool,
+) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
+    spark_postgres::create_postgres_token_store_from_pool(pool)
         .await
         .map_err(StorageError::from)
 }

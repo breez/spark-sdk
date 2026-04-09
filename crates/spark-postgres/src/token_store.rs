@@ -7,9 +7,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use spark_postgres::deadpool_postgres;
-use spark_postgres::tokio_postgres;
-
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use platform_utils::time::SystemTime;
@@ -22,11 +19,10 @@ use spark_wallet::{
 use tracing::{trace, warn};
 use uuid::Uuid;
 
-use crate::persist::StorageError;
-
-use super::base::run_migrations;
-#[cfg(test)]
-use super::base::{PostgresStorageConfig, create_pool};
+use crate::config::PostgresStorageConfig;
+use crate::error::PostgresError;
+use crate::migrations::run_migrations;
+use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTokenStore`.
 const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
@@ -43,7 +39,7 @@ const TOKEN_STORE_WRITE_LOCK_KEY: i64 = 0x746F_6B65_6E53_5452; // "toknSTR" as h
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
 /// `PostgreSQL`-backed token output store implementation.
-pub(crate) struct PostgresTokenStore {
+pub struct PostgresTokenStore {
     pool: Pool,
 }
 
@@ -704,25 +700,31 @@ impl TokenOutputStore for PostgresTokenStore {
 }
 
 impl PostgresTokenStore {
-    /// Creates a new `PostgresTokenStore`.
-    #[cfg(test)]
-    pub async fn new(config: PostgresStorageConfig) -> Result<Self, StorageError> {
+    /// Creates a new `PostgresTokenStore` from a configuration.
+    ///
+    /// This creates its own connection pool and runs token store migrations.
+    pub async fn from_config(config: PostgresStorageConfig) -> Result<Self, PostgresError> {
         let pool = create_pool(&config)?;
-        Self::new_with_pool(pool).await
+        Self::init(pool).await
     }
 
-    /// Creates a new `PostgresTokenStore` using an existing connection pool.
+    /// Creates a new `PostgresTokenStore` from an existing connection pool.
     ///
-    /// This allows sharing a single pool across multiple store implementations.
-    pub async fn new_with_pool(pool: Pool) -> Result<Self, StorageError> {
+    /// This reuses the provided pool and runs token store migrations.
+    /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
+    pub async fn from_pool(pool: Pool) -> Result<Self, PostgresError> {
+        Self::init(pool).await
+    }
+
+    /// Shared initialization logic for both constructors.
+    async fn init(pool: Pool) -> Result<Self, PostgresError> {
         let store = Self { pool };
         store.migrate().await?;
-
         Ok(store)
     }
 
     /// Runs database migrations for token store tables.
-    async fn migrate(&self) -> Result<(), StorageError> {
+    async fn migrate(&self) -> Result<(), PostgresError> {
         run_migrations(&self.pool, TOKEN_MIGRATIONS_TABLE, &Self::migrations()).await
     }
 
@@ -951,11 +953,31 @@ fn map_err<E: std::fmt::Display>(e: E) -> TokenOutputServiceError {
     TokenOutputServiceError::Generic(e.to_string())
 }
 
-/// Creates a `PostgresTokenStore` instance for use with the SDK, using an existing pool.
+/// Creates a `PostgresTokenStore` instance from a configuration.
+///
+/// Creates its own connection pool. For sharing a pool, use
+/// [`create_postgres_token_store_from_pool`] instead.
+///
+/// # Arguments
+///
+/// * `config` - Configuration for the `PostgreSQL` connection pool
 pub async fn create_postgres_token_store(
+    config: PostgresStorageConfig,
+) -> Result<Arc<dyn TokenOutputStore>, PostgresError> {
+    Ok(Arc::new(PostgresTokenStore::from_config(config).await?))
+}
+
+/// Creates a `PostgresTokenStore` instance from an existing connection pool.
+///
+/// Useful when sharing a pool with other components.
+///
+/// # Arguments
+///
+/// * `pool` - An existing deadpool-postgres connection pool
+pub async fn create_postgres_token_store_from_pool(
     pool: Pool,
-) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    Ok(Arc::new(PostgresTokenStore::new_with_pool(pool).await?))
+) -> Result<Arc<dyn TokenOutputStore>, PostgresError> {
+    Ok(Arc::new(PostgresTokenStore::from_pool(pool).await?))
 }
 
 #[cfg(test)]
@@ -989,10 +1011,11 @@ mod tests {
                 "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
             );
 
-            let store =
-                PostgresTokenStore::new(PostgresStorageConfig::with_defaults(connection_string))
-                    .await
-                    .expect("Failed to create PostgresTokenStore");
+            let store = PostgresTokenStore::from_config(PostgresStorageConfig::with_defaults(
+                connection_string,
+            ))
+            .await
+            .expect("Failed to create PostgresTokenStore");
 
             Self { store, container }
         }
