@@ -89,11 +89,6 @@ export class WebAuthnPrfProvider {
     }
 
     /**
-     * Check if a PRF-capable passkey is available on this device.
-     *
-     * @returns {Promise<boolean>} true if WebAuthn with PRF extension is likely supported.
-     */
-    /**
      * Create a new passkey with PRF support.
      *
      * Only registers the credential — no seed derivation. Triggers exactly
@@ -110,6 +105,11 @@ export class WebAuthnPrfProvider {
         await this._registerCredential();
     }
 
+    /**
+     * Check if a PRF-capable passkey is available on this device.
+     *
+     * @returns {Promise<boolean>} true if WebAuthn with PRF extension is likely supported.
+     */
     async isPrfAvailable() {
         try {
             if (typeof window === 'undefined' || !window.PublicKeyCredential) {
