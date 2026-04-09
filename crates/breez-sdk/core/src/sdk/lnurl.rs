@@ -1,5 +1,5 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
-use tracing::{info, trace};
+use tracing::info;
 
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
@@ -39,35 +39,18 @@ impl BreezSdk {
             .await?;
         let is_token_conversion = conversion_estimate.is_some();
 
-        // Apply a slippage buffer only on the AmountIn conversion path
-        // (token_identifier set, variable sat output) so the LNURL invoice is sized
-        // below the worst-case conversion output and is guaranteed payable. The
-        // MinAmountOut path (no token_identifier) needs no buffer because the
-        // converter is invoked with MinAmountOut(invoice + fees) at execution time
-        // and is guaranteed to deliver enough sats or fail. The actual sats sent at
-        // execution time come from `complete_conversion_and_send` using the real
-        // post-conversion balance and may overpay this invoice.
+        // When token_identifier is set, the amount is in token units and the
+        // conversion output (estimated_sats) is all we have to pay with — there
+        // are no separate sats to cover fees. Force FeesIncluded so fees are
+        // deducted from the conversion output. Reject explicit FeesExcluded.
         let (amount, fee_policy) = if is_token_conversion && request.token_identifier.is_some() {
-            let max_slippage_bps = u128::from(
-                request
-                    .conversion_options
-                    .as_ref()
-                    .and_then(|co| co.max_slippage_bps)
-                    .unwrap_or(crate::token_conversion::DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS),
-            );
-            let slippage_buffer = estimated_sats
-                .saturating_mul(max_slippage_bps)
-                .saturating_div(10_000);
-            let amount_after_slippage = estimated_sats.saturating_sub(slippage_buffer);
-            trace!(
-                "prepare_lnurl: token_amount={}, estimated_sats={}, slippage_bps={}, slippage_buffer={}, amount_for_invoice={}",
-                request.amount,
-                estimated_sats,
-                max_slippage_bps,
-                slippage_buffer,
-                amount_after_slippage
-            );
-            (amount_after_slippage, FeePolicy::FeesIncluded)
+            if fee_policy == FeePolicy::FeesExcluded {
+                return Err(SdkError::InvalidInput(
+                    "Token conversion with token_identifier requires FeesIncluded fee policy"
+                        .to_string(),
+                ));
+            }
+            (estimated_sats, FeePolicy::FeesIncluded)
         } else {
             (estimated_sats, fee_policy)
         };
@@ -178,16 +161,11 @@ impl BreezSdk {
 
             // Protect against excessive fee overpayment.
             // Allow overpayment up to 100% of actual fee, with a minimum of 1 sat.
-            // With conversion, skip this check — the slippage buffer deducted at prepare
-            // time means the actual post-conversion balance may exceed the invoice amount,
-            // and we want to overpay the invoice to send everything.
-            if !has_conversion {
-                let max_allowed_overpayment = current_fee.max(1);
-                if overpayment > max_allowed_overpayment {
-                    return Err(SdkError::Generic(format!(
-                        "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
-                    )));
-                }
+            let max_allowed_overpayment = current_fee.max(1);
+            if overpayment > max_allowed_overpayment {
+                return Err(SdkError::Generic(format!(
+                    "Fee overpayment ({overpayment} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
+                )));
             }
 
             if overpayment > 0 {
@@ -205,7 +183,6 @@ impl BreezSdk {
 
         // For send-all with conversion, pass through FeesIncluded so the conversion
         // flow queries actual balance post-conversion. Otherwise use FeesExcluded.
-        let has_conversion = request.prepare_response.conversion_estimate.is_some();
         let internal_fee_policy = if is_fees_included && has_conversion {
             FeePolicy::FeesIncluded
         } else {

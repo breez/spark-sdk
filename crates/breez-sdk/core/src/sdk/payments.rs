@@ -1603,6 +1603,8 @@ impl BreezSdk {
 
         // If the caller passed a token_identifier it must match conversion options.
         // If they omitted it, we can't compare against the balance, so is_send_all=false.
+        // Send-all also requires stable balance to be active with a matching active token,
+        // otherwise we shouldn't sweep the existing sat balance.
         let is_send_all = match token_identifier {
             Some(token_id) => {
                 if token_id != from_token_identifier {
@@ -1612,7 +1614,13 @@ impl BreezSdk {
                 }
                 let token_balances = self.spark_wallet.get_token_balances().await?;
                 let token_balance = token_balances.get(token_id).map_or(0, |tb| tb.balance);
-                amount == token_balance && fee_policy == FeePolicy::FeesIncluded
+                let has_active_stable_token = match &self.stable_balance {
+                    Some(sb) => sb.get_active_token_identifier().await.as_ref() == Some(token_id),
+                    None => false,
+                };
+                amount == token_balance
+                    && fee_policy == FeePolicy::FeesIncluded
+                    && has_active_stable_token
             }
             None => false,
         };
@@ -1766,9 +1774,16 @@ impl BreezSdk {
             .await?;
 
         let total_u64: u64 = estimated_sats.try_into()?;
-        if total_u64 <= lightning_fee_sats {
+        // For fixed-amount invoices, the converted sats must cover invoice amount + fees.
+        // For amountless invoices (send-all), just check fees are covered.
+        let min_required = if let Some(amount_msat) = invoice.amount_msat {
+            (amount_msat / 1000).saturating_add(lightning_fee_sats)
+        } else {
+            lightning_fee_sats
+        };
+        if total_u64 <= min_required {
             return Err(SdkError::InvalidInput(
-                "Amount too small to cover fees".to_string(),
+                "Token conversion amount too small to cover invoice amount and fees".to_string(),
             ));
         }
 
