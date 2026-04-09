@@ -121,11 +121,28 @@ public class PlatformPasskeyPrfProvider: PasskeyPrfProvider {
         try await registerCredential()
     }
 
-    /// Check if a PRF-capable passkey is available on this device.
+    /// Check if this device's OS version supports the passkey PRF extension.
     ///
-    /// - Returns: `true` if the platform supports passkeys with the PRF extension.
+    /// This is an **API availability** check, not a readiness check:
+    /// - Returns `true` whenever the OS exposes
+    ///   `ASAuthorizationPlatformPublicKeyCredentialPRFAssertionInput`
+    ///   (iOS 18.0+ / macOS 15.0+). Because this class is itself gated on
+    ///   those versions via `@available`, any instance that can be
+    ///   constructed will return `true`.
+    /// - Does **not** verify that the user has Face ID / Touch ID /
+    ///   a device passcode enrolled, or that iCloud Keychain / a third-party
+    ///   credential provider is configured. Those states are handled by the
+    ///   system at call time: when `derivePrfSeed` runs, the OS surfaces
+    ///   its own "set up biometrics / pick a credential provider" prompts
+    ///   and the call either succeeds or fails with a `PasskeyPrfError`
+    ///   (e.g. `.userCancelled`, `.authenticationFailed`).
+    ///
+    /// Callers that need a stronger "ready to derive" signal should try a
+    /// real `derivePrfSeed` and handle the error, rather than pre-checking.
+    ///
+    /// - Returns: `true` on supported OS versions.
     public func isPrfAvailable() async throws -> Bool {
-        return true // iOS 18+ always supports platform passkeys with PRF
+        return true
     }
 
     // MARK: - Private
