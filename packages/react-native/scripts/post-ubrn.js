@@ -38,7 +38,12 @@
 const fs = require('fs');
 const path = require('path');
 
+const args = process.argv.slice(2);
+const checkMode = args.includes('--check') || args.includes('--dry-run');
+
 const repoRoot = path.resolve(__dirname, '..');
+const drift = [];
+const errors = [];
 
 function patchFile(relPath, label, patcher) {
   const filePath = path.join(repoRoot, relPath);
@@ -46,10 +51,21 @@ function patchFile(relPath, label, patcher) {
     console.log(`[post-ubrn] ${label}: skipping, file not yet generated (${relPath})`);
     return;
   }
-  const before = fs.readFileSync(filePath, 'utf8');
-  const after = patcher(before, label, relPath);
+  let before, after;
+  try {
+    before = fs.readFileSync(filePath, 'utf8');
+    after = patcher(before, label, relPath);
+  } catch (err) {
+    errors.push({ label, relPath, message: err.message });
+    return;
+  }
   if (before === after) {
     console.log(`[post-ubrn] ${label}: already patched (${relPath})`);
+    return;
+  }
+  if (checkMode) {
+    drift.push({ label, relPath });
+    console.log(`[post-ubrn] ${label}: WOULD PATCH (${relPath})`);
     return;
   }
   fs.writeFileSync(filePath, after);
@@ -59,9 +75,10 @@ function patchFile(relPath, label, patcher) {
 function requireAnchor(content, anchor, label, relPath) {
   if (!content.includes(anchor)) {
     throw new Error(
-      `[post-ubrn] ${label}: anchor not found in ${relPath}. ` +
-        `The uniffi-bindgen-react-native output format may have changed. ` +
-        `Expected to find:\n${anchor}`
+      `anchor not found. The uniffi-bindgen-react-native output format may ` +
+        `have changed (check the installed version against the one this ` +
+        `script was written for). See CLAUDE.md "Generated Files Policy" ` +
+        `for how to update the patches. Expected anchor text:\n${anchor}`
     );
   }
 }
@@ -201,5 +218,33 @@ export type { PasskeyPrfProviderOptions } from './PasskeyPrfProvider';`
     );
   }
 );
+
+if (errors.length > 0) {
+  console.error('');
+  console.error(`[post-ubrn] ${errors.length} patch(es) failed:`);
+  for (const { label, relPath, message } of errors) {
+    console.error(`  - ${label} (${relPath})`);
+    console.error(`    ${message.split('\n').join('\n    ')}`);
+  }
+  process.exit(2);
+}
+
+if (checkMode && drift.length > 0) {
+  console.error('');
+  console.error(
+    `[post-ubrn] ${drift.length} generated file(s) are out of sync with the ` +
+      `committed hand-edits:`
+  );
+  for (const { label, relPath } of drift) {
+    console.error(`  - ${label} (${relPath})`);
+  }
+  console.error('');
+  console.error(
+    'Run `yarn post-ubrn` inside packages/react-native and commit the diff, ' +
+      'or revert whatever change dropped the patches. See CLAUDE.md ' +
+      '"Generated Files Policy" for context.'
+  );
+  process.exit(1);
+}
 
 console.log('[post-ubrn] done.');

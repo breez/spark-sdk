@@ -55,6 +55,21 @@ jobs:
       - name: Verify CredentialManagerPrfCore copies are in sync
         run: cargo xtask sync-passkey-core --check
 
+  rn-post-ubrn-check:
+    name: RN post-ubrn sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify post-ubrn patches are in sync
+        working-directory: packages/react-native
+        run: node ./scripts/post-ubrn.js --check
+
   itest:
     name: Integration test
     runs-on: ubuntu-latest
