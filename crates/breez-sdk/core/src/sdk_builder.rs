@@ -487,7 +487,7 @@ impl SdkBuilder {
             crate::built_info::PKG_NAME,
             crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
         );
-        info!("Building SparkWallet with user agent: {}", user_agent);
+        info!("Building sdk with user agent: {}", user_agent);
 
         let breez_server = Arc::new(
             BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
