@@ -15,8 +15,8 @@ export * from './generated/breez_sdk_spark';
 export * from './generated/breez_sdk_spark_bindings';
 
 // Export the platform passkey PRF provider.
-export { PasskeyPrfProvider } from './passkey-prf-provider';
-export type { PasskeyPrfProviderOptions } from './passkey-prf-provider';
+export { PasskeyPrfProvider } from './PasskeyPrfProvider';
+export type { PasskeyPrfProviderOptions } from './PasskeyPrfProvider';
 
 // Now import the bindings so we can:
 // - intialize them
