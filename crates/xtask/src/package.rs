@@ -194,7 +194,58 @@ fn package_wasm_target(
         copy_web_storage_files(crate_dir, &out_path)?;
     }
 
+    // The top-level packages/wasm/package.json exposes
+    //   "./passkey-prf-provider": "./web/passkey-prf-provider/index.js"
+    // so the helper only needs to land in the `web` target output to be
+    // reachable via `@breeztech/breez-sdk-spark/passkey-prf-provider`.
+    if target == "web" {
+        copy_passkey_prf_provider_files(crate_dir, &out_path)?;
+    }
+
     println!("Successfully built WASM target: {}", target);
+    Ok(())
+}
+
+fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let src_dir = crate_dir.join("js/passkey-prf-provider");
+
+    if !src_dir.exists() {
+        println!(
+            "Warning: passkey-prf-provider source directory not found at {:?}",
+            src_dir
+        );
+        return Ok(());
+    }
+
+    let dest_dir = out_path.join("passkey-prf-provider");
+    std::fs::create_dir_all(&dest_dir)?;
+
+    let files_to_copy = ["index.js", "index.d.ts"];
+    for file_name in files_to_copy {
+        let src_file = src_dir.join(file_name);
+        let dest_file = dest_dir.join(file_name);
+
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied passkey-prf-provider file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "passkey-prf-provider file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    println!(
+        "Successfully copied passkey-prf-provider files to {}",
+        dest_dir.display()
+    );
     Ok(())
 }
 
