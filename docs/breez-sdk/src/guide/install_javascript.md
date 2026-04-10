@@ -11,3 +11,9 @@ or
 ```console
 yarn add @breeztech/breez-sdk-spark
 ```
+
+## Example Apps
+
+For full working example apps, see:
+- [CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/wasm)
+- [Glow Web App](https://github.com/breez/glow-web)

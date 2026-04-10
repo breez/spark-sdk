@@ -99,3 +99,7 @@ Or via the command line:
 ```bash
 ./gradlew build -PbreezSdkSparkFrameworkPath=/path/to/framework/dir
 ```
+
+## Example App
+
+For a full working example app, see the [Kotlin Multiplatform CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/kotlin-multiplatform).

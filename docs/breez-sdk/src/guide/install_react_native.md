@@ -52,3 +52,7 @@ To enable [Passkey](passkey.md#ios-apple-app-site-association) support, set `ena
 This package contains native code and requires a custom development build. It will not work with Expo Go.
 
 </div>
+
+## Example App
+
+For a full working example app, see the [React Native CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/react-native).

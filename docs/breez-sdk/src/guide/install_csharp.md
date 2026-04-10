@@ -23,3 +23,7 @@ Add the following to your `.csproj` file:
   <PackageReference Include="Breez.Sdk.Spark" Version="{VERSION}" />
 </ItemGroup>
 ```
+
+## Example App
+
+For a full working example app, see the [C# CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/csharp).
