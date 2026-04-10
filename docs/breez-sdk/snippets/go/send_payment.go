@@ -312,11 +312,6 @@ func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 
 func PrepareSendPaymentSendAll(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
 	// ANCHOR: prepare-send-payment-send-all
-	// To send the entire token balance plus any remaining sats,
-	// provide the full token balance as the amount with ToBitcoin
-	// conversion options and FeesIncluded. The SDK converts all
-	// tokens to sats, combines with existing sat balance, and
-	// deducts fees — draining the wallet completely.
 	paymentRequest := "<payment request>"
 	tokenIdentifier := "<token identifier>"
 

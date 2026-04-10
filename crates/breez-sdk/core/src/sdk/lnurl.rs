@@ -57,8 +57,11 @@ impl BreezSdk {
 
         // FeesIncluded uses the double-query approach
         if fee_policy == FeePolicy::FeesIncluded {
+            let amount_sats: u64 = amount
+                .try_into()
+                .map_err(|_| SdkError::InvalidInput("Amount too large for LNURL".to_string()))?;
             return self
-                .prepare_lnurl_pay_fees_included(request, amount, conversion_estimate)
+                .prepare_lnurl_pay_fees_included(request, amount_sats, conversion_estimate)
                 .await;
         }
 
@@ -112,7 +115,6 @@ impl BreezSdk {
             fee_sats: lightning_fee_sats,
             success_action: success_data.success_action.map(From::from),
             conversion_estimate: prepare_response.conversion_estimate,
-            token_identifier: prepare_response.token_identifier,
             fee_policy,
         })
     }
@@ -181,7 +183,7 @@ impl BreezSdk {
             None
         };
 
-        // For send-all with conversion, pass through FeesIncluded so the conversion
+        // For FeesIncluded with conversion, pass through FeesIncluded so the conversion
         // flow queries actual balance post-conversion. Otherwise use FeesExcluded.
         let internal_fee_policy = if is_fees_included && has_conversion {
             FeePolicy::FeesIncluded
@@ -198,7 +200,10 @@ impl BreezSdk {
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
                     amount: u128::from(receiver_amount_sats),
-                    token_identifier: request.prepare_response.token_identifier,
+                    // LNURL always sends sats — token_identifier is None on the
+                    // internal PrepareSendPaymentResponse even when a conversion
+                    // is present (the token info is in conversion_estimate).
+                    token_identifier: None,
                     conversion_estimate: request.prepare_response.conversion_estimate,
                     fee_policy: internal_fee_policy,
                 },
@@ -419,19 +424,14 @@ impl BreezSdk {
     pub(super) async fn prepare_lnurl_pay_fees_included(
         &self,
         request: PrepareLnurlPayRequest,
-        amount: u128,
+        amount_sats: u64,
         conversion_estimate: Option<crate::ConversionEstimate>,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        let amount_sats: u64 = amount
-            .try_into()
-            .map_err(|_| SdkError::InvalidInput("Amount too large".to_string()))?;
         if amount_sats == 0 {
             return Err(SdkError::InvalidInput(
                 "Amount must be greater than 0".to_string(),
             ));
         }
-
-        let token_identifier = request.token_identifier.clone();
 
         // 1. Validate amount is within LNURL limits
         let min_sendable_sats = request.pay_request.min_sendable.div_ceil(1000);
@@ -534,7 +534,6 @@ impl BreezSdk {
             fee_sats: first_fee,
             success_action: success_data.success_action.map(From::from),
             conversion_estimate,
-            token_identifier,
             fee_policy: FeePolicy::FeesIncluded,
         })
     }

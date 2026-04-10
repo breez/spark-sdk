@@ -858,7 +858,6 @@ pub struct PrepareLnurlPayResponse {
     pub invoice_details: Bolt11InvoiceDetails,
     pub success_action: Option<SuccessAction>,
     pub conversion_estimate: Option<ConversionEstimate>,
-    pub token_identifier: Option<String>,
     pub fee_policy: FeePolicy,
 }
 

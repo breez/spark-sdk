@@ -202,11 +202,6 @@ func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
 
 func prepareSendPaymentSendAll(sdk: BreezSdk) async throws {
     // ANCHOR: prepare-send-payment-send-all
-    // To send the entire token balance plus any remaining sats,
-    // provide the full token balance as the amount with ToBitcoin
-    // conversion options and FeesIncluded. The SDK converts all
-    // tokens to sats, combines with existing sat balance, and
-    // deducts fees — draining the wallet completely.
     let paymentRequest = "<payment request>"
     let tokenIdentifier = "<token identifier>"
 

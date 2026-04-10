@@ -265,11 +265,6 @@ async def prepare_send_payment_fees_included(sdk: BreezSdk):
 
 async def prepare_send_payment_send_all(sdk: BreezSdk):
     # ANCHOR: prepare-send-payment-send-all
-    # To send the entire token balance plus any remaining sats,
-    # provide the full token balance as the amount with ToBitcoin
-    # conversion options and FeesIncluded. The SDK converts all
-    # tokens to sats, combines with existing sat balance, and
-    # deducts fees — draining the wallet completely.
     payment_request = "<payment request>"
     token_identifier = "<token identifier>"
     try:

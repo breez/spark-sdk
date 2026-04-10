@@ -1157,9 +1157,8 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    /// The amount to send.
-    /// For regular sends, this is in satoshis.
-    /// For send-all with conversion (`ToBitcoin`), this is the token amount in base units.
+    /// The amount to send. Denominated in satoshis, or in token base units
+    /// when `token_identifier` is set.
     pub amount: u128,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
@@ -1180,7 +1179,10 @@ pub struct PrepareLnurlPayRequest {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
-    /// The amount to send in satoshis.
+    /// The amount for the payment, always denominated in sats, even when a
+    /// `token_identifier` and conversion are present.
+    /// When a conversion is present, the token input amount is available in
+    /// `conversion_estimate.amount_in`.
     pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
@@ -1191,8 +1193,6 @@ pub struct PrepareLnurlPayResponse {
     pub success_action: Option<SuccessAction>,
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
-    /// The token identifier for send-all-with-conversion flows
-    pub token_identifier: Option<String>,
     /// How fees are handled for this payment.
     pub fee_policy: FeePolicy,
 }
@@ -1325,8 +1325,10 @@ pub struct PrepareSendPaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    /// The amount for the payment.
-    /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
+    /// The amount to be sent, denominated in satoshis for Bitcoin payments
+    /// (including token-to-Bitcoin conversions), or token base units for token payments.
+    /// When a conversion is present, the input amount is in
+    /// `conversion_estimate.amount_in`.
     pub amount: u128,
     /// Optional token identifier for token payments.
     /// Absence indicates that the payment is a Bitcoin payment.

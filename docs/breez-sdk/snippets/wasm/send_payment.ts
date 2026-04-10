@@ -218,11 +218,6 @@ const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
 
 const examplePrepareSendPaymentSendAll = async (sdk: BreezSdk) => {
   // ANCHOR: prepare-send-payment-send-all
-  // To send the entire token balance plus any remaining sats,
-  // provide the full token balance as the amount with ToBitcoin
-  // conversion options and FeesIncluded. The SDK converts all
-  // tokens to sats, combines with existing sat balance, and
-  // deducts fees — draining the wallet completely.
   const paymentRequest = '<payment request>'
   const tokenIdentifier = '<token identifier>'
 
