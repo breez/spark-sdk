@@ -69,6 +69,16 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const OnchainConfirmationSpeed: any;
   export const getSparkStatus: any;
 
+  // --- passkey ---
+  export const PasskeyPrfProvider: any;
+  export type PasskeyPrfProvider = any;
+
+  export const Passkey: any;
+  export type Passkey = any;
+
+  export const NostrRelayConfig: any;
+  export type NostrRelayConfig = any;
+
   // --- types only ---
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
