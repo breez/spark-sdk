@@ -111,7 +111,8 @@ async fn test_distributed_lock_acquire_and_release(
     // Same signer key = same user (two instances of the same wallet)
     let signer_key: [u8; 32] = [1u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
@@ -157,7 +158,8 @@ async fn test_distributed_lock_multiple_instances(
 
     let signer_key: [u8; 32] = [2u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
@@ -210,7 +212,8 @@ async fn test_distributed_lock_expiration(
 
     let signer_key: [u8; 32] = [3u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);
@@ -246,7 +249,8 @@ async fn test_distributed_lock_release_idempotent(
 
     let signer_key: [u8; 32] = [4u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
 
@@ -277,7 +281,8 @@ async fn test_distributed_lock_different_users(
     let user_a_key: [u8; 32] = [5u8; 32];
     let user_b_key: [u8; 32] = [6u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let user_a = create_signing_client(Arc::clone(&sync_client), &user_a_key);
     let user_b = create_signing_client(Arc::clone(&sync_client), &user_b_key);
@@ -317,7 +322,8 @@ async fn test_distributed_lock_exclusive(
 
     let signer_key: [u8; 32] = [7u8; 32];
 
-    let sync_client: Arc<dyn SyncerClient> = Arc::new(BreezSyncerClient::new(grpc_url, None)?);
+    let sync_client: Arc<dyn SyncerClient> =
+        Arc::new(BreezSyncerClient::new(grpc_url, None, "breez-sdk-itest")?);
 
     let instance_a = create_signing_client(Arc::clone(&sync_client), &signer_key);
     let instance_b = create_signing_client(Arc::clone(&sync_client), &signer_key);

@@ -57,9 +57,11 @@ tonic = { workspace = true, features = [
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 dnssec-prover = { workspace = true, features = ["validation"] }
+http.workspace = true
 reqwest.workspace = true
 tonic = { workspace = true, features = ["codegen", "prost"] }
 tonic-web-wasm-client.workspace = true
+tower-service.workspace = true
 
 # Wasm dev dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]

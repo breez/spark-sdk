@@ -12,6 +12,7 @@ use crate::{
 pub struct RealTimeSyncParams {
     pub server_url: String,
     pub api_key: Option<String>,
+    pub user_agent: String,
     pub signer: Arc<dyn breez_sdk_common::sync::SyncSigner>,
     pub storage: Arc<dyn Storage>,
     pub shutdown_receiver: tokio::sync::watch::Receiver<()>,
@@ -36,8 +37,12 @@ pub async fn init_and_start_real_time_sync(
     synced_storage.initial_setup();
     let storage: Arc<dyn Storage> = synced_storage.clone();
     let sync_client: Arc<dyn breez_sdk_common::sync::SyncerClient> = Arc::new(
-        BreezSyncerClient::new(&params.server_url, params.api_key.as_deref())
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
+        BreezSyncerClient::new(
+            &params.server_url,
+            params.api_key.as_deref(),
+            &params.user_agent,
+        )
+        .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
 
     let signing_client = SigningClient::new(

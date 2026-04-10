@@ -1,6 +1,37 @@
-use anyhow::Result;
+use std::task::{Context, Poll};
 
-pub type Transport = tonic_web_wasm_client::Client;
+use anyhow::Result;
+use http::HeaderValue;
+use tower_service::Service;
+
+#[derive(Clone)]
+pub struct Transport {
+    inner: tonic_web_wasm_client::Client,
+    user_agent: HeaderValue,
+}
+
+impl Service<http::Request<tonic::body::BoxBody>> for Transport {
+    type Response = http::Response<tonic_web_wasm_client::ResponseBody>;
+    type Error = tonic_web_wasm_client::Error;
+    type Future =
+        <tonic_web_wasm_client::Client as Service<http::Request<tonic::body::BoxBody>>>::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: http::Request<tonic::body::BoxBody>) -> Self::Future {
+        // Set both `User-Agent` and `X-User-Agent`. Chrome silently drops any
+        // script-set `User-Agent` on Fetch requests (crbug.com/571722), so we
+        // also send `X-User-Agent` to ensure the value reaches the server
+        // cross-browser. Firefox and Safari honor `User-Agent`.
+        req.headers_mut()
+            .insert("User-Agent", self.user_agent.clone());
+        req.headers_mut()
+            .insert("X-User-Agent", self.user_agent.clone());
+        self.inner.call(req)
+    }
+}
 
 #[derive(Clone)]
 pub struct GrpcClient {
@@ -8,9 +39,13 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    pub fn new(url: &str) -> Result<Self> {
+    pub fn new(url: &str, user_agent: &str) -> Result<Self> {
+        let user_agent = HeaderValue::from_str(user_agent)?;
         Ok(Self {
-            inner: tonic_web_wasm_client::Client::new(url.to_string()),
+            inner: Transport {
+                inner: tonic_web_wasm_client::Client::new(url.to_string()),
+                user_agent,
+            },
         })
     }
 

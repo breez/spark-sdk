@@ -482,8 +482,15 @@ impl SdkBuilder {
             }
         };
 
+        let user_agent = format!(
+            "{}/{}",
+            crate::built_info::PKG_NAME,
+            crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+        );
+        info!("Building sdk with user agent: {}", user_agent);
+
         let breez_server = Arc::new(
-            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None)
+            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
                 .map_err(|e| SdkError::Generic(e.to_string()))?,
         );
 
@@ -496,12 +503,6 @@ impl SdkBuilder {
             Some(client) => client,
             None => Arc::new(DefaultHttpClient::default()),
         };
-        let user_agent = format!(
-            "{}/{}",
-            crate::built_info::PKG_NAME,
-            crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
-        );
-        info!("Building SparkWallet with user agent: {}", user_agent);
         let mut spark_wallet_config = if let Some(env_config) = &self.config.spark_config {
             Self::build_spark_wallet_config(self.config.network.into(), env_config)?
         } else {
@@ -510,7 +511,7 @@ impl SdkBuilder {
         spark_wallet_config.operator_pool = spark_wallet_config
             .operator_pool
             .with_user_agent(Some(user_agent.clone()));
-        spark_wallet_config.service_provider_config.user_agent = Some(user_agent);
+        spark_wallet_config.service_provider_config.user_agent = Some(user_agent.clone());
         spark_wallet_config.leaf_auto_optimize_enabled =
             self.config.optimization_config.auto_enabled;
         spark_wallet_config.leaf_optimization_options.multiplicity =
@@ -585,6 +586,7 @@ impl SdkBuilder {
             init_and_start_real_time_sync(RealTimeSyncParams {
                 server_url: server_url.clone(),
                 api_key: self.config.api_key.clone(),
+                user_agent,
                 signer: rtsync_signer,
                 storage: Arc::clone(&storage),
                 shutdown_receiver: shutdown_sender.subscribe(),
