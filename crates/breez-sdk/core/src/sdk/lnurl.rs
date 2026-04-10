@@ -138,7 +138,6 @@ impl BreezSdk {
         };
 
         // Calculate amount override for FeesIncluded operations
-        let has_conversion = request.prepare_response.conversion_estimate.is_some();
         let amount_override = if is_fees_included {
             // Re-estimate current fee for the invoice
             let current_fee = self
@@ -183,8 +182,10 @@ impl BreezSdk {
             None
         };
 
-        // For FeesIncluded with conversion, pass through FeesIncluded so the conversion
-        // flow queries actual balance post-conversion. Otherwise use FeesExcluded.
+        // For conversions, use FeesIncluded so the send path deducts fees from
+        // the post-conversion balance. For non-conversion FeesIncluded, the LNURL
+        // flow handles fees via invoice sizing and amount_override.
+        let has_conversion = request.prepare_response.conversion_estimate.is_some();
         let internal_fee_policy = if is_fees_included && has_conversion {
             FeePolicy::FeesIncluded
         } else {
@@ -199,7 +200,15 @@ impl BreezSdk {
                         spark_transfer_fee_sats: None,
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    amount: u128::from(receiver_amount_sats),
+                    // For conversions, use the prepare's total amount (before fee
+                    // deduction) so the sats_change logic in complete_conversion_and_send
+                    // correctly computes the post-conversion amount override.
+                    // For non-conversions, use the invoice amount.
+                    amount: if has_conversion {
+                        u128::from(request.prepare_response.amount_sats)
+                    } else {
+                        u128::from(receiver_amount_sats)
+                    },
                     // LNURL always sends sats — token_identifier is None on the
                     // internal PrepareSendPaymentResponse even when a conversion
                     // is present (the token info is in conversion_estimate).
@@ -211,7 +220,14 @@ impl BreezSdk {
                 idempotency_key: request.idempotency_key,
             },
             true,
-            amount_override,
+            // For conversions, don't pass amount_override — let
+            // complete_conversion_and_send compute it from sats_change.
+            // For non-conversions, use the LNURL-computed override.
+            if has_conversion {
+                None
+            } else {
+                amount_override
+            },
         ))
         .await?
         .payment;

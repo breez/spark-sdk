@@ -561,6 +561,7 @@ impl BreezSdk {
             Box::pin(self.convert_token_send_payment_internal(
                 conversion_options,
                 &request,
+                amount_override,
                 &mut suppress_payment_event,
             ))
             .await
@@ -586,6 +587,7 @@ impl BreezSdk {
         &self,
         conversion_options: &ConversionOptions,
         request: &SendPaymentRequest,
+        caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Suppress auto-convert while this send-with-conversion is in flight
@@ -595,7 +597,7 @@ impl BreezSdk {
         };
 
         // Step 1: Execute the token conversion
-        let (conversion_response, conversion_purpose, is_send_all, uses_amount_in) = self
+        let (conversion_response, conversion_purpose, uses_amount_in) = self
             .execute_pre_send_conversion(conversion_options, request)
             .await?;
 
@@ -609,8 +611,8 @@ impl BreezSdk {
             &conversion_response,
             &conversion_purpose,
             request,
-            is_send_all,
             uses_amount_in,
+            caller_amount_override,
             suppress_payment_event,
         )
         .await
@@ -620,26 +622,22 @@ impl BreezSdk {
     /// Executes the token conversion for the given payment method.
     ///
     /// Returns the conversion response, purpose (self-transfer vs ongoing payment),
-    /// and whether this is a send-all-with-conversion.
+    /// and whether the conversion used `AmountIn` (needed by `complete_conversion_and_send`
+    /// to compute the amount override).
     ///
-    /// Re-evaluates whether this is still a send-all based on the current token
-    /// balance (which may have changed since prepare) and chooses the conversion direction:
-    /// - `ToBitcoin` conversion → uses `AmountIn` from the conversion estimate
-    ///   (variable sat output).
-    /// - Other conversions → uses `MinAmountOut(amount)`, which the per-payment-method
-    ///   paths expand to `MinAmountOut(amount + fees)` so the converter delivers enough
-    ///   to cover the send and its fees.
+    /// Chooses the conversion direction based on whether the prepare used `AmountIn`
+    /// (user specified token amount, `amount == estimate.amount_out`) or `MinAmountOut`
+    /// (user specified sats). For `MinAmountOut`, the per-payment-method paths expand to
+    /// `MinAmountOut(amount + fees)` so the converter delivers enough to cover the send.
     #[allow(clippy::too_many_lines)]
     async fn execute_pre_send_conversion(
         &self,
         conversion_options: &ConversionOptions,
         request: &SendPaymentRequest,
-    ) -> Result<(TokenConversionResponse, ConversionPurpose, bool, bool), SdkError> {
+    ) -> Result<(TokenConversionResponse, ConversionPurpose, bool), SdkError> {
         let amount = request.prepare_response.amount;
 
         // Extract from_token_identifier from conversion options for ToBitcoin conversions.
-        // This replaces the previous reliance on prepare_response.token_identifier,
-        // which is now None for ToBitcoin (reflects output denomination).
         let from_token_identifier = match &conversion_options.conversion_type {
             ConversionType::ToBitcoin {
                 from_token_identifier,
@@ -647,33 +645,19 @@ impl BreezSdk {
             ConversionType::FromBitcoin => None,
         };
 
-        // Re-evaluate send-all at send time — if the token balance changed since
-        // prepare, is_send_all may become false (existing sats won't be swept).
-        let (is_token_conversion, is_send_all) = self
-            .is_token_conversion(
-                Some(conversion_options),
-                from_token_identifier.as_ref(),
-                request
-                    .prepare_response
-                    .conversion_estimate
-                    .as_ref()
-                    .map(|e| e.amount_in),
-                request.prepare_response.fee_policy,
-            )
-            .await?;
-
         // AmountIn vs MinAmountOut at convert time:
-        // Determine whether the prepare used AmountIn (user specified token amount,
-        // variable sat output) or MinAmountOut (user specified sats, guaranteed output).
-        // When AmountIn was used, the prepare's `amount` equals the estimate's
-        // `amount_out` (estimated sats). When MinAmountOut was used, `amount` is the
-        // user's requested sats and won't match `amount_out`.
-        let was_amount_in = request
+        // For AmountIn (user specified token amount), the prepare's `amount` is
+        // derived from `estimate.amount_out` (+ optional sat balance), so
+        // `amount >= estimate.amount_out`.
+        // For MinAmountOut (user specified sats), the converter guarantees
+        // `estimate.amount_out >= amount`, so `amount <= estimate.amount_out`
+        // (strictly less when there's conversion slack).
+        let uses_amount_in = request
             .prepare_response
             .conversion_estimate
             .as_ref()
-            .is_some_and(|e| e.amount_out == amount);
-        let conversion_amount = if is_token_conversion && was_amount_in {
+            .is_some_and(|e| amount >= e.amount_out);
+        let conversion_amount = if uses_amount_in {
             let token_amount = request
                 .prepare_response
                 .conversion_estimate
@@ -686,7 +670,6 @@ impl BreezSdk {
         } else {
             ConversionAmount::MinAmountOut(amount)
         };
-        let uses_amount_in = matches!(conversion_amount, ConversionAmount::AmountIn(_));
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
@@ -712,7 +695,7 @@ impl BreezSdk {
                         None,
                     )
                     .await?;
-                Ok((response, purpose, is_send_all, uses_amount_in))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::SparkInvoice {
                 spark_invoice_details:
@@ -742,7 +725,7 @@ impl BreezSdk {
                         None,
                     )
                     .await?;
-                Ok((response, purpose, is_send_all, uses_amount_in))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::Bolt11Invoice {
                 spark_transfer_fee_sats,
@@ -769,7 +752,7 @@ impl BreezSdk {
                         conversion_amount_override,
                     )
                     .await?;
-                Ok((response, purpose, is_send_all, uses_amount_in))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                 let purpose = ConversionPurpose::OngoingPayment {
@@ -790,7 +773,7 @@ impl BreezSdk {
                         conversion_amount_override,
                     )
                     .await?;
-                Ok((response, purpose, is_send_all, uses_amount_in))
+                Ok((response, purpose, uses_amount_in))
             }
         }
     }
@@ -822,17 +805,20 @@ impl BreezSdk {
     ///
     /// For self-transfers, returns immediately after conversion completes.
     /// For ongoing payments, sends the actual payment and links any remaining children.
-    /// For send-all, queries the actual sat balance post-conversion and uses it as the
-    /// send amount (with `FeesIncluded` to deduct fees).
-    #[allow(clippy::too_many_arguments)]
+    /// For `AmountIn` conversions, computes `amount_override = converted_sats + sats_change`
+    /// where `sats_change` is the difference between the prepare amount and the estimated
+    /// conversion output (representing any existing sat balance included at prepare time).
+    /// If `caller_amount_override` is provided (e.g. from the LNURL flow which handles
+    /// its own fee logic), it takes precedence over the computed override.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn complete_conversion_and_send(
         &self,
         conversion_options: &ConversionOptions,
         conversion_response: &TokenConversionResponse,
         conversion_purpose: &ConversionPurpose,
         request: &SendPaymentRequest,
-        is_send_all: bool,
         uses_amount_in: bool,
+        caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Trigger a wallet state sync if converting from Bitcoin to token
@@ -867,40 +853,59 @@ impl BreezSdk {
         }
 
         // Determine the amount to use for the actual send.
-        // - Send-all: drain the wallet — use the full post-conversion sat balance.
-        // - Non-send-all ToBitcoin: user specified a token amount → send the actual
-        //   sats produced by *this* conversion. This honors "convert N tokens and
-        //   send the result" regardless of slippage.
-        // - Other conversions (e.g. FromBitcoin, or sat-specified ToBitcoin via
-        //   stable balance): the conversion was sized as MinAmountOut(amount + fees),
-        //   so the converted output covers the send. Don't override — send exactly
-        //   the requested amount and let the slack cover fees.
-        let amount_override = if is_send_all {
-            let balance = self.spark_wallet.get_balance().await?;
+        //
+        // If the caller provided an amount_override (e.g. LNURL flow with its own
+        // fee logic), use it directly.
+        //
+        // For AmountIn conversions (user specified token amount), the prepare's
+        // `amount` includes estimated conversion output + any existing sat balance
+        // (sats_change). At send time, use the actual converted sats + sats_change
+        // to honor the prepare estimate while accounting for slippage.
+        // This unifies send-all (sats_change > 0) and non-send-all (sats_change = 0).
+        //
+        // For MinAmountOut conversions (user specified sats, e.g. auto stable
+        // balance), the conversion guarantees ≥ requested sats, so no override is
+        // needed — send exactly the prepared amount.
+        let amount_override = if let Some(override_amount) = caller_amount_override {
             tracing::trace!(
-                sat_balance_post_conversion = balance,
-                request_amount = request.prepare_response.amount,
-                fee_policy = ?request.prepare_response.fee_policy,
-                "[SEND-ALL] complete_conversion_and_send: post-conversion balance as amount_override"
+                override_amount,
+                "complete_conversion_and_send: using caller-provided amount_override"
             );
-            Some(balance)
+            Some(override_amount)
         } else if uses_amount_in {
             let converted_sats: u64 = payment
                 .amount
                 .try_into()
                 .map_err(|_| SdkError::Generic("Converted sats too large for u64".to_string()))?;
+            let estimated_conversion_out: u64 = request
+                .prepare_response
+                .conversion_estimate
+                .as_ref()
+                .map_or(0, |e| e.amount_out)
+                .try_into()
+                .map_err(|_| SdkError::Generic("Estimated sats too large for u64".to_string()))?;
+            let sats_change = request
+                .prepare_response
+                .amount
+                .try_into()
+                .map(|amount: u64| amount.saturating_sub(estimated_conversion_out))
+                .unwrap_or(0);
+            let total = converted_sats.saturating_add(sats_change);
             tracing::trace!(
-                converted_sats = converted_sats,
+                converted_sats,
+                estimated_conversion_out,
+                sats_change,
+                total,
                 prepared_amount = request.prepare_response.amount,
                 fee_policy = ?request.prepare_response.fee_policy,
-                "complete_conversion_and_send: actual converted sats as amount_override (token-amount conversion)"
+                "complete_conversion_and_send: amount_override = converted_sats + sats_change"
             );
-            Some(converted_sats)
+            Some(total)
         } else {
             tracing::trace!(
                 prepared_amount = request.prepare_response.amount,
                 fee_policy = ?request.prepare_response.fee_policy,
-                "complete_conversion_and_send: no override (sat-amount conversion, slack covers fee)"
+                "complete_conversion_and_send: no override (MinAmountOut conversion)"
             );
             None
         };
