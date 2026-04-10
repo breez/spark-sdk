@@ -11,8 +11,7 @@ use crate::webhooks::{NewWebhookDelivery, WebhookRepository, WebhookService};
 #[derive(Debug, Serialize)]
 #[serde(tag = "template", content = "data", rename_all = "snake_case")]
 pub enum WebhookPayload {
-    #[serde(rename_all = "camelCase")]
-    PaymentReceived {
+    SparkPaymentReceived {
         payment_hash: String,
         user_pubkey: String,
         invoice: String,
@@ -42,7 +41,7 @@ where
     let now = now_millis();
     let mut deliveries = Vec::with_capacity(data.len());
     for item in data {
-        let payload = WebhookPayload::PaymentReceived {
+        let payload = WebhookPayload::SparkPaymentReceived {
             payment_hash: item.payment_hash.clone(),
             user_pubkey: item.user_pubkey,
             invoice: item.invoice,
@@ -163,13 +162,13 @@ mod shared_tests {
         assert_eq!(deliveries[0].url, webhook_url);
 
         let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
-        assert_eq!(payload["template"], "payment_received");
+        assert_eq!(payload["template"], "spark_payment_received");
         let data = &payload["data"];
-        assert_eq!(data["paymentHash"], payment_hash);
-        assert_eq!(data["userPubkey"], "enqueue_pubkey");
+        assert_eq!(data["payment_hash"], payment_hash);
+        assert_eq!(data["user_pubkey"], "enqueue_pubkey");
         assert_eq!(data["preimage"], preimage_hex);
-        assert_eq!(data["lightningAddress"], "alice@enqueue-test.example.com");
-        assert_eq!(data["amountSat"], 1000);
+        assert_eq!(data["lightning_address"], "alice@enqueue-test.example.com");
+        assert_eq!(data["amount_sat"], 1000);
     }
 
     pub async fn enqueue_webhooks_skips_invoice_without_domain<DB>(db: &DB)

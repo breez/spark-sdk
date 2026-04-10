@@ -20,19 +20,19 @@ Your endpoint should accept `POST` requests with a JSON body and respond with a 
 
 ## Payload
 
-All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently the only template is `payment_received`:
+All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently the only template is `spark_payment_received`:
 
 ```json
 {
-  "template": "payment_received",
+  "template": "spark_payment_received",
   "data": {
-    "paymentHash": "abc123...",
+    "payment_hash": "abc123...",
     "invoice": "lnbc50u1p...",
     "preimage": "def456...",
-    "amountSat": 50000,
-    "userPubkey": "02abc123...",
-    "lightningAddress": "alice@yourdomain.com",
-    "senderComment": "Thanks!",
+    "amount_sat": 50000,
+    "user_pubkey": "02abc123...",
+    "lightning_address": "alice@yourdomain.com",
+    "sender_comment": "Thanks!",
     "timestamp": 1711929600000
   }
 }
@@ -40,13 +40,13 @@ All payloads use a `{ "template": "...", "data": { ... } }` envelope. Currently 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `paymentHash` | `string` | Hex-encoded payment hash |
+| `payment_hash` | `string` | Hex-encoded payment hash |
 | `invoice` | `string` | BOLT11 invoice that was paid |
 | `preimage` | `string` | Hex-encoded payment preimage |
-| `amountSat` | `number \| null` | Amount received in satoshis. May be `null` in rare cases where the amount is not available. |
-| `userPubkey` | `string` | The Spark identity public key of the user who received the payment |
-| `lightningAddress` | `string \| null` | The Lightning Address that received the payment (e.g. `alice@yourdomain.com`) |
-| `senderComment` | `string \| null` | Comment attached by the sender, if any |
+| `amount_sat` | `number \| null` | Amount received in satoshis. May be `null` in rare cases where the amount is not available. |
+| `user_pubkey` | `string` | The Spark identity public key of the user who received the payment |
+| `lightning_address` | `string \| null` | The Lightning Address that received the payment (e.g. `alice@yourdomain.com`) |
+| `sender_comment` | `string \| null` | Comment attached by the sender, if any |
 | `timestamp` | `number` | Milliseconds since Unix epoch when the webhook was enqueued |
 
 ## Retries
