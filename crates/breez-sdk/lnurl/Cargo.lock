@@ -2146,6 +2146,7 @@ dependencies = [
  "axum-extra",
  "base64",
  "bitcoin",
+ "bitreq",
  "clap",
  "figment",
  "hex",

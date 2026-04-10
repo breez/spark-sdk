@@ -97,3 +97,7 @@ If the payment was sent as a Nostr Zap (as defined in [NIP-57](https://github.co
 
 Payments received through your Lightning address support [LUD-21](https://github.com/lnurl/luds/blob/luds/21.md) invoice verification, allowing third parties to verify payment completion via a public verify URL.
 
+## Payment notifications
+
+You can receive webhook notifications when your users get paid via their Lightning Address. See [Lightning Address payment notifications](./lnurl_webhooks.md) for details.
+

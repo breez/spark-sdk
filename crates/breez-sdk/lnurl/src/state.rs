@@ -8,6 +8,7 @@ use tokio::sync::{Mutex, watch};
 
 pub struct State<DB> {
     pub db: DB,
+    pub webhook_service: crate::webhooks::WebhookService<DB>,
     pub wallet: Arc<spark_wallet::SparkWallet>,
     pub scheme: String,
     pub min_sendable: u64,
@@ -33,6 +34,7 @@ where
     fn clone(&self) -> Self {
         Self {
             db: self.db.clone(),
+            webhook_service: self.webhook_service.clone(),
             wallet: Arc::clone(&self.wallet),
             scheme: self.scheme.clone(),
             min_sendable: self.min_sendable,

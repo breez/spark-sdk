@@ -31,7 +31,6 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
-mod background;
 mod error;
 mod invoice_paid;
 mod postgresql;
@@ -41,6 +40,8 @@ mod sqlite;
 mod state;
 mod time;
 mod user;
+mod webhook_notify;
+mod webhooks;
 mod zap;
 
 #[derive(Clone, Parser, Debug, Serialize, Deserialize)]
@@ -112,6 +113,11 @@ struct Args {
     /// If not set, a random seed will be generated.
     #[arg(long)]
     pub ssp_auth_seed: Option<String>,
+
+    /// Number of days to keep webhook deliveries (both succeeded and failed)
+    /// for audit/debugging before they are cleaned up periodically.
+    #[arg(long, default_value = "90")]
+    pub webhook_delivery_ttl_days: u32,
 }
 
 #[tokio::main]
@@ -199,7 +205,7 @@ fn parse_auth_seed(hex_str: Option<&str>) -> [u8; 32] {
 #[allow(clippy::too_many_lines)]
 async fn run_server<DB>(args: Args, repository: DB) -> Result<(), anyhow::Error>
 where
-    DB: LnurlRepository + Clone + Send + Sync + 'static,
+    DB: LnurlRepository + webhooks::WebhookRepository + Clone + Send + Sync + 'static,
 {
     let auth_seed = parse_auth_seed(args.ssp_auth_seed.as_deref());
 
@@ -275,8 +281,24 @@ where
     // Create watch channel for triggering background processing
     let (invoice_paid_trigger, invoice_paid_rx) = watch::channel(());
 
-    // Start background processor for handling paid invoices.
-    background::start_background_processor(repository.clone(), nostr_keys.clone(), invoice_paid_rx);
+    // Create a shared HTTP client for webhook delivery (connection cache capacity —
+    // generous enough that connections to all webhook hosts stay warm).
+    let http_client = bitreq::Client::new(100);
+
+    let webhook_service = webhooks::WebhookService::new(repository.clone());
+
+    // Start background processors.
+    zap::start_background_processor(
+        repository.clone(),
+        nostr_keys.as_ref(),
+        invoice_paid_rx.clone(),
+    );
+    webhooks::start_background_processor(
+        repository.clone(),
+        http_client,
+        invoice_paid_rx,
+        args.webhook_delivery_ttl_days,
+    );
 
     // Get or create a shared webhook secret persisted in the database.
     // All instances share the same secret so webhooks verify correctly
@@ -297,6 +319,7 @@ where
 
     let state = State {
         db: repository,
+        webhook_service,
         wallet,
         scheme: args.scheme,
         min_sendable: args.min_sendable,

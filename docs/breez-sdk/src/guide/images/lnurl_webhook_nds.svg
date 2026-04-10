@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 160" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#6B7280" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- Sender -->
+  <rect x="10" y="40" width="140" height="70" rx="12" fill="#F3F4F6" stroke="#D1D5DB" stroke-width="1.5"/>
+  <text x="80" y="72" text-anchor="middle" fill="#374151" font-weight="600" font-size="14">Sender</text>
+  <text x="80" y="92" text-anchor="middle" fill="#6B7280" font-size="11">pays Lightning Address</text>
+
+  <!-- Arrow 1 -->
+  <line x1="150" y1="75" x2="238" y2="75" stroke="#6B7280" stroke-width="1.5" marker-end="url(#arrow2)"/>
+  <text x="194" y="65" text-anchor="middle" fill="#6B7280" font-size="11">payment</text>
+
+  <!-- Breez LNURL Server -->
+  <rect x="240" y="40" width="170" height="70" rx="12" fill="#EEF2FF" stroke="#A5B4FC" stroke-width="1.5"/>
+  <text x="325" y="72" text-anchor="middle" fill="#3730A3" font-weight="600" font-size="14">Breez LNURL</text>
+  <text x="325" y="92" text-anchor="middle" fill="#6366F1" font-size="11">Server</text>
+
+  <!-- Arrow 2 -->
+  <line x1="410" y1="75" x2="498" y2="75" stroke="#6B7280" stroke-width="1.5" marker-end="url(#arrow2)"/>
+  <text x="454" y="65" text-anchor="middle" fill="#6B7280" font-size="11">webhook</text>
+
+  <!-- Your NDS -->
+  <rect x="500" y="40" width="150" height="70" rx="12" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.5"/>
+  <text x="575" y="72" text-anchor="middle" fill="#065F46" font-weight="600" font-size="14">Your NDS</text>
+  <text x="575" y="92" text-anchor="middle" fill="#059669" font-size="11">processes event</text>
+
+  <!-- Arrow 3 -->
+  <line x1="650" y1="75" x2="738" y2="75" stroke="#6B7280" stroke-width="1.5" marker-end="url(#arrow2)"/>
+  <text x="694" y="65" text-anchor="middle" fill="#6B7280" font-size="11">push</text>
+
+  <!-- User's Phone -->
+  <rect x="740" y="40" width="150" height="70" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.5"/>
+  <text x="815" y="72" text-anchor="middle" fill="#9A3412" font-weight="600" font-size="14">User's Phone</text>
+  <text x="815" y="92" text-anchor="middle" fill="#EA580C" font-size="11">receives notification</text>
+</svg>

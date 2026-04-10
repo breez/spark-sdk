@@ -32,6 +32,7 @@
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Managing contacts](guide/contacts.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
+    - [Lightning Address payment notifications](guide/lnurl_webhooks.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [Using LNURL-Auth](guide/lnurl_auth.md)
 - [Passkey login](guide/passkey.md)
