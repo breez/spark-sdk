@@ -202,32 +202,32 @@ fn package_wasm_target(
     Ok(())
 }
 
-/// Parsed exports from a wasm-bindgen generated JS file.
+/// Parsed exports from a wasm-bindgen generated `.d.ts` file.
 struct WasmExports {
     functions: Vec<String>,
     classes: Vec<String>,
-    reexports: Vec<String>,
 }
 
-/// Parse exported symbols from a wasm-bindgen generated ESM `.js` file.
+/// Parse exported symbols from a wasm-bindgen generated `.d.ts` file.
 ///
-/// Recognises three line-level patterns produced by wasm-bindgen:
+/// This file is identical across web and nodejs targets (except `initSync`
+/// which only appears in the web target). Both targets generate
+/// `breez_sdk_spark_wasm.d.ts` with the same `export function` and
+/// `export class` patterns, so a single parser covers both use cases.
+///
+/// Recognises two line-level patterns:
 ///   `export function NAME(`
 ///   `export class NAME `
-///   `export { NAME };`
-///
-/// `export default` is intentionally skipped (the SSR shim provides its own).
-fn parse_wasm_exports(js_path: &Path) -> Result<WasmExports> {
-    let content = fs::read_to_string(js_path)
-        .with_context(|| format!("Failed to read {}", js_path.display()))?;
+fn parse_wasm_exports(dts_path: &Path) -> Result<WasmExports> {
+    let content = fs::read_to_string(dts_path)
+        .with_context(|| format!("Failed to read {}", dts_path.display()))?;
 
     let mut functions = Vec::new();
     let mut classes = Vec::new();
-    let mut reexports = Vec::new();
 
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("export function ") {
-            // "connect(request) {" → "connect"
+            // "connect(request: ConnectRequest): Promise<BreezSdk>;" → "connect"
             if let Some(name) = rest
                 .split(|c: char| !c.is_alphanumeric() && c != '_')
                 .next()
@@ -242,15 +242,6 @@ fn parse_wasm_exports(js_path: &Path) -> Result<WasmExports> {
             {
                 classes.push(name.to_string());
             }
-        } else if let Some(rest) = line.strip_prefix("export { ") {
-            // "initSync };" → "initSync"
-            if let Some(name) = rest
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .next()
-                && !name.is_empty()
-            {
-                reexports.push(name.to_string());
-            }
         }
     }
 
@@ -258,66 +249,19 @@ fn parse_wasm_exports(js_path: &Path) -> Result<WasmExports> {
         !functions.is_empty() && !classes.is_empty(),
         "Failed to parse WASM exports from {} — found {} functions, {} classes. \
          wasm-bindgen output format may have changed.",
-        js_path.display(),
+        dts_path.display(),
         functions.len(),
         classes.len()
     );
 
     println!(
-        "Parsed {} functions, {} classes, {} re-exports from {}",
+        "Parsed {} functions, {} classes from {}",
         functions.len(),
         classes.len(),
-        reexports.len(),
-        js_path.display()
+        dts_path.display()
     );
 
-    Ok(WasmExports {
-        functions,
-        classes,
-        reexports,
-    })
-}
-
-/// Parse exported symbols from a wasm-bindgen generated CJS `.js` file (Node.js target).
-///
-/// Recognises the pattern: `module.exports.NAME = ...`
-/// Skips internal wasm-bindgen symbols (`__wbindgen_*`, `__wbg_*`, `__wasm`).
-fn parse_nodejs_exports(js_path: &Path) -> Result<Vec<String>> {
-    let content = fs::read_to_string(js_path)
-        .with_context(|| format!("Failed to read {}", js_path.display()))?;
-
-    let mut exports = Vec::new();
-
-    for line in content.lines() {
-        if let Some(rest) = line.strip_prefix("module.exports.") {
-            // "connect = function(request) {" → "connect"
-            if let Some(name) = rest
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .next()
-                && !name.is_empty()
-                && !name.starts_with("__wbindgen")
-                && !name.starts_with("__wbg")
-                && !name.starts_with("__wasm")
-            {
-                exports.push(name.to_string());
-            }
-        }
-    }
-
-    anyhow::ensure!(
-        !exports.is_empty(),
-        "Failed to parse Node.js exports from {} — found 0 public exports. \
-         wasm-bindgen output format may have changed.",
-        js_path.display()
-    );
-
-    println!(
-        "Parsed {} public exports from {}",
-        exports.len(),
-        js_path.display()
-    );
-
-    Ok(exports)
+    Ok(WasmExports { functions, classes })
 }
 
 /// Generate the SSR-safe entry point at `pkg_dir/ssr/`.
@@ -327,8 +271,8 @@ fn parse_nodejs_exports(js_path: &Path) -> Result<Vec<String>> {
 /// until `init()` is called on the client, at which point they delegate to the
 /// real web module loaded via dynamic `import()`.
 fn create_ssr_entry_point(pkg_dir: &Path) -> Result<()> {
-    let web_js = pkg_dir.join("web/breez_sdk_spark_wasm.js");
-    let exports = parse_wasm_exports(&web_js)?;
+    let dts = pkg_dir.join("web/breez_sdk_spark_wasm.d.ts");
+    let exports = parse_wasm_exports(&dts)?;
 
     let ssr_dir = pkg_dir.join("ssr");
     fs::create_dir_all(&ssr_dir)?;
@@ -386,16 +330,6 @@ export default async function init(wasmInput) {
         ));
     }
 
-    // Re-export stubs (treated as functions)
-    for name in &exports.reexports {
-        js.push_str(&format!(
-            "export function {name}(...args) {{\n  \
-             if (!_module) _notInitialized('{name}');\n  \
-             return _module.{name}(...args);\n\
-             }}\n\n"
-        ));
-    }
-
     fs::write(ssr_dir.join("index.js"), &js).with_context(|| "Failed to write ssr/index.js")?;
 
     // --- ssr/index.d.ts ---
@@ -410,7 +344,7 @@ export default function init(wasmInput?: any): Promise<void>;
 
     println!(
         "Created SSR entry point with {} stubs",
-        exports.functions.len() + exports.classes.len() + exports.reexports.len()
+        exports.functions.len() + exports.classes.len()
     );
     Ok(())
 }
@@ -419,28 +353,32 @@ export default function init(wasmInput?: any): Promise<void>;
 /// `import { connect } from '@breeztech/breez-sdk-spark'` works in ESM
 /// contexts (e.g. Vite SSR) where the `"node"` export condition is active.
 fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
-    let node_js = pkg_dir.join("nodejs/breez_sdk_spark_wasm.js");
-    let exports = parse_nodejs_exports(&node_js)?;
+    let dts = pkg_dir.join("nodejs/breez_sdk_spark_wasm.d.ts");
+    let exports = parse_wasm_exports(&dts)?;
 
     let mut mjs = String::new();
     mjs.push_str(
         "// ESM wrapper for the CJS Node.js entry — re-exports named bindings\n\
          // so that `import { connect } from '@breeztech/breez-sdk-spark'` works\n\
-         // in ESM contexts (Vite SSR).\n\
+         // in ESM contexts.\n\
          import pkg from './index.js';\n\n\
          export const {\n",
     );
 
-    for name in &exports {
+    for name in &exports.functions {
+        mjs.push_str(&format!("  {name},\n"));
+    }
+    for name in &exports.classes {
         mjs.push_str(&format!("  {name},\n"));
     }
 
     mjs.push_str("} = pkg;\n\nexport default pkg;\n");
 
+    let count = exports.functions.len() + exports.classes.len();
     fs::write(pkg_dir.join("nodejs/index.mjs"), &mjs)
         .with_context(|| "Failed to write nodejs/index.mjs")?;
 
-    println!("Created Node.js ESM wrapper with {} exports", exports.len());
+    println!("Created Node.js ESM wrapper with {count} exports");
     Ok(())
 }
 
