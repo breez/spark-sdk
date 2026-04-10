@@ -87,3 +87,7 @@ Copy the binding library to the same directory as the executable file or include
 ```bash
 cp vendor/github.com/breez/breez-sdk-spark-go/breez_sdk_spark/lib/windows-amd64/*.dll build/windows/
 ```
+
+## Example App
+
+For a full working example app, see the [Go CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/golang).

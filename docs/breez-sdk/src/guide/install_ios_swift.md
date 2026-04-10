@@ -22,3 +22,7 @@ Add the following to the dependencies array of your `Package.swift`:
 ``` swift
 .package(url: "https://github.com/breez/breez-sdk-spark-swift.git", from: "{VERSION}"),
 ```
+
+## Example App
+
+For a full working example app, see the [Swift CLI example app](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/bindings/examples/cli/langs/swift).
