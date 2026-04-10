@@ -647,16 +647,29 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         let now = now_millis();
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let rows = sqlx::query(
-            "WITH candidates AS (
-                 SELECT id, ROW_NUMBER() OVER (PARTITION BY url ORDER BY next_retry_at ASC) AS rn
-                 FROM webhook_deliveries
-                 WHERE next_retry_at <= $1
-                   AND succeeded_at IS NULL
-                   AND COALESCE(claimed_at, 0) < $3
-             )
-             UPDATE webhook_deliveries
+            "UPDATE webhook_deliveries
              SET claimed_at = $2
-             WHERE id IN (SELECT id FROM candidates WHERE rn = 1)
+             WHERE id IN (
+                 SELECT d.id
+                 FROM (
+                     SELECT DISTINCT url
+                     FROM webhook_deliveries
+                     WHERE next_retry_at <= $1
+                       AND succeeded_at IS NULL
+                       AND COALESCE(claimed_at, 0) < $3
+                 ) urls
+                 CROSS JOIN LATERAL (
+                     SELECT id
+                     FROM webhook_deliveries
+                     WHERE url = urls.url
+                       AND next_retry_at <= $1
+                       AND succeeded_at IS NULL
+                       AND COALESCE(claimed_at, 0) < $3
+                     ORDER BY next_retry_at ASC
+                     FOR UPDATE SKIP LOCKED
+                     LIMIT 1
+                 ) d
+             )
              RETURNING id, identifier, url, payload, created_at, retry_count, next_retry_at",
         )
         .bind(now)
