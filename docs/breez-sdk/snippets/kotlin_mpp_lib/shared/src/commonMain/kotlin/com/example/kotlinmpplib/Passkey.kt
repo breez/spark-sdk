@@ -1,10 +1,12 @@
 package com.example.kotlinmpplib
 
+import android.app.Activity
 import breez_sdk_spark.*
+import technology.breez.spark.passkey.CredentialManagerPrfProvider
 
 // ANCHOR: implement-prf-provider
-// In practice, implement PRF provider using platform passkey APIs
-class ExamplePasskeyPrfProvider : PasskeyPrfProvider {
+// Implement the interface for custom logic if the built-in CredentialManagerPrfProvider doesn't fit your needs.
+class CustomPasskeyPrfProvider : PasskeyPrfProvider {
     override suspend fun derivePrfSeed(salt: String): ByteArray {
         // Call platform passkey API with PRF extension
         // Returns 32-byte PRF output
@@ -18,10 +20,12 @@ class ExamplePasskeyPrfProvider : PasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
-class PasskeySnippets {
+class PasskeySnippets(private val activity: Activity) {
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
-        val prfProvider = ExamplePasskeyPrfProvider()
+        val prfProvider = CredentialManagerPrfProvider(
+            activityProvider = { activity }, // provide the current Activity
+        )
         val passkey = Passkey(prfProvider, null)
 
         // Derive the wallet from the passkey (pass null for the default wallet)
@@ -35,7 +39,9 @@ class PasskeySnippets {
 
     suspend fun listLabels(): List<String> {
         // ANCHOR: list-labels
-        val prfProvider = ExamplePasskeyPrfProvider()
+        val prfProvider = CredentialManagerPrfProvider(
+            activityProvider = { activity }, // provide the current Activity
+        )
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
         val passkey = Passkey(prfProvider, relayConfig)
 
@@ -51,7 +57,9 @@ class PasskeySnippets {
 
     suspend fun storeLabel() {
         // ANCHOR: store-label
-        val prfProvider = ExamplePasskeyPrfProvider()
+        val prfProvider = CredentialManagerPrfProvider(
+            activityProvider = { activity }, // provide the current Activity
+        )
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
         val passkey = Passkey(prfProvider, relayConfig)
 

@@ -133,16 +133,17 @@ The SDK ships with PRF providers for the major platforms:
 |----------|----------|
 | Web (browsers) | `WebAuthnPrfProvider` |
 | iOS / macOS | `PlatformPasskeyPrfProvider` |
+| Android / Kotlin Multiplatform | `CredentialManagerPrfProvider` |
 | React Native | `PasskeyPrfProvider` |
 | Flutter | `PasskeyPrfProvider` |
 
-Android (Kotlin), Kotlin Multiplatform, and other platforms not listed above need to implement their own provider; see [Custom providers](#custom-providers) below.
+Built-in providers are not currently available for C#, Go, and Python.
 
 **Constructor options** (all built-in providers):
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| {{#name rp_id}} | `keys.breez.technology` | Relying Party ID. **Changing this breaks existing credentials.** |
+| {{#name rp_id}} | `keys.breez.technology` | Relying Party ID. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
 | {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
 | {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only) |
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker (registration only) |
@@ -153,7 +154,7 @@ Use a built-in provider with `Passkey` as shown in the [Connecting with a passke
 
 ### Custom providers
 
-If the built-in providers don't fit your needs, implement the `PasskeyPrfProvider` interface directly using platform-native APIs.
+If a built-in provider does not satisfy your requirements (e.g., you need a hardware security key, a FIDO2/CTAP2 transport, or a custom authenticator), implement the `PasskeyPrfProvider` interface directly using platform-native APIs.
 
 {{#tabs passkey:implement-prf-provider}}
 
