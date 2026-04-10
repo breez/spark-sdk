@@ -2,14 +2,14 @@ import 'dart:typed_data';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 // ANCHOR: implement-prf-provider
-// Use the built-in PasskeyPrfProvider, or implement the callbacks for custom logic.
-Future<Uint8List> exampleDerivePrfSeed(String salt) async {
+// Implement custom callbacks if the built-in PasskeyPrfProvider doesn't fit your needs.
+Future<Uint8List> derivePrfSeed(String salt) async {
   // Call platform passkey API with PRF extension
   // Returns 32-byte PRF output
   throw UnimplementedError('Implement using platform passkey APIs');
 }
 
-Future<bool> exampleIsPrfAvailable() async {
+Future<bool> isPrfAvailable() async {
   // Check if PRF-capable passkey exists
   throw UnimplementedError('Check platform passkey availability');
 }

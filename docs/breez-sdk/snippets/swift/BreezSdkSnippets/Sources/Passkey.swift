@@ -2,8 +2,8 @@ import BreezSdkSpark
 import Foundation
 
 // ANCHOR: implement-prf-provider
-// Use the built-in PlatformPasskeyPrfProvider, or implement the interface for custom logic.
-class ExamplePasskeyPrfProvider: PasskeyPrfProvider {
+// Implement the interface for custom logic if the built-in PlatformPasskeyPrfProvider doesn't fit your needs.
+class CustomPasskeyPrfProvider: PasskeyPrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
         // Call platform passkey API with PRF extension
         // Returns 32-byte PRF output

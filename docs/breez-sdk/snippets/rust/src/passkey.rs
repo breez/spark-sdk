@@ -6,11 +6,11 @@ use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};
 use std::sync::Arc;
 
 // ANCHOR: implement-prf-provider
-/// In practice, implement using platform-specific passkey APIs.
-struct ExamplePasskeyPrfProvider;
+/// Implement using platform-specific passkey APIs if the SDK does not ship a built-in provider for your target.
+struct CustomPasskeyPrfProvider;
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for ExamplePasskeyPrfProvider {
+impl PasskeyPrfProvider for CustomPasskeyPrfProvider {
     async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         // Call platform passkey API with PRF extension
         // Returns 32-byte PRF output
@@ -26,7 +26,7 @@ impl PasskeyPrfProvider for ExamplePasskeyPrfProvider {
 
 async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: connect-with-passkey
-    let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+    let prf_provider = Arc::new(CustomPasskeyPrfProvider);
     let passkey = Passkey::new(prf_provider, None);
 
     // Derive the wallet from the passkey (pass None for the default wallet)
@@ -45,7 +45,7 @@ async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
 
 async fn list_labels() -> Result<Vec<String>> {
     // ANCHOR: list-labels
-    let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+    let prf_provider = Arc::new(CustomPasskeyPrfProvider);
     let relay_config = NostrRelayConfig {
         breez_api_key: Some("<breez api key>".to_string()),
         ..NostrRelayConfig::default()
@@ -64,7 +64,7 @@ async fn list_labels() -> Result<Vec<String>> {
 
 async fn store_label() -> Result<()> {
     // ANCHOR: store-label
-    let prf_provider = Arc::new(ExamplePasskeyPrfProvider);
+    let prf_provider = Arc::new(CustomPasskeyPrfProvider);
     let relay_config = NostrRelayConfig {
         breez_api_key: Some("<breez api key>".to_string()),
         ..NostrRelayConfig::default()

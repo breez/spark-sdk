@@ -2,8 +2,8 @@ import type { NostrRelayConfig } from '@breeztech/breez-sdk-spark'
 import { Passkey, WebAuthnPrfProvider, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
 
 // ANCHOR: implement-prf-provider
-// Use the built-in WebAuthnPrfProvider for browsers, or implement the interface for custom logic.
-class ExamplePasskeyPrfProvider {
+// Implement the interface for custom logic if the built-in WebAuthnPrfProvider doesn't fit your needs.
+class CustomPasskeyPrfProvider {
   derivePrfSeed = async (salt: string): Promise<Uint8Array> => {
     // Call platform passkey API with PRF extension
     // Returns 32-byte PRF output
@@ -17,7 +17,7 @@ class ExamplePasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
-const exampleConnectWithPasskey = async () => {
+const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Use the built-in WebAuthn PRF provider (or pass a custom implementation)
   const prfProvider = new WebAuthnPrfProvider()
@@ -32,7 +32,7 @@ const exampleConnectWithPasskey = async () => {
   return sdk
 }
 
-const exampleListLabels = async (): Promise<string[]> => {
+const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const prfProvider = new WebAuthnPrfProvider()
   const relayConfig: NostrRelayConfig = {
@@ -50,7 +50,7 @@ const exampleListLabels = async (): Promise<string[]> => {
   return labels
 }
 
-const exampleStoreLabel = async () => {
+const storeLabel = async () => {
   // ANCHOR: store-label
   const prfProvider = new WebAuthnPrfProvider()
   const relayConfig: NostrRelayConfig = {

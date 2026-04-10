@@ -3,8 +3,8 @@ using Breez.Sdk.Spark;
 namespace BreezSdkSnippets
 {
     // ANCHOR: implement-prf-provider
-    // In practice, implement using platform-specific passkey APIs.
-    class ExamplePasskeyPrfProvider : PasskeyPrfProvider
+    // Implement using platform-specific passkey APIs if the SDK does not ship a built-in provider for your target.
+    class CustomPasskeyPrfProvider : PasskeyPrfProvider
     {
         public async Task<byte[]> DerivePrfSeed(string salt)
         {
@@ -26,7 +26,7 @@ namespace BreezSdkSnippets
         async Task<BreezSdk> ConnectWithPasskey()
         {
             // ANCHOR: connect-with-passkey
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPasskeyPrfProvider();
             var passkey = new Passkey(prfProvider, null);
 
             // Derive the wallet from the passkey (pass null for the default wallet)
@@ -45,7 +45,7 @@ namespace BreezSdkSnippets
         async Task<string[]> ListLabels()
         {
             // ANCHOR: list-labels
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPasskeyPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );
@@ -65,7 +65,7 @@ namespace BreezSdkSnippets
         async Task StoreLabel()
         {
             // ANCHOR: store-label
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPasskeyPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );
