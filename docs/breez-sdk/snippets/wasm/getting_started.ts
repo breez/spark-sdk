@@ -15,10 +15,15 @@ const init = async () => {}
 
 const exampleGettingStarted = async () => {
   // ANCHOR: init-sdk
-  // Call init when using the SDK in a web environment before calling any other SDK
-  // methods. This is not needed when using the SDK in a Node.js/Deno environment.
+  // Call init to load the WASM module before calling any other SDK methods.
+  // This is not needed when using the SDK via require() in Node.js.
   //
-  // import init, { BreezSdk, defaultConfig } from '@breeztech/breez-sdk-spark'
+  // For SSR frameworks (Next.js, SvelteKit, Nuxt), use the /ssr subpath:
+  //   import init, { connect } from '@breeztech/breez-sdk-spark/ssr'
+  // The /ssr import is safe during server-side rendering. Call init() on the
+  // client only (e.g., inside useEffect or onMount).
+  //
+  // import init from '@breeztech/breez-sdk-spark'
   await init()
 
   // Construct the seed using a mnemonic, entropy or passkey

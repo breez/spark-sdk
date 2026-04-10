@@ -28,94 +28,93 @@ Head over to the Breez SDK - Spark [documentation](https://sdk-doc-spark.breez.t
 
 ### Web
 
-When developing a browser application you should import `@breeztech/breez-sdk-spark` (or the explicit `@breeztech/breez-sdk-spark/web` submodule).
+When developing a browser application, import from `@breeztech/breez-sdk-spark` (or the explicit `@breeztech/breez-sdk-spark/web` subpath).
 
-It's important to first initialise the WebAssembly module by using `await init()` before making any other calls to the module.
+Call `await init()` to load the WebAssembly module before using any other SDK methods.
 
 ```js
 import init, {
-  initLogging,
   defaultConfig,
-  SdkBuilder,
+  connect,
 } from "@breeztech/breez-sdk-spark/web";
 
-// Initialise the WebAssembly module
 await init();
+
+const config = defaultConfig("mainnet");
+config.apiKey = "<your api key>";
+
+const sdk = await connect({
+  config,
+  seed: { type: "mnemonic", mnemonic: "<words>", passphrase: undefined },
+  storageDir: "./.data",
+});
+```
+
+### SSR Frameworks (Next.js, SvelteKit, Nuxt, Remix)
+
+Use the `@breeztech/breez-sdk-spark/ssr` subpath in SSR applications. It can be imported during server-side rendering without errors — no WASM is loaded, no browser or Node.js APIs are touched. Call `init()` on the client to load the WASM module before using SDK functions.
+
+```tsx
+"use client";
+import { useEffect, useState } from "react";
+import init, { connect, defaultConfig } from "@breeztech/breez-sdk-spark/ssr";
+
+export default function Wallet() {
+  const [sdk, setSdk] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      await init(); // Loads WASM — client-side only
+      const config = defaultConfig("mainnet");
+      config.apiKey = "<your api key>";
+      const s = await connect({
+        config,
+        seed: { type: "mnemonic", mnemonic: "<words>", passphrase: undefined },
+        storageDir: "./.data",
+      });
+      setSdk(s);
+    })();
+  }, []);
+
+  return <div>{sdk ? "Connected" : "Loading..."}</div>;
+}
 ```
 
 ### Node.js
 
 > **Note**: This package requires Node.js v22 or higher.
 
-When developing a node.js application you should require `@breeztech/breez-sdk-spark` (or the explicit `@breeztech/breez-sdk-spark/node` submodule).
+When developing a Node.js application, use `require("@breeztech/breez-sdk-spark")` (or the explicit `@breeztech/breez-sdk-spark/nodejs` subpath). No `init()` call is needed — the WASM module loads automatically.
 
 ```js
 const {
-  initLogging,
   defaultConfig,
-  SdkBuilder,
-} = require("@breeztech/breez-sdk-spark/nodejs");
-const { Command } = require("commander");
-require("dotenv").config();
+  connect,
+} = require("@breeztech/breez-sdk-spark");
 
-class JsLogger {
-  log = (logEntry) => {
-    console.log(
-      `[${new Date().toISOString()} ${logEntry.level}]: ${logEntry.line}`
-    );
-  };
-}
+const config = defaultConfig("mainnet");
+config.apiKey = process.env.BREEZ_API_KEY;
 
-const fileLogger = new JsLogger();
-
-class JsEventListener {
-  onEvent = (event) => {
-    fileLogger.log({
-      level: "INFO",
-      line: `Received event: ${JSON.stringify(event)}`,
-    });
-  };
-}
-
-const eventListener = new JsEventListener();
-const program = new Command();
-
-const initSdk = async () => {
-  // Set the logger to trace
-  await initLogging(fileLogger);
-
-  // Get the mnemonic
-  const mnemonic = process.env.MNEMONIC;
-
-  // Connect using the config
-  let config = defaultConfig("regtest");
-  config.apiKey = process.env.BREEZ_API_KEY;
-  console.log(`defaultConfig: ${JSON.stringify(config)}`);
-
-  let sdkBuilder = SdkBuilder.new(config, {
-    type: "mnemonic",
-    mnemonic: mnemonic,
-  });
-  sdkBuilder = await sdkBuilder.withDefaultStorage("./.data");
-
-  const sdk = await sdkBuilder.build();
-
-  await sdk.addEventListener(eventListener);
-  return sdk;
-};
-
-program
-  .name("breez-sdk-spark-wasm-cli")
-  .description("CLI for Breez SDK Spark - Wasm");
-
-program.command("get-info").action(async () => {
-  const sdk = await initSdk();
-  const res = await sdk.getInfo({});
-  console.log(`getInfo: ${JSON.stringify(res)}`);
+const sdk = await connect({
+  config,
+  seed: { type: "mnemonic", mnemonic: process.env.MNEMONIC, passphrase: undefined },
+  storageDir: "./.data",
 });
 
-program.parse();
+const info = await sdk.getInfo({});
+console.log(`Balance: ${info.balanceSats} sats`);
 ```
+
+### Subpath Exports
+
+| Subpath | Environment | Module Format |
+|---------|-------------|---------------|
+| `@breeztech/breez-sdk-spark` | Node.js / Browser (default) | CJS / ESM |
+| `@breeztech/breez-sdk-spark/web` | Browser | ESM |
+| `@breeztech/breez-sdk-spark/nodejs` | Node.js | CJS |
+| `@breeztech/breez-sdk-spark/bundler` | Bundler (Webpack, Vite) | ESM |
+| `@breeztech/breez-sdk-spark/deno` | Deno | ESM |
+| `@breeztech/breez-sdk-spark/ssr` | SSR (explicit) | ESM |
 
 ## Pricing
 

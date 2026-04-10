@@ -1,0 +1,17 @@
+{
+  "name": "breez-sdk-spark-ssr-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "build": "vite build && vite build --ssr src/entry-server.js --outDir dist/server"
+  },
+  "dependencies": {
+    "@breeztech/breez-sdk-spark": "file:../../"
+  },
+  "devDependencies": {
+    "express": "^5.1.0",
+    "vite": "^7.1.2"
+  }
+}

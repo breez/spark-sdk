@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breez SDK SSR Demo</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      #status { padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+      .ok  { background: #d4edda; color: #155724; }
+      .err { background: #f8d7da; color: #721c24; }
+      pre  { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Breez SDK — SSR Demo</h1>
+    <p>This page is <strong>server-side rendered</strong> by Vite SSR.
+       The SDK import resolves during SSR without errors.
+       WASM is only loaded on the client via <code>init()</code>.</p>
+    <div id="status">Loading...</div>
+    <h2>Server-rendered content</h2>
+    <div id="ssr-content"><!--ssr-outlet--></div>
+    <h2>Client-side SDK</h2>
+    <pre id="client-info">Initializing...</pre>
+    <!--app-script-->
+  </body>
+</html>
