@@ -163,23 +163,41 @@ impl BreezSdk {
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-                let conversion_estimate = self
-                    .estimate_conversion(
+                let (amount, conversion_estimate) = self
+                    .resolve_send_amount_with_conversion_estimate(
                         request.conversion_options.as_ref(),
-                        token_identifier.as_ref(),
+                        request.token_identifier.as_ref(),
                         amount,
                         fee_policy,
                     )
                     .await?;
 
+                // For ToBitcoin conversions, the output is sats — clear token_identifier
+                // so it reflects the output denomination, not the input.
+                let is_to_bitcoin = matches!(
+                    conversion_estimate,
+                    Some(ConversionEstimate {
+                        options: ConversionOptions {
+                            conversion_type: ConversionType::ToBitcoin { .. },
+                            ..
+                        },
+                        ..
+                    })
+                );
+                let response_token_identifier = if is_to_bitcoin {
+                    None
+                } else {
+                    token_identifier.clone()
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkAddress {
                         address: spark_address_details.address.clone(),
                         fee: 0,
-                        token_identifier: token_identifier.clone(),
+                        token_identifier: response_token_identifier.clone(),
                     },
                     amount,
-                    token_identifier,
+                    token_identifier: response_token_identifier,
                     conversion_estimate,
                     fee_policy,
                 })
@@ -194,8 +212,8 @@ impl BreezSdk {
                     .or(request.amount)
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
 
-                let conversion_estimate = self
-                    .estimate_conversion(
+                let (amount, conversion_estimate) = self
+                    .resolve_send_amount_with_conversion_estimate(
                         request.conversion_options.as_ref(),
                         effective_token_identifier.as_ref(),
                         amount,
@@ -203,14 +221,30 @@ impl BreezSdk {
                     )
                     .await?;
 
+                let is_to_bitcoin = matches!(
+                    conversion_estimate,
+                    Some(ConversionEstimate {
+                        options: ConversionOptions {
+                            conversion_type: ConversionType::ToBitcoin { .. },
+                            ..
+                        },
+                        ..
+                    })
+                );
+                let response_token_identifier = if is_to_bitcoin {
+                    None
+                } else {
+                    effective_token_identifier.clone()
+                };
+
                 Ok(PrepareSendPaymentResponse {
                     payment_method: SendPaymentMethod::SparkInvoice {
                         spark_invoice_details: spark_invoice_details.clone(),
                         fee: 0,
-                        token_identifier: effective_token_identifier.clone(),
+                        token_identifier: response_token_identifier.clone(),
                     },
                     amount,
-                    token_identifier: effective_token_identifier,
+                    token_identifier: response_token_identifier,
                     conversion_estimate,
                     fee_policy,
                 })
@@ -225,6 +259,19 @@ impl BreezSdk {
                 } else {
                     None
                 };
+
+                if let Some(response) = self
+                    .maybe_prepare_bolt11_from_token_conversion(
+                        &request,
+                        detailed_bolt11_invoice,
+                        spark_transfer_fee_sats,
+                        token_identifier.as_ref(),
+                        fee_policy,
+                    )
+                    .await?
+                {
+                    return Ok(response);
+                }
 
                 let amount = request
                     .amount
@@ -258,8 +305,9 @@ impl BreezSdk {
                     .estimate_conversion(
                         request.conversion_options.as_ref(),
                         token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(lightning_fee_sats)),
-                        fee_policy,
+                        ConversionAmount::MinAmountOut(
+                            amount.saturating_add(u128::from(lightning_fee_sats)),
+                        ),
                     )
                     .await?;
 
@@ -276,6 +324,18 @@ impl BreezSdk {
                 })
             }
             InputType::BitcoinAddress(withdrawal_address) => {
+                if let Some(response) = self
+                    .maybe_prepare_bitcoin_from_token_conversion(
+                        &request,
+                        withdrawal_address,
+                        token_identifier.as_ref(),
+                        fee_policy,
+                    )
+                    .await?
+                {
+                    return Ok(response);
+                }
+
                 let amount = request
                     .amount
                     .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
@@ -291,12 +351,21 @@ impl BreezSdk {
                     )));
                 }
 
+                // When stable balance is active (has an active label), sats come
+                // from token conversion so they don't exist yet — pass None to
+                // skip leaf selection.
+                let stable_balance_active = match &self.stable_balance {
+                    Some(sb) => sb.get_active_label().await.is_some(),
+                    None => false,
+                };
+                let fee_quote_amount = if stable_balance_active {
+                    None
+                } else {
+                    Some(amount.try_into()?)
+                };
                 let fee_quote: SendOnchainFeeQuote = self
                     .spark_wallet
-                    .fetch_coop_exit_fee_quote(
-                        &withdrawal_address.address,
-                        Some(amount.try_into()?),
-                    )
+                    .fetch_coop_exit_fee_quote(&withdrawal_address.address, fee_quote_amount)
                     .await?
                     .into();
 
@@ -317,8 +386,9 @@ impl BreezSdk {
                     .estimate_conversion(
                         request.conversion_options.as_ref(),
                         token_identifier.as_ref(),
-                        amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
-                        fee_policy,
+                        ConversionAmount::MinAmountOut(
+                            amount.saturating_add(u128::from(fee_quote.speed_fast.total_fee_sat())),
+                        ),
                     )
                     .await?;
 
@@ -491,6 +561,7 @@ impl BreezSdk {
             Box::pin(self.convert_token_send_payment_internal(
                 conversion_options,
                 &request,
+                amount_override,
                 &mut suppress_payment_event,
             ))
             .await
@@ -516,6 +587,7 @@ impl BreezSdk {
         &self,
         conversion_options: &ConversionOptions,
         request: &SendPaymentRequest,
+        caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Suppress auto-convert while this send-with-conversion is in flight
@@ -524,15 +596,8 @@ impl BreezSdk {
             None => None,
         };
 
-        // FeesIncluded not supported with token conversion (validated earlier)
-        if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
-            return Err(SdkError::InvalidInput(
-                "FeesIncluded not supported with token conversion".to_string(),
-            ));
-        }
-
         // Step 1: Execute the token conversion
-        let (conversion_response, conversion_purpose) = self
+        let (conversion_response, conversion_purpose, uses_amount_in) = self
             .execute_pre_send_conversion(conversion_options, request)
             .await?;
 
@@ -546,6 +611,8 @@ impl BreezSdk {
             &conversion_response,
             &conversion_purpose,
             request,
+            uses_amount_in,
+            caller_amount_override,
             suppress_payment_event,
         )
         .await
@@ -554,14 +621,55 @@ impl BreezSdk {
 
     /// Executes the token conversion for the given payment method.
     ///
-    /// Returns the conversion response and purpose (self-transfer vs ongoing payment).
+    /// Returns the conversion response, purpose (self-transfer vs ongoing payment),
+    /// and whether the conversion used `AmountIn` (needed by `complete_conversion_and_send`
+    /// to compute the amount override).
+    ///
+    /// Chooses the conversion direction based on whether the prepare used `AmountIn`
+    /// (user specified token amount, `amount == estimate.amount_out`) or `MinAmountOut`
+    /// (user specified sats). For `MinAmountOut`, the per-payment-method paths expand to
+    /// `MinAmountOut(amount + fees)` so the converter delivers enough to cover the send.
+    #[allow(clippy::too_many_lines)]
     async fn execute_pre_send_conversion(
         &self,
         conversion_options: &ConversionOptions,
         request: &SendPaymentRequest,
-    ) -> Result<(TokenConversionResponse, ConversionPurpose), SdkError> {
+    ) -> Result<(TokenConversionResponse, ConversionPurpose, bool), SdkError> {
         let amount = request.prepare_response.amount;
-        let token_identifier = request.prepare_response.token_identifier.clone();
+
+        // Extract from_token_identifier from conversion options for ToBitcoin conversions.
+        let from_token_identifier = match &conversion_options.conversion_type {
+            ConversionType::ToBitcoin {
+                from_token_identifier,
+            } => Some(from_token_identifier.clone()),
+            ConversionType::FromBitcoin => None,
+        };
+
+        // AmountIn vs MinAmountOut at convert time:
+        // For AmountIn (user specified token amount), the prepare's `amount` is
+        // derived from `estimate.amount_out` (+ optional sat balance), so
+        // `amount >= estimate.amount_out`.
+        // For MinAmountOut (user specified sats), the converter guarantees
+        // `estimate.amount_out >= amount`, so `amount <= estimate.amount_out`
+        // (strictly less when there's conversion slack).
+        let uses_amount_in = request
+            .prepare_response
+            .conversion_estimate
+            .as_ref()
+            .is_some_and(|e| amount >= e.amount_out);
+        let conversion_amount = if uses_amount_in {
+            let token_amount = request
+                .prepare_response
+                .conversion_estimate
+                .as_ref()
+                .map(|e| e.amount_in)
+                .ok_or(SdkError::InvalidInput(
+                    "Conversion estimate required for token conversion".to_string(),
+                ))?;
+            ConversionAmount::AmountIn(token_amount)
+        } else {
+            ConversionAmount::MinAmountOut(amount)
+        };
 
         match &request.prepare_response.payment_method {
             SendPaymentMethod::SparkAddress { address, .. } => {
@@ -582,12 +690,12 @@ impl BreezSdk {
                     .convert(
                         conversion_options,
                         &purpose,
-                        token_identifier.as_ref(),
-                        ConversionAmount::MinAmountOut(amount),
+                        from_token_identifier.as_ref(),
+                        conversion_amount,
                         None,
                     )
                     .await?;
-                Ok((response, purpose))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::SparkInvoice {
                 spark_invoice_details:
@@ -612,12 +720,12 @@ impl BreezSdk {
                     .convert(
                         conversion_options,
                         &purpose,
-                        token_identifier.as_ref(),
-                        ConversionAmount::MinAmountOut(amount),
+                        from_token_identifier.as_ref(),
+                        conversion_amount,
                         None,
                     )
                     .await?;
-                Ok((response, purpose))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::Bolt11Invoice {
                 spark_transfer_fee_sats,
@@ -628,6 +736,10 @@ impl BreezSdk {
                 let purpose = ConversionPurpose::OngoingPayment {
                     payment_request: invoice_details.invoice.bolt11.clone(),
                 };
+                let conversion_amount_override = match &conversion_amount {
+                    ConversionAmount::AmountIn(_) => Some(conversion_amount),
+                    ConversionAmount::MinAmountOut(_) => None,
+                };
                 let response = self
                     .convert_token_for_bolt11_invoice(
                         conversion_options,
@@ -636,14 +748,19 @@ impl BreezSdk {
                         request,
                         &purpose,
                         amount,
-                        token_identifier.as_ref(),
+                        from_token_identifier.as_ref(),
+                        conversion_amount_override,
                     )
                     .await?;
-                Ok((response, purpose))
+                Ok((response, purpose, uses_amount_in))
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                 let purpose = ConversionPurpose::OngoingPayment {
                     payment_request: address.address.clone(),
+                };
+                let conversion_amount_override = match &conversion_amount {
+                    ConversionAmount::AmountIn(_) => Some(conversion_amount),
+                    ConversionAmount::MinAmountOut(_) => None,
                 };
                 let response = self
                     .convert_token_for_bitcoin_address(
@@ -652,10 +769,11 @@ impl BreezSdk {
                         request,
                         &purpose,
                         amount,
-                        token_identifier.as_ref(),
+                        from_token_identifier.as_ref(),
+                        conversion_amount_override,
                     )
                     .await?;
-                Ok((response, purpose))
+                Ok((response, purpose, uses_amount_in))
             }
         }
     }
@@ -687,12 +805,20 @@ impl BreezSdk {
     ///
     /// For self-transfers, returns immediately after conversion completes.
     /// For ongoing payments, sends the actual payment and links any remaining children.
+    /// For `AmountIn` conversions, computes `amount_override = converted_sats + sats_change`
+    /// where `sats_change` is the difference between the prepare amount and the estimated
+    /// conversion output (representing any existing sat balance included at prepare time).
+    /// If `caller_amount_override` is provided (e.g. from the LNURL flow which handles
+    /// its own fee logic), it takes precedence over the computed override.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     async fn complete_conversion_and_send(
         &self,
         conversion_options: &ConversionOptions,
         conversion_response: &TokenConversionResponse,
         conversion_purpose: &ConversionPurpose,
         request: &SendPaymentRequest,
+        uses_amount_in: bool,
+        caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Trigger a wallet state sync if converting from Bitcoin to token
@@ -726,8 +852,66 @@ impl BreezSdk {
             return Ok(SendPaymentResponse { payment });
         }
 
+        // Determine the amount to use for the actual send.
+        //
+        // If the caller provided an amount_override (e.g. LNURL flow with its own
+        // fee logic), use it directly.
+        //
+        // For AmountIn conversions (user specified token amount), the prepare's
+        // `amount` includes estimated conversion output + any existing sat balance
+        // (sats_change). At send time, use the actual converted sats + sats_change
+        // to honor the prepare estimate while accounting for slippage.
+        // This unifies send-all (sats_change > 0) and non-send-all (sats_change = 0).
+        //
+        // For MinAmountOut conversions (user specified sats, e.g. auto stable
+        // balance), the conversion guarantees ≥ requested sats, so no override is
+        // needed — send exactly the prepared amount.
+        let amount_override = if let Some(override_amount) = caller_amount_override {
+            tracing::trace!(
+                override_amount,
+                "complete_conversion_and_send: using caller-provided amount_override"
+            );
+            Some(override_amount)
+        } else if uses_amount_in {
+            let converted_sats: u64 = payment
+                .amount
+                .try_into()
+                .map_err(|_| SdkError::Generic("Converted sats too large for u64".to_string()))?;
+            let estimated_conversion_out: u64 = request
+                .prepare_response
+                .conversion_estimate
+                .as_ref()
+                .map_or(0, |e| e.amount_out)
+                .try_into()
+                .map_err(|_| SdkError::Generic("Estimated sats too large for u64".to_string()))?;
+            let sats_change = request
+                .prepare_response
+                .amount
+                .try_into()
+                .map(|amount: u64| amount.saturating_sub(estimated_conversion_out))
+                .unwrap_or(0);
+            let total = converted_sats.saturating_add(sats_change);
+            tracing::trace!(
+                converted_sats,
+                estimated_conversion_out,
+                sats_change,
+                total,
+                prepared_amount = request.prepare_response.amount,
+                fee_policy = ?request.prepare_response.fee_policy,
+                "complete_conversion_and_send: amount_override = converted_sats + sats_change"
+            );
+            Some(total)
+        } else {
+            tracing::trace!(
+                prepared_amount = request.prepare_response.amount,
+                fee_policy = ?request.prepare_response.fee_policy,
+                "complete_conversion_and_send: no override (MinAmountOut conversion)"
+            );
+            None
+        };
+
         // Now send the actual payment
-        let response = Box::pin(self.send_payment_internal(request, None)).await?;
+        let response = Box::pin(self.send_payment_internal(request, amount_override)).await?;
 
         // Link conversion children to the send payment (deferred linking)
         self.storage
@@ -779,7 +963,7 @@ impl BreezSdk {
                 Box::pin(self.send_spark_address(
                     address,
                     token_identifier,
-                    amount,
+                    amount_override.map_or(amount, u128::from),
                     request.options.as_ref(),
                     request.idempotency_key.clone(),
                 ))
@@ -789,8 +973,12 @@ impl BreezSdk {
                 spark_invoice_details,
                 ..
             } => {
-                self.send_spark_invoice(&spark_invoice_details.invoice, request, amount)
-                    .await
+                self.send_spark_invoice(
+                    &spark_invoice_details.invoice,
+                    request,
+                    amount_override.map_or(amount, u128::from),
+                )
+                .await
             }
             SendPaymentMethod::Bolt11Invoice {
                 invoice_details,
@@ -809,7 +997,8 @@ impl BreezSdk {
                 .await
             }
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
-                self.send_bitcoin_address(address, fee_quote, request).await
+                self.send_bitcoin_address(address, fee_quote, request, amount_override)
+                    .await
             }
         }
     }
@@ -1028,31 +1217,8 @@ impl BreezSdk {
         amount_override: Option<u64>,
         amount: u128,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Handle FeesIncluded for amountless Bolt11 invoices
-        let amount_to_send = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded
-            && invoice_details.amount_msat.is_none()
-            && amount_override.is_none()
-        {
-            let amt = self
-                .calculate_fees_included_bolt11_amount(
-                    &invoice_details.invoice.bolt11,
-                    amount.try_into()?,
-                    lightning_fee_sats,
-                )
-                .await?;
-            Some(u128::from(amt))
-        } else {
-            match amount_override {
-                // Amount override provided
-                Some(amt) => Some(amt.into()),
-                None => match invoice_details.amount_msat {
-                    // We are not sending amount in case the invoice contains it.
-                    Some(_) => None,
-                    // We are sending amount for zero amount invoice
-                    None => Some(amount),
-                },
-            }
-        };
+        // Determine routing preference and actual fee before calculating the send amount,
+        // so FeesIncluded deducts the correct fee (Spark=0 vs Lightning).
         let (prefer_spark, completion_timeout_secs) = match request.options {
             Some(SendPaymentOptions::Bolt11Invoice {
                 prefer_spark,
@@ -1060,9 +1226,46 @@ impl BreezSdk {
             }) => (prefer_spark, completion_timeout_secs),
             _ => (self.config.prefer_spark_over_lightning, None),
         };
-        let fee_sats = match (prefer_spark, spark_transfer_fee_sats, lightning_fee_sats) {
-            (true, Some(fee), _) => fee,
-            _ => lightning_fee_sats,
+        let is_spark_route = prefer_spark && spark_transfer_fee_sats.is_some();
+        let fee_sats = if is_spark_route {
+            spark_transfer_fee_sats.unwrap_or(0)
+        } else {
+            lightning_fee_sats
+        };
+
+        // Handle FeesIncluded: deduct fees from the total balance.
+        // Applies to both amountless invoices and fixed-amount invoices with amount_override
+        // (send-all-with-conversion via LNURL — overpays the invoice to drain the wallet).
+        let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
+        let amount_to_send = if is_fees_included
+            && (invoice_details.amount_msat.is_none() || amount_override.is_some())
+        {
+            let total_sats: u64 = match amount_override {
+                Some(sat_balance) => sat_balance,
+                None => amount.try_into()?,
+            };
+            // Spark route: deduct known fee directly (often 0).
+            // Lightning route: re-estimate fees via calculate_fees_included_bolt11_amount
+            // which handles fee changes between prepare and send.
+            let amt = if is_spark_route {
+                total_sats.saturating_sub(fee_sats)
+            } else {
+                self.calculate_fees_included_bolt11_amount(
+                    &invoice_details.invoice.bolt11,
+                    total_sats,
+                    fee_sats,
+                )
+                .await?
+            };
+            Some(u128::from(amt))
+        } else {
+            match amount_override {
+                Some(amt) => Some(amt.into()),
+                None => match invoice_details.amount_msat {
+                    Some(_) => None,
+                    None => Some(amount),
+                },
+            }
         };
         let transfer_id = request
             .idempotency_key
@@ -1134,6 +1337,7 @@ impl BreezSdk {
         address: &BitcoinAddressDetails,
         fee_quote: &SendOnchainFeeQuote,
         request: &SendPaymentRequest,
+        amount_override: Option<u64>,
     ) -> Result<SendPaymentResponse, SdkError> {
         // Extract confirmation speed from options
         let confirmation_speed = match &request.options {
@@ -1157,12 +1361,14 @@ impl BreezSdk {
             OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
         };
 
-        // Compute amount - for FeesIncluded, receiver gets total minus fees
-        let amount_sats: u64 = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
-            let total_sats: u64 = request.prepare_response.amount.try_into()?;
+        // Compute amount - for FeesIncluded, receiver gets total minus fees.
+        // amount_override (send-all post-conversion) is always FeesIncluded.
+        let total_sats: u64 =
+            amount_override.unwrap_or(request.prepare_response.amount.try_into()?);
+        let amount_sats = if request.prepare_response.fee_policy == FeePolicy::FeesIncluded {
             total_sats.saturating_sub(fee_sats)
         } else {
-            request.prepare_response.amount.try_into()?
+            total_sats
         };
 
         // Validate the output amount meets the dust limit for this address type
@@ -1332,26 +1538,32 @@ impl BreezSdk {
         conversion_purpose: &ConversionPurpose,
         amount: u128,
         token_identifier: Option<&String>,
+        conversion_amount_override: Option<ConversionAmount>,
     ) -> Result<TokenConversionResponse, SdkError> {
-        // Determine the fee to be used based on preference
-        let fee_sats = match request.options {
-            Some(SendPaymentOptions::Bolt11Invoice { prefer_spark, .. }) => {
-                match (prefer_spark, spark_transfer_fee_sats) {
-                    (true, Some(fee)) => fee,
-                    _ => lightning_fee_sats,
+        let conversion_amount = if let Some(ca) = conversion_amount_override {
+            ca
+        } else {
+            // Determine the fee to be used based on preference
+            let fee_sats = match request.options {
+                Some(SendPaymentOptions::Bolt11Invoice { prefer_spark, .. }) => {
+                    match (prefer_spark, spark_transfer_fee_sats) {
+                        (true, Some(fee)) => fee,
+                        _ => lightning_fee_sats,
+                    }
                 }
-            }
-            _ => lightning_fee_sats,
+                _ => lightning_fee_sats,
+            };
+            // The absolute minimum amount out is the lightning invoice amount plus fee
+            let min_amount_out = amount.saturating_add(u128::from(fee_sats));
+            ConversionAmount::MinAmountOut(min_amount_out)
         };
-        // The absolute minimum amount out is the lightning invoice amount plus fee
-        let min_amount_out = amount.saturating_add(u128::from(fee_sats));
 
         self.token_converter
             .convert(
                 conversion_options,
                 conversion_purpose,
                 token_identifier,
-                ConversionAmount::MinAmountOut(min_amount_out),
+                conversion_amount,
                 None,
             )
             .await
@@ -1380,31 +1592,320 @@ impl BreezSdk {
 
     /// Estimates a conversion for a payment, returning `None` when no conversion is needed.
     ///
-    /// Skips conversion for `FeesIncluded` fee policy (validated earlier).
-    /// Auto-populates conversion options from stable balance config when applicable.
-    async fn estimate_conversion(
+    /// For `AmountIn`: validates with the given options directly (caller knows what to convert).
+    /// For `MinAmountOut`: auto-populates conversion options from stable balance config when applicable.
+    pub(super) async fn estimate_conversion(
         &self,
         request_options: Option<&ConversionOptions>,
         token_identifier: Option<&String>,
+        conversion_amount: ConversionAmount,
+    ) -> Result<Option<ConversionEstimate>, SdkError> {
+        match conversion_amount {
+            ConversionAmount::AmountIn(_) => self
+                .token_converter
+                .validate(request_options, token_identifier, conversion_amount)
+                .await
+                .map_err(Into::into),
+            ConversionAmount::MinAmountOut(amount) => {
+                let options = self
+                    .get_conversion_options_for_payment(request_options, token_identifier, amount)
+                    .await?;
+                self.token_converter
+                    .validate(options.as_ref(), token_identifier, conversion_amount)
+                    .await
+                    .map_err(Into::into)
+            }
+        }
+    }
+
+    // Returns `(is_token_conversion, is_send_all)`.
+    pub(super) async fn is_token_conversion(
+        &self,
+        conversion_options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        amount: Option<u128>,
+        fee_policy: FeePolicy,
+    ) -> Result<(bool, bool), SdkError> {
+        let (
+            Some(amount),
+            Some(ConversionOptions {
+                conversion_type:
+                    ConversionType::ToBitcoin {
+                        from_token_identifier,
+                    },
+                ..
+            }),
+        ) = (amount, conversion_options)
+        else {
+            return Ok((false, false));
+        };
+
+        // If the caller passed a token_identifier it must match conversion options.
+        // If they omitted it, we can't compare against the balance, so is_send_all=false.
+        // Send-all also requires stable balance to be active with a matching active token,
+        // otherwise we shouldn't sweep the existing sat balance.
+        let is_send_all = match token_identifier {
+            Some(token_id) => {
+                if token_id != from_token_identifier {
+                    return Err(SdkError::Generic(
+                        "Request token identifier must match conversion options".to_string(),
+                    ));
+                }
+                let token_balances = self.spark_wallet.get_token_balances().await?;
+                let token_balance = token_balances.get(token_id).map_or(0, |tb| tb.balance);
+                let has_active_stable_token = match &self.stable_balance {
+                    Some(sb) => sb.get_active_token_identifier().await.as_ref() == Some(token_id),
+                    None => false,
+                };
+                amount == token_balance
+                    && fee_policy == FeePolicy::FeesIncluded
+                    && has_active_stable_token
+            }
+            None => false,
+        };
+
+        Ok((true, is_send_all))
+    }
+
+    /// Estimates the sats available for a send that may go through a token→BTC conversion.
+    ///
+    /// Branches on `token_identifier`:
+    /// - **Set** → `amount` is in token base units; uses `AmountIn(amount)` (variable
+    ///   sat output). For send-all, adds the existing sat balance to the conversion
+    ///   output.
+    /// - **Not set** → `amount` is already in sats; uses `MinAmountOut(amount)` so
+    ///   the converter is guaranteed to deliver at least `amount` sats or fail.
+    ///   `estimated_sats == amount` in this case.
+    ///
+    /// Returns `(estimated_sats, conversion_estimate)`. When the request is not a
+    /// token conversion, `estimated_sats == amount` and `conversion_estimate` is None,
+    /// so callers can use `conversion_estimate.is_some()` to detect the conversion path.
+    /// The returned `estimated_sats` is the *raw* expected conversion output — callers
+    /// that need a defensive lower bound (e.g. LNURL invoice sizing on the `AmountIn`
+    /// path) should apply their own slippage buffer.
+    pub(super) async fn estimate_sats_from_token_conversion(
+        &self,
+        conversion_options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
         amount: u128,
         fee_policy: FeePolicy,
-    ) -> Result<Option<ConversionEstimate>, SdkError> {
-        if fee_policy == FeePolicy::FeesIncluded {
-            return Ok(None);
-        }
-        let options = self
-            .get_conversion_options_for_payment(request_options, token_identifier, amount)
+    ) -> Result<(u128, Option<ConversionEstimate>), SdkError> {
+        let (is_token_conversion, is_send_all) = self
+            .is_token_conversion(
+                conversion_options,
+                token_identifier,
+                Some(amount),
+                fee_policy,
+            )
             .await?;
-        self.token_converter
-            .validate(
-                options.as_ref(),
+        if !is_token_conversion {
+            return Ok((amount, None));
+        }
+
+        // When token_identifier is provided, `amount` is in token units → AmountIn.
+        // When it's omitted, `amount` is in sats → MinAmountOut (we want at least
+        // that many sats out of the conversion).
+        let (conversion_amount, estimated_sats_from_conversion) = if token_identifier.is_some() {
+            let estimate = self
+                .estimate_conversion(
+                    conversion_options,
+                    token_identifier,
+                    ConversionAmount::AmountIn(amount),
+                )
+                .await?;
+            let sats = estimate.as_ref().map_or(0, |e| e.amount_out);
+            (estimate, sats)
+        } else {
+            let estimate = self
+                .estimate_conversion(
+                    conversion_options,
+                    token_identifier,
+                    ConversionAmount::MinAmountOut(amount),
+                )
+                .await?;
+            // For MinAmountOut, the requested sats is the amount we asked for.
+            (estimate, amount)
+        };
+
+        // For send-all, include existing sats balance — the actual send at execution
+        // time will use the full post-conversion balance.
+        let estimated_sats = if is_send_all {
+            let sat_balance = u128::from(self.spark_wallet.get_balance().await?);
+            estimated_sats_from_conversion.saturating_add(sat_balance)
+        } else {
+            estimated_sats_from_conversion
+        };
+
+        Ok((estimated_sats, conversion_amount))
+    }
+
+    /// Resolves the effective send amount and conversion estimate for a prepare flow
+    /// where the destination accepts sats directly (Spark address, Spark invoice).
+    ///
+    /// - **Token conversion** (`token_identifier` set + `ToBitcoin` options): substitutes
+    ///   `amount` with the post-conversion estimated sats, returns the `AmountIn` estimate.
+    /// - **Plain send with conversion options** (no `token_identifier`, sats `amount` +
+    ///   options): keeps `amount` as-is, attaches a `MinAmountOut` estimate for display.
+    /// - **Plain send (no options)**: passes through unchanged with `None` estimate.
+    async fn resolve_send_amount_with_conversion_estimate(
+        &self,
+        conversion_options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        amount: u128,
+        fee_policy: FeePolicy,
+    ) -> Result<(u128, Option<ConversionEstimate>), SdkError> {
+        let (estimated_sats, conversion_estimate) = self
+            .estimate_sats_from_token_conversion(
+                conversion_options,
+                token_identifier,
+                amount,
+                fee_policy,
+            )
+            .await?;
+        if conversion_estimate.is_some() {
+            return Ok((estimated_sats, conversion_estimate));
+        }
+        let estimate = self
+            .estimate_conversion(
+                conversion_options,
                 token_identifier,
                 ConversionAmount::MinAmountOut(amount),
             )
-            .await
-            .map_err(Into::into)
+            .await?;
+        Ok((amount, estimate))
     }
 
+    /// Prepares a Bolt11 invoice payment for token-to-Bitcoin conversion (send-all
+    /// or non-send-all). Returns `Ok(None)` when the request is not a token conversion
+    /// so the caller can fall through to the regular bolt11 prepare path.
+    ///
+    /// Estimates the conversion, fetches lightning fees based on the estimated sats,
+    /// and validates the receiver amount covers fees.
+    async fn maybe_prepare_bolt11_from_token_conversion(
+        &self,
+        request: &PrepareSendPaymentRequest,
+        invoice: &Bolt11InvoiceDetails,
+        spark_transfer_fee_sats: Option<u64>,
+        token_identifier: Option<&String>,
+        fee_policy: FeePolicy,
+    ) -> Result<Option<PrepareSendPaymentResponse>, SdkError> {
+        let Some(token_amount) = request.amount else {
+            return Ok(None);
+        };
+        let (estimated_sats, conversion_estimate) = self
+            .estimate_sats_from_token_conversion(
+                request.conversion_options.as_ref(),
+                token_identifier,
+                token_amount,
+                fee_policy,
+            )
+            .await?;
+        if conversion_estimate.is_none() {
+            return Ok(None);
+        }
+
+        let lightning_fee_sats = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(
+                &request.payment_request,
+                Some(estimated_sats.try_into()?),
+            )
+            .await?;
+
+        let total_u64: u64 = estimated_sats.try_into()?;
+        // For fixed-amount invoices, the converted sats must cover invoice amount + fees.
+        // For amountless invoices (send-all), just check fees are covered.
+        let min_required = if let Some(amount_msat) = invoice.amount_msat {
+            (amount_msat / 1000).saturating_add(lightning_fee_sats)
+        } else {
+            lightning_fee_sats
+        };
+        if total_u64 <= min_required {
+            return Err(SdkError::InvalidInput(
+                "Token conversion amount too small to cover invoice amount and fees".to_string(),
+            ));
+        }
+
+        Ok(Some(PrepareSendPaymentResponse {
+            payment_method: SendPaymentMethod::Bolt11Invoice {
+                invoice_details: invoice.clone(),
+                spark_transfer_fee_sats,
+                lightning_fee_sats,
+            },
+            amount: estimated_sats,
+            // ToBitcoin conversion outputs sats — token_identifier is None
+            token_identifier: None,
+            conversion_estimate,
+            fee_policy,
+        }))
+    }
+
+    /// Prepares a Bitcoin address payment for token-to-Bitcoin conversion (send-all
+    /// or non-send-all). Returns `Ok(None)` when the request is not a token conversion
+    /// so the caller can fall through to the regular bitcoin address prepare path.
+    ///
+    /// Estimates the conversion, fetches onchain fee quote based on the estimated
+    /// sats, and validates the output after fees meets the dust limit.
+    async fn maybe_prepare_bitcoin_from_token_conversion(
+        &self,
+        request: &PrepareSendPaymentRequest,
+        withdrawal_address: &BitcoinAddressDetails,
+        token_identifier: Option<&String>,
+        fee_policy: FeePolicy,
+    ) -> Result<Option<PrepareSendPaymentResponse>, SdkError> {
+        let Some(token_amount) = request.amount else {
+            return Ok(None);
+        };
+        let (estimated_sats, conversion_estimate) = self
+            .estimate_sats_from_token_conversion(
+                request.conversion_options.as_ref(),
+                token_identifier,
+                token_amount,
+                fee_policy,
+            )
+            .await?;
+        if conversion_estimate.is_none() {
+            return Ok(None);
+        }
+
+        let dust_limit_sats = get_dust_limit_sats(&withdrawal_address.address)?;
+        let total_u64: u64 = estimated_sats.try_into()?;
+        if total_u64 < dust_limit_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount is below the minimum of {dust_limit_sats} sats required for this address"
+            )));
+        }
+
+        // Pass None for amount — the sats don't exist yet (still tokens),
+        // so leaf selection would fail. Get a generic fee estimate instead.
+        let fee_quote: SendOnchainFeeQuote = self
+            .spark_wallet
+            .fetch_coop_exit_fee_quote(&withdrawal_address.address, None)
+            .await?
+            .into();
+
+        let min_fee_sats = fee_quote.speed_slow.total_fee_sat();
+        let output_amount_sats = total_u64.saturating_sub(min_fee_sats);
+        if output_amount_sats < dust_limit_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount is below the minimum of {dust_limit_sats} sats required for this address after lowest fees of {min_fee_sats} sats"
+            )));
+        }
+
+        Ok(Some(PrepareSendPaymentResponse {
+            payment_method: SendPaymentMethod::BitcoinAddress {
+                address: withdrawal_address.clone(),
+                fee_quote,
+            },
+            amount: estimated_sats,
+            // ToBitcoin conversion outputs sats — token_identifier is None
+            token_identifier: None,
+            conversion_estimate,
+            fee_policy,
+        }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn convert_token_for_bitcoin_address(
         &self,
         conversion_options: &ConversionOptions,
@@ -1413,28 +1914,33 @@ impl BreezSdk {
         conversion_purpose: &ConversionPurpose,
         amount: u128,
         token_identifier: Option<&String>,
+        conversion_amount_override: Option<ConversionAmount>,
     ) -> Result<TokenConversionResponse, SdkError> {
-        // Derive fee_sats from request.options confirmation speed
-        let fee_sats = match &request.options {
-            Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
-                match confirmation_speed {
-                    OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
-                    OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
-                    OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+        let conversion_amount = if let Some(ca) = conversion_amount_override {
+            ca
+        } else {
+            // Derive fee_sats from request.options confirmation speed
+            let fee_sats = match &request.options {
+                Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
+                    match confirmation_speed {
+                        OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
+                        OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
+                        OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+                    }
                 }
-            }
-            _ => fee_quote.speed_fast.total_fee_sat(), // Default to fast
+                _ => fee_quote.speed_fast.total_fee_sat(), // Default to fast
+            };
+            // The absolute minimum amount out is the amount plus fee
+            let min_amount_out = amount.saturating_add(u128::from(fee_sats));
+            ConversionAmount::MinAmountOut(min_amount_out)
         };
-
-        // The absolute minimum amount out is the amount plus fee
-        let min_amount_out = amount.saturating_add(u128::from(fee_sats));
 
         self.token_converter
             .convert(
                 conversion_options,
                 conversion_purpose,
                 token_identifier,
-                ConversionAmount::MinAmountOut(min_amount_out),
+                conversion_amount,
                 None,
             )
             .await

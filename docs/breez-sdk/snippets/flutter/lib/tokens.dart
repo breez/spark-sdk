@@ -174,9 +174,9 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
   // If the fees are acceptable, continue to send the token payment
   if (prepareResponse.conversionEstimate != null) {
     print(
-        "Estimated conversion amount: ${prepareResponse.conversionEstimate!.amount} sats");
+        "Estimated conversion: ${prepareResponse.conversionEstimate!.amountIn} token units → ${prepareResponse.conversionEstimate!.amountOut} sats");
     print(
-        "Estimated conversion fee: ${prepareResponse.conversionEstimate!.fee} sats");
+        "Estimated conversion fee: ${prepareResponse.conversionEstimate!.fee} token units");
   }
   // ANCHOR_END: prepare-send-payment-with-conversion
 }

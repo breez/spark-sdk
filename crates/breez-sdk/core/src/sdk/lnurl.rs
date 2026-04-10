@@ -20,25 +20,55 @@ use super::{BreezSdk, helpers::process_success_action};
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    #[allow(clippy::too_many_lines)]
     pub async fn prepare_lnurl_pay(
         &self,
         request: PrepareLnurlPayRequest,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         let fee_policy = request.fee_policy.unwrap_or_default();
-        let amount_sats = request.amount_sats;
 
-        if fee_policy == FeePolicy::FeesIncluded && request.conversion_options.is_some() {
-            return Err(SdkError::InvalidInput(
-                "FeesIncluded cannot be combined with token conversion".to_string(),
-            ));
-        }
+        // For token conversions, the helper returns the raw estimated sats.
+        // For plain LNURL pay (no conversion) it returns request.amount unchanged.
+        let (estimated_sats, conversion_estimate) = self
+            .estimate_sats_from_token_conversion(
+                request.conversion_options.as_ref(),
+                request.token_identifier.as_ref(),
+                request.amount,
+                fee_policy,
+            )
+            .await?;
+        let is_token_conversion = conversion_estimate.is_some();
+
+        // When token_identifier is set, the amount is in token units and the
+        // conversion output (estimated_sats) is all we have to pay with — there
+        // are no separate sats to cover fees. Force FeesIncluded so fees are
+        // deducted from the conversion output. Reject explicit FeesExcluded.
+        let (amount, fee_policy) = if is_token_conversion && request.token_identifier.is_some() {
+            if fee_policy == FeePolicy::FeesExcluded {
+                return Err(SdkError::InvalidInput(
+                    "Token conversion with token_identifier requires FeesIncluded fee policy"
+                        .to_string(),
+                ));
+            }
+            (estimated_sats, FeePolicy::FeesIncluded)
+        } else {
+            (estimated_sats, fee_policy)
+        };
 
         // FeesIncluded uses the double-query approach
         if fee_policy == FeePolicy::FeesIncluded {
+            let amount_sats: u64 = amount
+                .try_into()
+                .map_err(|_| SdkError::InvalidInput("Amount too large for LNURL".to_string()))?;
             return self
-                .prepare_lnurl_pay_fees_included(request, amount_sats)
+                .prepare_lnurl_pay_fees_included(request, amount_sats, conversion_estimate)
                 .await;
         }
+
+        // Regular send (no FeesIncluded, no conversion)
+        let amount_sats: u64 = amount
+            .try_into()
+            .map_err(|_| SdkError::InvalidInput("Amount too large for LNURL".to_string()))?;
 
         let success_data = match validate_lnurl_pay(
             self.lnurl_client.as_ref(),
@@ -60,7 +90,7 @@ impl BreezSdk {
             .prepare_send_payment(crate::PrepareSendPaymentRequest {
                 payment_request: success_data.pr,
                 amount: Some(u128::from(amount_sats)),
-                token_identifier: None,
+                token_identifier: request.token_identifier.clone(),
                 conversion_options: request.conversion_options.clone(),
                 fee_policy: None,
             })
@@ -152,6 +182,16 @@ impl BreezSdk {
             None
         };
 
+        // For conversions, use FeesIncluded so the send path deducts fees from
+        // the post-conversion balance. For non-conversion FeesIncluded, the LNURL
+        // flow handles fees via invoice sizing and amount_override.
+        let has_conversion = request.prepare_response.conversion_estimate.is_some();
+        let internal_fee_policy = if is_fees_included && has_conversion {
+            FeePolicy::FeesIncluded
+        } else {
+            FeePolicy::FeesExcluded
+        };
+
         let mut payment = Box::pin(self.maybe_convert_token_send_payment(
             SendPaymentRequest {
                 prepare_response: PrepareSendPaymentResponse {
@@ -160,16 +200,34 @@ impl BreezSdk {
                         spark_transfer_fee_sats: None,
                         lightning_fee_sats: request.prepare_response.fee_sats,
                     },
-                    amount: u128::from(receiver_amount_sats),
+                    // For conversions, use the prepare's total amount (before fee
+                    // deduction) so the sats_change logic in complete_conversion_and_send
+                    // correctly computes the post-conversion amount override.
+                    // For non-conversions, use the invoice amount.
+                    amount: if has_conversion {
+                        u128::from(request.prepare_response.amount_sats)
+                    } else {
+                        u128::from(receiver_amount_sats)
+                    },
+                    // LNURL always sends sats — token_identifier is None on the
+                    // internal PrepareSendPaymentResponse even when a conversion
+                    // is present (the token info is in conversion_estimate).
                     token_identifier: None,
                     conversion_estimate: request.prepare_response.conversion_estimate,
-                    fee_policy: FeePolicy::FeesExcluded, // Always FeesExcluded for internal handling
+                    fee_policy: internal_fee_policy,
                 },
                 options: None,
                 idempotency_key: request.idempotency_key,
             },
             true,
-            amount_override,
+            // For conversions, don't pass amount_override — let
+            // complete_conversion_and_send compute it from sats_change.
+            // For non-conversions, use the LNURL-computed override.
+            if has_conversion {
+                None
+            } else {
+                amount_override
+            },
         ))
         .await?
         .payment;
@@ -378,10 +436,12 @@ impl BreezSdk {
     /// 3. Calculates actual send amount (amount - estimated fee)
     /// 4. Second query: gets invoice for actual amount
     /// 5. Returns the prepare response with the second invoice
+    #[allow(clippy::too_many_lines)]
     pub(super) async fn prepare_lnurl_pay_fees_included(
         &self,
         request: PrepareLnurlPayRequest,
         amount_sats: u64,
+        conversion_estimate: Option<crate::ConversionEstimate>,
     ) -> Result<PrepareLnurlPayResponse, SdkError> {
         if amount_sats == 0 {
             return Err(SdkError::InvalidInput(
@@ -489,7 +549,7 @@ impl BreezSdk {
             invoice_details,
             fee_sats: first_fee,
             success_action: success_data.success_action.map(From::from),
-            conversion_estimate: None,
+            conversion_estimate,
             fee_policy: FeePolicy::FeesIncluded,
         })
     }

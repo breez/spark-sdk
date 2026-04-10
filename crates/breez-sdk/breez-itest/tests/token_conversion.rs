@@ -85,7 +85,7 @@ async fn test_token_conversion_success(
         .expect("Conversion estimate should be present");
     info!(
         "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
-        prepare_btc_to_token.amount, conversion_estimate.amount, conversion_estimate.fee
+        prepare_btc_to_token.amount, conversion_estimate.amount_out, conversion_estimate.fee
     );
 
     let send_btc_to_token = alice
@@ -252,7 +252,7 @@ async fn test_token_conversion_success(
         .expect("Conversion estimate should be present");
     info!(
         "Prepared bitcoin payment: amount={:?} (converting token amount={}, fee={})",
-        prepare_token_to_btc.amount, conversion_estimate.amount, conversion_estimate.fee
+        prepare_token_to_btc.amount, conversion_estimate.amount_out, conversion_estimate.fee
     );
 
     let send_token_to_btc = bob
@@ -490,7 +490,7 @@ async fn test_token_conversion_failure(
         .expect("Conversion estimate should be present");
     info!(
         "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
-        prepare_low_slippage.amount, conversion_estimate.amount, conversion_estimate.fee
+        prepare_low_slippage.amount, conversion_estimate.amount_out, conversion_estimate.fee
     );
 
     // Send the payment - expect it to fail due to slippage

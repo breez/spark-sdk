@@ -138,6 +138,49 @@ namespace BreezSdkSnippets
             // ANCHOR_END: prepare-send-payment-fees-included
         }
 
+        async Task PrepareSendPaymentSendAll(BreezSdk sdk)
+        {
+            // ANCHOR: prepare-send-payment-send-all
+            var paymentRequest = "<payment request>";
+            var tokenIdentifier = "<token identifier>";
+
+            var info = await sdk.GetInfo(request: new GetInfoRequest(ensureSynced: false));
+            if (!info.tokenBalances.TryGetValue(tokenIdentifier, out var tokenBalance))
+            {
+                throw new Exception("Token balance not found");
+            }
+
+            var conversionOptions = new ConversionOptions(
+                conversionType: new ConversionType.ToBitcoin(
+                    fromTokenIdentifier: tokenIdentifier
+                ),
+                maxSlippageBps: null,
+                completionTimeoutSecs: null
+            );
+
+            var request = new PrepareSendPaymentRequest(
+                paymentRequest: paymentRequest,
+                amount: tokenBalance.balance,
+                tokenIdentifier: tokenIdentifier,
+                conversionOptions: conversionOptions,
+                feePolicy: FeePolicy.FeesIncluded
+            );
+            var prepareResponse = await sdk.PrepareSendPayment(request: request);
+
+            // The response amount is the estimated total sats available
+            // (converted sats + existing sat balance)
+            Console.WriteLine($"Total sats available: {prepareResponse.amount}");
+
+            if (prepareResponse.conversionEstimate != null)
+            {
+                Console.WriteLine("Converting " +
+                    $"{prepareResponse.conversionEstimate.amountIn} token units → ~{prepareResponse.conversionEstimate.amountOut} sats");
+                Console.WriteLine("Conversion fee: " +
+                    $"{prepareResponse.conversionEstimate.fee} token units");
+            }
+            // ANCHOR_END: prepare-send-payment-send-all
+        }
+
         async Task PrepareSendPaymentTokenConversion(BreezSdk sdk)
         {
             // ANCHOR: prepare-send-payment-with-conversion
@@ -165,10 +208,10 @@ namespace BreezSdkSnippets
             // If the fees are acceptable, continue to create the Send Payment
             if (prepareResponse.conversionEstimate != null)
             {
-                Console.WriteLine("Estimated conversion amount: " +
-                    $"{prepareResponse.conversionEstimate.amount} token base units");
+                Console.WriteLine("Estimated conversion: " +
+                    $"{prepareResponse.conversionEstimate.amountIn} token units → {prepareResponse.conversionEstimate.amountOut} sats");
                 Console.WriteLine("Estimated conversion fee: " +
-                    $"{prepareResponse.conversionEstimate.fee} token base units");
+                    $"{prepareResponse.conversionEstimate.fee} token units");
             }
             // ANCHOR_END: prepare-send-payment-with-conversion
         }

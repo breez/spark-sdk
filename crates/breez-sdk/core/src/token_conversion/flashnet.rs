@@ -380,7 +380,8 @@ impl FlashnetTokenConverter {
 
         Ok(ConversionEstimate {
             options: conversion_options.clone(),
-            amount: amount_in,
+            amount_in,
+            amount_out: response.amount_out,
             fee: response.fee_paid_asset_in.unwrap_or(0),
             amount_adjustment,
         })
@@ -637,14 +638,18 @@ impl FlashnetTokenConverter {
                 "No conversion estimate available".to_string(),
             ))?;
 
-        match amount {
-            ConversionAmount::MinAmountOut(min_out) => {
-                Ok((estimate.amount, *min_out, estimate.amount_adjustment))
-            }
-            ConversionAmount::AmountIn(amount_in) => {
-                Ok((*amount_in, estimate.amount, estimate.amount_adjustment))
-            }
-        }
+        // For MinAmountOut, use the original requested minimum as min_amount_out
+        // (not the simulated output, which may be higher and cause unnecessary failures).
+        // For AmountIn, use the slippage-adjusted estimated output.
+        let min_amount_out = match amount {
+            ConversionAmount::MinAmountOut(min_out) => *min_out,
+            ConversionAmount::AmountIn(_) => estimate.amount_out,
+        };
+        Ok((
+            estimate.amount_in,
+            min_amount_out,
+            estimate.amount_adjustment,
+        ))
     }
 }
 
@@ -817,7 +822,8 @@ impl TokenConverter for FlashnetTokenConverter {
 
                 Ok(Some(ConversionEstimate {
                     options: options.clone(),
-                    amount: estimated_out,
+                    amount_in,
+                    amount_out: estimated_out,
                     fee: response.fee_paid_asset_in.unwrap_or(0),
                     amount_adjustment: None,
                 }))

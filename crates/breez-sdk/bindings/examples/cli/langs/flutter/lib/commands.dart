@@ -420,7 +420,9 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
   if (prepareResponse.conversionEstimate != null) {
     final est = prepareResponse.conversionEstimate!;
     final units = est.options.conversionType is ConversionType_FromBitcoin ? 'sats' : 'token base units';
-    print('Estimated conversion of ${est.amount} $units with a ${est.fee} $units fee');
+    print(
+      'Estimated conversion of ${est.amountIn} $units → ${est.amountOut} $units with a ${est.fee} $units fee',
+    );
     final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');
@@ -497,7 +499,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
 
   final prepareResponse = await sdk.prepareLnurlPay(
     request: PrepareLnurlPayRequest(
-      amountSats: amountSats,
+      amount: amountSats,
       comment: results.option('comment'),
       payRequest: payRequest,
       validateSuccessActionUrl: _parseBool(results.option('validate')),
@@ -508,7 +510,9 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
 
   if (prepareResponse.conversionEstimate != null) {
     final est = prepareResponse.conversionEstimate!;
-    print('Estimated conversion of ${est.amount} token base units with a ${est.fee} token base units fee');
+    print(
+      'Estimated conversion of ${est.amountIn} token base units → ${est.amountOut} sats with a ${est.fee} token base units fee',
+    );
     final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');

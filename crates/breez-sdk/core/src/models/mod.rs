@@ -690,7 +690,7 @@ pub struct StableBalanceConfig {
 
     /// Maximum slippage in basis points (1/100 of a percent).
     ///
-    /// Defaults to 50 bps (0.5%) if not set.
+    /// Defaults to 10 bps (0.1%) if not set.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub max_slippage_bps: Option<u32>,
 }
@@ -1157,13 +1157,17 @@ pub struct ReceivePaymentResponse {
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayRequest {
-    /// The amount to send in satoshis.
-    pub amount_sats: u64,
+    /// The amount to send. Denominated in satoshis, or in token base units
+    /// when `token_identifier` is set.
+    pub amount: u128,
     pub pay_request: LnurlPayRequestDetails,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub comment: Option<String>,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub validate_success_action_url: Option<bool>,
+    /// The token identifier when sending a token amount with conversion.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub token_identifier: Option<String>,
     /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
@@ -1175,7 +1179,10 @@ pub struct PrepareLnurlPayRequest {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareLnurlPayResponse {
-    /// The amount to send in satoshis.
+    /// The amount for the payment, always denominated in sats, even when a
+    /// `token_identifier` and conversion are present.
+    /// When a conversion is present, the token input amount is available in
+    /// `conversion_estimate.amount_in`.
     pub amount_sats: u64,
     pub comment: Option<String>,
     pub pay_request: LnurlPayRequestDetails,
@@ -1318,8 +1325,10 @@ pub struct PrepareSendPaymentRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentResponse {
     pub payment_method: SendPaymentMethod,
-    /// The amount for the payment.
-    /// Denominated in satoshis for Bitcoin payments, or token base units for token payments.
+    /// The amount to be sent, denominated in satoshis for Bitcoin payments
+    /// (including token-to-Bitcoin conversions), or token base units for token payments.
+    /// When a conversion is present, the input amount is in
+    /// `conversion_estimate.amount_in`.
     pub amount: u128,
     /// Optional token identifier for token payments.
     /// Absence indicates that the payment is a Bitcoin payment.

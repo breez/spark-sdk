@@ -32,10 +32,15 @@ pub(crate) enum FeeSplit {
 pub struct ConversionEstimate {
     /// The conversion options used for the estimate
     pub options: ConversionOptions,
-    /// The estimated amount to be received from the conversion
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub amount: u128,
-    /// The fee estimated for the conversion
+    /// The input amount for the conversion.
+    /// For `FromBitcoin`: the satoshis required to produce the desired token output.
+    /// For `ToBitcoin`: the token amount being converted.
+    pub amount_in: u128,
+    /// The estimated output amount from the conversion.
+    /// For `FromBitcoin`: the estimated token amount received.
+    /// For `ToBitcoin`: the estimated satoshis received.
+    pub amount_out: u128,
+    /// The fee estimated for the conversion.
     /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
     pub fee: u128,
     /// The reason the conversion amount was adjusted, if applicable.

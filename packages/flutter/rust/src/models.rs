@@ -353,10 +353,11 @@ pub enum _FeePolicy {
 
 #[frb(mirror(PrepareLnurlPayRequest))]
 pub struct _PrepareLnurlPayRequest {
-    pub amount_sats: u64,
+    pub amount: u128,
     pub pay_request: LnurlPayRequestDetails,
     pub comment: Option<String>,
     pub validate_success_action_url: Option<bool>,
+    pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1129,7 +1130,8 @@ pub struct _OptimizationProgress {
 #[frb(mirror(ConversionEstimate))]
 pub struct _ConversionEstimate {
     pub options: ConversionOptions,
-    pub amount: u128,
+    pub amount_in: u128,
+    pub amount_out: u128,
     pub fee: u128,
     pub amount_adjustment: Option<AmountAdjustmentReason>,
 }

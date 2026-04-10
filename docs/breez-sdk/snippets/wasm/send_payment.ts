@@ -129,8 +129,8 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   // If the fees are acceptable, continue to create the Send Payment
   if (prepareResponse.conversionEstimate !== undefined) {
     const conversionEstimate = prepareResponse.conversionEstimate
-    console.debug(`Estimated conversion amount: ${conversionEstimate.amount} token base units`)
-    console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token base units`)
+    console.debug(`Estimated conversion: ${conversionEstimate.amountIn} token units → ${conversionEstimate.amountOut} sats`)
+    console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token units`)
   }
   // ANCHOR_END: prepare-send-payment-with-conversion
 }
@@ -214,4 +214,43 @@ const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
   console.log(`Amount: ${prepareResponse.amount}`)
   // The receiver gets amount - fees (fees are available in prepareResponse.paymentMethod)
   // ANCHOR_END: prepare-send-payment-fees-included
+}
+
+const examplePrepareSendPaymentSendAll = async (sdk: BreezSdk) => {
+  // ANCHOR: prepare-send-payment-send-all
+  const paymentRequest = '<payment request>'
+  const tokenIdentifier = '<token identifier>'
+
+  const info = await sdk.getInfo({ ensureSynced: false })
+  const tokenBalance = info.tokenBalances.get(tokenIdentifier)
+  if (tokenBalance === undefined) {
+    throw new Error('Token balance not found')
+  }
+
+  const conversionOptions: ConversionOptions = {
+    conversionType: {
+      type: 'toBitcoin',
+      fromTokenIdentifier: tokenIdentifier
+    }
+  }
+  const feePolicy: FeePolicy = 'feesIncluded'
+
+  const prepareResponse = await sdk.prepareSendPayment({
+    paymentRequest,
+    amount: tokenBalance.balance,
+    tokenIdentifier,
+    conversionOptions,
+    feePolicy
+  })
+
+  // The response amount is the estimated total sats available
+  // (converted sats + existing sat balance)
+  console.log(`Total sats available: ${prepareResponse.amount}`)
+
+  if (prepareResponse.conversionEstimate !== undefined) {
+    const estimate = prepareResponse.conversionEstimate
+    console.log(`Converting ${estimate.amountIn} token units → ~${estimate.amountOut} sats`)
+    console.log(`Conversion fee: ${estimate.fee} token units`)
+  }
+  // ANCHOR_END: prepare-send-payment-send-all
 }

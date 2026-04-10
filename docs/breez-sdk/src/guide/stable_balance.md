@@ -72,6 +72,25 @@ You can still explicitly specify `conversion options` in your request if you nee
 
 </div>
 
+## Sending entire balance
+
+When stable balance is active, you can send your entire wallet balance — both the token balance and any remaining Bitcoin — in a single payment. This is useful for draining a wallet completely.
+
+To send all, provide the full token balance as the amount along with {{#enum FeePolicy::FeesIncluded}} and {{#enum ConversionType::ToBitcoin}} conversion options. The SDK converts all specified tokens to Bitcoin, combines the result with any existing Bitcoin balance, and deducts payment fees from the total.
+
+The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details.
+
+The same approach works with {{#name prepare_lnurl_pay}} for [LNURL payments](./lnurl_pay.md).
+
+{{#tabs send_payment:prepare-send-payment-send-all}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+The actual sats received from conversion may differ slightly from the estimate due to price movement. The SDK handles this by querying the actual balance after conversion completes and sending the full available amount.
+
+</div>
+
 ## Conversion details
 
 Payments involving token conversions include a {{#name conversion_details}} field that describes the conversion that took place. This is useful for displaying conversion context in your UI.

@@ -187,8 +187,8 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 
 	// If the fees are acceptable, continue to create the Send Payment
 	if response.ConversionEstimate != nil {
-		log.Printf("Estimated conversion amount: %v token base units", response.ConversionEstimate.Amount)
-		log.Printf("Estimated conversion fee: %v token base units", response.ConversionEstimate.Fee)
+		log.Printf("Estimated conversion: %v token units → %v sats", response.ConversionEstimate.AmountIn, response.ConversionEstimate.AmountOut)
+		log.Printf("Estimated conversion fee: %v token units", response.ConversionEstimate.Fee)
 	}
 	// ANCHOR_END: prepare-send-payment-with-conversion
 	return &response, nil
@@ -307,5 +307,60 @@ func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	log.Printf("Amount: %v", response.Amount)
 	// The receiver gets amount - fees (fees are available in response.PaymentMethod)
 	// ANCHOR_END: prepare-send-payment-fees-included
+	return &response, nil
+}
+
+func PrepareSendPaymentSendAll(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareSendPaymentResponse, error) {
+	// ANCHOR: prepare-send-payment-send-all
+	paymentRequest := "<payment request>"
+	tokenIdentifier := "<token identifier>"
+
+	ensureSynced := false
+	info, err := sdk.GetInfo(breez_sdk_spark.GetInfoRequest{
+		EnsureSynced: &ensureSynced,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tokenBalance, ok := info.TokenBalances[tokenIdentifier]
+	if !ok {
+		return nil, errors.New("token balance not found")
+	}
+
+	conversionOptions := breez_sdk_spark.ConversionOptions{
+		ConversionType: breez_sdk_spark.ConversionTypeToBitcoin{
+			FromTokenIdentifier: tokenIdentifier,
+		},
+	}
+	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
+
+	request := breez_sdk_spark.PrepareSendPaymentRequest{
+		PaymentRequest:    paymentRequest,
+		Amount:            &tokenBalance.Balance,
+		TokenIdentifier:   &tokenIdentifier,
+		ConversionOptions: &conversionOptions,
+		FeePolicy:         &feePolicy,
+	}
+	response, err := sdk.PrepareSendPayment(request)
+
+	if err != nil {
+		var sdkErr *breez_sdk_spark.SdkError
+		if errors.As(err, &sdkErr) {
+			// Handle SdkError - can inspect specific variants if needed
+			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
+		}
+		return nil, err
+	}
+
+	// The response amount is the estimated total sats available
+	// (converted sats + existing sat balance)
+	log.Printf("Total sats available: %v", response.Amount)
+
+	if response.ConversionEstimate != nil {
+		log.Printf("Converting %v token units → ~%v sats", response.ConversionEstimate.AmountIn, response.ConversionEstimate.AmountOut)
+		log.Printf("Conversion fee: %v token units", response.ConversionEstimate.Fee)
+	}
+	// ANCHOR_END: prepare-send-payment-send-all
 	return &response, nil
 }

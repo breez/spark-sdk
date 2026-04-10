@@ -27,10 +27,20 @@ pub(crate) fn validate_prepare_send_payment_request(
     // Validate amount is > 0 if provided
     validate_amount(request.amount)?;
 
-    // Validate FeesIncluded is not combined with token conversion
-    if request.fee_policy == Some(FeePolicy::FeesIncluded) && request.conversion_options.is_some() {
+    // Validate FeesIncluded is not combined with FromBitcoin conversion.
+    // FeesIncluded + ToBitcoin is allowed (send-all-with-conversion from stable balance).
+    if request.fee_policy == Some(FeePolicy::FeesIncluded)
+        && request.conversion_options.is_some()
+        && !matches!(
+            &request.conversion_options,
+            Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin { .. },
+                ..
+            })
+        )
+    {
         return Err(SdkError::InvalidInput(
-            "FeesIncluded cannot be combined with token conversion".to_string(),
+            "FeesIncluded cannot be combined with FromBitcoin conversion".to_string(),
         ));
     }
 
@@ -166,23 +176,18 @@ fn validate_spark_address_request(request: &PrepareSendPaymentRequest) -> Result
     // Check if token identifier is provided
     let has_token_identifier = request.token_identifier.is_some();
 
-    // Validate conversion depending on whether token identifier is provided
-    if let Some(conversion_options) = &request.conversion_options {
-        match (has_token_identifier, &conversion_options.conversion_type) {
-            (true, ConversionType::ToBitcoin { .. }) => {
-                return Err(SdkError::InvalidInput(
-                    "Conversion must be from Bitcoin when a token identifier is provided"
-                        .to_string(),
-                ));
-            }
-            (false, ConversionType::FromBitcoin) => {
-                return Err(SdkError::InvalidInput(
-                    "Conversion must be to Bitcoin when no token identifier is provided"
-                        .to_string(),
-                ));
-            }
-            _ => {}
-        }
+    // Validate conversion depending on whether token identifier is provided.
+    // token_identifier + ToBitcoin is allowed (send-all-with-conversion from stable balance).
+    if let Some(conversion_options) = &request.conversion_options
+        && !has_token_identifier
+        && matches!(
+            conversion_options.conversion_type,
+            ConversionType::FromBitcoin
+        )
+    {
+        return Err(SdkError::InvalidInput(
+            "Conversion must be to Bitcoin when no token identifier is provided".to_string(),
+        ));
     }
 
     // Token identifier is optional for spark addresses
@@ -202,8 +207,17 @@ fn validate_bolt11_invoice_request(
         ));
     }
 
-    // Token identifier cannot be provided for Bolt11 invoices
-    if request.token_identifier.is_some() {
+    // Token identifier cannot be provided for Bolt11 invoices unless ToBitcoin conversion
+    // is present (send-all-with-conversion from stable balance).
+    if request.token_identifier.is_some()
+        && !matches!(
+            &request.conversion_options,
+            Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin { .. },
+                ..
+            })
+        )
+    {
         return Err(SdkError::InvalidInput(
             "Token identifier can't be provided for this payment request: non-spark address"
                 .to_string(),
@@ -227,8 +241,17 @@ fn validate_bolt11_invoice_request(
 
 /// Validates a Bitcoin address request.
 fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
-    // Token identifier cannot be provided for Bitcoin addresses
-    if request.token_identifier.is_some() {
+    // Token identifier cannot be provided for Bitcoin addresses unless ToBitcoin conversion
+    // is present (send-all-with-conversion from stable balance).
+    if request.token_identifier.is_some()
+        && !matches!(
+            &request.conversion_options,
+            Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin { .. },
+                ..
+            })
+        )
+    {
         return Err(SdkError::InvalidInput(
             "Token identifier can't be provided for this payment request: non-spark address"
                 .to_string(),
@@ -841,6 +864,23 @@ mod tests {
 
     #[test_all]
     fn test_validate_token_spark_address_with_invalid_conversion() {
+        // FromBitcoin without token_identifier is invalid
+        let mut request = create_test_request();
+        request.amount = Some(1000);
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        });
+        let result = validate_spark_address_request(&request);
+        assert!(
+            result.is_err(),
+            "Should fail when FromBitcoin conversion is provided without token identifier"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_token_spark_address_with_to_bitcoin_conversion_succeeds() {
         let mut request = create_token_amount_request(1000, "token123");
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
@@ -851,8 +891,8 @@ mod tests {
         });
         let result = validate_spark_address_request(&request);
         assert!(
-            result.is_err(),
-            "Should fail when conversion to Bitcoin is provided"
+            result.is_ok(),
+            "Should succeed when ToBitcoin conversion is provided for token spark address"
         );
     }
 
@@ -1168,7 +1208,7 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_fees_included_with_token_conversion_fails() {
+    fn test_validate_fees_included_with_from_bitcoin_conversion_fails() {
         use crate::PaymentRequestSource;
         let address_details = BitcoinAddressDetails {
             address: "bc1...".to_string(),
@@ -1177,6 +1217,40 @@ mod tests {
         };
 
         let mut request = create_fees_included_request(1000);
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        });
+
+        let input_type = InputType::BitcoinAddress(address_details);
+        let identity_key = "test_identity".to_string();
+        let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
+        assert!(
+            result.is_err(),
+            "Should fail for FeesIncluded with FromBitcoin conversion"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("FeesIncluded cannot be combined with FromBitcoin conversion"),
+                "Error message should mention FeesIncluded and FromBitcoin conversion"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_fees_included_with_to_bitcoin_conversion_succeeds() {
+        use crate::PaymentRequestSource;
+        let address_details = BitcoinAddressDetails {
+            address: "bc1...".to_string(),
+            network: BitcoinNetwork::Regtest,
+            source: PaymentRequestSource::default(),
+        };
+
+        let mut request = create_fees_included_request(1000);
+        request.token_identifier = Some("token123".to_string());
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: "token123".to_string(),
@@ -1189,17 +1263,9 @@ mod tests {
         let identity_key = "test_identity".to_string();
         let result = validate_prepare_send_payment_request(&input_type, &request, &identity_key);
         assert!(
-            result.is_err(),
-            "Should fail for FeesIncluded with token conversion"
+            result.is_ok(),
+            "Should succeed for FeesIncluded with ToBitcoin conversion (send-all-with-conversion)"
         );
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("FeesIncluded cannot be combined with token conversion"),
-                "Error message should mention FeesIncluded and token conversion"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
     }
 
     // Dust limit tests

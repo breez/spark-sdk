@@ -26,6 +26,10 @@ This is particularly useful when you want to spend your entire balance in a sing
 
 {{#tabs lnurl_pay:prepare-lnurl-pay-fees-included}}
 
+### Sending entire token balance
+
+When [stable balance](./stable_balance.md) is active, you can send your entire wallet balance via LNURL. See [Sending entire balance](./stable_balance.md#sending-entire-balance) for details.
+
 <h2 id="lnurl-payments">
     <a class="header" href="#lnurl-payments">LNURL Payments</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.lnurl_pay">API docs</a>

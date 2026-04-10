@@ -251,8 +251,8 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 
 	// If the fees are acceptable, continue to send the token payment
 	if prepareResponse.ConversionEstimate != nil {
-		log.Printf("Estimated conversion amount: %v sats", prepareResponse.ConversionEstimate.Amount)
-		log.Printf("Estimated conversion fee: %v sats", prepareResponse.ConversionEstimate.Fee)
+		log.Printf("Estimated conversion: %v token units → %v sats", prepareResponse.ConversionEstimate.AmountIn, prepareResponse.ConversionEstimate.AmountOut)
+		log.Printf("Estimated conversion fee: %v token units", prepareResponse.ConversionEstimate.Fee)
 	}
 	// ANCHOR_END: prepare-send-payment-with-conversion
 	return nil

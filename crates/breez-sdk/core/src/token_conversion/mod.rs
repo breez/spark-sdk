@@ -46,8 +46,7 @@ pub(crate) trait TokenConverter: Send + Sync {
     ///
     /// # Returns
     /// The estimated conversion including amount and fee, or None if options is None.
-    /// For `MinAmountOut`: `estimate.amount` is the required input amount.
-    /// For `AmountIn`: `estimate.amount` is the estimated output amount (slippage-adjusted).
+    /// `estimate.amount_in` is the input amount, `estimate.amount_out` is the estimated output.
     async fn validate(
         &self,
         options: Option<&ConversionOptions>,

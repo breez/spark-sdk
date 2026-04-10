@@ -7,8 +7,6 @@ from breez_sdk_spark import (
     LnurlPayRequestDetails,
     PrepareLnurlPayRequest,
     PrepareLnurlPayResponse,
-    ConversionOptions,
-    ConversionType,
 )
 
 
@@ -28,37 +26,19 @@ async def prepare_pay(sdk: BreezSdk):
             optional_comment = "<comment>"
             pay_request = details.pay_request
             optional_validate_success_action_url = True
-            # Optionally set to use token funds to pay via token conversion
-            optional_max_slippage_bps = 50
-            optional_completion_timeout_secs = 30
-            optional_conversion_options = ConversionOptions(
-                conversion_type=ConversionType.TO_BITCOIN(
-                    from_token_identifier="<token identifier>"
-                ),
-                max_slippage_bps=optional_max_slippage_bps,
-                completion_timeout_secs=optional_completion_timeout_secs,
-            )
 
             request = PrepareLnurlPayRequest(
-                amount_sats=amount_sats,
+                amount=amount_sats,
                 pay_request=pay_request,
                 comment=optional_comment,
                 validate_success_action_url=optional_validate_success_action_url,
-                conversion_options=optional_conversion_options,
+                token_identifier=None,
+                conversion_options=None,
                 fee_policy=None,
             )
             prepare_response = await sdk.prepare_lnurl_pay(request=request)
 
             # If the fees are acceptable, continue to create the LNURL Pay
-            if prepare_response.conversion_estimate is not None:
-                conversion_estimate = prepare_response.conversion_estimate
-                logging.debug(
-                    f"Estimated conversion amount: {conversion_estimate.amount} token base units"
-                )
-                logging.debug(
-                    f"Estimated conversion fee: {conversion_estimate.fee} token base units"
-                )
-
             logging.debug(f"Fees: {prepare_response.fee_sats} sats")
             return prepare_response
     except Exception as error:
@@ -97,10 +77,11 @@ async def prepare_pay_fees_included(sdk: BreezSdk, pay_request: LnurlPayRequestD
     optional_validate_success_action_url = True
 
     request = PrepareLnurlPayRequest(
-        amount_sats=amount_sats,
+        amount=amount_sats,
         pay_request=pay_request,
         comment=optional_comment,
         validate_success_action_url=optional_validate_success_action_url,
+        token_identifier=None,
         conversion_options=None,
         fee_policy=FeePolicy.FEES_INCLUDED,
     )

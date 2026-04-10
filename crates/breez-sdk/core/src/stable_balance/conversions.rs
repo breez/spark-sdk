@@ -379,13 +379,13 @@ impl StableBalance {
         };
 
         // Would create token dust if projected balance is still below min conversion limit
-        let estimated_total = existing_tokens.saturating_add(est.amount);
+        let estimated_total = existing_tokens.saturating_add(est.amount_out);
         if estimated_total < to_btc_min {
             debug!(
                 "Auto-conversion skipped: {balance_sats} sats would produce \
                  {} tokens, total {estimated_total} still below ToBitcoin min {to_btc_min} \
                  (existing tokens: {existing_tokens})",
-                est.amount,
+                est.amount_out,
             );
             return true;
         }
