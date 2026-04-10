@@ -1,5 +1,6 @@
 import type { NostrRelayConfig } from '@breeztech/breez-sdk-spark'
-import { Passkey, WebAuthnPrfProvider, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { Passkey, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { WebAuthnPrfProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
 // Implement the interface for custom logic if the built-in WebAuthnPrfProvider doesn't fit your needs.

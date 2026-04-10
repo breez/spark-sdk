@@ -11,7 +11,8 @@ from breez_sdk_spark import (
 
 
 # ANCHOR: implement-prf-provider
-# Implement using platform-specific passkey APIs if the SDK does not ship a built-in provider for your target.
+# Implement using platform-specific passkey APIs if the SDK does not
+# ship a built-in provider for your target.
 class CustomPasskeyPrfProvider(PasskeyPrfProvider):
     async def derive_prf_seed(self, salt: str):
         # Call platform passkey API with PRF extension

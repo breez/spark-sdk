@@ -20,7 +20,7 @@ class CustomPasskeyPrfProvider : PasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
-class CheckAvailabilitySnippet(private val activity: Activity) {
+class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
         val prfProvider = CredentialManagerPrfProvider(
@@ -33,9 +33,7 @@ class CheckAvailabilitySnippet(private val activity: Activity) {
         }
         // ANCHOR_END: check-availability
     }
-}
 
-class PasskeySnippets(private val activity: Activity) {
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
         val prfProvider = CredentialManagerPrfProvider(

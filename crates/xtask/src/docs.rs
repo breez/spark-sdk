@@ -305,6 +305,8 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
     println!("Checking doc snippets Kotlin MPP");
 
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
+
+    // Compile JVM target (commonMain sources)
     let status = Command::new("./gradlew")
         .arg("compileKotlinJvm")
         .current_dir(&kotlin_snippets_dir)
@@ -312,6 +314,19 @@ fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
     if !status.success() {
         anyhow::bail!(
             "Failed to run './gradlew compileKotlinJvm' in {:?}",
+            kotlin_snippets_dir
+        );
+    }
+
+    // Compile Android target (androidMain sources, including passkey snippets
+    // that use CredentialManagerPrfProvider which requires android.app.Activity)
+    let status = Command::new("./gradlew")
+        .arg("compileReleaseKotlinAndroid")
+        .current_dir(&kotlin_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!(
+            "Failed to run './gradlew compileReleaseKotlinAndroid' in {:?}",
             kotlin_snippets_dir
         );
     }

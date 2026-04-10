@@ -38,7 +38,7 @@ const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Use the built-in platform PRF provider (or pass a custom implementation)
   const prfProvider = new PasskeyPrfProvider()
-  const passkey = new Passkey(prfProvider, undefined)
+  const passkey = new Passkey(prfProvider as any, undefined)
 
   // Construct the wallet using the passkey (pass undefined for the default wallet)
   const wallet = await passkey.getWallet('personal')
@@ -56,7 +56,7 @@ const listLabels = async (): Promise<string[]> => {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined
   }
-  const passkey = new Passkey(prfProvider, relayConfig)
+  const passkey = new Passkey(prfProvider as any, relayConfig)
 
   // Query Nostr for labels associated with this passkey
   const labels = await passkey.listLabels()
@@ -75,7 +75,7 @@ const storeLabel = async () => {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined
   }
-  const passkey = new Passkey(prfProvider, relayConfig)
+  const passkey = new Passkey(prfProvider as any, relayConfig)
 
   // Publish the label to Nostr for later discovery
   await passkey.storeLabel('personal')
