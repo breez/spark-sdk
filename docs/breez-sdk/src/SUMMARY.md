@@ -33,6 +33,7 @@
   - [Sending payments using LNURL-Pay/Lightning address](guide/lnurl_pay.md)
   - [Managing contacts](guide/contacts.md)
   - [Receiving payments using LNURL-Pay/Lightning address](guide/receive_lnurl_pay.md)
+    - [Lightning Address payment notifications](guide/lnurl_webhooks.md)
   - [Receiving payments using LNURL-Withdraw](guide/lnurl_withdraw.md)
   - [Using LNURL-Auth](guide/lnurl_auth.md)
 - [User settings](guide/user_settings.md)
@@ -51,12 +52,6 @@
   - [Using an External Signer](guide/external_signer.md)
   - [Managing webhooks](guide/webhooks.md)
 - [Moving to production](guide/moving_to_production.md)
-
----
-
-# Lightning Address webhooks
-
-- [Lightning Address payment notifications](guide/lnurl_webhooks.md)
 
 ---
 

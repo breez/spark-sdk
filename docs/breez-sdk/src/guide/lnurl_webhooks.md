@@ -14,7 +14,7 @@ As an example, if you want to send push notifications to your users, you could r
 
 ## Getting started
 
-To start receiving webhooks, provide your webhook endpoint URL to Breez. Breez will configure it for your domain so that all Lightning Address payments on that domain trigger a POST request to your endpoint.
+To start receiving webhooks, [send us](mailto:contact@breez.technology) your webhook endpoint URL. Breez will configure it for your domain so that all Lightning Address payments on that domain trigger a POST request to your endpoint.
 
 Your endpoint should accept `POST` requests with a JSON body and respond with a `2xx` status code to acknowledge receipt.
 
