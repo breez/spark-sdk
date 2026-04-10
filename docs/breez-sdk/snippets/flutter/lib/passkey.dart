@@ -15,6 +15,17 @@ Future<bool> isPrfAvailable() async {
 }
 // ANCHOR_END: implement-prf-provider
 
+Future<void> checkAvailability() async {
+  // ANCHOR: check-availability
+  final prfProvider = PasskeyPrfProvider();
+  if (await prfProvider.isPrfAvailable()) {
+    // Show passkey as primary option
+  } else {
+    // Fall back to mnemonic flow
+  }
+  // ANCHOR_END: check-availability
+}
+
 Future<BreezSdk> connectWithPasskey() async {
   // ANCHOR: connect-with-passkey
   // Use the built-in platform PRF provider (or pass custom callbacks)

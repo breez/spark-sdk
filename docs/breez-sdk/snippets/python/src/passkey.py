@@ -24,6 +24,17 @@ class CustomPasskeyPrfProvider(PasskeyPrfProvider):
 # ANCHOR_END: implement-prf-provider
 
 
+async def check_availability():
+    # ANCHOR: check-availability
+    prf_provider = CustomPasskeyPrfProvider()
+
+    if await prf_provider.is_prf_available():
+        pass  # Show passkey as primary option
+    else:
+        pass  # Fall back to mnemonic flow
+    # ANCHOR_END: check-availability
+
+
 async def connect_with_passkey():
     # ANCHOR: connect-with-passkey
     prf_provider = CustomPasskeyPrfProvider()

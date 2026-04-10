@@ -174,13 +174,7 @@ If a built-in provider does not satisfy your requirements (e.g., you need a hard
 
 Use {{#name is_prf_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
 
-```
-if (await prfProvider.isPrfAvailable()) {
-  // Show passkey as primary option
-} else {
-  // Show mnemonic flow only
-}
-```
+{{#tabs passkey:check-availability}}
 
 <h2 id="connecting-with-passkey">
     <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>

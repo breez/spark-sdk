@@ -17,6 +17,17 @@ class CustomPasskeyPrfProvider: PasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
+func checkAvailability() async throws {
+    // ANCHOR: check-availability
+    let prfProvider = PlatformPasskeyPrfProvider()
+    if try await prfProvider.isPrfAvailable() {
+        // Show passkey as primary option
+    } else {
+        // Fall back to mnemonic flow
+    }
+    // ANCHOR_END: check-availability
+}
+
 func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
     // Use the built-in platform PRF provider (or pass a custom implementation)

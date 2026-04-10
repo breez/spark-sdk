@@ -24,6 +24,19 @@ impl PasskeyPrfProvider for CustomPasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
+async fn check_availability() -> Result<()> {
+    // ANCHOR: check-availability
+    let prf_provider = Arc::new(CustomPasskeyPrfProvider);
+
+    if prf_provider.is_prf_available().await? {
+        // Show passkey as primary option
+    } else {
+        // Fall back to mnemonic flow
+    }
+    // ANCHOR_END: check-availability
+    Ok(())
+}
+
 async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: connect-with-passkey
     let prf_provider = Arc::new(CustomPasskeyPrfProvider);

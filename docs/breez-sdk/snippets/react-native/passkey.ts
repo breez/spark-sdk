@@ -23,6 +23,17 @@ class CustomPasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
+const checkAvailability = async () => {
+  // ANCHOR: check-availability
+  const prfProvider = new PasskeyPrfProvider()
+  if (await prfProvider.isPrfAvailable()) {
+    // Show passkey as primary option
+  } else {
+    // Fall back to mnemonic flow
+  }
+  // ANCHOR_END: check-availability
+}
+
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Use the built-in platform PRF provider (or pass a custom implementation)

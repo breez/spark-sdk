@@ -21,6 +21,25 @@ namespace BreezSdkSnippets
     }
     // ANCHOR_END: implement-prf-provider
 
+    class CheckAvailabilitySnippet
+    {
+        async Task CheckAvailability()
+        {
+            // ANCHOR: check-availability
+            var prfProvider = new CustomPasskeyPrfProvider();
+
+            if (await prfProvider.IsPrfAvailable())
+            {
+                // Show passkey as primary option
+            }
+            else
+            {
+                // Fall back to mnemonic flow
+            }
+            // ANCHOR_END: check-availability
+        }
+    }
+
     class PasskeySnippets
     {
         async Task<BreezSdk> ConnectWithPasskey()

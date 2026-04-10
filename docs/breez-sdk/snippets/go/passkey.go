@@ -23,6 +23,19 @@ func (p *CustomPasskeyPrfProvider) IsPrfAvailable() (bool, error) {
 
 // ANCHOR_END: implement-prf-provider
 
+func CheckAvailability() {
+	// ANCHOR: check-availability
+	prfProvider := &CustomPasskeyPrfProvider{}
+
+	available, err := prfProvider.IsPrfAvailable()
+	if err == nil && available {
+		// Show passkey as primary option
+	} else {
+		// Fall back to mnemonic flow
+	}
+	// ANCHOR_END: check-availability
+}
+
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: connect-with-passkey
 	prfProvider := &CustomPasskeyPrfProvider{}
