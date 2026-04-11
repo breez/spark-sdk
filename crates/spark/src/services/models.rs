@@ -262,9 +262,27 @@ impl TryFrom<operator_rpc::spark::Transfer> for Transfer {
                 ServiceError::Generic("Invalid receiver identity public key".to_string())
             })?;
 
-        let status = transfer.status().into();
+        let status = match operator_rpc::spark::TransferStatus::try_from(transfer.status) {
+            Ok(proto_status) => TransferStatus::from(proto_status),
+            Err(prost::UnknownEnumValue(v)) => {
+                warn!(
+                    "Unknown TransferStatus value {} for transfer {}",
+                    v, transfer.id
+                );
+                TransferStatus::Unknown(v)
+            }
+        };
 
-        let transfer_type = transfer.r#type().into();
+        let transfer_type = match operator_rpc::spark::TransferType::try_from(transfer.r#type) {
+            Ok(proto_type) => TransferType::from(proto_type),
+            Err(prost::UnknownEnumValue(v)) => {
+                warn!(
+                    "Unknown TransferType value {} for transfer {}",
+                    v, transfer.id
+                );
+                TransferType::Unknown(v)
+            }
+        };
 
         let leaves = transfer
             .leaves
@@ -579,25 +597,26 @@ pub enum TransferStatus {
     ReceiverKeyTweakLocked,
     ReceiverKeyTweakApplied,
     ApplyingSenderKeyTweak,
+    Unknown(i32),
 }
 
 impl Display for TransferStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let status_str = match self {
-            TransferStatus::SenderInitiated => "SenderInitiated",
-            TransferStatus::SenderKeyTweakPending => "SenderKeyTweakPending",
-            TransferStatus::SenderKeyTweaked => "SenderKeyTweaked",
-            TransferStatus::ReceiverKeyTweaked => "ReceiverKeyTweaked",
-            TransferStatus::ReceiverRefundSigned => "ReceiverRefundSigned",
-            TransferStatus::Completed => "Completed",
-            TransferStatus::Expired => "Expired",
-            TransferStatus::Returned => "Returned",
-            TransferStatus::SenderInitiatedCoordinator => "SenderInitiatedCoordinator",
-            TransferStatus::ReceiverKeyTweakLocked => "ReceiverKeyTweakLocked",
-            TransferStatus::ReceiverKeyTweakApplied => "ReceiverKeyTweakApplied",
-            TransferStatus::ApplyingSenderKeyTweak => "ApplyingSenderKeyTweak",
-        };
-        write!(f, "{status_str}")
+        match self {
+            TransferStatus::SenderInitiated => write!(f, "SenderInitiated"),
+            TransferStatus::SenderKeyTweakPending => write!(f, "SenderKeyTweakPending"),
+            TransferStatus::SenderKeyTweaked => write!(f, "SenderKeyTweaked"),
+            TransferStatus::ReceiverKeyTweaked => write!(f, "ReceiverKeyTweaked"),
+            TransferStatus::ReceiverRefundSigned => write!(f, "ReceiverRefundSigned"),
+            TransferStatus::Completed => write!(f, "Completed"),
+            TransferStatus::Expired => write!(f, "Expired"),
+            TransferStatus::Returned => write!(f, "Returned"),
+            TransferStatus::SenderInitiatedCoordinator => write!(f, "SenderInitiatedCoordinator"),
+            TransferStatus::ReceiverKeyTweakLocked => write!(f, "ReceiverKeyTweakLocked"),
+            TransferStatus::ReceiverKeyTweakApplied => write!(f, "ReceiverKeyTweakApplied"),
+            TransferStatus::ApplyingSenderKeyTweak => write!(f, "ApplyingSenderKeyTweak"),
+            TransferStatus::Unknown(v) => write!(f, "Unknown({})", v),
+        }
     }
 }
 
@@ -646,6 +665,7 @@ pub enum TransferType {
     CounterSwap,
     PrimarySwapV3,
     CounterSwapV3,
+    Unknown(i32),
 }
 
 impl From<operator_rpc::spark::TransferType> for TransferType {
@@ -832,7 +852,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
             .map(|output| (output, network).try_into())
             .collect::<Result<Vec<TokenOutput>, _>>()?;
 
-        let status = TokenTransactionStatus::Unknown;
+        let status = TokenTransactionStatus::Unknown(0);
 
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
@@ -895,9 +915,13 @@ impl
             .collect::<Result<Vec<TokenOutput>, _>>()?;
 
         let status =
-            operator_rpc::spark_token::TokenTransactionStatus::try_from(transaction.status)
-                .map_err(|_| ServiceError::Generic("Invalid token transaction status".to_string()))?
-                .into();
+            match operator_rpc::spark_token::TokenTransactionStatus::try_from(transaction.status) {
+                Ok(proto_status) => TokenTransactionStatus::from(proto_status),
+                Err(prost::UnknownEnumValue(v)) => {
+                    warn!("Unknown TokenTransactionStatus value {} for transaction", v);
+                    TokenTransactionStatus::Unknown(v)
+                }
+            };
 
         // client_created_timestamp will always be filled for V2 transactions and V1 transactions will be discontinued soon
         let created_timestamp = token_transaction
@@ -1078,7 +1102,7 @@ pub enum TokenTransactionStatus {
     StartedCancelled,
     /// Transaction was cancelled and cannot be recovered.
     SignedCancelled,
-    Unknown,
+    Unknown(i32),
 }
 
 impl From<operator_rpc::spark_token::TokenTransactionStatus> for TokenTransactionStatus {
@@ -1103,7 +1127,7 @@ impl From<operator_rpc::spark_token::TokenTransactionStatus> for TokenTransactio
                 TokenTransactionStatus::SignedCancelled
             }
             operator_rpc::spark_token::TokenTransactionStatus::TokenTransactionUnknown => {
-                TokenTransactionStatus::Unknown
+                TokenTransactionStatus::Unknown(0)
             }
         }
     }
@@ -1252,7 +1276,17 @@ impl TryFrom<operator_rpc::spark::PreimageRequestWithTransfer> for PreimageReque
             })?,
             receiver_identity_pubkey: PublicKey::from_slice(&request.receiver_identity_pubkey)
                 .map_err(|_| ServiceError::InvalidPublicKey)?,
-            status: request.status().into(),
+            status: match operator_rpc::spark::PreimageRequestStatus::try_from(request.status) {
+                Ok(proto_status) => PreimageRequestStatus::from(proto_status),
+                Err(prost::UnknownEnumValue(v)) => {
+                    warn!(
+                        "Unknown PreimageRequestStatus value {} for payment_hash {}",
+                        v,
+                        hex::encode(&request.payment_hash)
+                    );
+                    PreimageRequestStatus::Unknown(v)
+                }
+            },
             created_time: request
                 .created_time
                 .map(|ts| {
@@ -1277,18 +1311,22 @@ pub enum PreimageRequestStatus {
     WaitingForPreimage,
     PreimageShared,
     Returned,
+    Unknown(i32),
 }
 
 impl From<PreimageRequestStatus> for operator_rpc::spark::PreimageRequestStatus {
     fn from(status: PreimageRequestStatus) -> Self {
         match status {
-            PreimageRequestStatus::WaitingForPreimage => {
-                operator_rpc::spark::PreimageRequestStatus::WaitingForPreimage
+            PreimageRequestStatus::WaitingForPreimage => Self::WaitingForPreimage,
+            PreimageRequestStatus::PreimageShared => Self::PreimageShared,
+            PreimageRequestStatus::Returned => Self::Returned,
+            PreimageRequestStatus::Unknown(v) => {
+                warn!(
+                    "Mapping Unknown PreimageRequestStatus({}) to WaitingForPreimage",
+                    v
+                );
+                Self::WaitingForPreimage
             }
-            PreimageRequestStatus::PreimageShared => {
-                operator_rpc::spark::PreimageRequestStatus::PreimageShared
-            }
-            PreimageRequestStatus::Returned => operator_rpc::spark::PreimageRequestStatus::Returned,
         }
     }
 }

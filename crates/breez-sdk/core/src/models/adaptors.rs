@@ -477,7 +477,7 @@ impl PaymentStatus {
         match status {
             TokenTransactionStatus::Started
             | TokenTransactionStatus::Revealed
-            | TokenTransactionStatus::Unknown => PaymentStatus::Pending,
+            | TokenTransactionStatus::Unknown(_) => PaymentStatus::Pending,
             TokenTransactionStatus::Signed if is_transfer_transaction => PaymentStatus::Pending,
             TokenTransactionStatus::Finalized | TokenTransactionStatus::Signed => {
                 PaymentStatus::Completed
@@ -511,6 +511,13 @@ impl From<PreimageRequestStatus> for SparkHtlcStatus {
             PreimageRequestStatus::WaitingForPreimage => SparkHtlcStatus::WaitingForPreimage,
             PreimageRequestStatus::PreimageShared => SparkHtlcStatus::PreimageShared,
             PreimageRequestStatus::Returned => SparkHtlcStatus::Returned,
+            PreimageRequestStatus::Unknown(v) => {
+                warn!(
+                    "Unknown PreimageRequestStatus({}) mapped to WaitingForPreimage",
+                    v
+                );
+                SparkHtlcStatus::WaitingForPreimage
+            }
         }
     }
 }
