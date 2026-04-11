@@ -292,29 +292,62 @@ fn create_tx_cpfp_psbt(
         ..Default::default()
     });
 
-    // Calculate the approximate transaction size in vbytes
-    // P2WPKH inputs: ~68 vbytes each (41 non-witness + 108 witness / 4)
-    // P2TR inputs: ~58 vbytes each (41 non-witness + 66 witness / 4)
-    // Anchor input: ~41 vbytes (no signature needed for ephemeral anchor)
-    // P2WPKH output: ~31 vbytes
-    // P2TR output: ~43 vbytes
-    // Transaction overhead: ~10 vbytes
-    let input_vbytes: u64 = utxos
+    // Calculate the maximum child transaction weight in weight units (WU).
+    // Computing in WU avoids rounding errors from per-component vbyte estimates.
+    //
+    // Non-witness bytes cost 4 WU each, witness bytes cost 1 WU each.
+    //
+    // Per-input non-witness: txid(32) + vout(4) + scriptSig_len(1) + sequence(4) = 41 bytes
+    // P2WPKH witness: count(1) + sig_len(1) + sig(max 72) + pk_len(1) + pk(33) = 108 bytes
+    // P2TR witness:   count(1) + sig_len(1) + sig(64) = 66 bytes
+    // Anchor witness: count(1) = 1 byte (empty witness)
+    //
+    // Outputs (non-witness only):
+    // P2WPKH: value(8) + scriptPubKey_len(1) + scriptPubKey(22) = 31 bytes
+    // P2TR:   value(8) + scriptPubKey_len(1) + scriptPubKey(34) = 43 bytes
+    //
+    // Overhead non-witness: version(4) + input_count(1) + output_count(1) + locktime(4) = 10 bytes
+    // Overhead witness: marker(1) + flag(1) = 2 bytes
+    let input_weight: u64 = utxos
         .iter()
         .map(|utxo| match utxo.utxo_type {
-            CpfpUtxoType::P2wpkh => 68,
-            CpfpUtxoType::P2tr => 58,
+            // 41 * 4 + 108 = 272 WU
+            CpfpUtxoType::P2wpkh => 272,
+            // 41 * 4 + 66 = 230 WU
+            CpfpUtxoType::P2tr => 230,
         })
         .sum();
-    let output_vbytes: u64 = match first_utxo_type {
-        CpfpUtxoType::P2wpkh => 31,
-        CpfpUtxoType::P2tr => 43,
+    // Anchor input: 41 * 4 + 1 = 165 WU
+    let anchor_weight: u64 = 165;
+    let output_weight: u64 = match first_utxo_type {
+        // 31 * 4 = 124 WU
+        CpfpUtxoType::P2wpkh => 124,
+        // 43 * 4 = 172 WU
+        CpfpUtxoType::P2tr => 172,
     };
-    let tx_size_vbytes = input_vbytes + 41 + output_vbytes + 10;
-    trace!("Estimated transaction size: {} vbytes", tx_size_vbytes);
+    // 10 * 4 + 2 = 42 WU
+    let overhead_weight: u64 = 42;
+    let child_weight = input_weight + anchor_weight + output_weight + overhead_weight;
+    trace!(
+        "Estimated child weight: {} WU ({} vbytes)",
+        child_weight,
+        child_weight.div_ceil(4)
+    );
 
-    // Calculate fee based on fee rate (fee_rate is in sat/vbyte)
-    let fee_amount = fee_rate * tx_size_vbytes;
+    // For package relay, the fee must cover both parent and child at the target rate.
+    // The parent tx has no fee (ephemeral anchor), so the child pays for the whole package.
+    // Fee is calculated from weight directly: ceil(fee_rate * weight / 4) to ensure we
+    // at least meet the target rate.
+    let parent_weight = tx.weight().to_wu();
+    let package_weight = parent_weight + child_weight;
+    trace!(
+        "Parent: {} WU, package total: {} WU ({} vbytes)",
+        parent_weight,
+        package_weight,
+        package_weight.div_ceil(4)
+    );
+
+    let fee_amount = (fee_rate * package_weight).div_ceil(4);
     trace!("Calculated fee: {} sats", fee_amount);
 
     // Adjust output value to account for fees
@@ -473,9 +506,11 @@ mod tests {
         assert_eq!(psbt.inputs.len(), 2); // One for our UTXO, one for the anchor
         assert_eq!(psbt.outputs.len(), 1); // Change output
 
-        // Verify the output value accounts for fees
-        let estimated_size = 68 + 41 + 31 + 10; // UTXO input + anchor input + output + overhead
-        let expected_fee = fee_rate * estimated_size;
+        // Verify the output value accounts for fees (package = parent + child in WU)
+        let parent_wu = tx.weight().to_wu();
+        let child_wu: u64 = 272 + 165 + 124 + 42; // p2wpkh input + anchor + p2wpkh output + overhead
+        let package_weight = parent_wu + child_wu;
+        let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 10_000 - expected_fee;
 
         assert_eq!(
@@ -524,9 +559,11 @@ mod tests {
         // Verify the total input value (excluding anchor which is 0)
         let total_input_value = 5_000 + 3_000 + 2_000;
 
-        // Verify the output value accounts for fees
-        let estimated_size = (3 * 68) + 41 + 31 + 10; // 3 UTXO inputs + anchor input + output + overhead
-        let expected_fee = fee_rate * estimated_size;
+        // Verify the output value accounts for fees (package = parent + child in WU)
+        let parent_wu = tx.weight().to_wu();
+        let child_wu: u64 = (3 * 272) + 165 + 124 + 42; // 3 p2wpkh inputs + anchor + p2wpkh output + overhead
+        let package_weight = parent_wu + child_wu;
+        let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = total_input_value - expected_fee;
 
         assert_eq!(
@@ -630,9 +667,11 @@ mod tests {
         assert_eq!(psbt.inputs.len(), 2);
         assert_eq!(psbt.outputs.len(), 1);
 
-        // P2TR: 58 (input) + 41 (anchor) + 43 (output) + 10 (overhead) = 152
-        let estimated_size = 58 + 41 + 43 + 10;
-        let expected_fee = fee_rate * estimated_size;
+        // P2TR: 230 (input) + 165 (anchor) + 172 (output) + 42 (overhead) = 609 WU child + parent
+        let parent_wu = tx.weight().to_wu();
+        let child_wu: u64 = 230 + 165 + 172 + 42; // p2tr input + anchor + p2tr output + overhead
+        let package_weight = parent_wu + child_wu;
+        let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 10_000 - expected_fee;
         assert_eq!(
             psbt.unsigned_tx.output[0].value.to_sat(),
@@ -668,9 +707,11 @@ mod tests {
         let psbt = result.unwrap();
         assert_eq!(psbt.inputs.len(), 3); // 2 UTXOs + anchor
 
-        // Input sizes: 68 (p2wpkh) + 58 (p2tr) + 41 (anchor) + 31 (p2wpkh output) + 10 = 208
-        let estimated_size = 68 + 58 + 41 + 31 + 10;
-        let expected_fee = fee_rate * estimated_size;
+        // Mixed: 272 (p2wpkh) + 230 (p2tr) + 165 (anchor) + 124 (p2wpkh output) + 42 (overhead) WU child + parent
+        let parent_wu = tx.weight().to_wu();
+        let child_wu: u64 = 272 + 230 + 165 + 124 + 42; // p2wpkh + p2tr + anchor + p2wpkh output + overhead
+        let package_weight = parent_wu + child_wu;
+        let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 8_000 - expected_fee;
         assert_eq!(
             psbt.unsigned_tx.output[0].value.to_sat(),
