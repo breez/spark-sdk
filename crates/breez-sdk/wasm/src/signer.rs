@@ -263,6 +263,20 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
+    #[wasm_bindgen(js_name = "signHashSchnorrWithTweak")]
+    pub async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<SchnorrSignatureBytes, JsValue> {
+        self.inner
+            .sign_hash_schnorr_with_tweak(secret.into(), hash, tap_merkle_root)
+            .await
+            .map(|sig| sig.into())
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
     #[wasm_bindgen(js_name = "generateRandomSigningCommitment")]
     pub async fn generate_random_signing_commitment(
         &self,
@@ -465,6 +479,17 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         path: String,
     ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
         self.inner.sign_hash_schnorr(hash, path).await
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: core_types::ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        self.inner
+            .sign_hash_schnorr_with_tweak(secret, hash, tap_merkle_root)
+            .await
     }
 
     async fn generate_random_signing_commitment(
@@ -674,6 +699,32 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let promise = self
             .inner
             .sign_hash_schnorr(hash, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize schnorr signature: {}", e))
+            })?;
+        Ok(wasm_sig.into())
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: core_types::ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        let wasm_secret: ExternalSecretSource = secret.into();
+        let promise = self
+            .inner
+            .sign_hash_schnorr_with_tweak(
+                wasm_secret,
+                hash,
+                tap_merkle_root.unwrap_or_default(),
+            )
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -1011,6 +1062,14 @@ extern "C" {
         this: &JsExternalSigner,
         hash: Vec<u8>,
         path: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "signHashSchnorrWithTweak", catch)]
+    pub fn sign_hash_schnorr_with_tweak(
+        this: &JsExternalSigner,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Vec<u8>,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "generateFrostSigningCommitments", catch)]

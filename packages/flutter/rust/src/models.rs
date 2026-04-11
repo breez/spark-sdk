@@ -209,12 +209,14 @@ pub struct _PrepareUnilateralExitRequest {
     pub fee_rate: u64,
     pub leaf_ids: Vec<String>,
     pub utxos: Vec<UnilateralExitCpfpUtxo>,
+    pub destination: String,
 }
 
 #[frb(mirror(UnilateralExitTxCpfpPsbt))]
 pub struct _UnilateralExitTxCpfpPsbt {
     pub parent_tx_hex: String,
     pub child_psbt_hex: String,
+    pub csv_timelock_blocks: Option<u32>,
 }
 
 #[frb(mirror(UnilateralExitLeafTxCpfpPsbts))]
@@ -226,6 +228,7 @@ pub struct _UnilateralExitLeafTxCpfpPsbts {
 #[frb(mirror(PrepareUnilateralExitResponse))]
 pub struct _PrepareUnilateralExitResponse {
     pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+    pub sweep_tx_hex: String,
 }
 
 #[frb(mirror(GetInfoRequest))]

@@ -748,12 +748,14 @@ pub struct PrepareUnilateralExitRequest {
     pub fee_rate: u64,
     pub leaf_ids: Vec<String>,
     pub utxos: Vec<UnilateralExitCpfpUtxo>,
+    pub destination: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTxCpfpPsbt)]
 pub struct UnilateralExitTxCpfpPsbt {
     pub parent_tx_hex: String,
     pub child_psbt_hex: String,
+    pub csv_timelock_blocks: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeafTxCpfpPsbts)]
@@ -765,6 +767,7 @@ pub struct UnilateralExitLeafTxCpfpPsbts {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
 pub struct PrepareUnilateralExitResponse {
     pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+    pub sweep_tx_hex: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]
