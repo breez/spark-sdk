@@ -106,6 +106,16 @@ pub trait ExternalSigner: Send + Sync {
         path: String,
     ) -> Result<SchnorrSignatureBytes, SignerError>;
 
+    /// Signs a hash using Schnorr signature with a key from a `SecretSource`, applying a BIP341
+    /// `tap_tweak`. The `tap_merkle_root` is the optional 32-byte merkle root of the taproot script
+    /// tree; pass `None`/empty for key-path-only spends.
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<SchnorrSignatureBytes, SignerError>;
+
     /// HMAC-SHA256 of a message at the given derivation path.
     ///
     /// # Arguments

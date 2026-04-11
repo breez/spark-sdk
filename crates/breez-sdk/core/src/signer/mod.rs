@@ -44,6 +44,13 @@ pub trait BreezSigner: Send + Sync {
         path: &DerivationPath,
     ) -> Result<secp256k1::schnorr::Signature, SdkError>;
 
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &spark_wallet::SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<bitcoin::taproot::TapNodeHash>,
+    ) -> Result<secp256k1::schnorr::Signature, SdkError>;
+
     async fn derive_public_key(
         &self,
         path: &DerivationPath,

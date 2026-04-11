@@ -135,6 +135,18 @@ impl BreezSigner for BreezSignerImpl {
             .sign_schnorr_with_rng(&message, &keypair, &mut rng))
     }
 
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &spark_wallet::SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<bitcoin::taproot::TapNodeHash>,
+    ) -> Result<secp256k1::schnorr::Signature, SdkError> {
+        self.spark_signer
+            .sign_hash_schnorr_with_tweak(secret, hash, tap_tweak)
+            .await
+            .map_err(|e| SdkError::Generic(e.to_string()))
+    }
+
     async fn generate_random_signing_commitment(
         &self,
     ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError> {

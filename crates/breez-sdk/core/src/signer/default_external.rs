@@ -10,6 +10,7 @@ use crate::signer::external_types::{
 };
 use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
+use bitcoin::hashes::Hash as _;
 
 /// Default implementation of `ExternalSigner` that uses the internal `BreezSignerImpl`.
 ///
@@ -156,6 +157,31 @@ impl ExternalSigner for DefaultExternalSigner {
         let sig = self
             .inner
             .sign_hash_schnorr(&hash, &derivation_path)
+            .await
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        Ok(SchnorrSignatureBytes::from_signature(&sig))
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<SchnorrSignatureBytes, SignerError> {
+        let secret_source = secret
+            .to_secret_source()
+            .map_err(|e| SignerError::Generic(e.to_string()))?;
+        let tap_tweak = tap_merkle_root
+            .map(|bytes| {
+                let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+                    SignerError::Generic("Tap merkle root must be 32 bytes".to_string())
+                })?;
+                Ok::<_, SignerError>(bitcoin::taproot::TapNodeHash::from_byte_array(arr))
+            })
+            .transpose()?;
+        let sig = self
+            .inner
+            .sign_hash_schnorr_with_tweak(&secret_source, &hash, tap_tweak)
             .await
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(SchnorrSignatureBytes::from_signature(&sig))
