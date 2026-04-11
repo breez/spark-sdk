@@ -8,7 +8,7 @@ pub struct CheckUsernameAvailableResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecoverLnurlPayRequest {
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,7 +23,7 @@ pub struct RecoverLnurlPayResponse {
 pub struct RegisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
     pub description: String,
 }
 
@@ -31,7 +31,7 @@ pub struct RegisterLnurlPayRequest {
 pub struct UnregisterLnurlPayRequest {
     pub username: String,
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,7 +43,7 @@ pub struct RegisterLnurlPayResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListMetadataRequest {
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
     pub offset: Option<u32>,
     pub limit: Option<u32>,
     /// Only return metadata updated after this timestamp (milliseconds)
@@ -71,21 +71,21 @@ pub struct ListMetadataMetadata {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PublishZapReceiptRequest {
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
     pub zap_receipt: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InvoicePaidRequest {
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
     pub preimage: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InvoicesPaidRequest {
     pub signature: String,
-    pub timestamp: Option<u64>,
+    pub timestamp: u64,
     pub invoices: Vec<PaidInvoice>,
 }
 

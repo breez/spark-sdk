@@ -68,6 +68,8 @@ const RETRY_MULTIPLIER: f64 = 1.5;
 /// Maximum number of pending zap receipts to claim and process per poll cycle.
 const ZAP_RECEIPT_BATCH_LIMIT: u32 = 4;
 const MAX_RETRY_DURATION_MS: i64 = 14 * 24 * 60 * 60 * 1000; // 14 days
+/// Maximum number of nostr relays to connect to when publishing zap receipts.
+const MAX_NOSTR_RELAYS: usize = 10;
 
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn next_retry_delay(retry_count: i32) -> i64 {
@@ -291,7 +293,7 @@ where
         nostr::EventBuilder::zap_receipt(bolt11, Some(preimage.to_string()), &zap_request)
             .sign_with_keys(nostr_keys)?;
 
-    let relays = zap_request
+    let relays: Vec<_> = zap_request
         .tags
         .iter()
         .filter_map(|t| {
@@ -302,7 +304,8 @@ where
             }
         })
         .flatten()
-        .collect::<Vec<_>>();
+        .take(MAX_NOSTR_RELAYS)
+        .collect();
 
     if relays.is_empty() {
         return Err(anyhow::anyhow!("No relays in zap request"));

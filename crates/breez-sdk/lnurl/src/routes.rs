@@ -42,6 +42,12 @@ use crate::{
 const ACCEPTABLE_TIME_DIFF_SECS: u64 = 600;
 const DEFAULT_METADATA_OFFSET: u32 = 0;
 const DEFAULT_METADATA_LIMIT: u32 = 100;
+/// Maximum number of nostr relays to connect to when publishing zap receipts.
+const MAX_NOSTR_RELAYS: usize = 10;
+/// Maximum size (bytes) of a nostr event JSON (zap request or zap receipt).
+const MAX_NOSTR_EVENT_SIZE: usize = 32_768;
+/// Maximum length of a sender comment (LUD-12).
+const MAX_COMMENT_LENGTH: usize = 255;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct LnurlPayCallbackParams {
@@ -301,6 +307,13 @@ where
         )
         .await?;
 
+        if payload.zap_receipt.len() > MAX_NOSTR_EVENT_SIZE {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "zap receipt too large"})),
+            ));
+        }
+
         // Parse and validate the zap receipt
         let zap_receipt = Event::from_json(&payload.zap_receipt).map_err(|e| {
             trace!("invalid zap receipt, could not parse: {}", e);
@@ -483,7 +496,7 @@ where
             }
         };
 
-        let relays = zap_request
+        let relays: Vec<_> = zap_request
             .tags
             .iter()
             .filter_map(|t| {
@@ -494,7 +507,8 @@ where
                 }
             })
             .flatten()
-            .collect::<Vec<_>>();
+            .take(MAX_NOSTR_RELAYS)
+            .collect();
 
         if !relays.is_empty() {
             // The nostr keys are not really needed here, but we use them to create the client
@@ -588,7 +602,7 @@ where
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
-            comment_allowed: Some(255),
+            comment_allowed: Some(MAX_COMMENT_LENGTH as u32),
             allows_nostr,
             nostr_pubkey,
         }))
@@ -647,6 +661,10 @@ where
             if nostr_pubkey.is_none() {
                 trace!("nostr zap not supported");
                 return Err(lnurl_error("nostr zap not supported"));
+            }
+
+            if event.len() > MAX_NOSTR_EVENT_SIZE {
+                return Err(lnurl_error("nostr event too large"));
             }
 
             let event = Event::from_json(event).map_err(|e| {
@@ -725,6 +743,9 @@ where
 
         if let Some(comment) = params.comment {
             let comment = comment.trim();
+            if comment.len() > MAX_COMMENT_LENGTH {
+                return Err(lnurl_error("comment too long"));
+            }
             if !comment.is_empty()
                 && let Err(e) = state
                     .db
@@ -1219,7 +1240,7 @@ async fn validate<DB>(
     pubkey: &str,
     signature: &str,
     message: &str,
-    timestamp: Option<u64>,
+    timestamp: u64,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pubkey = parse_pubkey(pubkey)?;
@@ -1238,45 +1259,25 @@ async fn validate<DB>(
         )
     })?;
 
-    // This should be the preferred way to validate going forward. We accept both for backward
-    // compatibility, but log a warning if the timestamp is missing. Remove the old way after a
-    // deprecation period.
-    if let Some(timestamp) = timestamp {
-        let now = now_u64();
-        let diff = timestamp.abs_diff(now);
-        if diff > ACCEPTABLE_TIME_DIFF_SECS {
-            trace!(
-                "invalid timestamp, too far off: {}, now: {}, diff: {}",
-                timestamp, now, diff
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("invalid timestamp".into())),
-            ));
-        }
-
-        state
-            .wallet
-            .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
-            .await
-            .map_err(|e| {
-                trace!("invalid signature with timestamp, could not verify: {}", e);
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(Value::String("invalid signature".into())),
-                )
-            })?;
-
-        return Ok(pubkey);
+    let now = now_u64();
+    let diff = timestamp.abs_diff(now);
+    if diff > ACCEPTABLE_TIME_DIFF_SECS {
+        trace!(
+            "invalid timestamp, too far off: {}, now: {}, diff: {}",
+            timestamp, now, diff
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid timestamp".into())),
+        ));
     }
 
-    warn!("Use of endpoint without timestamp is deprecated, pubkey: {pubkey}, message: {message}");
     state
         .wallet
-        .verify_message(message, &signature, &pubkey)
+        .verify_message(&format!("{message}-{timestamp}"), &signature, &pubkey)
         .await
         .map_err(|e| {
-            trace!("invalid signature, could not verify: {}", e);
+            trace!("invalid signature with timestamp, could not verify: {}", e);
             (
                 StatusCode::BAD_REQUEST,
                 Json(Value::String("invalid signature".into())),
