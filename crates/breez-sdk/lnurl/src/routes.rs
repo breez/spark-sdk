@@ -1097,6 +1097,16 @@ where
 
     let amount_received_sat = match &payload.htlc_amount {
         Some(amount) if amount.unit == "SATOSHI" => Some(amount.value),
+        Some(amount) if amount.unit == "MILLISATOSHI" => {
+            if amount.value % 1000 != 0 {
+                warn!(
+                    "truncating htlc_amount from {} msat to {} sat",
+                    amount.value,
+                    amount.value / 1000
+                );
+            }
+            Some(amount.value / 1000)
+        }
         Some(amount) => {
             warn!("unexpected htlc_amount unit: {}", amount.unit);
             None
@@ -1695,6 +1705,42 @@ mod tests {
                 .unwrap()
                 .contains_key(&payment_hash)
         );
+    }
+
+    #[tokio::test]
+    async fn webhook_millisatoshi_htlc_amount_converts_to_sat() {
+        let repo = setup_repo_with_invoice(TEST_PREIMAGE_HEX, TEST_RECEIVER_PUBKEY);
+        let (trigger, _rx) = watch::channel(());
+
+        let mut payload = make_webhook_payload(
+            "SPARK_LIGHTNING_RECEIVE_FINISHED",
+            Some(TEST_PREIMAGE_HEX),
+            Some(TEST_RECEIVER_PUBKEY),
+        );
+        payload["htlc_amount"] = serde_json::json!({"value": 50_000_000, "unit": "MILLISATOSHI"});
+        let (headers, body) = signed_headers_and_body(TEST_WEBHOOK_SECRET, &payload);
+
+        let result = process_webhook(
+            &repo,
+            &crate::webhooks::WebhookService::new(repo.clone()),
+            TEST_WEBHOOK_SECRET,
+            &trigger,
+            &headers,
+            &body,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let payment_hash = compute_payment_hash(TEST_PREIMAGE_HEX);
+        let invoice = repo
+            .invoices
+            .lock()
+            .unwrap()
+            .get(&payment_hash)
+            .cloned()
+            .unwrap();
+        assert_eq!(invoice.preimage.as_deref(), Some(TEST_PREIMAGE_HEX));
+        assert_eq!(invoice.amount_received_sat, Some(50_000));
     }
 
     #[tokio::test]
