@@ -72,7 +72,7 @@ pub async fn subscribe_server_events(
                     break;
                 }
                 Err(e) => {
-                    error!("Error receiving event, reconnecting: {}", e);
+                    debug!("Error receiving event, reconnecting: {}", e);
                     break;
                 }
             };
