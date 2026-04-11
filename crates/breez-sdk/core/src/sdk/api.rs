@@ -133,6 +133,12 @@ impl BreezSdk {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let btc_network: bitcoin::Network = self.config.network.into();
+        let destination = bitcoin::Address::from_str(&request.destination)
+            .map_err(|e| SdkError::Generic(format!("Invalid destination address: {e}")))?
+            .require_network(btc_network)
+            .map_err(|e| SdkError::Generic(format!("Address network mismatch: {e}")))?;
+
         let utxos = request
             .utxos
             .into_iter()
@@ -166,6 +172,32 @@ impl BreezSdk {
             .unilateral_exit(request.fee_rate, leaf_ids, utxos)
             .await?;
 
+        // Extract refund outputs from the result. The last tx_cpfp_psbts entry
+        // for each leaf is the refund TX; its output[0] is the P2TR refund output.
+        let refund_outputs: Vec<spark_wallet::RefundOutput> = result
+            .iter()
+            .map(|leaf| {
+                let refund_tx = &leaf
+                    .tx_cpfp_psbts
+                    .last()
+                    .ok_or_else(|| SdkError::Generic("No transactions for leaf".to_string()))?
+                    .parent_tx;
+                Ok(spark_wallet::RefundOutput {
+                    outpoint: bitcoin::OutPoint {
+                        txid: refund_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    leaf_id: leaf.leaf_id.clone(),
+                    value: refund_tx.output[0].value.to_sat(),
+                })
+            })
+            .collect::<Result<Vec<_>, SdkError>>()?;
+
+        let sweep_tx = self
+            .spark_wallet
+            .create_refund_sweep_transaction(refund_outputs, destination, request.fee_rate)
+            .await?;
+
         let leaves = result
             .into_iter()
             .map(|leaf| crate::models::UnilateralExitLeafTxCpfpPsbts {
@@ -173,15 +205,32 @@ impl BreezSdk {
                 tx_cpfp_psbts: leaf
                     .tx_cpfp_psbts
                     .into_iter()
-                    .map(|tc| crate::models::UnilateralExitTxCpfpPsbt {
-                        parent_tx_hex: serialize_hex(&tc.parent_tx),
-                        child_psbt_hex: tc.child_psbt.serialize_hex(),
+                    .map(|tc| {
+                        let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
+                            let seq = input.sequence.to_consensus_u32();
+                            // BIP68: bit 31 (disable flag) must be unset for relative lock
+                            // Bit 22 unset means block-based (not time-based)
+                            if seq & 0x8000_0000 == 0 && seq & 0x0040_0000 == 0 {
+                                let blocks = seq & 0xFFFF;
+                                if blocks > 0 { Some(blocks) } else { None }
+                            } else {
+                                None
+                            }
+                        });
+                        crate::models::UnilateralExitTxCpfpPsbt {
+                            parent_tx_hex: serialize_hex(&tc.parent_tx),
+                            child_psbt_hex: tc.child_psbt.serialize_hex(),
+                            csv_timelock_blocks,
+                        }
                     })
                     .collect(),
             })
             .collect();
 
-        Ok(crate::models::PrepareUnilateralExitResponse { leaves })
+        Ok(crate::models::PrepareUnilateralExitResponse {
+            leaves,
+            sweep_tx_hex: serialize_hex(&sweep_tx),
+        })
     }
 
     /// List fiat currencies for which there is a known exchange rate,

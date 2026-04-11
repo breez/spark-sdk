@@ -1061,6 +1061,8 @@ pub struct PrepareUnilateralExitRequest {
     pub leaf_ids: Vec<String>,
     /// UTXOs used to pay fees for the unilateral exit via CPFP
     pub utxos: Vec<UnilateralExitCpfpUtxo>,
+    /// Destination address for the sweep transaction that spends refund outputs
+    pub destination: String,
 }
 
 /// A transaction and its CPFP fee-bumping PSBT
@@ -1071,6 +1073,10 @@ pub struct UnilateralExitTxCpfpPsbt {
     pub parent_tx_hex: String,
     /// The hex-encoded CPFP child PSBT
     pub child_psbt_hex: String,
+    /// If this transaction has a relative timelock (CSV), the number of blocks that
+    /// the previous transaction's output must be confirmed before this transaction
+    /// can be included in a block. `None` if there is no timelock.
+    pub csv_timelock_blocks: Option<u32>,
 }
 
 /// The transactions and PSBTs for a single leaf's unilateral exit
@@ -1088,6 +1094,8 @@ pub struct UnilateralExitLeafTxCpfpPsbts {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
     pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+    /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address
+    pub sweep_tx_hex: String,
 }
 
 /// Request to get the balance of the wallet

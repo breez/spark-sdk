@@ -290,6 +290,8 @@ pub enum Command {
     PrepareUnilateralExit {
         /// Fee rate in sats/vbyte
         fee_rate: u64,
+        /// Destination address for the sweep transaction
+        destination: String,
         /// The leaf IDs to exit. If empty, exits all leaves.
         #[arg(short, long = "leaf")]
         leaf_ids: Vec<String>,
@@ -477,6 +479,7 @@ pub(crate) async fn execute_command(
         }
         Command::PrepareUnilateralExit {
             fee_rate,
+            destination,
             leaf_ids,
             utxos,
             signing_key,
@@ -490,6 +493,7 @@ pub(crate) async fn execute_command(
                     fee_rate,
                     leaf_ids,
                     utxos,
+                    destination,
                 })
                 .await?;
 
@@ -520,7 +524,14 @@ pub(crate) async fn execute_command(
                         "Node TX"
                     };
 
-                    println!("{index_str}{tx_type}: {}", tc.parent_tx_hex);
+                    if let Some(blocks) = tc.csv_timelock_blocks {
+                        println!(
+                            "{index_str}{tx_type} (CSV: {blocks} blocks): {}",
+                            tc.parent_tx_hex
+                        );
+                    } else {
+                        println!("{index_str}{tx_type}: {}", tc.parent_tx_hex);
+                    }
                     println!("{index_spaces}CPFP PSBT (unsigned): {}", tc.child_psbt_hex);
 
                     if let Some(signing_key) = &signing_key {
@@ -537,6 +548,9 @@ pub(crate) async fn execute_command(
                     }
                 }
             }
+
+            println!();
+            println!("Sweep TX: {}", response.sweep_tx_hex);
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
