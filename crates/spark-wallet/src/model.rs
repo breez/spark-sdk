@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use bitcoin::{Address, Transaction, hashes::sha256, secp256k1::PublicKey};
+use bitcoin::{Address, OutPoint, Transaction, hashes::sha256, secp256k1::PublicKey};
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use spark::{
@@ -24,6 +24,16 @@ use spark::{
 };
 
 use crate::SparkWalletError;
+
+/// Describes a refund output sitting on-chain after a unilateral exit.
+pub struct RefundOutput {
+    /// The on-chain outpoint (txid:vout) of the refund output.
+    pub outpoint: OutPoint,
+    /// The leaf ID used to derive the signing key for this output.
+    pub leaf_id: TreeNodeId,
+    /// The value in satoshis of this output.
+    pub value: u64,
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

@@ -1,11 +1,13 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
-    Address, Transaction,
+    Address, Amount, Transaction, TxIn, TxOut, Witness,
+    absolute::LockTime,
     address::NetworkUnchecked,
-    hashes::sha256::Hash,
+    hashes::{Hash as _, sha256::Hash},
     key::Secp256k1,
     secp256k1::{PublicKey, ecdsa::Signature},
+    transaction::Version,
 };
 
 use futures::stream::{self, StreamExt};
@@ -15,7 +17,7 @@ use spark::{
     address::{
         SatsPayment, SparkAddress, SparkAddressPaymentType, SparkInvoiceFields, TokensPayment,
     },
-    bitcoin::BitcoinService,
+    bitcoin::{BitcoinService, sighash_from_multi_input_tx},
     events::{SparkEvent, subscribe_server_events},
     operator::{
         OperatorPool,
@@ -34,7 +36,7 @@ use spark::{
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
-    signer::Signer,
+    signer::{SecretSource, Signer},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
         InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
@@ -52,7 +54,7 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 
 use crate::{
     FulfillSparkInvoiceResult, ListTokenTransactionsRequest, ListTransfersRequest, PreimageRequest,
-    QuerySparkInvoiceResult, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
+    QuerySparkInvoiceResult, RefundOutput, TokenBalance, WalletEvent, WalletLeaves, WalletSettings,
     WithdrawInnerParams,
     event::EventManager,
     model::{PayLightningInvoiceResult, WalletInfo, WalletLeaf, WalletTransfer},
@@ -1276,6 +1278,105 @@ impl SparkWallet {
             .unilateral_exit_service
             .unilateral_exit(fee_rate, leaf_ids, utxos)
             .await?)
+    }
+
+    /// Creates a signed transaction that sweeps unilateral exit refund outputs to a destination
+    /// address. The caller is responsible for broadcasting the returned transaction.
+    ///
+    /// # Arguments
+    /// * `refund_outputs` - The refund outputs to sweep (outpoint + leaf_id + value)
+    /// * `destination` - The Bitcoin address to send funds to
+    /// * `fee_rate_sat_per_vbyte` - Fee rate in satoshis per virtual byte
+    pub async fn create_refund_sweep_transaction(
+        &self,
+        refund_outputs: Vec<RefundOutput>,
+        destination: Address,
+        fee_rate_sat_per_vbyte: u64,
+    ) -> Result<Transaction, SparkWalletError> {
+        if refund_outputs.is_empty() {
+            return Err(SparkWalletError::ValidationError(
+                "At least one refund output is required".to_string(),
+            ));
+        }
+
+        let secp = Secp256k1::new();
+        let network: bitcoin::Network = self.config.network.into();
+
+        // Build inputs and prevouts
+        let mut inputs = Vec::with_capacity(refund_outputs.len());
+        let mut prev_outputs = Vec::with_capacity(refund_outputs.len());
+        let mut total_value: u64 = 0;
+
+        for refund_output in &refund_outputs {
+            inputs.push(TxIn {
+                previous_output: refund_output.outpoint,
+                ..Default::default()
+            });
+
+            let pubkey = self
+                .signer
+                .public_key_from_secret(&SecretSource::Derived(refund_output.leaf_id.clone()))
+                .await?;
+            let addr = Address::p2tr(&secp, pubkey.x_only_public_key().0, None, network);
+            prev_outputs.push(TxOut {
+                value: Amount::from_sat(refund_output.value),
+                script_pubkey: addr.script_pubkey(),
+            });
+
+            total_value = total_value
+                .checked_add(refund_output.value)
+                .ok_or_else(|| {
+                    SparkWalletError::ValidationError("Total value overflow".to_string())
+                })?;
+        }
+
+        // Estimate fee from weight
+        // P2TR key-path input: 41 non-witness * 4 + 66 witness = 230 WU
+        // Overhead: (version 4 + input_count 1 + output_count 1 + locktime 4) * 4 + (marker 1 + flag 1) = 42 WU
+        let dest_script = destination.script_pubkey();
+        // Output: (value 8 + script_len varint 1 + script) * 4 = all non-witness
+        let output_weight: u64 = (9u64 + dest_script.len() as u64) * 4;
+        let input_weight: u64 = refund_outputs.len() as u64 * 230;
+        let total_weight = 42 + input_weight + output_weight;
+        let fee = (fee_rate_sat_per_vbyte * total_weight).div_ceil(4);
+
+        if total_value <= fee {
+            return Err(SparkWalletError::ValidationError(format!(
+                "Total value {total_value} sats is not enough to cover fee {fee} sats"
+            )));
+        }
+        let output_value = total_value - fee;
+
+        // Build the transaction
+        let mut tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: inputs,
+            output: vec![TxOut {
+                value: Amount::from_sat(output_value),
+                script_pubkey: dest_script,
+            }],
+        };
+
+        // Sign each input
+        for (i, refund_output) in refund_outputs.iter().enumerate() {
+            let sighash = sighash_from_multi_input_tx(&tx, i, &prev_outputs).map_err(|e| {
+                SparkWalletError::Generic(format!("Failed to compute sighash: {e}"))
+            })?;
+
+            let sig = self
+                .signer
+                .sign_hash_schnorr_with_tweak(
+                    &SecretSource::Derived(refund_output.leaf_id.clone()),
+                    &sighash.to_byte_array(),
+                    None,
+                )
+                .await?;
+
+            tx.input[i].witness = Witness::from_slice(&[sig.serialize()]);
+        }
+
+        Ok(tx)
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
