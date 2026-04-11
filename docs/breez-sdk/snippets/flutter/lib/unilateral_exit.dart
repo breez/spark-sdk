@@ -2,7 +2,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<List<Leaf>> listLeavesForExit(BreezSdk sdk) async {
   // ANCHOR: list-leaves
-  ListLeavesRequest request = ListLeavesRequest(minValueSats: 10000);
+  ListLeavesRequest request = ListLeavesRequest(minValueSats: BigInt.from(10000));
   ListLeavesResponse response = await sdk.listLeaves(request: request);
 
   for (Leaf leaf in response.leaves) {
@@ -17,15 +17,15 @@ Future<PrepareUnilateralExitResponse> prepareExit(BreezSdk sdk) async {
   List<String> leafIds = ["leaf-id-1", "leaf-id-2"];
 
   PrepareUnilateralExitRequest request = PrepareUnilateralExitRequest(
-    feeRate: 2,
+    feeRate: BigInt.from(2),
     leafIds: leafIds,
     utxos: [
       UnilateralExitCpfpUtxo(
         txid: "your-utxo-txid",
         vout: 0,
-        value: 50000,
+        value: BigInt.from(50000),
         pubkey: "your-compressed-pubkey-hex",
-        utxoType: UnilateralExitCpfpUtxoType.p2wpkh,
+        utxoType: UnilateralExitCpfpUtxoType.p2Wpkh,
       ),
     ],
     destination: "bc1q...your-destination-address",

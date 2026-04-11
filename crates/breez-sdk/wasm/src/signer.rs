@@ -720,11 +720,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let wasm_secret: ExternalSecretSource = secret.into();
         let promise = self
             .inner
-            .sign_hash_schnorr_with_tweak(
-                wasm_secret,
-                hash,
-                tap_merkle_root.unwrap_or_default(),
-            )
+            .sign_hash_schnorr_with_tweak(wasm_secret, hash, tap_merkle_root.unwrap_or_default())
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future

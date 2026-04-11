@@ -3,11 +3,12 @@ import type {
   Leaf,
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark-react-native'
+import { UnilateralExitCpfpUtxoType } from '@breeztech/breez-sdk-spark-react-native'
 
 const exampleListLeavesForExit = async (sdk: BreezSdk): Promise<Leaf[]> => {
   // ANCHOR: list-leaves
   const response = await sdk.listLeaves({
-    minValueSats: 10_000
+    minValueSats: BigInt(10_000)
   })
 
   for (const leaf of response.leaves) {
@@ -22,14 +23,14 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
   const leafIds = ['leaf-id-1', 'leaf-id-2']
 
   const response = await sdk.prepareUnilateralExit({
-    feeRate: 2,
+    feeRate: BigInt(2),
     leafIds,
     utxos: [{
       txid: 'your-utxo-txid',
       vout: 0,
-      value: 50_000,
+      value: BigInt(50_000),
       pubkey: 'your-compressed-pubkey-hex',
-      utxoType: 'p2wpkh'
+      utxoType: UnilateralExitCpfpUtxoType.P2wpkh
     }],
     destination: 'bc1q...your-destination-address'
   })

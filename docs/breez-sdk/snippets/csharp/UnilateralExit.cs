@@ -21,13 +21,13 @@ namespace BreezSdkSnippets
         async Task PrepareExit(BreezSdk sdk)
         {
             // ANCHOR: prepare-unilateral-exit
-            var leafIds = new List<string> { "leaf-id-1", "leaf-id-2" };
+            var leafIds = new string[] { "leaf-id-1", "leaf-id-2" };
 
             var response = await sdk.PrepareUnilateralExit(
                 request: new PrepareUnilateralExitRequest(
                     feeRate: 2,
                     leafIds: leafIds,
-                    utxos: new List<UnilateralExitCpfpUtxo>
+                    utxos: new UnilateralExitCpfpUtxo[]
                     {
                         new UnilateralExitCpfpUtxo(
                             txid: "your-utxo-txid",

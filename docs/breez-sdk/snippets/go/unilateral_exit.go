@@ -59,5 +59,5 @@ func PrepareExit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareUnilate
 		}
 	}
 	// ANCHOR_END: prepare-unilateral-exit
-	return response, nil
+	return &response, nil
 }
