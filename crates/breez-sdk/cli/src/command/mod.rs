@@ -8,7 +8,8 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    InputType, LightningAddressDetails, ListLeavesRequest, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
     PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
@@ -278,6 +279,12 @@ pub enum Command {
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
     },
+    /// List wallet leaves
+    ListLeaves {
+        /// Only return leaves with a value greater than or equal to this amount in satoshis
+        #[arg(long)]
+        min_value_sats: Option<u64>,
+    },
     ListUnclaimedDeposits,
     /// Buy Bitcoin using an external provider
     BuyBitcoin {
@@ -442,6 +449,13 @@ pub(crate) async fn execute_command(
         }
         Command::Sync => {
             let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
+            print_value(&value)?;
+            Ok(true)
+        }
+        Command::ListLeaves { min_value_sats } => {
+            let value = sdk
+                .list_leaves(ListLeavesRequest { min_value_sats })
+                .await?;
             print_value(&value)?;
             Ok(true)
         }
