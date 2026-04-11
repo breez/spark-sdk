@@ -602,6 +602,7 @@ where
             min_sendable: state.min_sendable,
             tag: Tag::Pay,
             metadata: get_metadata(&user.domain, &user),
+            #[allow(clippy::cast_possible_truncation)]
             comment_allowed: Some(MAX_COMMENT_LENGTH as u32),
             allows_nostr,
             nostr_pubkey,
