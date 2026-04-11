@@ -728,6 +728,45 @@ pub struct Leaf {
     pub value: u64,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitCpfpUtxoType)]
+pub enum UnilateralExitCpfpUtxoType {
+    P2wpkh,
+    P2tr,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitCpfpUtxo)]
+pub struct UnilateralExitCpfpUtxo {
+    pub txid: String,
+    pub vout: u32,
+    pub value: u64,
+    pub pubkey: String,
+    pub utxo_type: UnilateralExitCpfpUtxoType,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
+pub struct PrepareUnilateralExitRequest {
+    pub fee_rate: u64,
+    pub leaf_ids: Vec<String>,
+    pub utxos: Vec<UnilateralExitCpfpUtxo>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTxCpfpPsbt)]
+pub struct UnilateralExitTxCpfpPsbt {
+    pub parent_tx_hex: String,
+    pub child_psbt_hex: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeafTxCpfpPsbts)]
+pub struct UnilateralExitLeafTxCpfpPsbts {
+    pub leaf_id: String,
+    pub tx_cpfp_psbts: Vec<UnilateralExitTxCpfpPsbt>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
+pub struct PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]
 pub struct GetInfoRequest {
     pub ensure_synced: Option<bool>,

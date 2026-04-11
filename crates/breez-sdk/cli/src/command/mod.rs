@@ -11,10 +11,11 @@ use breez_sdk_spark::{
     InputType, LightningAddressDetails, ListLeavesRequest, ListPaymentsRequest,
     ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
     OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    TokenTransactionType, UpdateUserSettingsRequest,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, PrepareUnilateralExitRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
+    UnilateralExitCpfpUtxo, UnilateralExitCpfpUtxoType, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -24,6 +25,7 @@ use rustyline::{
 };
 use std::{
     borrow::Cow::{self, Owned},
+    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -284,6 +286,21 @@ pub enum Command {
         #[arg(long)]
         min_value_sats: Option<u64>,
     },
+    /// Prepare a unilateral exit package
+    PrepareUnilateralExit {
+        /// Fee rate in sats/vbyte
+        fee_rate: u64,
+        /// The leaf IDs to exit. If empty, exits all leaves.
+        #[arg(short, long = "leaf")]
+        leaf_ids: Vec<String>,
+        /// Hex-encoded UTXOs "txid:vout:value:pubkey[:type]" used to pay fees via CPFP.
+        /// Type is "p2wpkh" (default) or "p2tr".
+        #[arg(short, long = "utxo")]
+        utxos: Vec<String>,
+        /// Optional hex-encoded private key to sign CPFP PSBTs
+        #[arg(short)]
+        signing_key: Option<String>,
+    },
     ListUnclaimedDeposits,
     /// Buy Bitcoin using an external provider
     BuyBitcoin {
@@ -456,6 +473,70 @@ pub(crate) async fn execute_command(
                 .list_leaves(ListLeavesRequest { min_value_sats })
                 .await?;
             print_value(&value)?;
+            Ok(true)
+        }
+        Command::PrepareUnilateralExit {
+            fee_rate,
+            leaf_ids,
+            utxos,
+            signing_key,
+        } => {
+            let utxos = utxos
+                .into_iter()
+                .map(|s| parse_cpfp_utxo(&s))
+                .collect::<Result<Vec<_>, _>>()?;
+            let response = sdk
+                .prepare_unilateral_exit(PrepareUnilateralExitRequest {
+                    fee_rate,
+                    leaf_ids,
+                    utxos,
+                })
+                .await?;
+
+            let signing_key = signing_key
+                .map(|pk| {
+                    bitcoin::secp256k1::SecretKey::from_str(&pk)
+                        .map(|sk| bitcoin::PrivateKey::new(sk, bitcoin::Network::Bitcoin))
+                })
+                .transpose()?;
+
+            for leaf in &response.leaves {
+                println!();
+                println!("Leaf ID: {}", leaf.leaf_id);
+                println!();
+
+                let total_txs = leaf.tx_cpfp_psbts.len();
+                for (index, tc) in leaf.tx_cpfp_psbts.iter().enumerate() {
+                    let index_str = format!("{}. ", index.saturating_add(1));
+                    let index_spaces = " ".repeat(index_str.len());
+
+                    let is_refund_tx = index == total_txs.saturating_sub(1);
+                    let is_leaf_tx = index == total_txs.saturating_sub(2);
+                    let tx_type = if is_refund_tx {
+                        "Refund TX"
+                    } else if is_leaf_tx {
+                        "Leaf TX"
+                    } else {
+                        "Node TX"
+                    };
+
+                    println!("{index_str}{tx_type}: {}", tc.parent_tx_hex);
+                    println!("{index_spaces}CPFP PSBT (unsigned): {}", tc.child_psbt_hex);
+
+                    if let Some(signing_key) = &signing_key {
+                        let mut psbt =
+                            bitcoin::Psbt::deserialize(&hex::decode(&tc.child_psbt_hex)?)?;
+                        sign_cpfp_psbt(&mut psbt, signing_key)?;
+                        let signed_tx = psbt.extract_tx()?;
+                        let signed_tx_hex = bitcoin::consensus::encode::serialize_hex(&signed_tx);
+                        println!("{index_spaces}CPFP signed TX: {signed_tx_hex}");
+                        println!(
+                            "{index_spaces}Package: {},{}",
+                            tc.parent_tx_hex, signed_tx_hex
+                        );
+                    }
+                }
+            }
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
@@ -1062,4 +1143,123 @@ pub(crate) fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_js
 
 fn serialize<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(value)
+}
+
+/// Sign a CPFP PSBT with the given private key, handling both segwit v0 (ECDSA) and
+/// taproot (Schnorr) inputs, plus ephemeral anchor inputs.
+fn sign_cpfp_psbt(
+    psbt: &mut bitcoin::Psbt,
+    signing_key: &bitcoin::PrivateKey,
+) -> Result<(), anyhow::Error> {
+    use bitcoin::{
+        TxOut, Witness,
+        ecdsa::Signature,
+        key::Secp256k1,
+        sighash::{self, SighashCache},
+    };
+
+    let secp = Secp256k1::new();
+    let pubkey = signing_key.public_key(&secp);
+
+    let prevouts: Vec<TxOut> = psbt
+        .inputs
+        .iter()
+        .map(|input| input.witness_utxo.clone().unwrap_or(TxOut::NULL))
+        .collect();
+
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let mut ecdsa_signatures = vec![];
+    let mut taproot_indices = vec![];
+    let mut anchor_index = None;
+
+    for (i, input) in psbt.inputs.iter().enumerate() {
+        if let Some(tx_out) = &input.witness_utxo {
+            // Ephemeral anchor: value 0, script 0x51024e73
+            if tx_out.value.to_sat() == 0
+                && tx_out.script_pubkey.as_bytes() == [0x51, 0x02, 0x4e, 0x73]
+            {
+                anchor_index = Some(i);
+            } else if tx_out.script_pubkey.is_p2tr() {
+                taproot_indices.push(i);
+            } else {
+                let (msg, ecdsa_type) = psbt.sighash_ecdsa(i, &mut cache)?;
+                let sig = secp.sign_ecdsa(&msg, &signing_key.inner);
+                let signature = Signature {
+                    signature: sig,
+                    sighash_type: ecdsa_type,
+                };
+                ecdsa_signatures.push((i, pubkey, signature));
+            }
+        }
+    }
+
+    // Sign and finalize ECDSA (p2wpkh) inputs
+    for (i, pubkey, signature) in ecdsa_signatures {
+        let mut witness = Witness::new();
+        witness.push(signature.to_vec());
+        witness.push(pubkey.to_bytes());
+        psbt.inputs[i].final_script_witness = Some(witness);
+        psbt.inputs[i].partial_sigs.clear();
+    }
+
+    // Sign and finalize taproot inputs
+    if !taproot_indices.is_empty() {
+        let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner);
+        let prevouts_ref = sighash::Prevouts::All(&prevouts);
+        for i in taproot_indices {
+            let sighash = cache.taproot_key_spend_signature_hash(
+                i,
+                &prevouts_ref,
+                sighash::TapSighashType::Default,
+            )?;
+            let msg = bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array());
+            let schnorr_sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
+            let tap_sig = bitcoin::taproot::Signature {
+                signature: schnorr_sig,
+                sighash_type: sighash::TapSighashType::Default,
+            };
+            let mut witness = Witness::new();
+            witness.push(tap_sig.to_vec());
+            psbt.inputs[i].final_script_witness = Some(witness);
+            psbt.inputs[i].tap_key_sig = None;
+        }
+    }
+
+    // Finalize ephemeral anchor input with empty witness
+    if let Some(anchor_index) = anchor_index {
+        psbt.inputs[anchor_index].final_script_witness = Some(Witness::new());
+    }
+
+    Ok(())
+}
+
+/// Parse a CPFP UTXO from a string in the format "txid:vout:value:pubkey[:type]".
+/// Type is "p2wpkh" (default) or "p2tr".
+fn parse_cpfp_utxo(s: &str) -> Result<UnilateralExitCpfpUtxo, anyhow::Error> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() < 4 || parts.len() > 5 {
+        return Err(anyhow::anyhow!(
+            "Expected format: txid:vout:value:pubkey[:type]"
+        ));
+    }
+    let utxo_type = if let Some(t) = parts.get(4) {
+        match *t {
+            "p2wpkh" => UnilateralExitCpfpUtxoType::P2wpkh,
+            "p2tr" => UnilateralExitCpfpUtxoType::P2tr,
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unknown UTXO type: {t}. Use p2wpkh or p2tr"
+                ));
+            }
+        }
+    } else {
+        UnilateralExitCpfpUtxoType::P2wpkh
+    };
+    Ok(UnilateralExitCpfpUtxo {
+        txid: parts[0].to_string(),
+        vout: parts[1].parse()?,
+        value: parts[2].parse()?,
+        pubkey: parts[3].to_string(),
+        utxo_type,
+    })
 }

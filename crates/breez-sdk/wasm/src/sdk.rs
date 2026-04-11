@@ -119,6 +119,18 @@ impl BreezSdk {
         Ok(self.sdk.list_leaves(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "prepareUnilateralExit")]
+    pub async fn prepare_unilateral_exit(
+        &self,
+        request: PrepareUnilateralExitRequest,
+    ) -> WasmResult<PrepareUnilateralExitResponse> {
+        Ok(self
+            .sdk
+            .prepare_unilateral_exit(request.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "receivePayment")]
     pub async fn receive_payment(
         &self,

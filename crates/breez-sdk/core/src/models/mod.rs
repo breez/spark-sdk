@@ -1027,6 +1027,69 @@ pub struct Leaf {
     pub value: u64,
 }
 
+/// The type of a CPFP UTXO used to pay fees for a unilateral exit
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnilateralExitCpfpUtxoType {
+    P2wpkh,
+    P2tr,
+}
+
+/// A UTXO used to pay fees for a unilateral exit via CPFP
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitCpfpUtxo {
+    /// The transaction ID as a hex string
+    pub txid: String,
+    /// The output index
+    pub vout: u32,
+    /// The value in satoshis
+    pub value: u64,
+    /// The public key as a hex string
+    pub pubkey: String,
+    /// The UTXO type
+    pub utxo_type: UnilateralExitCpfpUtxoType,
+}
+
+/// Request to prepare a unilateral exit
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitRequest {
+    /// Fee rate in sats/vbyte
+    pub fee_rate: u64,
+    /// The leaf IDs to exit
+    pub leaf_ids: Vec<String>,
+    /// UTXOs used to pay fees for the unilateral exit via CPFP
+    pub utxos: Vec<UnilateralExitCpfpUtxo>,
+}
+
+/// A transaction and its CPFP fee-bumping PSBT
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitTxCpfpPsbt {
+    /// The hex-encoded parent transaction
+    pub parent_tx_hex: String,
+    /// The hex-encoded CPFP child PSBT
+    pub child_psbt_hex: String,
+}
+
+/// The transactions and PSBTs for a single leaf's unilateral exit
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitLeafTxCpfpPsbts {
+    /// The leaf ID
+    pub leaf_id: String,
+    /// The transaction/PSBT pairs (node TXs, leaf TX, refund TX)
+    pub tx_cpfp_psbts: Vec<UnilateralExitTxCpfpPsbt>,
+}
+
+/// Response containing the prepared unilateral exit transactions
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+}
+
 /// Request to get the balance of the wallet
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

@@ -189,6 +189,45 @@ pub struct _Leaf {
     pub value: u64,
 }
 
+#[frb(mirror(UnilateralExitCpfpUtxoType))]
+pub enum _UnilateralExitCpfpUtxoType {
+    P2wpkh,
+    P2tr,
+}
+
+#[frb(mirror(UnilateralExitCpfpUtxo))]
+pub struct _UnilateralExitCpfpUtxo {
+    pub txid: String,
+    pub vout: u32,
+    pub value: u64,
+    pub pubkey: String,
+    pub utxo_type: UnilateralExitCpfpUtxoType,
+}
+
+#[frb(mirror(PrepareUnilateralExitRequest))]
+pub struct _PrepareUnilateralExitRequest {
+    pub fee_rate: u64,
+    pub leaf_ids: Vec<String>,
+    pub utxos: Vec<UnilateralExitCpfpUtxo>,
+}
+
+#[frb(mirror(UnilateralExitTxCpfpPsbt))]
+pub struct _UnilateralExitTxCpfpPsbt {
+    pub parent_tx_hex: String,
+    pub child_psbt_hex: String,
+}
+
+#[frb(mirror(UnilateralExitLeafTxCpfpPsbts))]
+pub struct _UnilateralExitLeafTxCpfpPsbts {
+    pub leaf_id: String,
+    pub tx_cpfp_psbts: Vec<UnilateralExitTxCpfpPsbt>,
+}
+
+#[frb(mirror(PrepareUnilateralExitResponse))]
+pub struct _PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+}
+
 #[frb(mirror(GetInfoRequest))]
 pub struct _GetInfoRequest {
     pub ensure_synced: Option<bool>,

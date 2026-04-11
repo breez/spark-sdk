@@ -67,6 +67,13 @@ impl BreezSdk {
         self.inner.list_leaves(request).await
     }
 
+    pub async fn prepare_unilateral_exit(
+        &self,
+        request: PrepareUnilateralExitRequest,
+    ) -> Result<PrepareUnilateralExitResponse, SdkError> {
+        self.inner.prepare_unilateral_exit(request).await
+    }
+
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,

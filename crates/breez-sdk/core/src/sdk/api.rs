@@ -116,6 +116,74 @@ impl BreezSdk {
         Ok(crate::models::ListLeavesResponse { leaves })
     }
 
+    /// Prepares a unilateral exit by building the necessary transactions and PSBTs
+    pub async fn prepare_unilateral_exit(
+        &self,
+        request: crate::models::PrepareUnilateralExitRequest,
+    ) -> Result<crate::models::PrepareUnilateralExitResponse, SdkError> {
+        use bitcoin::consensus::encode::serialize_hex;
+        use std::str::FromStr;
+
+        let leaf_ids = request
+            .leaf_ids
+            .into_iter()
+            .map(|id| {
+                spark_wallet::TreeNodeId::from_str(&id)
+                    .map_err(|e| SdkError::Generic(format!("Invalid leaf ID: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let utxos = request
+            .utxos
+            .into_iter()
+            .map(|u| {
+                let txid = bitcoin::Txid::from_str(&u.txid)
+                    .map_err(|e| SdkError::Generic(format!("Invalid txid: {e}")))?;
+                let pubkey_bytes = hex::decode(&u.pubkey)
+                    .map_err(|e| SdkError::Generic(format!("Invalid pubkey hex: {e}")))?;
+                let pubkey = bitcoin::secp256k1::PublicKey::from_slice(&pubkey_bytes)
+                    .map_err(|e| SdkError::Generic(format!("Invalid pubkey: {e}")))?;
+                let utxo_type = match u.utxo_type {
+                    crate::models::UnilateralExitCpfpUtxoType::P2wpkh => {
+                        spark_wallet::CpfpUtxoType::P2wpkh
+                    }
+                    crate::models::UnilateralExitCpfpUtxoType::P2tr => {
+                        spark_wallet::CpfpUtxoType::P2tr
+                    }
+                };
+                Ok(spark_wallet::CpfpUtxo {
+                    txid,
+                    vout: u.vout,
+                    value: u.value,
+                    pubkey,
+                    utxo_type,
+                })
+            })
+            .collect::<Result<Vec<_>, SdkError>>()?;
+
+        let result = self
+            .spark_wallet
+            .unilateral_exit(request.fee_rate, leaf_ids, utxos)
+            .await?;
+
+        let leaves = result
+            .into_iter()
+            .map(|leaf| crate::models::UnilateralExitLeafTxCpfpPsbts {
+                leaf_id: leaf.leaf_id.to_string(),
+                tx_cpfp_psbts: leaf
+                    .tx_cpfp_psbts
+                    .into_iter()
+                    .map(|tc| crate::models::UnilateralExitTxCpfpPsbt {
+                        parent_tx_hex: serialize_hex(&tc.parent_tx),
+                        child_psbt_hex: tc.child_psbt.serialize_hex(),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        Ok(crate::models::PrepareUnilateralExitResponse { leaves })
+    }
+
     /// List fiat currencies for which there is a known exchange rate,
     /// sorted by the canonical name of the currency.
     pub async fn list_fiat_currencies(&self) -> Result<ListFiatCurrenciesResponse, SdkError> {
