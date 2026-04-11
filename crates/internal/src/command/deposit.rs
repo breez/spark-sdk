@@ -83,7 +83,7 @@ pub async fn handle_command(
             let address = if is_static {
                 wallet.generate_static_deposit_address().await?
             } else {
-                wallet.generate_deposit_address().await?
+                wallet.generate_deposit_address().await?.address
             };
             println!("{address}");
         }

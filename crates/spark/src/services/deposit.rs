@@ -48,12 +48,21 @@ const MIN_REFUND_FEE_SATS: u64 = 194;
 /// Witness structure: 1 (stack items) + 1 (sig length varint) + 64 (signature) = 66 bytes
 const SCHNORR_SIG_WITNESS_VBYTES: u64 = 17;
 
+/// A static deposit address.
+#[derive(Debug)]
+pub struct StaticDepositAddress {
+    pub address: Address,
+    pub user_signing_public_key: PublicKey,
+    pub verifying_public_key: PublicKey,
+}
+
+/// A non-static deposit address that includes a leaf ID for tree creation.
 #[derive(Debug)]
 pub struct DepositAddress {
     pub address: Address,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
-    pub leaf_id: Option<TreeNodeId>,
+    pub leaf_id: TreeNodeId,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -71,30 +80,59 @@ impl Fee {
     }
 }
 
+fn parse_deposit_address_result(
+    result: &operator_rpc::spark::DepositAddressQueryResult,
+    network: Network,
+) -> Result<(Address, PublicKey, PublicKey), ServiceError> {
+    let address: Address<NetworkUnchecked> = result
+        .deposit_address
+        .parse()
+        .map_err(|_| ServiceError::InvalidDepositAddress)?;
+    let address = address
+        .require_network(network.into())
+        .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?;
+    let user_signing_public_key = PublicKey::from_slice(&result.user_signing_public_key)
+        .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+    let verifying_public_key = PublicKey::from_slice(&result.verifying_public_key)
+        .map_err(|_| ServiceError::InvalidDepositAddressProof)?;
+    Ok((address, user_signing_public_key, verifying_public_key))
+}
+
+impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for StaticDepositAddress {
+    type Error = ServiceError;
+
+    fn try_from(
+        (result, network): (operator_rpc::spark::DepositAddressQueryResult, Network),
+    ) -> Result<Self, Self::Error> {
+        let (address, user_signing_public_key, verifying_public_key) =
+            parse_deposit_address_result(&result, network)?;
+        Ok(StaticDepositAddress {
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+        })
+    }
+}
+
 impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for DepositAddress {
     type Error = ServiceError;
 
     fn try_from(
         (result, network): (operator_rpc::spark::DepositAddressQueryResult, Network),
     ) -> Result<Self, Self::Error> {
-        let address: Address<NetworkUnchecked> = result
-            .deposit_address
+        let leaf_id: TreeNodeId = result
+            .leaf_id
+            .as_ref()
+            .ok_or(ServiceError::MissingLeafId)?
             .parse()
-            .map_err(|_| ServiceError::InvalidDepositAddress)?;
-
+            .map_err(ServiceError::InvalidNodeId)?;
+        let (address, user_signing_public_key, verifying_public_key) =
+            parse_deposit_address_result(&result, network)?;
         Ok(DepositAddress {
-            address: address
-                .require_network(network.into())
-                .map_err(|_| ServiceError::InvalidDepositAddressNetwork)?,
-            user_signing_public_key: PublicKey::from_slice(&result.user_signing_public_key)
-                .map_err(|_| ServiceError::InvalidDepositAddressProof)?,
-            verifying_public_key: PublicKey::from_slice(&result.verifying_public_key)
-                .map_err(|_| ServiceError::InvalidDepositAddressProof)?,
-            leaf_id: result
-                .leaf_id
-                .map(|l| l.parse())
-                .transpose()
-                .map_err(ServiceError::InvalidNodeId)?,
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+            leaf_id,
         })
     }
 }
@@ -213,7 +251,7 @@ impl DepositService {
             .get_unused_deposit_address(&address)
             .await?
             .ok_or(ServiceError::DepositAddressUsed)?;
-        let deposit_leaf_id = deposit_address.leaf_id.ok_or(ServiceError::MissingLeafId)?;
+        let deposit_leaf_id = deposit_address.leaf_id;
         self.create_tree_root(
             &deposit_leaf_id,
             &deposit_address.verifying_public_key,
@@ -788,20 +826,13 @@ impl DepositService {
             return Err(ServiceError::MissingDepositAddress);
         };
 
-        let address = self.validate_deposit_address(
-            deposit_address,
-            signing_public_key,
-            Some(leaf_id),
-            false,
-        )?;
-
-        Ok(address)
+        self.validate_deposit_address(deposit_address, signing_public_key, leaf_id)
     }
 
     pub async fn generate_static_deposit_address(
         &self,
         signing_public_key: PublicKey,
-    ) -> Result<DepositAddress, ServiceError> {
+    ) -> Result<StaticDepositAddress, ServiceError> {
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -820,16 +851,13 @@ impl DepositService {
             return Err(ServiceError::MissingDepositAddress);
         };
 
-        let address =
-            self.validate_deposit_address(deposit_address, signing_public_key, None, true)?;
-
-        Ok(address)
+        self.validate_static_deposit_address(deposit_address, signing_public_key)
     }
 
     pub async fn rotate_static_deposit_address(
         &self,
         signing_public_key: PublicKey,
-    ) -> Result<DepositAddress, ServiceError> {
+    ) -> Result<StaticDepositAddress, ServiceError> {
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -845,16 +873,13 @@ impl DepositService {
             .new_deposit_address
             .ok_or(ServiceError::MissingDepositAddress)?;
 
-        let new_address =
-            self.validate_deposit_address(new_deposit_address, signing_public_key, None, true)?;
-
-        Ok(new_address)
+        self.validate_static_deposit_address(new_deposit_address, signing_public_key)
     }
 
     async fn query_static_deposit_addresses_inner(
         &self,
         paging: PagingFilter,
-    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+    ) -> Result<PagingResult<StaticDepositAddress>, ServiceError> {
         trace!(
             "Querying static deposit addresses with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
@@ -888,7 +913,7 @@ impl DepositService {
     pub async fn query_static_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+    ) -> Result<PagingResult<StaticDepositAddress>, ServiceError> {
         let result = match paging {
             Some(paging) => self.query_static_deposit_addresses_inner(paging).await?,
             None => {
@@ -936,9 +961,20 @@ impl DepositService {
         let addresses = resp
             .deposit_addresses
             .into_iter()
-            .map(|result| (result, self.network).try_into())
-            .collect::<Result<Vec<_>, ServiceError>>()
-            .map_err(|_| ServiceError::InvalidDepositAddress)?;
+            .filter_map(
+                |result| match DepositAddress::try_from((result, self.network)) {
+                    Ok(addr) => Some(addr),
+                    Err(ServiceError::MissingLeafId) => {
+                        error!("Ignoring deposit address without leaf ID");
+                        None
+                    }
+                    Err(e) => {
+                        error!("Failed to parse deposit address: {e}");
+                        None
+                    }
+                },
+            )
+            .collect();
 
         Ok(PagingResult {
             items: addresses,
@@ -1028,9 +1064,40 @@ impl DepositService {
         &self,
         deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
-        leaf_id: Option<&TreeNodeId>,
-        verify_coordinator_proof: bool,
+        leaf_id: &TreeNodeId,
     ) -> Result<DepositAddress, ServiceError> {
+        let (address, verifying_public_key) =
+            self.validate_deposit_address_inner(deposit_address, user_signing_public_key, false)?;
+
+        Ok(DepositAddress {
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+            leaf_id: leaf_id.clone(),
+        })
+    }
+
+    fn validate_static_deposit_address(
+        &self,
+        deposit_address: crate::operator::rpc::spark::Address,
+        user_signing_public_key: PublicKey,
+    ) -> Result<StaticDepositAddress, ServiceError> {
+        let (address, verifying_public_key) =
+            self.validate_deposit_address_inner(deposit_address, user_signing_public_key, true)?;
+
+        Ok(StaticDepositAddress {
+            address,
+            user_signing_public_key,
+            verifying_public_key,
+        })
+    }
+
+    fn validate_deposit_address_inner(
+        &self,
+        deposit_address: crate::operator::rpc::spark::Address,
+        user_signing_public_key: PublicKey,
+        verify_coordinator_proof: bool,
+    ) -> Result<(Address, PublicKey), ServiceError> {
         let address: Address<NetworkUnchecked> = deposit_address
             .address
             .parse()
@@ -1072,12 +1139,11 @@ impl DepositService {
             return Err(ServiceError::InvalidDepositAddressProof);
         }
 
+        let coordinator_identifier = self.operator_pool.get_coordinator().identifier;
         let address_hash = sha256::Hash::hash(address.to_string().as_bytes());
         let address_hash_message = Message::from_digest(address_hash.to_byte_array());
         for operator in self.operator_pool.get_all_operators() {
-            if operator.identifier == self.operator_pool.get_coordinator().identifier
-                && !verify_coordinator_proof
-            {
+            if operator.identifier == coordinator_identifier && !verify_coordinator_proof {
                 continue;
             }
             // TODO: rather than using hex::encode here, we should define our own type for the frost identifier, and use a hashmap with the identifier as key here.
@@ -1113,11 +1179,6 @@ impl DepositService {
             }
         }
 
-        Ok(DepositAddress {
-            address,
-            user_signing_public_key,
-            verifying_public_key,
-            leaf_id: leaf_id.cloned(),
-        })
+        Ok((address, verifying_public_key))
     }
 }
