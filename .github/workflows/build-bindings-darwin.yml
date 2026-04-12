@@ -52,19 +52,41 @@ jobs:
 
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "full"
         run: cargo lipo --release --targets ${{ matrix.target }}
-      
+
+      - name: Generate dSYM and strip dylib
+        run: |
+          cd target/${{ matrix.target }}/release
+          cp libbreez_sdk_spark_bindings.dylib breez_sdk_sparkFFI
+          dsymutil breez_sdk_sparkFFI -o breez_sdk_sparkFFI.framework.dSYM
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.apple.xcode.dsym.breez_sdk_sparkFFI" breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist
+          rm breez_sdk_sparkFFI
+          strip -S libbreez_sdk_spark_bindings.dylib
+
+      - name: Stage dSYM for upload
+        run: |
+          mkdir -p dsym-stage
+          cp -R target/${{ matrix.target }}/release/breez_sdk_sparkFFI.framework.dSYM dsym-stage/
+
       - name: Archive bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
-      
+
       - name: Archive bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-dynamic-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.dylib
+
+      - name: Archive dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dsym-${{ matrix.target }}
+          path: dsym-stage
   
   merge:
     runs-on: macOS-latest
@@ -91,6 +113,16 @@ jobs:
         name: bindings-dynamic-x86_64-apple-darwin
         path: dynamic-x86_64-apple-darwin
 
+    - uses: actions/download-artifact@v4
+      with:
+        name: bindings-dsym-aarch64-apple-darwin
+        path: dsym-aarch64-apple-darwin
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: bindings-dsym-x86_64-apple-darwin
+        path: dsym-x86_64-apple-darwin
+
     - name: Build Darwin universal
       run: |
         mkdir -p darwin-universal
@@ -100,6 +132,17 @@ jobs:
       run: |
         mkdir -p dynamic-darwin-universal
         lipo -create -output dynamic-darwin-universal/libbreez_sdk_spark_bindings.dylib dynamic-aarch64-apple-darwin/libbreez_sdk_spark_bindings.dylib dynamic-x86_64-apple-darwin/libbreez_sdk_spark_bindings.dylib
+
+    - name: Build Darwin universal dSYM
+      run: |
+        DSYM_OUT=dsym-darwin-universal/breez_sdk_sparkFFI.framework.dSYM
+        mkdir -p "$DSYM_OUT/Contents/Resources/DWARF"
+        cp dsym-aarch64-apple-darwin/breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist \
+           "$DSYM_OUT/Contents/Info.plist"
+        lipo -create \
+          -output "$DSYM_OUT/Contents/Resources/DWARF/breez_sdk_sparkFFI" \
+          dsym-aarch64-apple-darwin/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI \
+          dsym-x86_64-apple-darwin/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI
 
     - name: Archive release
       uses: actions/upload-artifact@v4
@@ -112,6 +155,12 @@ jobs:
       with:
         name: bindings-dynamic-darwin-universal
         path: dynamic-darwin-universal/libbreez_sdk_spark_bindings.dylib
+
+    - name: Archive darwin-universal dSYM
+      uses: actions/upload-artifact@v4
+      with:
+        name: bindings-dsym-darwin-universal
+        path: dsym-darwin-universal
 
   build-dummies:
     if: ${{ inputs.use-dummy-binaries }}
@@ -154,3 +203,27 @@ jobs:
         with:
           name: bindings-dynamic-${{ matrix.target }}
           path: ./*
+
+  build-dsym-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dSYM dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-apple-darwin,
+          x86_64-apple-darwin,
+          darwin-universal
+        ]
+    steps:
+      - name: Build dummy darwin dSYM ${{ matrix.target }}
+        run: |
+          mkdir -p dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF
+          touch dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist
+          touch dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI
+
+      - name: Upload dummy darwin dSYM ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dsym-${{ matrix.target }}
+          path: dsym-stage

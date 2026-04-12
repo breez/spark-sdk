@@ -105,6 +105,24 @@ jobs:
           name: bindings-dynamic-darwin-universal
           path: darwin-universal
 
+      - name: Download dSYM ios-arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-dsym-aarch64-apple-ios
+          path: dsym-ios-arm64
+
+      - name: Download dSYM ios-arm64_x86_64-simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-dsym-ios-universal-sim
+          path: dsym-ios-arm64_x86_64-simulator
+
+      - name: Download dSYM macos-arm64_x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-dsym-darwin-universal
+          path: dsym-macos-arm64_x86_64
+
       - name: Copy swift bindings
         run: |
           mkdir -p build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark
@@ -118,6 +136,14 @@ jobs:
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
+
+      - name: Embed dSYMs in xcframework
+        run: |
+          XCF=build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework
+          for slice in ios-arm64 ios-arm64_x86_64-simulator macos-arm64_x86_64; do
+            mkdir -p "$XCF/$slice/dSYMs"
+            cp -R "dsym-$slice/breez_sdk_sparkFFI.framework.dSYM" "$XCF/$slice/dSYMs/"
+          done
 
       - name: Set plist versions
         working-directory: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework
