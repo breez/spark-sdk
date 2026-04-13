@@ -60,8 +60,6 @@ jobs:
 
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: "line-tables-only"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Generate dSYM and strip dylib

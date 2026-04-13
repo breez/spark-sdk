@@ -1,9 +1,94 @@
 [profile.release]
 lto = true
-opt-level = "z"   # Optimize for size.
-codegen-units = 1 # Reduce Parallel Code Generation Units to Increase Optimization
-panic = "abort"   # Abort on panic, as unwinding code does require extra binary size
+opt-level = "z"        # Optimize for size.
+codegen-units = 1      # Reduce Parallel Code Generation Units to Increase Optimization
+panic = "abort"        # Abort on panic, as unwinding code does require extra binary size
 rpath = true
+debug = "line-tables-only" # Emit line tables so dsymutil can build dSYMs with
+                           # matching UUIDs (required for Xcode archive validation
+                           # of the Apple XCFramework) and stack traces resolve
+                           # to file + line. Per-package overrides below strip
+                           # third-party dependencies down to no debug info.
+
+# Debug-info scoping for release builds.
+#
+# We ship Apple bindings through `breez_sdk_sparkFFI.xcframework`, which embeds
+# `.dSYM` bundles so Xcode archive validation passes. Full DWARF over our whole
+# dependency graph (rustls, tokio, ldk-node, secp256k1, bitcoin, ...) inflates
+# those dSYMs by an order of magnitude without meaningfully improving crash
+# reports for the code that actually matters.
+#
+# Strategy: emit `line-tables-only` DWARF for every first-party crate under
+# `crates/`, and no debug info at all for third-party dependencies. First-party
+# stack frames still resolve to file + line in crash reports; third-party frames
+# keep their symbol names from the Mach-O symbol table but lose source lines.
+# If a crash repeatedly surfaces inside a specific external crate, we can flip
+# that crate back to `line-tables-only` on demand.
+[profile.release.package."*"]
+debug = false
+
+[profile.release.package.breez-sdk-bindings]
+debug = "line-tables-only"
+
+[profile.release.package.breez-sdk-spark]
+debug = "line-tables-only"
+
+[profile.release.package.breez-sdk-common]
+debug = "line-tables-only"
+
+[profile.release.package.breez-sdk-spark-wasm]
+debug = "line-tables-only"
+
+[profile.release.package.breez-sdk-itest]
+debug = "line-tables-only"
+
+[profile.release.package.breez-sdk-bench]
+debug = "line-tables-only"
+
+[profile.release.package.spark]
+debug = "line-tables-only"
+
+[profile.release.package.spark-wallet]
+debug = "line-tables-only"
+
+[profile.release.package.spark-postgres]
+debug = "line-tables-only"
+
+[profile.release.package.spark-itest]
+debug = "line-tables-only"
+
+[profile.release.package.spark-cli]
+debug = "line-tables-only"
+
+[profile.release.package.lnurl]
+debug = "line-tables-only"
+
+[profile.release.package.lnurl-models]
+debug = "line-tables-only"
+
+[profile.release.package.flashnet]
+debug = "line-tables-only"
+
+[profile.release.package.platform-utils]
+debug = "line-tables-only"
+
+[profile.release.package.utils]
+debug = "line-tables-only"
+
+[profile.release.package.macros]
+debug = "line-tables-only"
+
+[profile.release.package.macro_test]
+debug = "line-tables-only"
+
+[profile.release.package.cli]
+debug = "line-tables-only"
+
+[profile.release.package.xtask]
+debug = "line-tables-only"
+
+[profile.release.package.nip65-publisher]
+debug = "line-tables-only"
 
 [workspace]
 resolver = "2"
