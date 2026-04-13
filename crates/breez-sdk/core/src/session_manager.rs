@@ -40,8 +40,8 @@ impl SessionManager for BreezSessionManager {
         service_identity_key: &PublicKey,
     ) -> Result<Session, SessionManagerError> {
         let mut session = self.inner.get_session(service_identity_key).await?;
-        if !session.headers.contains_key(PARTNER_ID_HEADER)
-            && let Some(token) = self.token.read().await.as_ref()
+        if let Some(token) = self.token.read().await.as_ref()
+            && session.headers.get(PARTNER_ID_HEADER) != Some(token)
         {
             session
                 .headers
