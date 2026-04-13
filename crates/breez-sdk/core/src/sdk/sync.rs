@@ -1,14 +1,19 @@
 use platform_utils::time::{Duration, Instant, SystemTime};
-use platform_utils::tokio;
+use platform_utils::{DefaultHttpClient, HttpClient as _, tokio};
+use serde::Deserialize;
 use spark_wallet::WalletEvent;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
-use crate::Network;
-use crate::session_manager::{
-    BreezSessionManager, KEY_BREEZ_JWT, calculate_expiry, is_jwt_expired, jwt_exp,
+use super::{
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
+    helpers::{BalanceWatcher, update_balances},
+    parse_input,
 };
+use crate::Network;
+use crate::session_manager::{KEY_BREEZ_JWT, calculate_expiry, is_jwt_expired, jwt_exp};
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -24,16 +29,34 @@ use crate::{
         utxo_fetcher::DetailedUtxo,
     },
 };
-
-use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
-    helpers::{BalanceWatcher, update_balances},
-    parse_input,
-};
+use breez_sdk_common::breez_server::PRODUCTION_BREEZSERVER_URL;
 
 const JWT_REFRESH_RETRY_SECS: u64 = 10;
 
+#[derive(Deserialize)]
+struct JwtResponse {
+    token: String,
+}
+
 impl BreezSdk {
+    pub(crate) async fn new_jwt(api_key: &str) -> Result<String, SdkError> {
+        let client = DefaultHttpClient::new(None);
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
+        let res = client
+            .get(
+                format!("{PRODUCTION_BREEZSERVER_URL}/api/jwt"),
+                Some(headers),
+            )
+            .await
+            .map_err(|err| SdkError::Generic(format!("Could not retrieve JWT token: {err}")))?;
+
+        let JwtResponse { token } = serde_json::from_str(&res.body).map_err(|err| {
+            SdkError::Generic(format!("Could not parse JWT token response: {err}"))
+        })?;
+        Ok(token)
+    }
+
     async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
         let mut token = self.session_manager.get_token().await;
 
@@ -129,7 +152,8 @@ impl BreezSdk {
                     () = tokio::time::sleep(sdk.jwt_interval(refresh_counter).await), if should_refresh_jwt => {
                         refresh_counter = refresh_counter.saturating_add(1);
                         let api_key = sdk.config.api_key.as_ref().unwrap();
-                        let token = match BreezSessionManager::new_jwt(api_key).await {
+
+                        let token = match Self::new_jwt(api_key).await {
                             Ok(token) => token,
                             Err(err) => {
                                 warn!("Could not fetch new JWT: {err}");

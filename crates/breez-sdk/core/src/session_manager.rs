@@ -1,14 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_common::utils::now;
 use platform_utils::tokio::sync::RwLock;
-use platform_utils::{DefaultHttpClient, HttpClient};
 use serde::Deserialize;
 use spark_wallet::{Session, SessionManager, SessionManagerError};
-
-use breez_sdk_common::breez_server::PRODUCTION_BREEZSERVER_URL;
 
 pub(crate) const KEY_BREEZ_JWT: &str = "breez_jwt";
 const PARTNER_ID_HEADER: &str = "partner_id";
@@ -17,11 +14,6 @@ const JWT_EXPIRY_GRACE_PERIOD_SECS: u64 = 60 * 5; // Token expires 5 minutes in 
 pub(crate) struct BreezSessionManager {
     inner: Arc<dyn SessionManager>,
     token: RwLock<Option<String>>,
-}
-
-#[derive(Deserialize)]
-struct TokenResponse {
-    token: String,
 }
 
 impl BreezSessionManager {
@@ -38,26 +30,6 @@ impl BreezSessionManager {
 
     pub(crate) async fn set_token(&self, new_token: String) {
         *self.token.write().await = Some(new_token);
-    }
-
-    pub(crate) async fn new_jwt(api_key: &str) -> Result<String, SessionManagerError> {
-        let client = DefaultHttpClient::new(None);
-        let mut headers = HashMap::new();
-        headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
-        let res = client
-            .get(
-                format!("{PRODUCTION_BREEZSERVER_URL}/api/jwt"),
-                Some(headers),
-            )
-            .await
-            .map_err(|err| {
-                SessionManagerError::Generic(format!("Could not retrieve JWT token: {err}"))
-            })?;
-
-        let TokenResponse { token } = serde_json::from_str(&res.body).map_err(|err| {
-            SessionManagerError::Generic(format!("Could not parse JWT token response: {err}"))
-        })?;
-        Ok(token)
     }
 }
 
