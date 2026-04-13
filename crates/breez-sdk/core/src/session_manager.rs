@@ -16,7 +16,7 @@ const JWT_EXPIRY_GRACE_PERIOD_SECS: u64 = 60 * 5; // Token expires 5 minutes in 
 
 pub(crate) struct BreezSessionManager {
     inner: Arc<dyn SessionManager>,
-    pub(crate) token: RwLock<Option<String>>,
+    token: RwLock<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +30,14 @@ impl BreezSessionManager {
             inner,
             token: RwLock::new(None),
         }
+    }
+
+    pub(crate) async fn get_token(&self) -> Option<String> {
+        self.token.read().await.clone()
+    }
+
+    pub(crate) async fn set_token(&self, new_token: String) {
+        *self.token.write().await = Some(new_token);
     }
 
     pub(crate) async fn new_jwt(api_key: &str) -> Result<String, SessionManagerError> {

@@ -35,7 +35,7 @@ const JWT_REFRESH_RETRY_SECS: u64 = 10;
 
 impl BreezSdk {
     async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
-        let mut token = self.session_manager.token.read().await.clone();
+        let mut token = self.session_manager.get_token().await;
 
         if token.is_none() {
             token = self
@@ -47,7 +47,7 @@ impl BreezSdk {
             if let Some(token) = &token
                 && !is_jwt_expired(token)
             {
-                *self.session_manager.token.write().await = Some(token.clone());
+                self.session_manager.set_token(token.clone()).await;
             }
         }
 
@@ -136,7 +136,7 @@ impl BreezSdk {
                                 continue;
                             }
                         };
-                        *sdk.session_manager.token.write().await = Some(token.clone());
+                        sdk.session_manager.set_token(token.clone()).await;
                         if let Err(err) = sdk
                             .storage
                             .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
