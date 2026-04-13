@@ -15,6 +15,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] Send and receive Lightning payments
 - [x] Send and receive via LNURL-pay & Lightning addresses 
 - [x] Send and receive Spark payments (BTC)
+- [x] Passkey login for seedless experience 
 - [x] Issue, send and receive Spark tokens (BTKN)
 - [x] On-chain interoperability
 - [x] Convert Spark tokens (BTKN) to bitcoin and vice versa
@@ -34,6 +35,19 @@ The Breez SDK is **free** for developers.
 ## Support
 
 Have a question for the team? Join us on [Telegram](https://t.me/breezsdk) or email us at <contact@breez.technology>.
+
+## API Key
+
+The Breez SDK API key must be set for the SDK to work.
+
+You can request one by <a target="_blank" href="{{api_key_form_uri}}">filling out this form</a> or programmatically with the following request:  
+
+```bash
+curl -d "fullname=<full name>" -d "company=<company>" -d "email=<email>" -d "message=<message>" \
+  https://breez.technology/contact/apikey
+```
+
+The API key is sent to the provided email address.
 
 
 ## Repository
