@@ -53,8 +53,13 @@ impl SessionManager for BreezSessionManager {
     async fn set_session(
         &self,
         service_identity_key: &PublicKey,
-        session: Session,
+        mut session: Session,
     ) -> Result<(), SessionManagerError> {
+        if let Some(token) = self.token.read().await.as_ref() {
+            session
+                .headers
+                .insert(PARTNER_ID_HEADER.to_string(), token.clone());
+        }
         self.inner.set_session(service_identity_key, session).await
     }
 }
