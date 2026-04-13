@@ -1,23 +1,23 @@
 # Stable balance
 
-The stable balance feature enables users to convert between Bitcoin and a stable token, like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>, protecting against Bitcoin price volatility. On receive, sats are converted to the stable token. On send, the stable token is converted back to Bitcoin.
+The stable balance feature enables users to switch between bitcoin and a stablecoin, like <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>, protecting against bitcoin price volatility. On receive, sats are automatically converted to the stablecoin. On send, the stablecoin is converted to Bitcoin.
 
 ## How it works
 
-When stable balance is configured and activated, for example with <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>, the SDK manages conversions in both directions using [token conversions](./token_conversion.md):
+When Stable Balance is configured and activated, for example with <a href="https://sparkscan.io/token/3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca?network=mainnet" target="_blank">USDB</a>, the SDK manages conversions in both directions using [token conversions](./token_conversion.md):
 
 - **On receive** — When you receive a payment (Lightning, Spark, or on-chain), the SDK converts the incoming sats to USDB once your sats balance exceeds the configured threshold.
-- **On send** — When you send a Bitcoin payment and your sats balance is insufficient, the SDK converts USDB back to Bitcoin to cover the payment. See [Sending payments with stable balance](#sending-payments-with-stable-balance) for more details.
+- **On send** — When you send a bitcoin payment and your sats balance is insufficient, the SDK converts USDB back to bitcoin to cover the payment. See [Sending payments with stable balance](#sending-payments-with-stable-balance) for more details.
 
-Your balance remains stable in value, denominated in USDB.
+Your balance remains stable in value, denominated in USD.
 
 ## Configuration
 
 To enable stable balance, configure the [stable balance config](./config.md#stable-balance-configuration) when initializing the SDK:
 
-- **Tokens** — The stable token to use. Specify its token identifier and a display label.
-- **Default Active Label** — Optional label to activate by default. If unset, stable balance starts deactivated and can be activated at runtime via [user settings](./user_settings.md).
-- **Threshold Sats** — Optional minimum sats balance to trigger conversion. We recommend omitting this to use the conversion limit minimum.
+- **Tokens** — The stablecoin to use. Specify its token identifier and a display label.
+- **Default Active Label** — Optional label to activate by default. If unset, Stable Balance starts deactivated and can be activated at runtime via [user settings](./user_settings.md).
+- **Threshold Sats** — Optional minimum sats balance to trigger automatic conversion. We recommend omitting this to use the conversion limit minimum.
 - **Maximum Slippage** — Optional maximum slippage in basis points. We recommend omitting this to use the default of 10 bps (0.1%).
 
 {{#tabs config:stable-balance-config}}
@@ -29,21 +29,21 @@ If the configured `threshold sats` is lower than the minimum amount required by 
 
 </div>
 
-## Switching stable balance mode
+## Switching Stable Balance mode
 
-You can activate, switch, or deactivate stable balance at runtime using the [user settings](./user_settings.md) API. This allows users to choose when to enable stable balance and which token to use.
+You can activate, switch, or deactivate Stable Balance at runtime using the [user settings](./user_settings.md) API. This allows users to choose when to enable Stable Balance and which stablecoin to use.
 
-### Activating stable balance
+### Activating Stable Balance
 
-To activate stable balance, set the active label to one of the labels defined in your #{{name StableBalanceConfig.tokens}} list:
+To activate Stable Balance, set the active label to one of the labels defined in your #{{name StableBalanceConfig.tokens}} list:
 
 {{#tabs user_settings:activate-stable-balance}}
 
 When activated, the SDK immediately converts any excess sats balance to the specified token.
 
-### Deactivating stable balance
+### Deactivating Stable Balance
 
-To deactivate stable balance, unset the active label:
+To deactivate Stable Balance, unset the active label:
 
 {{#tabs user_settings:deactivate-stable-balance}}
 
@@ -55,15 +55,15 @@ You can check which token is currently active using {{#name get_user_settings}}:
 
 {{#tabs user_settings:get-user-settings}}
 
-The {{#name stable_balance_active_label}} field will be unset if stable balance is deactivated, or the label of the currently active token.
+The {{#name stable_balance_active_label}} field will be unset if Stable Balance is deactivated, or the label of the currently active token.
 
 ## Sending payments with stable balance
 
-When your balance is held in a stable token, you can still send Bitcoin payments. The SDK detects when there's not enough Bitcoin balance to cover a payment and sets up the token-to-Bitcoin conversion for you.
+When your balance is held in a stablecoin, you can still send bitcoin payments. The SDK detects when there's not enough bitcoin balance to cover a payment and sets up the token-to-bitcoin conversion for you.
 
 When you [prepare to send a payment](./send_payment.md#preparing-payments) without specifying conversion options:
-1. If you have enough Bitcoin balance, no conversion is needed
-2. If your Bitcoin balance is insufficient, the SDK configures conversion options using your stable balance settings (token identifier and slippage)
+1. If you have enough bitcoin balance, no conversion is needed
+2. If your bitcoin balance is insufficient, the SDK configures conversion options using your Stable Balance settings (token identifier and slippage)
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -74,9 +74,9 @@ You can still explicitly specify `conversion options` in your request if you nee
 
 ## Sending entire balance
 
-When stable balance is active, you can send your entire wallet balance — both the token balance and any remaining Bitcoin — in a single payment. This is useful for draining a wallet completely.
+When Stable Balance is active, you can send your entire balance, both the token balance and any remaining bitcoin, in a single payment. 
 
-To send all, provide the full token balance as the amount along with {{#enum FeePolicy::FeesIncluded}} and {{#enum ConversionType::ToBitcoin}} conversion options. The SDK converts all specified tokens to Bitcoin, combines the result with any existing Bitcoin balance, and deducts payment fees from the total.
+To send all, provide the full token balance as the amount along with {{#enum FeePolicy::FeesIncluded}} and {{#enum ConversionType::ToBitcoin}} conversion options. The SDK converts all specified tokens to bitcoin, combines the result with any existing bitcoin balance, and deducts payment fees from the total.
 
 The prepare response returns the estimated total Bitcoin available after conversion, and includes a {{#name conversion_estimate}} with the conversion details.
 
@@ -116,7 +116,7 @@ The {{#name from}} and {{#name to}} fields are conversion step objects describin
 | {{#name payment_id}} | The ID of the internal conversion payment |
 | {{#name amount}} | The amount in the step's denomination (sats or token units) |
 | {{#name fee}} | Fee charged for this step |
-| {{#name method}} | Payment method ({{#enum PaymentMethod::Spark}} for Bitcoin, {{#enum PaymentMethod::Token}} for stable tokens) |
+| {{#name method}} | Payment method ({{#enum PaymentMethod::Spark}} for bitcoin, {{#enum PaymentMethod::Token}} for stablecoins) |
 | {{#name token_metadata}} | Token metadata (name, symbol, etc.) — present when method is {{#enum PaymentMethod::Token}} |
 | {{#name amount_adjustment}} | Present if the amount was modified before conversion (see [amount adjustments](#amount-adjustments)) |
 
