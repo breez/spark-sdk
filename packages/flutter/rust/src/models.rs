@@ -228,6 +228,32 @@ pub enum _InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+#[frb(mirror(CrossChainAddressFamily))]
+pub enum _CrossChainAddressFamily {
+    Evm,
+    Solana,
+    Tron,
+}
+
+#[frb(mirror(CrossChainAddressDetails))]
+pub struct _CrossChainAddressDetails {
+    pub address: String,
+    pub address_family: CrossChainAddressFamily,
+    pub chain: Option<String>,
+    pub asset: Option<String>,
+    pub amount: Option<u128>,
+}
+
+#[frb(mirror(CrossChainRoutePair))]
+pub struct _CrossChainRoutePair {
+    pub chain: String,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+    pub exact_out_eligible: bool,
 }
 
 #[frb(mirror(PaymentDetailsFilter))]
@@ -374,9 +400,25 @@ pub struct _PrepareLnurlPayResponse {
     pub fee_policy: FeePolicy,
 }
 
+#[frb(mirror(PaymentRequest))]
+pub enum _PaymentRequest {
+    Raw(String),
+    CrossChain {
+        address: String,
+        chain: String,
+        asset: String,
+        provider: Option<CrossChainProvider>,
+    },
+}
+
+#[frb(mirror(CrossChainProvider))]
+pub enum _CrossChainProvider {
+    Orchestra,
+}
+
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
@@ -473,6 +515,20 @@ pub enum _SendPaymentMethod {
         spark_invoice_details: SparkInvoiceDetails,
         fee: u128,
         token_identifier: Option<String>,
+    },
+    CrossChainAddress {
+        provider: CrossChainProvider,
+        recipient_address: String,
+        destination_chain: String,
+        destination_asset: String,
+        destination_contract_address: Option<String>,
+        quote_id: String,
+        deposit_address: String,
+        amount_in: u128,
+        estimated_out: u128,
+        fee_amount: u128,
+        fee_bps: u32,
+        expires_at: String,
     },
 }
 
@@ -1153,13 +1209,25 @@ pub enum _ConversionStatus {
 }
 
 #[frb(mirror(ConversionInfo))]
-pub struct _ConversionInfo {
-    pub pool_id: String,
-    pub conversion_id: String,
-    pub status: ConversionStatus,
-    pub fee: Option<u128>,
-    pub purpose: Option<ConversionPurpose>,
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
+pub enum _ConversionInfo {
+    Amm {
+        pool_id: String,
+        conversion_id: String,
+        status: ConversionStatus,
+        fee: Option<u128>,
+        purpose: Option<ConversionPurpose>,
+        amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    Orchestra {
+        order_id: String,
+        quote_id: String,
+        destination_chain: String,
+        destination_asset: String,
+        destination_address: String,
+        estimated_out: u128,
+        status: ConversionStatus,
+        fee: Option<u128>,
+    },
 }
 
 #[frb(mirror(ConversionOptions))]

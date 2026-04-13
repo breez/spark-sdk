@@ -188,7 +188,7 @@ async fn test_concurrent_token_operations() -> Result<()> {
     let prepare = instance_0
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_address,
+            payment_request: PaymentRequest::Raw(bob_address),
             amount: Some(500_000),
             token_identifier: Some(token_id.clone()),
             conversion_options: None,
@@ -307,7 +307,7 @@ async fn test_concurrent_token_operations() -> Result<()> {
             let prepare = instances[sender_idx]
                 .sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: bob_addr,
+                    payment_request: PaymentRequest::Raw(bob_addr),
                     amount: Some(PAYMENT_AMOUNT),
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,
@@ -406,7 +406,7 @@ async fn test_concurrent_token_operations() -> Result<()> {
             let prepare = bob
                 .sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: alice_addr,
+                    payment_request: PaymentRequest::Raw(alice_addr),
                     amount: Some(PAYMENT_AMOUNT),
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,

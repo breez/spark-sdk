@@ -70,7 +70,57 @@ impl BreezSdk {
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
-        parse_input(input, Some(self.external_input_parsers.clone())).await
+        match parse_input(input, Some(self.external_input_parsers.clone())).await {
+            Ok(parsed) => Ok(parsed),
+            Err(err) => {
+                // Fallback: attempt to recognize a cross-chain destination
+                // (EVM / Solana / Tron address, or canonical `ethereum:..`
+                // style URI). Pure address detection with no network calls.
+                if let Some(info) = breez_sdk_common::input::try_parse_cross_chain_address(input) {
+                    let common_it = breez_sdk_common::input::InputType::CrossChainAddress(
+                        breez_sdk_common::input::CrossChainAddressDetails {
+                            address: info.address,
+                            address_family: info.family,
+                            chain: info.chain,
+                            asset: info.asset,
+                            amount: info.amount,
+                        },
+                    );
+                    return Ok(common_it.into());
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Returns the available `{chain, asset}` routes for a given address family.
+    ///
+    /// The UI calls this after `parse()` returns `CrossChainAddress` to populate
+    /// the chain/asset picker. Optionally filter by a specific asset or provider.
+    pub async fn get_cross_chain_routes(
+        &self,
+        family: crate::CrossChainAddressFamily,
+        asset: Option<String>,
+        provider: Option<crate::cross_chain::CrossChainProvider>,
+    ) -> Result<Vec<crate::CrossChainRoutePair>, SdkError> {
+        let common_family: breez_sdk_common::input::CrossChainAddressFamily = family.into();
+
+        let providers: Vec<_> = match provider {
+            Some(key) => {
+                vec![self.cross_chain_providers.get(key)?.clone()]
+            }
+            None => self.cross_chain_providers.values().cloned().collect(),
+        };
+
+        let mut all_pairs = Vec::new();
+        for svc in &providers {
+            match svc.get_routes(common_family, asset.as_deref()).await {
+                Ok(pairs) => all_pairs.extend(pairs),
+                Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
+            }
+        }
+
+        Ok(all_pairs.into_iter().map(Into::into).collect())
     }
 
     /// Returns the balance of the wallet in satoshis

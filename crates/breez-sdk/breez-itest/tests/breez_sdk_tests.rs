@@ -59,7 +59,7 @@ async fn test_01_spark_transfer(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Raw(bob_spark_address.clone()),
             amount: Some(5),
             token_identifier: None,
             conversion_options: None,
@@ -303,7 +303,7 @@ async fn test_03_lightning_invoice_payment(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_invoice.clone()),
             amount: sender_amount.map(|a| a as u128),
             token_identifier: None,
             conversion_options: None,
@@ -564,7 +564,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_invoice.clone()),
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -659,7 +659,7 @@ async fn test_06_lightning_timeout_and_wait(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_invoice.clone()),
             amount: Some(expected_amount as u128),
             token_identifier: None,
             conversion_options: None,
@@ -769,7 +769,7 @@ async fn test_07_spark_invoice(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_spark_invoice.clone()),
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -933,7 +933,7 @@ async fn test_08_lightning_invoice_expiry_secs(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_invoice.clone()),
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -1063,7 +1063,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
     async fn get_fee(sdk: &BreezSdk, invoice: &str, amount: u64) -> Result<u64> {
         let prepare = sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: invoice.to_string(),
+                payment_request: PaymentRequest::Raw(invoice.to_string()),
                 amount: Some(amount as u128),
                 token_identifier: None,
                 conversion_options: None,
@@ -1165,7 +1165,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
         let prepare = alice
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: bob_spark_address,
+                payment_request: PaymentRequest::Raw(bob_spark_address),
                 amount: Some(excess as u128),
                 token_identifier: None,
                 conversion_options: None,
@@ -1212,7 +1212,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
     let prepare_response = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Raw(bob_invoice.clone()),
             amount: Some(target_balance as u128),
             token_identifier: None,
             conversion_options: None,

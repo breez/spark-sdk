@@ -18,9 +18,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use breez_sdk_spark::{
-    BreezSdk, EventListener, GetInfoRequest, Network, PaymentType, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent, Seed, SendPaymentRequest,
-    SyncWalletRequest, default_config,
+    BreezSdk, EventListener, GetInfoRequest, Network, PaymentRequest, PaymentType,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkBuilder, SdkEvent,
+    Seed, SendPaymentRequest, SyncWalletRequest, default_config,
 };
 use tokio::sync::mpsc;
 
@@ -308,7 +308,7 @@ async fn main() -> Result<()> {
                 let prepare = receiver
                     .sdk
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: sender_address.clone(),
+                        payment_request: PaymentRequest::Raw(sender_address.clone()),
                         amount: Some(receiver_balance as u128),
                         token_identifier: None,
                         conversion_options: None,
@@ -457,7 +457,7 @@ async fn main() -> Result<()> {
         let prepare_result = sender
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: receiver_address.clone(),
+                payment_request: PaymentRequest::Raw(receiver_address.clone()),
                 amount: Some(payment_spec.amount_sats as u128),
                 token_identifier: None,
                 conversion_options: None,
@@ -809,7 +809,7 @@ async fn return_funds_to_sender(
     let prepare = receiver
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: sender_address.to_string(),
+            payment_request: PaymentRequest::Raw(sender_address.to_string()),
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,

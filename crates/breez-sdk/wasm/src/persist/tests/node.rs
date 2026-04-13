@@ -365,7 +365,7 @@ async fn test_migration_from_v17_to_v18() {
         status_filter: None,
         asset_filter: None,
         payment_details_filter: Some(vec![breez_sdk_spark::StoragePaymentDetailsFilter::Token {
-            conversion_refund_needed: None,
+            conversion_filter: None,
             tx_hash: None,
             tx_type: Some(breez_sdk_spark::TokenTransactionType::Transfer),
         }]),

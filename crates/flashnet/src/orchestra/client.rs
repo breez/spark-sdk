@@ -1,0 +1,368 @@
+//! HTTP client for the Flashnet Orchestra cross-chain API.
+
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use bitcoin::hashes::{Hash, sha256};
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
+use spark::bech32m_encode_token_id;
+use spark_wallet::{SparkAddress, SparkWallet, TransferTokenOutput};
+use tracing::debug;
+
+use super::models::{
+    EstimateRequest, EstimateResponse, QuoteRequest, QuoteResponse, Route, RoutesResponse,
+    StatusResponse, SubmitRequestSpark, SubmitResponse,
+};
+use crate::cache::CacheStore;
+use crate::config::OrchestraConfig;
+use crate::error::FlashnetError;
+
+const ROUTES_CACHE_KEY: &str = "orchestra_routes";
+/// One hour — Orchestra routes are effectively static between deployments.
+const ROUTES_TTL_MS: u128 = 60 * 60 * 1000;
+
+pub struct OrchestraClient {
+    config: OrchestraConfig,
+    network: spark::Network,
+    http_client: platform_utils::DefaultHttpClient,
+    cache_store: CacheStore,
+    spark_wallet: Arc<SparkWallet>,
+}
+
+impl OrchestraClient {
+    pub fn new(
+        config: OrchestraConfig,
+        network: spark::Network,
+        spark_wallet: Arc<SparkWallet>,
+    ) -> Self {
+        Self {
+            config,
+            network,
+            http_client: platform_utils::DefaultHttpClient::default(),
+            cache_store: CacheStore::default(),
+            spark_wallet,
+        }
+    }
+
+    /// Fetch all supported cross-chain routes. Responses are cached for
+    /// [`ROUTES_TTL_MS`] so repeated parser/UI calls are synchronous.
+    pub async fn routes(&self) -> Result<RoutesResponse, FlashnetError> {
+        if let Some(cached) = self
+            .cache_store
+            .get::<RoutesResponse>(ROUTES_CACHE_KEY)
+            .await?
+        {
+            return Ok(cached);
+        }
+        debug!("Orchestra: GET /v1/orchestration/routes (cache miss)");
+        let response: RoutesResponse = self
+            .get("v1/orchestration/routes", None::<()>, false)
+            .await?;
+        self.cache_store
+            .set(ROUTES_CACHE_KEY, &response, ROUTES_TTL_MS)
+            .await?;
+        Ok(response)
+    }
+
+    /// Return the subset of routes whose source is Spark and whose destination
+    /// chain matches one of `allowed_chains`. Passing an empty slice returns
+    /// all Spark-sourced routes regardless of destination chain.
+    ///
+    /// Driven by the cached [`Self::routes`] response — cheap to call
+    /// repeatedly from the parser / UI layer.
+    pub async fn routes_for_chains(
+        &self,
+        allowed_chains: &[&str],
+    ) -> Result<Vec<Route>, FlashnetError> {
+        let response = self.routes().await?;
+        let mut out = Vec::new();
+        for route in response.routes {
+            if !route.source_chain.eq_ignore_ascii_case("spark") {
+                continue;
+            }
+            let matches_chain = allowed_chains.is_empty()
+                || allowed_chains
+                    .iter()
+                    .any(|c| route.destination_chain.eq_ignore_ascii_case(c));
+            if matches_chain {
+                out.push(route);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Find a single Spark-sourced route by destination chain + asset
+    /// (case-insensitive).
+    pub async fn find_route(
+        &self,
+        chain: &str,
+        asset: &str,
+    ) -> Result<Option<Route>, FlashnetError> {
+        let response = self.routes().await?;
+        Ok(response.routes.into_iter().find(|r| {
+            r.source_chain.eq_ignore_ascii_case("spark")
+                && r.destination_chain.eq_ignore_ascii_case(chain)
+                && r.destination_asset.eq_ignore_ascii_case(asset)
+        }))
+    }
+
+    /// Price preview (no auth).
+    pub async fn estimate(
+        &self,
+        request: EstimateRequest,
+    ) -> Result<EstimateResponse, FlashnetError> {
+        debug!("Orchestra: GET /v1/orchestration/estimate");
+        self.get("v1/orchestration/estimate", Some(request), false)
+            .await
+    }
+
+    /// Create a quote. Requires auth.
+    pub async fn quote(&self, request: QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
+        debug!(
+            "Orchestra: POST /v1/orchestration/quote (source={}/{} dest={}/{})",
+            request.source_chain,
+            request.source_asset,
+            request.destination_chain,
+            request.destination_asset
+        );
+        self.post("v1/orchestration/quote", &request, true, None)
+            .await
+    }
+
+    /// Transfer the quoted `amount_in` to `deposit_address` via the Spark
+    /// wallet, then submit the resulting tx hash to Orchestra. Mirrors the
+    /// AMM client's `execute_swap` shape: the caller supplies the prepared
+    /// quote and Orchestra returns a processing order id.
+    ///
+    /// * `quote_id` / `deposit_address` / `amount_in` come from the
+    ///   [`QuoteResponse`] returned by [`Self::quote`].
+    /// * `source_token_identifier` is `None` for BTC sats and
+    ///   `Some(token_id_hex)` for Spark token sends (e.g. USDB).
+    pub async fn submit_deposit_spark(
+        &self,
+        quote_id: String,
+        deposit_address: &str,
+        amount_in: u128,
+        source_token_identifier: Option<&str>,
+    ) -> Result<SubmitResponse, FlashnetError> {
+        let spark_tx_hash = self
+            .transfer_to_deposit(deposit_address, amount_in, source_token_identifier)
+            .await?;
+        debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
+        self.submit_spark(SubmitRequestSpark {
+            quote_id,
+            spark_tx_hash,
+            source_spark_address: None,
+        })
+        .await
+    }
+
+    /// Low-level: submit an already-sent deposit tx hash for an existing
+    /// quote. Prefer [`Self::submit_deposit_spark`] which also performs the
+    /// Spark transfer.
+    ///
+    /// Requires auth and an idempotency key. The key is derived
+    /// deterministically from the quote id so retries are safe.
+    pub async fn submit_spark(
+        &self,
+        request: SubmitRequestSpark,
+    ) -> Result<SubmitResponse, FlashnetError> {
+        let idem = derive_idempotency_key("submit", &request.quote_id);
+        debug!(
+            "Orchestra: POST /v1/orchestration/submit quoteId={} idem={}",
+            request.quote_id, idem
+        );
+        self.post("v1/orchestration/submit", &request, true, Some(idem))
+            .await
+    }
+
+    /// Send `amount_in` sats (or tokens) to the Orchestra-provided
+    /// `deposit_address` via the Spark wallet. Returns the resulting Spark
+    /// transfer id / token tx hash, which `/submit` expects as
+    /// `sparkTxHash`.
+    pub async fn transfer_to_deposit(
+        &self,
+        deposit_address: &str,
+        amount_in: u128,
+        source_token_identifier: Option<&str>,
+    ) -> Result<String, FlashnetError> {
+        let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
+            FlashnetError::Generic(format!(
+                "Failed to parse Orchestra deposit address '{deposit_address}': {e}"
+            ))
+        })?;
+
+        let id = match source_token_identifier {
+            None => {
+                // BTC sats — plain Spark transfer.
+                let amount_sats = u64::try_from(amount_in)
+                    .map_err(|e| FlashnetError::Generic(format!("amount_in exceeds u64: {e}")))?;
+                self.spark_wallet
+                    .transfer(amount_sats, &receiver_address, None)
+                    .await?
+                    .id
+                    .to_string()
+            }
+            Some(token_identifier_hex) => {
+                // USDB (or other Spark token) — token transfer. The
+                // `token_identifier` is the hex-encoded raw id; encode it as
+                // a bech32m token id the wallet expects.
+                let token_bytes = hex::decode(token_identifier_hex).map_err(|e| {
+                    FlashnetError::Generic(format!("Failed to decode token identifier hex: {e}"))
+                })?;
+                let token_id =
+                    bech32m_encode_token_id(&token_bytes, self.network).map_err(|e| {
+                        FlashnetError::Generic(format!("Failed to encode token id: {e}"))
+                    })?;
+                self.spark_wallet
+                    .transfer_tokens(
+                        vec![TransferTokenOutput {
+                            token_id,
+                            amount: amount_in,
+                            receiver_address,
+                            spark_invoice: None,
+                        }],
+                        None,
+                        None,
+                    )
+                    .await?
+                    .hash
+            }
+        };
+        Ok(id)
+    }
+
+    /// Look up an order by its id.
+    pub async fn status_by_id(&self, order_id: &str) -> Result<StatusResponse, FlashnetError> {
+        #[derive(serde::Serialize)]
+        struct Query<'a> {
+            id: &'a str,
+        }
+        self.get(
+            "v1/orchestration/status",
+            Some(Query { id: order_id }),
+            true,
+        )
+        .await
+    }
+
+    /// Look up an order by the originating quote id (useful before `/submit`
+    /// returns or when the order id is not yet known).
+    pub async fn status_by_quote_id(
+        &self,
+        quote_id: &str,
+    ) -> Result<StatusResponse, FlashnetError> {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Query<'a> {
+            quote_id: &'a str,
+        }
+        self.get("v1/orchestration/status", Some(Query { quote_id }), true)
+            .await
+    }
+
+    // -----------------------------------------------------------------------
+    // internals
+    // -----------------------------------------------------------------------
+
+    async fn get<S, D>(
+        &self,
+        endpoint: &str,
+        query: Option<S>,
+        authed: bool,
+    ) -> Result<D, FlashnetError>
+    where
+        S: serde::Serialize,
+        D: serde::de::DeserializeOwned,
+    {
+        let query_string = match query {
+            Some(q) => {
+                let qs = serde_urlencoded::to_string(&q).map_err(|e| {
+                    FlashnetError::Generic(format!(
+                        "Failed to serialize orchestra query params: {e}"
+                    ))
+                })?;
+                if qs.is_empty() {
+                    String::new()
+                } else {
+                    format!("?{qs}")
+                }
+            }
+            None => String::new(),
+        };
+        let url = format!("{}/{}{}", self.config.base_url, endpoint, query_string);
+
+        let mut headers = HashMap::new();
+        add_content_type_header(&mut headers, ContentType::Json);
+        if authed {
+            headers.insert(
+                "Authorization".to_string(),
+                format!("Bearer {}", self.config.api_key),
+            );
+        }
+
+        let response = self.http_client.get(url, Some(headers)).await?;
+        if !response.is_success() {
+            return Err(FlashnetError::Network {
+                reason: response.body,
+                code: Some(response.status),
+            });
+        }
+        response
+            .json::<D>()
+            .map_err(|e| FlashnetError::Generic(format!("Failed to parse orchestra response: {e}")))
+    }
+
+    async fn post<S, D>(
+        &self,
+        endpoint: &str,
+        body: &S,
+        authed: bool,
+        idempotency_key: Option<String>,
+    ) -> Result<D, FlashnetError>
+    where
+        S: serde::Serialize,
+        D: serde::de::DeserializeOwned,
+    {
+        let url = format!("{}/{}", self.config.base_url, endpoint);
+        let body_json = serde_json::to_string(body).map_err(|e| {
+            FlashnetError::Generic(format!("Failed to serialize orchestra body: {e}"))
+        })?;
+
+        let mut headers = HashMap::new();
+        add_content_type_header(&mut headers, ContentType::Json);
+        if authed {
+            headers.insert(
+                "Authorization".to_string(),
+                format!("Bearer {}", self.config.api_key),
+            );
+        }
+        if let Some(idem) = idempotency_key {
+            headers.insert("X-Idempotency-Key".to_string(), idem);
+        }
+
+        let response = self
+            .http_client
+            .post(url, Some(headers), Some(body_json))
+            .await?;
+
+        if !response.is_success() {
+            return Err(FlashnetError::Network {
+                reason: response.body,
+                code: Some(response.status),
+            });
+        }
+
+        response
+            .json::<D>()
+            .map_err(|e| FlashnetError::Generic(format!("Failed to parse orchestra response: {e}")))
+    }
+}
+
+/// Build a deterministic idempotency key so that retrying the same logical
+/// request (same endpoint + scope) is safe.
+fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
+    let hash = sha256::Hash::hash(format!("orchestra:{scope}:{key_input}").as_bytes());
+    hash.to_string()
+}

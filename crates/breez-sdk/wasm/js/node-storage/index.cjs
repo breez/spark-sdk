@@ -230,20 +230,23 @@ class SqliteStorage {
             }
             params.push(...paymentDetailsFilter.htlcStatus);
           }
-          // Filter by token conversion info presence
+          // Filter by conversion type + status
           if (
             (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
-              paymentDetailsFilter.conversionRefundNeeded !== undefined
+              paymentDetailsFilter.conversionFilter !== undefined
           ) {
             const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-              json_extract(pm.conversion_info, '$.status') ${refundNeeded}`
-            );
+            let statusClause;
+            if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'RefundNeeded'";
+            } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')";
+            }
+            if (statusClause) {
+              paymentDetailsClauses.push(
+                `${typeCheck} AND pm.conversion_info IS NOT NULL AND ${statusClause}`
+              );
+            }
           }
           // Filter by token transaction hash
           if (

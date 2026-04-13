@@ -10,7 +10,7 @@ use breez_sdk_spark::{
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    PaymentRequest, PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
@@ -639,7 +639,7 @@ pub(crate) async fn execute_command(
             };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request,
+                    payment_request: PaymentRequest::Raw(payment_request),
                     amount,
                     token_identifier,
                     conversion_options,
@@ -1029,7 +1029,9 @@ fn read_payment_options(
                 }),
             }))
         }
-        SendPaymentMethod::SparkInvoice { .. } => Ok(None),
+        SendPaymentMethod::SparkInvoice { .. } | SendPaymentMethod::CrossChainAddress { .. } => {
+            Ok(None)
+        }
     }
 }
 

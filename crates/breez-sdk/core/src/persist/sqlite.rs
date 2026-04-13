@@ -328,6 +328,14 @@ impl SqliteStorage {
             "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1;",
             // Add conversion_status to payment_metadata
             "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
+            // Backfill the `type` discriminator on existing conversion_info
+            // rows so the new `ConversionInfo` enum (tagged with
+            // `#[serde(tag = "type")]`) deserializes correctly. All existing
+            // rows are AMM conversions.
+            "UPDATE payment_metadata
+             SET conversion_info = json_set(conversion_info, '$.type', 'amm')
+             WHERE conversion_info IS NOT NULL
+               AND json_extract(conversion_info, '$.type') IS NULL;",
         ]
     }
 }
@@ -468,27 +476,44 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
+                // Payment type discriminator — always added so the filter
+                // restricts to the correct payment kind even when no
+                // conversion-specific sub-filter is set.
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = 1".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
+                // Filter by conversion info type + status
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "json_extract(pm.conversion_info, '$.type') = 'amm' AND \
+                             json_extract(pm.conversion_info, '$.status') = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND \
+                             json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         json_extract(pm.conversion_info, '$.status') {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 // Filter by token transaction hash
@@ -2039,7 +2064,7 @@ mod tests {
             status_filter: None,
             asset_filter: None,
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
+                conversion_filter: None,
                 tx_hash: None,
                 tx_type: Some(TokenTransactionType::Transfer),
             }]),

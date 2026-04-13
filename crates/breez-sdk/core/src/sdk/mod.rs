@@ -93,6 +93,7 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
+    pub(crate) cross_chain_providers: crate::cross_chain::CrossChainProviders,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -110,6 +111,7 @@ pub(crate) struct BreezSdkParams {
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
+    pub cross_chain_providers: crate::cross_chain::CrossChainProviders,
 }
 
 pub async fn parse_input(

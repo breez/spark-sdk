@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::SdkError;
 
+use crate::utils::serde_helpers::{serde_option_u128_as_string, serde_u128_as_string};
+
 /// Default maximum slippage for conversions in basis points (0.1%)
 pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 10;
 /// Default timeout for conversion operations in seconds
@@ -128,23 +130,90 @@ impl FromStr for ConversionStatus {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+/// Conversion metadata stored on a payment's metadata row. Discriminated by a
+/// `"type"` tag in JSON so old data (AMM-only, no tag) must be backfilled via a
+/// DB migration that sets `"type": "amm"` on all existing rows.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConversionInfo {
-    /// The pool id associated with the conversion
-    pub pool_id: String,
-    /// The conversion id shared by both sides of the conversion
-    pub conversion_id: String,
-    /// The status of the conversion
-    pub status: ConversionStatus,
-    /// The fee paid for the conversion
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub fee: Option<u128>,
-    /// The purpose of the conversion
-    pub purpose: Option<ConversionPurpose>,
-    /// The reason the conversion amount was adjusted, if applicable.
-    #[serde(default)]
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
+#[serde(tag = "type")]
+pub enum ConversionInfo {
+    /// AMM (Flashnet pool-based) conversion — Spark ↔ Spark token swaps.
+    #[serde(rename = "amm")]
+    Amm {
+        /// The pool id associated with the conversion
+        pool_id: String,
+        /// The conversion id shared by both sides of the conversion
+        conversion_id: String,
+        /// The status of the conversion
+        status: ConversionStatus,
+        /// The fee paid for the conversion.
+        /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// The purpose of the conversion
+        purpose: Option<ConversionPurpose>,
+        /// The reason the conversion amount was adjusted, if applicable.
+        #[serde(default)]
+        amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    /// Orchestra (cross-chain) send — BTC/USDB on Spark → stablecoin on
+    /// an external chain (Base, Solana, Tron, Ethereum, etc.).
+    #[serde(rename = "orchestra")]
+    Orchestra {
+        /// The Orchestra order id returned by `/v1/orchestration/submit`.
+        order_id: String,
+        /// The Orchestra quote id used to create this order.
+        quote_id: String,
+        /// Destination chain (e.g. `"base"`, `"solana"`, `"tron"`).
+        destination_chain: String,
+        /// Destination asset (e.g. `"USDC"`, `"USDT"`).
+        destination_asset: String,
+        /// Recipient address on the destination chain.
+        destination_address: String,
+        /// Estimated amount the recipient will receive, in the destination
+        /// asset's base units.
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// The status of the cross-chain order.
+        status: ConversionStatus,
+        /// The fee paid for the cross-chain send, in the source asset's base
+        /// units (sats for BTC, token base units for USDB).
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+    },
+}
+
+impl ConversionInfo {
+    /// The current status, regardless of conversion type.
+    pub fn status(&self) -> &ConversionStatus {
+        match self {
+            ConversionInfo::Amm { status, .. } | ConversionInfo::Orchestra { status, .. } => status,
+        }
+    }
+
+    /// A mutable reference to the status, for in-place updates.
+    pub fn status_mut(&mut self) -> &mut ConversionStatus {
+        match self {
+            ConversionInfo::Amm { status, .. } | ConversionInfo::Orchestra { status, .. } => status,
+        }
+    }
+
+    /// The fee paid, regardless of conversion type.
+    pub fn fee(&self) -> Option<u128> {
+        match self {
+            ConversionInfo::Amm { fee, .. } | ConversionInfo::Orchestra { fee, .. } => *fee,
+        }
+    }
+
+    /// Whether this is an AMM (Flashnet pool) conversion.
+    pub fn is_amm(&self) -> bool {
+        matches!(self, ConversionInfo::Amm { .. })
+    }
+
+    /// Whether this is an Orchestra (cross-chain) conversion.
+    pub fn is_orchestra(&self) -> bool {
+        matches!(self, ConversionInfo::Orchestra { .. })
+    }
 }
 
 pub(crate) struct TokenConversionPool {

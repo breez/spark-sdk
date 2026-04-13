@@ -410,6 +410,10 @@ class MigrationManager {
         name: "Add conversion_status to payment_metadata",
         sql: `ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT`,
       },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: `UPDATE payment_metadata SET conversion_info = json_set(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND json_extract(conversion_info, '$.type') IS NULL`,
+      },
     ];
   }
 }

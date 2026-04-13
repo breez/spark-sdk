@@ -335,15 +335,21 @@ impl TryFrom<&Payment> for ConversionStep {
                 )));
             }
         };
+        let amount_adjustment = match conversion_info {
+            ConversionInfo::Amm {
+                amount_adjustment, ..
+            } => amount_adjustment.clone(),
+            ConversionInfo::Orchestra { .. } => None,
+        };
         Ok(ConversionStep {
             payment_id: payment.id.clone(),
             amount: payment.amount,
             fee: payment
                 .fees
-                .saturating_add(conversion_info.fee.unwrap_or(0)),
+                .saturating_add(conversion_info.fee().unwrap_or(0)),
             method: payment.method,
             token_metadata,
-            amount_adjustment: conversion_info.amount_adjustment.clone(),
+            amount_adjustment,
         })
     }
 }
@@ -1116,6 +1122,32 @@ pub enum SendPaymentMethod {
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
     },
+    CrossChainAddress {
+        /// Which cross-chain provider fulfilled this quote.
+        provider: crate::cross_chain::CrossChainProvider,
+        /// Raw destination address (e.g. `0xabc...`).
+        recipient_address: String,
+        /// The chain the user has selected (`base`, `solana`, ...).
+        destination_chain: String,
+        /// The asset the user has selected (`usdc`, `usdt`, ...).
+        destination_asset: String,
+        /// Optional contract/mint address for the destination asset.
+        destination_contract_address: Option<String>,
+        /// Provider quote id used when calling `/submit`.
+        quote_id: String,
+        /// Address the source Spark transfer should be sent to.
+        deposit_address: String,
+        /// Amount (in source base units) the user must transfer to `deposit_address`.
+        amount_in: u128,
+        /// Estimated amount the recipient will receive in the destination asset's base units.
+        estimated_out: u128,
+        /// Provider's reported fee amount in the source asset's base units.
+        fee_amount: u128,
+        /// Provider's reported fee in basis points.
+        fee_bps: u32,
+        /// ISO8601 timestamp after which this quote is no longer valid.
+        expires_at: String,
+    },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1300,9 +1332,29 @@ pub enum OnchainConfirmationSpeed {
     Slow,
 }
 
+/// The payment destination. Either a raw string (bolt11, spark address, BIP-21,
+/// cross-chain URI, etc.) that is parsed internally, or a structured
+/// cross-chain destination with explicit chain + asset selection.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentRequest {
+    /// Existing string-based input (bolt11, spark address, BIP-21, cross-chain URI, etc.)
+    Raw(String),
+    /// Cross-chain send with explicit chain/asset selection.
+    /// Amount comes from `PrepareSendPaymentRequest.amount`, not here.
+    CrossChain {
+        address: String,
+        chain: String,
+        asset: String,
+        /// Optional cross-chain provider selection. When set, only the specified
+        /// provider is used. When `None`, the SDK selects the best available provider.
+        provider: Option<crate::cross_chain::CrossChainProvider>,
+    },
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     /// The amount to send.
     /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
     /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.

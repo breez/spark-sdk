@@ -36,7 +36,7 @@ async fn test_external_signer_send_receive(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Raw(bob_spark_address.clone()),
             amount: Some(100),
             token_identifier: None,
             conversion_options: None,

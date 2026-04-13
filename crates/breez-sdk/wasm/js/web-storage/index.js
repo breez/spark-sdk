@@ -457,6 +457,26 @@ class MigrationManager {
           }
         }
       },
+      {
+        name: "Backfill conversion_info type discriminator for serde tagged enum",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payment_metadata")) {
+            const store = transaction.objectStore("payment_metadata");
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (cursor) {
+                const record = cursor.value;
+                if (record.conversionInfo && !record.conversionInfo.type) {
+                  record.conversionInfo.type = "amm";
+                  cursor.update(record);
+                }
+                cursor.continue();
+              }
+            };
+          }
+        }
+      },
     ];
   }
 }
@@ -2092,11 +2112,11 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by token conversion info presence
+        // Filter by conversion type + status
         if (
           (paymentDetailsFilter.type === "spark" ||
             paymentDetailsFilter.type === "token") &&
-          paymentDetailsFilter.conversionRefundNeeded != null
+          paymentDetailsFilter.conversionFilter != null
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
@@ -2105,11 +2125,15 @@ class IndexedDBStorage {
             continue;
           }
 
-          if (
-            paymentDetailsFilter.conversionRefundNeeded ===
-            (details.conversionInfo.status !== "refundNeeded")
-          ) {
-            continue;
+          const ci = details.conversionInfo;
+          if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+            if (ci.type !== "amm" || ci.status !== "RefundNeeded") {
+              continue;
+            }
+          } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+            if (ci.type !== "orchestra" || ["Completed", "Failed", "Refunded"].includes(ci.status)) {
+              continue;
+            }
           }
         }
         // Filter by token transaction hash

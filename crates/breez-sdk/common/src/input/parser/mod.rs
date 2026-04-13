@@ -3,6 +3,7 @@ use std::ops::Not;
 use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use platform_utils::time::UNIX_EPOCH;
+use platform_utils::{DefaultHttpClient, HttpClient};
 use regex_lite::Regex;
 use spark_wallet::{SparkAddress, SparkAddressPaymentType};
 use tracing::{debug, error, warn};
@@ -16,8 +17,7 @@ use crate::{
     lnurl::{auth, error::LnurlError, pay::LnurlPayRequestDetails},
 };
 
-use platform_utils::{DefaultHttpClient, HttpClient};
-
+use super::percent_encode;
 use super::{
     Bip21Details, BitcoinAddressDetails, Bolt11InvoiceDetails, Bolt11RouteHint, Bolt11RouteHintHop,
     Bolt12InvoiceDetails, Bolt12InvoiceRequestDetails, Bolt12Offer, Bolt12OfferBlindedPath,
@@ -30,8 +30,6 @@ const BIP_353_USER_BITCOIN_PAYMENT_PREFIX: &str = "user._bitcoin-payment";
 const LIGHTNING_PREFIX: &str = "lightning:";
 const LIGHTNING_PREFIX_LEN: usize = LIGHTNING_PREFIX.len();
 const LNURL_HRP: &str = "lnurl";
-
-mod percent_encode;
 
 /// Validates lightning address format without network calls.
 /// Returns true if format is valid: user@domain where user contains only `[a-z0-9-_.]`

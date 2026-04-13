@@ -3,6 +3,7 @@ pub(crate) mod deposit_chain_syncer;
 pub(crate) mod expiring_cell;
 pub(crate) mod payments;
 pub(crate) mod send_payment_validation;
+pub mod serde_helpers;
 pub(crate) mod token;
 pub(crate) mod utxo_fetcher;
 

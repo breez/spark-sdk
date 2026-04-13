@@ -148,6 +148,28 @@ pub enum InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+/// Cross-chain recipient details produced by the core SDK's `parse_input`
+/// fallback after the common parser fails to classify the input.
+///
+/// The UI calls `get_cross_chain_routes(family)` to discover available
+/// `{chain, asset}` pairs, then passes the selected chain + asset to
+/// `prepare_send_payment` via `PaymentRequest::CrossChain`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CrossChainAddressDetails {
+    /// The raw recipient address (e.g. `0xabc...`).
+    pub address: String,
+    /// Which address family this belongs to.
+    pub address_family: super::cross_chain::CrossChainAddressFamily,
+    /// Optional chain hint parsed from a URI `chain=` param (e.g. `"base"`).
+    pub chain: Option<String>,
+    /// Optional asset hint parsed from a URI `asset=` param (e.g. `"usdc"`).
+    pub asset: Option<String>,
+    /// Optional amount (in the source asset's base units) parsed from an
+    /// `amount=` query param.
+    pub amount: Option<u128>,
 }
 
 impl TryFrom<LnurlRequestDetails> for InputType {

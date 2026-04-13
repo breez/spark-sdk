@@ -7,8 +7,9 @@ use serde_with::serde_as;
 use spark::Network;
 use spark_wallet::{PublicKey, TransferId};
 
-use crate::utils::decode_token_identifier;
-use crate::{BTC_ASSET_ADDRESS, FlashnetError};
+use super::api::BTC_ASSET_ADDRESS;
+use super::utils::decode_token_identifier;
+use crate::error::FlashnetError;
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]

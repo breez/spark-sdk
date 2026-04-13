@@ -612,6 +612,20 @@ impl SdkBuilder {
                     fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
                 }),
         );
+        // Build cross-chain providers. Each provider owns its own HTTP
+        // client, route cache, and background monitor task.
+        let mut cross_chain_providers = crate::cross_chain::CrossChainProviders::new();
+        cross_chain_providers.insert(
+            crate::cross_chain::CrossChainProvider::Orchestra,
+            std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
+                flashnet_config.orchestra.clone(),
+                self.config.network,
+                Arc::clone(&spark_wallet),
+                Arc::clone(&storage),
+                shutdown_sender.subscribe(),
+            )),
+        );
+
         let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
             flashnet_config,
             Arc::clone(&storage),
@@ -665,6 +679,7 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
+            cross_chain_providers,
         })?;
         debug!("Initialized and started breez sdk.");
 

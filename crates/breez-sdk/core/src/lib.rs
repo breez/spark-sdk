@@ -2,6 +2,7 @@
 pub mod bindings;
 mod chain;
 mod common;
+mod cross_chain;
 mod error;
 mod events;
 mod issuer;
@@ -26,13 +27,15 @@ pub use chain::{
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
+pub use cross_chain::CrossChainProvider;
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
-    PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
-    StoragePaymentDetailsFilter, UpdateDepositPayload, path::default_storage_path,
+    ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
+    StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
+    path::default_storage_path,
 };
 pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;

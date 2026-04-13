@@ -244,24 +244,27 @@ class PostgresStorage {
             params.push(...paymentDetailsFilter.htlcStatus);
           }
 
-          // Filter by conversion refund needed
+          // Filter by conversion type + status
           if (
             (paymentDetailsFilter.type === "spark" ||
               paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined
+            paymentDetailsFilter.conversionFilter !== undefined
           ) {
             const typeCheck =
               paymentDetailsFilter.type === "spark"
                 ? "p.spark = true"
                 : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-               pm.conversion_info::jsonb->>'status' ${refundNeeded}`
-            );
+            let statusClause;
+            if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'RefundNeeded'";
+            } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')";
+            }
+            if (statusClause) {
+              paymentDetailsClauses.push(
+                `${typeCheck} AND pm.conversion_info IS NOT NULL AND ${statusClause}`
+              );
+            }
           }
 
           // Filter by token transaction hash
