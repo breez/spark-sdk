@@ -14,11 +14,11 @@ async fn test_create_deposit_address(#[future] wallets: WalletsFixture) -> Resul
     let fixture = wallets.await;
     let wallet = fixture.alice_wallet;
 
-    let address = wallet.generate_deposit_address().await?;
-    info!("Generated deposit address: {}", address);
+    let deposit = wallet.generate_deposit_address().await?;
+    info!("Generated deposit address: {}", deposit.address);
 
     assert!(
-        !address.to_string().is_empty(),
+        !deposit.address.to_string().is_empty(),
         "Address should not be empty"
     );
 
@@ -48,13 +48,14 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     let bitcoind = &fixture.fixtures.bitcoind;
 
     // Generate a deposit address
-    let deposit_address = alice.generate_deposit_address().await?;
+    let deposit = alice.generate_deposit_address().await?;
+    let deposit_address = &deposit.address;
     info!("Generated deposit address: {}", deposit_address);
 
     // Fund the deposit address with a certain amount
     let deposit_amount = Amount::from_sat(100_000);
     let txid = bitcoind
-        .fund_address(&deposit_address, deposit_amount)
+        .fund_address(deposit_address, deposit_amount)
         .await?;
     info!(
         "Funded deposit address with {}, txid: {}",
@@ -84,7 +85,7 @@ async fn test_claim_confirmed_deposit(#[future] wallets: WalletsFixture) -> Resu
     for (vout, output) in tx.output.iter().enumerate() {
         if let Ok(address) =
             bitcoin::Address::from_script(&output.script_pubkey, bitcoin::Network::Regtest)
-            && address == deposit_address
+            && &address == deposit_address
         {
             output_index = Some(vout as u32);
             break;
