@@ -1,8 +1,6 @@
 use platform_utils::time::{Duration, Instant, SystemTime};
-use platform_utils::{DefaultHttpClient, HttpClient as _, tokio};
-use serde::Deserialize;
+use platform_utils::tokio;
 use spark_wallet::WalletEvent;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, error, info, trace, warn};
@@ -13,7 +11,6 @@ use super::{
     parse_input,
 };
 use crate::Network;
-use crate::session_manager::{KEY_BREEZ_JWT, calculate_expiry, is_jwt_expired, jwt_exp};
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -29,58 +26,8 @@ use crate::{
         utxo_fetcher::DetailedUtxo,
     },
 };
-use breez_sdk_common::breez_server::PRODUCTION_BREEZSERVER_URL;
-
-const JWT_REFRESH_RETRY_SECS: u64 = 10;
-
-#[derive(Deserialize)]
-struct JwtResponse {
-    token: String,
-}
 
 impl BreezSdk {
-    pub(crate) async fn new_jwt(api_key: &str) -> Result<String, SdkError> {
-        let client = DefaultHttpClient::new(None);
-        let mut headers = HashMap::new();
-        headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
-        let res = client
-            .get(
-                format!("{PRODUCTION_BREEZSERVER_URL}/api/jwt"),
-                Some(headers),
-            )
-            .await
-            .map_err(|err| SdkError::Generic(format!("Could not retrieve JWT token: {err}")))?;
-
-        let JwtResponse { token } = serde_json::from_str(&res.body).map_err(|err| {
-            SdkError::Generic(format!("Could not parse JWT token response: {err}"))
-        })?;
-        Ok(token)
-    }
-
-    async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
-        let mut token = self.session_manager.get_token().await;
-
-        if token.is_none() {
-            token = self
-                .storage
-                .get_cached_item(KEY_BREEZ_JWT.to_string())
-                .await
-                .ok()
-                .flatten();
-            if let Some(token) = &token
-                && !is_jwt_expired(token)
-            {
-                self.session_manager.set_token(token.clone()).await;
-            }
-        }
-
-        Duration::from_secs(match (token, refresh_counter) {
-            (None, counter) if counter < 3 => 0,
-            (None, _) => JWT_REFRESH_RETRY_SECS,
-            (Some(token), _) => jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry),
-        })
-    }
-
     pub(super) fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
         let sdk = self.clone();
         let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
@@ -163,7 +110,7 @@ impl BreezSdk {
                         sdk.session_manager.set_token(token.clone()).await;
                         if let Err(err) = sdk
                             .storage
-                            .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
+                            .set_cached_item(jwt::KEY_BREEZ_JWT.to_string(), token)
                             .await
                         {
                             warn!("Could not persist JWT: {err}");
@@ -710,5 +657,151 @@ impl BreezSdk {
             .trigger_sync_and_wait(super::SyncType::Full, true)
             .await?;
         Ok(SyncWalletResponse {})
+    }
+}
+
+mod jwt {
+    use std::collections::HashMap;
+
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use breez_sdk_common::{breez_server::PRODUCTION_BREEZSERVER_URL, utils::now};
+    use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration};
+    use serde::Deserialize;
+
+    use crate::{BreezSdk, SdkError};
+
+    pub(super) const KEY_BREEZ_JWT: &str = "breez_jwt";
+    const JWT_REFRESH_RETRY_SECS: u64 = 10;
+    const JWT_EXPIRY_GRACE_PERIOD_SECS: u64 = 60 * 5; // Token expires 5 minutes in advance
+
+    #[derive(Deserialize)]
+    struct Jwt {
+        exp: u64,
+    }
+
+    #[derive(Deserialize)]
+    struct JwtServerResponse {
+        token: String,
+    }
+
+    pub(crate) fn calculate_expiry(exp: u64) -> u64 {
+        exp.saturating_sub(Into::<u64>::into(now()).saturating_add(JWT_EXPIRY_GRACE_PERIOD_SECS))
+    }
+
+    pub(crate) fn is_jwt_expired(token: &str) -> bool {
+        let Some(exp) = jwt_exp(token) else {
+            return true;
+        };
+        calculate_expiry(exp) == 0
+    }
+
+    pub(crate) fn jwt_exp(token: &str) -> Option<u64> {
+        let payload_b64 = token.split('.').nth(1)?;
+        let decoded = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+        let payload = std::str::from_utf8(&decoded).ok()?;
+        let Jwt { exp } = serde_json::from_str(payload).ok()?;
+        Some(exp)
+    }
+
+    impl BreezSdk {
+        pub(super) async fn new_jwt(api_key: &str) -> Result<String, SdkError> {
+            let client = DefaultHttpClient::new(None);
+            let mut headers = HashMap::new();
+            headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
+            let res = client
+                .get(
+                    format!("{PRODUCTION_BREEZSERVER_URL}/api/jwt"),
+                    Some(headers),
+                )
+                .await
+                .map_err(|err| SdkError::Generic(format!("Could not retrieve JWT token: {err}")))?;
+
+            let JwtServerResponse { token } = serde_json::from_str(&res.body).map_err(|err| {
+                SdkError::Generic(format!("Could not parse JWT token response: {err}"))
+            })?;
+            Ok(token)
+        }
+
+        pub(super) async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
+            let mut token = self.session_manager.get_token().await;
+
+            if token.is_none() {
+                token = self
+                    .storage
+                    .get_cached_item(KEY_BREEZ_JWT.to_string())
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(token) = &token
+                    && !is_jwt_expired(token)
+                {
+                    self.session_manager.set_token(token.clone()).await;
+                }
+            }
+
+            Duration::from_secs(match (token, refresh_counter) {
+                (None, counter) if counter < 3 => 0,
+                (None, _) => JWT_REFRESH_RETRY_SECS,
+                (Some(token), _) => {
+                    jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry)
+                }
+            })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn make_jwt(exp: u64) -> String {
+            let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+            let payload = URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+            format!("{header}.{payload}.fakesignature")
+        }
+
+        // --- jwt_exp ---
+
+        #[test]
+        fn test_jwt_exp_extracts_value() {
+            assert_eq!(jwt_exp(&make_jwt(9_999_999_999)), Some(9_999_999_999));
+        }
+
+        #[test]
+        fn test_jwt_exp_missing_exp_field() {
+            let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"user123"}"#);
+            assert_eq!(jwt_exp(&format!("h.{payload}.s")), None);
+        }
+
+        #[test]
+        fn test_jwt_exp_invalid_json() {
+            let payload = URL_SAFE_NO_PAD.encode("not json");
+            assert_eq!(jwt_exp(&format!("h.{payload}.s")), None);
+        }
+
+        // --- is_jwt_expired ---
+
+        #[test]
+        fn test_is_jwt_expired_far_past() {
+            assert!(is_jwt_expired(&make_jwt(0)));
+        }
+
+        #[test]
+        fn test_is_jwt_expired_far_future() {
+            assert!(!is_jwt_expired(&make_jwt(u64::MAX / 2)));
+        }
+
+        #[test]
+        fn test_is_jwt_expired_within_grace_period() {
+            // Will expire in 2 minutes, which is within the 3-minute grace window.
+            // Marked as expired
+            let token = make_jwt(u64::from(now()) + 120);
+            assert!(is_jwt_expired(&token));
+        }
+
+        #[test]
+        fn test_is_jwt_expired_malformed_token() {
+            assert!(is_jwt_expired("not.a.jwt"));
+            assert!(is_jwt_expired("onlyone"));
+        }
     }
 }
