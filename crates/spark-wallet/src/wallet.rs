@@ -703,7 +703,7 @@ impl SparkWallet {
 
     pub async fn generate_deposit_address(
         &self,
-    ) -> Result<spark::services::DepositAddress, SparkWalletError> {
+    ) -> Result<spark::services::SingleUseDepositAddress, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
         let signing_public_key = self.signer.get_public_key_for_node(&leaf_id).await?;
         let address = self

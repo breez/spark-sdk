@@ -58,7 +58,7 @@ pub struct StaticDepositAddress {
 
 /// A non-static deposit address that includes a leaf ID for tree creation.
 #[derive(Debug)]
-pub struct DepositAddress {
+pub struct SingleUseDepositAddress {
     pub address: Address,
     pub user_signing_public_key: PublicKey,
     pub verifying_public_key: PublicKey,
@@ -114,7 +114,9 @@ impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for Stat
     }
 }
 
-impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for DepositAddress {
+impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)>
+    for SingleUseDepositAddress
+{
     type Error = ServiceError;
 
     fn try_from(
@@ -128,7 +130,7 @@ impl TryFrom<(operator_rpc::spark::DepositAddressQueryResult, Network)> for Depo
             .map_err(ServiceError::InvalidNodeId)?;
         let (address, user_signing_public_key, verifying_public_key) =
             parse_deposit_address_result(&result, network)?;
-        Ok(DepositAddress {
+        Ok(SingleUseDepositAddress {
             address,
             user_signing_public_key,
             verifying_public_key,
@@ -807,7 +809,7 @@ impl DepositService {
         &self,
         signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
-    ) -> Result<DepositAddress, ServiceError> {
+    ) -> Result<SingleUseDepositAddress, ServiceError> {
         let resp = self
             .operator_pool
             .get_coordinator()
@@ -930,7 +932,7 @@ impl DepositService {
     pub async fn get_unused_deposit_address(
         &self,
         address: &Address,
-    ) -> Result<Option<DepositAddress>, ServiceError> {
+    ) -> Result<Option<SingleUseDepositAddress>, ServiceError> {
         // TODO: unused deposit addresses could be cached in the wallet, so they don't have to be queried from the server every time.
         let addresses = self.query_unused_deposit_addresses(None).await?;
         Ok(addresses.items.into_iter().find(|d| &d.address == address))
@@ -939,7 +941,7 @@ impl DepositService {
     async fn query_unused_deposit_addresses_inner(
         &self,
         paging: PagingFilter,
-    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+    ) -> Result<PagingResult<SingleUseDepositAddress>, ServiceError> {
         trace!(
             "Querying unused deposit addresses with limit: {:?}, offset: {:?}",
             paging.limit, paging.offset
@@ -962,7 +964,7 @@ impl DepositService {
             .deposit_addresses
             .into_iter()
             .filter_map(
-                |result| match DepositAddress::try_from((result, self.network)) {
+                |result| match SingleUseDepositAddress::try_from((result, self.network)) {
                     Ok(addr) => Some(addr),
                     Err(ServiceError::MissingLeafId) => {
                         error!("Ignoring deposit address without leaf ID");
@@ -985,7 +987,7 @@ impl DepositService {
     pub async fn query_unused_deposit_addresses(
         &self,
         paging: Option<PagingFilter>,
-    ) -> Result<PagingResult<DepositAddress>, ServiceError> {
+    ) -> Result<PagingResult<SingleUseDepositAddress>, ServiceError> {
         let addresses = match paging {
             Some(paging) => self.query_unused_deposit_addresses_inner(paging).await?,
             None => {
@@ -1065,11 +1067,11 @@ impl DepositService {
         deposit_address: crate::operator::rpc::spark::Address,
         user_signing_public_key: PublicKey,
         leaf_id: &TreeNodeId,
-    ) -> Result<DepositAddress, ServiceError> {
+    ) -> Result<SingleUseDepositAddress, ServiceError> {
         let (address, verifying_public_key) =
             self.validate_deposit_address_inner(deposit_address, user_signing_public_key, false)?;
 
-        Ok(DepositAddress {
+        Ok(SingleUseDepositAddress {
             address,
             user_signing_public_key,
             verifying_public_key,
