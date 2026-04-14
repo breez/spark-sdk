@@ -31,6 +31,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 mod auth;
+mod domains;
 mod error;
 mod invoice_paid;
 mod postgresql;
@@ -252,8 +253,7 @@ where
         debug!("ensured domain '{}' exists in database", domain);
     }
 
-    let domains: HashSet<String> = repository.list_domains().await?.into_iter().collect();
-    info!("loaded {} allowed domains from database", domains.len());
+    let domains = domains::start(repository.clone()).await?;
 
     let ca_cert = args
         .ca_cert
