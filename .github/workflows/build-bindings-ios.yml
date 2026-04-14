@@ -61,18 +61,44 @@ jobs:
       - name: Build bindings
         working-directory: crates/breez-sdk/bindings
         run: cargo build --release --target ${{ matrix.target }}
-      
+
+      - name: Generate dSYM and strip dylib
+        run: |
+          cd target/${{ matrix.target }}/release
+          # Copy the dylib under the intended framework binary name so the
+          # resulting .dSYM bundle and inner DWARF file match what Xcode
+          # looks for inside the XCFramework.
+          cp libbreez_sdk_spark_bindings.dylib breez_sdk_sparkFFI
+          dsymutil breez_sdk_sparkFFI -o breez_sdk_sparkFFI.framework.dSYM
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.apple.xcode.dsym.breez_sdk_sparkFFI" breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist
+          rm breez_sdk_sparkFFI
+          # The DWARF is now in the .dSYM bundle; strip debug symbols from
+          # the dylib we will ship. LC_UUID is preserved so the stripped
+          # dylib still matches the .dSYM.
+          strip -S libbreez_sdk_spark_bindings.dylib
+
+      - name: Stage dSYM for upload
+        run: |
+          mkdir -p dsym-stage
+          cp -R target/${{ matrix.target }}/release/breez_sdk_sparkFFI.framework.dSYM dsym-stage/
+
       - name: Archive bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.a
-      
+
       - name: Archive dylib bindings
         uses: actions/upload-artifact@v4
         with:
           name: bindings-dynamic-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/libbreez_sdk_spark_bindings.dylib
+
+      - name: Archive dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dsym-${{ matrix.target }}
+          path: dsym-stage
 
   merge:
     runs-on: macOS-latest
@@ -109,6 +135,16 @@ jobs:
           name: bindings-dynamic-aarch64-apple-ios-sim
           path: dynamic-aarch64-apple-ios-sim
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-dsym-aarch64-apple-ios-sim
+          path: dsym-aarch64-apple-ios-sim
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bindings-dsym-x86_64-apple-ios
+          path: dsym-x86_64-apple-ios
+
       - name: Build ios-universal
         run: |
           mkdir -p ios-universal
@@ -128,6 +164,19 @@ jobs:
         run: |
           mkdir -p dynamic-ios-universal-sim
           lipo -create -output dynamic-ios-universal-sim/libbreez_sdk_spark_bindings.dylib dynamic-aarch64-apple-ios-sim/libbreez_sdk_spark_bindings.dylib dynamic-x86_64-apple-ios/libbreez_sdk_spark_bindings.dylib
+
+      - name: Build ios-universal-sim dSYM
+        run: |
+          # Combine per-arch dSYMs by lipo'ing their inner DWARF Mach-O into
+          # a single universal DWARF file.
+          DSYM_OUT=dsym-ios-universal-sim/breez_sdk_sparkFFI.framework.dSYM
+          mkdir -p "$DSYM_OUT/Contents/Resources/DWARF"
+          cp dsym-aarch64-apple-ios-sim/breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist \
+             "$DSYM_OUT/Contents/Info.plist"
+          lipo -create \
+            -output "$DSYM_OUT/Contents/Resources/DWARF/breez_sdk_sparkFFI" \
+            dsym-aarch64-apple-ios-sim/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI \
+            dsym-x86_64-apple-ios/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI
 
       - name: Archive ios-universal
         uses: actions/upload-artifact@v4
@@ -152,6 +201,12 @@ jobs:
         with:
           name: bindings-dynamic-ios-universal-sim
           path: dynamic-ios-universal-sim/libbreez_sdk_spark_bindings.dylib
+
+      - name: Archive ios-universal-sim dSYM
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dsym-ios-universal-sim
+          path: dsym-ios-universal-sim
 
   build-dummies:
     if: ${{ inputs.use-dummy-binaries }}
@@ -200,3 +255,28 @@ jobs:
         with:
           name: bindings-${{ matrix.target }}
           path: ./*
+
+  build-dsym-dummies:
+    if: ${{ inputs.use-dummy-binaries }}
+    runs-on: ubuntu-latest
+    name: Build dSYM dummies ${{ matrix.target }}
+    strategy:
+      matrix:
+        target: [
+          aarch64-apple-ios,
+          x86_64-apple-ios,
+          aarch64-apple-ios-sim,
+          ios-universal-sim,
+        ]
+    steps:
+      - name: Build dummy ios dSYM ${{ matrix.target }}
+        run: |
+          mkdir -p dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF
+          touch dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Info.plist
+          touch dsym-stage/breez_sdk_sparkFFI.framework.dSYM/Contents/Resources/DWARF/breez_sdk_sparkFFI
+
+      - name: Upload dummy ios dSYM ${{ matrix.target }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-dsym-${{ matrix.target }}
+          path: dsym-stage
