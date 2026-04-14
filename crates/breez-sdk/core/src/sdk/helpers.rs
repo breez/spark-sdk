@@ -7,7 +7,7 @@ use breez_sdk_common::lnurl::{
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use x509_cert::Certificate;
 use x509_cert::der::{Decode, asn1::ObjectIdentifier};
 
@@ -214,8 +214,7 @@ pub(crate) fn validate_breez_api_key(api_key: &str) -> Result<(), SdkError> {
 /// Returns a static deposit address.
 ///
 /// When `new_address` is `true`, rotates to a fresh address (archives the
-/// old one), falling back to generate when no address exists yet (gRPC
-/// `NotFound`).
+/// old one). The SO request creates one when no address exists yet.
 ///
 /// When `new_address` is `false`, returns the existing address via
 /// generate (which creates one on first call).
@@ -224,17 +223,10 @@ pub(crate) async fn get_deposit_address(
     new_address: bool,
 ) -> Result<String, SdkError> {
     if new_address {
-        match spark_wallet.rotate_static_deposit_address().await {
-            Ok(addr) => Ok(addr.to_string()),
-            Err(e) if e.is_not_found() => {
-                debug!("No existing deposit address found, generating a new one");
-                Ok(spark_wallet
-                    .generate_static_deposit_address()
-                    .await?
-                    .to_string())
-            }
-            Err(e) => Err(e.into()),
-        }
+        Ok(spark_wallet
+            .rotate_static_deposit_address()
+            .await?
+            .to_string())
     } else {
         Ok(spark_wallet
             .generate_static_deposit_address()
