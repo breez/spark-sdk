@@ -119,7 +119,7 @@ where
         validate_username(&username)?;
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
+            .get_user_by_name(&sanitize_domain(&state, &host).await?, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -158,7 +158,7 @@ where
         }
 
         let user = User {
-            domain: sanitize_domain(&state, &host)?,
+            domain: sanitize_domain(&state, &host).await?,
             pubkey: pubkey.to_string(),
             name: username,
             description: payload.description,
@@ -206,7 +206,7 @@ where
 
         state
             .db
-            .delete_user(&sanitize_domain(&state, &host)?, &pubkey.to_string())
+            .delete_user(&sanitize_domain(&state, &host).await?, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -236,7 +236,7 @@ where
 
         let user = state
             .db
-            .get_user_by_pubkey(&sanitize_domain(&state, &host)?, &pubkey.to_string())
+            .get_user_by_pubkey(&sanitize_domain(&state, &host).await?, &pubkey.to_string())
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -570,7 +570,7 @@ where
         let username = sanitize_username(&identifier);
         let user = state
             .db
-            .get_user_by_name(&sanitize_domain(&state, &host)?, &username)
+            .get_user_by_name(&sanitize_domain(&state, &host).await?, &username)
             .await
             .map_err(|e| {
                 error!("failed to execute query: {}", e);
@@ -621,7 +621,7 @@ where
         }
 
         let username = sanitize_username(&identifier);
-        let domain = sanitize_domain(&state, &host)?;
+        let domain = sanitize_domain(&state, &host).await?;
         let user = state
             .db
             .get_user_by_name(&domain, &username)
@@ -1353,13 +1353,14 @@ struct SspAmount {
     unit: String,
 }
 
-fn sanitize_domain<DB>(
+async fn sanitize_domain<DB>(
     state: &State<DB>,
     domain: &str,
 ) -> Result<String, (StatusCode, Json<Value>)> {
     let domain = domain.trim().to_lowercase();
     // If domains list is empty allow all domains (for testing)
-    if state.domains.is_empty() || state.domains.contains(&domain) {
+    let domains = state.domains.read().await;
+    if domains.is_empty() || domains.contains(&domain) {
         return Ok(domain);
     }
     warn!("domain not allowed: {}", domain);

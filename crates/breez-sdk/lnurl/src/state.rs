@@ -4,7 +4,7 @@ use spark::session_manager::InMemorySessionManager;
 use spark::ssp::ServiceProvider;
 use spark_wallet::DefaultSigner;
 use std::{collections::HashSet, sync::Arc};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, RwLock, watch};
 
 pub struct State<DB> {
     pub db: DB,
@@ -14,7 +14,7 @@ pub struct State<DB> {
     pub min_sendable: u64,
     pub max_sendable: u64,
     pub include_spark_address: bool,
-    pub domains: HashSet<String>,
+    pub domains: Arc<RwLock<HashSet<String>>>,
     pub nostr_keys: Option<nostr::Keys>,
     pub ca_cert: Option<Vec<u8>>,
     pub connection_manager: Arc<dyn ConnectionManager>,
@@ -40,7 +40,7 @@ where
             min_sendable: self.min_sendable,
             max_sendable: self.max_sendable,
             include_spark_address: self.include_spark_address,
-            domains: self.domains.clone(),
+            domains: Arc::clone(&self.domains),
             nostr_keys: self.nostr_keys.clone(),
             ca_cert: self.ca_cert.clone(),
             connection_manager: self.connection_manager.clone(),
