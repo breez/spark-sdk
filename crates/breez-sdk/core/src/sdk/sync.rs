@@ -10,7 +10,6 @@ use super::{
     helpers::{BalanceWatcher, update_balances},
     parse_input,
 };
-use crate::Network;
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -35,10 +34,6 @@ impl BreezSdk {
         let sync_coordinator = sdk.sync_coordinator.clone();
         let mut sync_trigger_receiver = sdk.sync_coordinator.subscribe();
         let mut last_sync_time = SystemTime::now();
-        let (should_refresh_jwt, mut refresh_counter) = (
-            matches!(sdk.config.network, Network::Mainnet) && sdk.config.api_key.is_some(),
-            0,
-        );
 
         let sync_interval = u64::from(self.config.sync_interval_secs);
         let span = tracing::Span::current();
@@ -97,10 +92,12 @@ impl BreezSdk {
                         }
                     }
 
-                    () = sdk.jwt_interval(should_refresh_jwt, refresh_counter) => {
-                        refresh_counter = refresh_counter.saturating_add(1);
-                        let api_key = sdk.config.api_key.as_ref().unwrap();
-
+                    // Only executes on mainnet with API key
+                    () = sdk.jwt_refresh_interval() => {
+                        let Some(api_key) = sdk.config.api_key.as_ref() else {
+                            warn!("Could not refresh JWT: no API key provided");
+                            return;
+                        };
                         let token = match Self::new_jwt(api_key).await {
                             Ok(token) => token,
                             Err(err) => {
@@ -116,7 +113,6 @@ impl BreezSdk {
                         {
                             warn!("Could not persist JWT: {err}");
                         }
-                        refresh_counter = 0;
                     }
 
                     // Ensure we sync at least the configured interval
@@ -670,7 +666,7 @@ mod jwt {
     use serde::Deserialize;
     use tracing::warn;
 
-    use crate::{BreezSdk, SdkError};
+    use crate::{BreezSdk, Network, SdkError};
 
     pub(super) const KEY_BREEZ_JWT: &str = "breez_jwt";
     const JWT_REFRESH_RETRY_SECS: u64 = 10;
@@ -738,17 +734,16 @@ mod jwt {
             }
         }
 
-        pub(super) async fn jwt_interval(&self, should_refresh_jwt: bool, refresh_counter: u8) {
+        pub(super) async fn jwt_refresh_interval(&self) {
+            let should_refresh_jwt =
+                matches!(self.config.network, Network::Mainnet) && self.config.api_key.is_some();
             if !should_refresh_jwt {
                 std::future::pending::<()>().await;
             }
             let token = self.session_manager.get_token().await;
-            let duration = Duration::from_secs(match (token, refresh_counter) {
-                (None, counter) if counter < 3 => 0,
-                (None, _) => JWT_REFRESH_RETRY_SECS,
-                (Some(token), _) => {
-                    jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry)
-                }
+            let duration = Duration::from_secs(match token {
+                None => JWT_REFRESH_RETRY_SECS,
+                Some(token) => jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry),
             });
             tokio::time::sleep(duration).await;
         }
