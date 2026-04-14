@@ -46,6 +46,7 @@ impl BreezSdk {
             let balance_watcher =
                 BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
             let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
+            sdk.init_jwt().await;
             loop {
                 tokio::select! {
                     _ = shutdown_receiver.changed() => {
@@ -667,6 +668,7 @@ mod jwt {
     use breez_sdk_common::{breez_server::PRODUCTION_BREEZSERVER_URL, utils::now};
     use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration};
     use serde::Deserialize;
+    use tracing::warn;
 
     use crate::{BreezSdk, SdkError};
 
@@ -722,23 +724,22 @@ mod jwt {
             Ok(token)
         }
 
-        pub(super) async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
-            let mut token = self.session_manager.get_token().await;
-
-            if token.is_none() {
-                token = self
-                    .storage
-                    .get_cached_item(KEY_BREEZ_JWT.to_string())
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(token) = &token
-                    && !is_jwt_expired(token)
-                {
-                    self.session_manager.set_token(token.clone()).await;
+        pub(super) async fn init_jwt(&self) {
+            match self
+                .storage
+                .get_cached_item(KEY_BREEZ_JWT.to_string())
+                .await
+            {
+                Ok(Some(stored_token)) if !is_jwt_expired(&stored_token) => {
+                    self.session_manager.set_token(stored_token).await;
                 }
+                Err(err) => warn!("Could not fetch stored JWT: {err}"),
+                _ => {}
             }
+        }
 
+        pub(super) async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
+            let token = self.session_manager.get_token().await;
             Duration::from_secs(match (token, refresh_counter) {
                 (None, counter) if counter < 3 => 0,
                 (None, _) => JWT_REFRESH_RETRY_SECS,
