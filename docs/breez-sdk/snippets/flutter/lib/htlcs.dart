@@ -8,7 +8,7 @@ Future<Payment> sendHtlcPayment(BreezSdk sdk) async {
   // Set the amount you wish the pay the receiver
   BigInt? amountSats = BigInt.from(50000);
   final prepareRequest = PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(paymentRequest),
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,

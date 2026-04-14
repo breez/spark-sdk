@@ -29,7 +29,7 @@ func sendHtlcPayment(sdk: BreezSdk) async throws -> Payment {
     // Set the amount you wish to pay the receiver
     let amountSats = BInt(50_000)
     let prepareRequest = PrepareSendPaymentRequest(
-        paymentRequest: .input(paymentRequest),
+        paymentRequest: .input(input: paymentRequest),
         amount: amountSats,
         tokenIdentifier: nil,
         conversionOptions: nil,

@@ -1335,7 +1335,7 @@ pub enum OnchainConfirmationSpeed {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentRequest {
     /// Unparsed user input string (bolt11, spark address, BIP-21, cross-chain URI, etc.)
-    Input(String),
+    Input { input: String },
     /// Cross-chain send with a selected route from `get_cross_chain_routes()`.
     /// Amount comes from `PrepareSendPaymentRequest.amount`, not here.
     CrossChain {

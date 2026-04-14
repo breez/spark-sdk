@@ -15,7 +15,7 @@ func PrepareSendPaymentLightningBolt11(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	optionalAmountSats := new(big.Int).SetInt64(5_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &optionalAmountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,
@@ -53,7 +53,7 @@ func PrepareSendPaymentOnchain(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &amountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,
@@ -92,7 +92,7 @@ func PrepareSendPaymentSparkAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	amountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &amountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,
@@ -126,7 +126,7 @@ func PrepareSendPaymentSparkInvoice(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	optionalAmountSats := new(big.Int).SetInt64(50_000)
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &optionalAmountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,
@@ -168,7 +168,7 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 	}
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            nil,
 		TokenIdentifier:   nil,
 		ConversionOptions: &conversionOptions,
@@ -285,7 +285,7 @@ func PrepareSendPaymentFeesIncluded(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_s
 	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &amountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,
@@ -336,7 +336,7 @@ func PrepareSendPaymentSendAll(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	feePolicy := breez_sdk_spark.FeePolicyFeesIncluded
 
 	request := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &tokenBalance.Balance,
 		TokenIdentifier:   &tokenIdentifier,
 		ConversionOptions: &conversionOptions,

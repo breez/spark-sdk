@@ -68,7 +68,9 @@ async fn test_token_conversion_success(
     let prepare_btc_to_token = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_success_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -232,7 +234,9 @@ async fn test_token_conversion_success(
     let prepare_token_to_btc = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(alice_invoice.clone()),
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice.clone(),
+            },
             amount: None, // Amount from invoice
             token_identifier: None,
             conversion_options: Some(ConversionOptions {
@@ -431,7 +435,9 @@ async fn test_token_conversion_failure(
     let prepare_non_existent_result = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(non_existent_token_id.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -472,7 +478,9 @@ async fn test_token_conversion_failure(
     let prepare_low_slippage = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {

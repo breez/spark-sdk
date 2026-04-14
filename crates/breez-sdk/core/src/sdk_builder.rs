@@ -615,16 +615,18 @@ impl SdkBuilder {
         // Build cross-chain providers. Each provider owns its own HTTP
         // client, route cache, and background monitor task.
         let mut cross_chain_providers = crate::cross_chain::CrossChainProviders::new();
-        cross_chain_providers.insert(
-            crate::cross_chain::CrossChainProvider::Orchestra,
-            std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
-                flashnet_config.orchestra.clone(),
-                self.config.network,
-                Arc::clone(&spark_wallet),
-                Arc::clone(&storage),
-                shutdown_sender.subscribe(),
-            )),
-        );
+        if let Some(orchestra_config) = &flashnet_config.orchestra {
+            cross_chain_providers.insert(
+                crate::cross_chain::CrossChainProvider::Orchestra,
+                std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
+                    orchestra_config.clone(),
+                    self.config.network,
+                    Arc::clone(&spark_wallet),
+                    Arc::clone(&storage),
+                    shutdown_sender.subscribe(),
+                )),
+            );
+        }
 
         let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
             flashnet_config,

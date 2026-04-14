@@ -117,7 +117,7 @@ impl OrchestraClient {
             .await
     }
 
-    /// Create a quote. Requires auth.
+    /// Create a quote. Requires auth + idempotency key.
     pub async fn quote(&self, request: QuoteRequest) -> Result<QuoteResponse, FlashnetError> {
         debug!(
             "Orchestra: POST /v1/orchestration/quote (source={}/{} dest={}/{})",
@@ -126,7 +126,8 @@ impl OrchestraClient {
             request.destination_chain,
             request.destination_asset
         );
-        self.post("v1/orchestration/quote", &request, true, None)
+        let idem = uuid::Uuid::new_v4().to_string();
+        self.post("v1/orchestration/quote", &request, true, Some(idem))
             .await
     }
 
@@ -305,7 +306,7 @@ impl OrchestraClient {
         let response = self.http_client.get(url, Some(headers)).await?;
         if !response.is_success() {
             return Err(FlashnetError::Network {
-                reason: response.body,
+                reason: extract_error_message(&response.body),
                 code: Some(response.status),
             });
         }
@@ -349,7 +350,7 @@ impl OrchestraClient {
 
         if !response.is_success() {
             return Err(FlashnetError::Network {
-                reason: response.body,
+                reason: extract_error_message(&response.body),
                 code: Some(response.status),
             });
         }
@@ -365,4 +366,19 @@ impl OrchestraClient {
 fn derive_idempotency_key(scope: &str, key_input: &str) -> String {
     let hash = sha256::Hash::hash(format!("orchestra:{scope}:{key_input}").as_bytes());
     hash.to_string()
+}
+
+/// Try to extract a human-readable message from an Orchestra JSON error body.
+/// Orchestra errors follow the shape `{"error":{"code":"...","message":"..."}}`.
+/// Returns the `message` field if present, otherwise the raw body.
+fn extract_error_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| body.to_string())
 }

@@ -16,7 +16,7 @@ class Htlcs {
         // val amountSats = BigInteger.valueOf(50_000L)
         try {
             val prepareRequest = PrepareSendPaymentRequest(
-                paymentRequest = PaymentRequest.Input(paymentRequest),
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = amountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,

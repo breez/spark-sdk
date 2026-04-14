@@ -25,7 +25,9 @@ async fn send_htlc_alice_to_bob(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(5),
             token_identifier: None,
             conversion_options: None,

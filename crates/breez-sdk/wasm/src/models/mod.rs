@@ -825,7 +825,9 @@ pub struct CrossChainRoutePair {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequest)]
 pub enum PaymentRequest {
-    Input(String),
+    Input {
+        input: String,
+    },
     CrossChain {
         address: String,
         route: CrossChainRoutePair,

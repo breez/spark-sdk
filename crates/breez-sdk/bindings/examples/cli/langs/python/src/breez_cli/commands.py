@@ -333,7 +333,7 @@ async def _handle_pay(sdk, _token_issuer, session, args):
 
     prepare_response = await sdk.prepare_send_payment(
         request=PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(args.payment_request),
+            payment_request=PaymentRequest.INPUT(input=args.payment_request),
             amount=args.amount,
             token_identifier=args.token_identifier,
             conversion_options=conversion_options,

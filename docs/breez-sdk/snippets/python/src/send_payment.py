@@ -22,7 +22,7 @@ async def prepare_send_payment_lightning_bolt11(sdk: BreezSdk):
     optional_amount_sats = 5_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=optional_amount_sats,
             token_identifier=None,
             conversion_options=None,
@@ -54,7 +54,7 @@ async def prepare_send_payment_onchain(sdk: BreezSdk):
     amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=amount_sats,
             token_identifier=None,
             conversion_options=None,
@@ -94,7 +94,7 @@ async def prepare_send_payment_spark_address(sdk: BreezSdk):
     amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=amount_sats,
             token_identifier=None,
             conversion_options=None,
@@ -118,7 +118,7 @@ async def prepare_send_payment_spark_invoice(sdk: BreezSdk):
     optional_amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=optional_amount_sats,
             token_identifier=None,
             conversion_options=None,
@@ -151,7 +151,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
     )
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=None,
             token_identifier=None,
             conversion_options=conversion_options,
@@ -246,7 +246,7 @@ async def prepare_send_payment_fees_included(sdk: BreezSdk):
     amount_sats = 50_000
     try:
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=amount_sats,
             token_identifier=None,
             conversion_options=None,
@@ -281,7 +281,7 @@ async def prepare_send_payment_send_all(sdk: BreezSdk):
         )
 
         request = PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(payment_request),
+            payment_request=PaymentRequest.INPUT(input=payment_request),
             amount=token_balance.balance,
             token_identifier=token_identifier,
             conversion_options=conversion_options,

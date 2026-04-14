@@ -597,7 +597,7 @@ public static class Commands
         FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
 
         var prepareResponse = await sdk.PrepareSendPayment(request: new PrepareSendPaymentRequest(
-            paymentRequest: new PaymentRequest.Input(paymentRequest),
+            paymentRequest: new PaymentRequest.Input(input: paymentRequest),
             amount: ParseOptionalUlong(amountStr),
             tokenIdentifier: tokenIdentifier,
             conversionOptions: conversionOptions,

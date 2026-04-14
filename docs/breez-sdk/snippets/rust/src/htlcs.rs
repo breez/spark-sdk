@@ -8,7 +8,7 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
     // Set the amount you wish to pay the receiver
     let amount_sats = Some(50_000);
     let prepare_request = PrepareSendPaymentRequest {
-        payment_request: PaymentRequest::Input(payment_request),
+        payment_request: PaymentRequest::Input { input: payment_request },
         amount: amount_sats,
         token_identifier: None,
         conversion_options: None,

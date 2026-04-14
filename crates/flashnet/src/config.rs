@@ -6,7 +6,7 @@ pub struct FlashnetConfig {
     pub base_url: String,
     pub network: Network,
     pub integrator_config: Option<IntegratorConfig>,
-    pub orchestra: OrchestraConfig,
+    pub orchestra: Option<OrchestraConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,22 +35,19 @@ impl std::fmt::Debug for OrchestraConfig {
     }
 }
 
-// Default Breez-owned Orchestra API keys per network. Placeholder values —
-// replace with real keys before release. See CLAUDE.md / deployment docs.
-const ORCHESTRA_API_KEY_MAINNET: &str = "fn_breez_mainnet_placeholder";
-const ORCHESTRA_API_KEY_TESTNET: &str = "fn_breez_testnet_placeholder";
-
+// Orchestra API key, injected at compile time via the ORCHESTRA_API_KEY env var.
+// In CI this is set from GitHub secrets; locally export it in your shell.
+const ORCHESTRA_API_KEY: Option<&str> = option_env!("ORCHESTRA_API_KEY");
 const ORCHESTRA_BASE_URL: &str = "https://orchestration.flashnet.xyz";
 
 impl OrchestraConfig {
-    pub fn default_for_network(network: Network) -> Self {
-        let api_key = match network {
-            Network::Mainnet => ORCHESTRA_API_KEY_MAINNET,
-            Network::Regtest | Network::Testnet | Network::Signet => ORCHESTRA_API_KEY_TESTNET,
-        };
-        Self {
-            base_url: ORCHESTRA_BASE_URL.to_string(),
-            api_key: api_key.to_string(),
+    pub fn default_for_network(network: Network) -> Option<Self> {
+        match network {
+            Network::Mainnet => ORCHESTRA_API_KEY.map(|api_key| Self {
+                base_url: ORCHESTRA_BASE_URL.to_string(),
+                api_key: api_key.to_string(),
+            }),
+            Network::Regtest | Network::Testnet | Network::Signet => None,
         }
     }
 }

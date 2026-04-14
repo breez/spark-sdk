@@ -403,7 +403,7 @@ pub struct _PrepareLnurlPayResponse {
 
 #[frb(mirror(PaymentRequest))]
 pub enum _PaymentRequest {
-    Input(String),
+    Input { input: String },
     CrossChain {
         address: String,
         route: CrossChainRoutePair,

@@ -167,7 +167,10 @@ impl BreezSdk {
         }
 
         // Input string path — parse and dispatch as before.
-        let PaymentRequest::Input(ref input_str) = request.payment_request else {
+        let PaymentRequest::Input {
+            input: ref input_str,
+        } = request.payment_request
+        else {
             return Err(SdkError::InvalidInput(
                 "Expected PaymentRequest::Input".to_string(),
             ));
@@ -1929,7 +1932,7 @@ impl BreezSdk {
         }
 
         let input_str = match &request.payment_request {
-            PaymentRequest::Input(s) => s.as_str(),
+            PaymentRequest::Input { input: s } => s.as_str(),
             PaymentRequest::CrossChain { .. } => {
                 return Err(SdkError::InvalidInput(
                     "Token conversion is not supported for cross-chain sends".to_string(),

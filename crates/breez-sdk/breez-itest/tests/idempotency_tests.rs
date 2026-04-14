@@ -56,7 +56,9 @@ async fn test_01_spark_idempotency_key(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(5),
             token_identifier: None,
             conversion_options: None,
@@ -224,7 +226,9 @@ async fn test_02_lightning_idempotency_key(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_invoice.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_invoice.clone(),
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -376,7 +380,9 @@ async fn test_03_bitcoin_idempotency_key(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_address.clone(),
+            },
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,
@@ -520,7 +526,9 @@ async fn test_04_spark_htlc_idempotency_key(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(5),
             token_identifier: None,
             conversion_options: None,

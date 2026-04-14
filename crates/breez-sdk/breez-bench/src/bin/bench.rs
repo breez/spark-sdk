@@ -308,7 +308,9 @@ async fn main() -> Result<()> {
                 let prepare = receiver
                     .sdk
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: PaymentRequest::Input(sender_address.clone()),
+                        payment_request: PaymentRequest::Input {
+                            input: sender_address.clone(),
+                        },
                         amount: Some(receiver_balance as u128),
                         token_identifier: None,
                         conversion_options: None,
@@ -457,7 +459,9 @@ async fn main() -> Result<()> {
         let prepare_result = sender
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: PaymentRequest::Input(receiver_address.clone()),
+                payment_request: PaymentRequest::Input {
+                    input: receiver_address.clone(),
+                },
                 amount: Some(payment_spec.amount_sats as u128),
                 token_identifier: None,
                 conversion_options: None,
@@ -809,7 +813,9 @@ async fn return_funds_to_sender(
     let prepare = receiver
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Input(sender_address.to_string()),
+            payment_request: PaymentRequest::Input {
+                input: sender_address.to_string(),
+            },
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,

@@ -74,6 +74,7 @@ impl OrchestraService {
             storage,
             monitor_trigger: monitor_trigger.clone(),
         };
+        info!("Orchestra service initialized");
         service.spawn_monitor(shutdown_receiver, &monitor_trigger);
         service
     }
@@ -259,7 +260,15 @@ impl CrossChainService for OrchestraService {
                 SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
             })?;
 
-        let pairs: Vec<CrossChainRoutePair> = routes
+        // Multiple raw routes may exist for the same destination (e.g.
+        // BTC→USDT-on-tron and USDB→USDT-on-tron). Dedup by (chain, asset,
+        // contract_address) so the caller only sees one route per destination.
+        // The source asset is determined later at prepare time via
+        // `token_identifier`.
+        let mut seen = std::collections::HashSet::new();
+        let mut pairs: Vec<CrossChainRoutePair> = Vec::new();
+
+        for r in routes
             .iter()
             .filter(|r| family.matches_chain(&r.destination.chain))
             .filter(|r| {
@@ -272,15 +281,34 @@ impl CrossChainService for OrchestraService {
                     true
                 }
             })
-            .map(|r| CrossChainRoutePair {
+        {
+            let key = (
+                r.destination.chain.clone(),
+                r.destination.asset.clone(),
+                r.destination.contract_address.clone(),
+            );
+            if seen.contains(&key) {
+                // Merge: if any source route supports exact-out, propagate it.
+                if r.exact_out_eligible
+                    && let Some(existing) = pairs.iter_mut().find(|p| {
+                        p.chain == key.0 && p.asset == key.1 && p.contract_address == key.2
+                    })
+                {
+                    existing.exact_out_eligible = true;
+                }
+
+                continue;
+            }
+            seen.insert(key);
+            pairs.push(CrossChainRoutePair {
                 provider: CrossChainProvider::Orchestra,
                 chain: r.destination.chain.clone(),
                 asset: r.destination.asset.clone(),
                 contract_address: r.destination.contract_address.clone(),
                 decimals: r.destination.decimals,
                 exact_out_eligible: r.exact_out_eligible,
-            })
-            .collect();
+            });
+        }
 
         Ok(pairs)
     }

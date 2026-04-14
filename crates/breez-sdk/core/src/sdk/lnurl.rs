@@ -89,7 +89,9 @@ impl BreezSdk {
 
         let prepare_response = self
             .prepare_send_payment(crate::PrepareSendPaymentRequest {
-                payment_request: PaymentRequest::Input(success_data.pr),
+                payment_request: PaymentRequest::Input {
+                    input: success_data.pr,
+                },
                 amount: Some(u128::from(amount_sats)),
                 token_identifier: request.token_identifier.clone(),
                 conversion_options: request.conversion_options.clone(),

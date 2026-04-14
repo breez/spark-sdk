@@ -115,7 +115,7 @@ func SendTokenPayment(sdk *breez_sdk_spark.BreezSdk) error {
 	amount := new(big.Int).SetInt64(1_000)
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &amount,
 		TokenIdentifier:   &tokenIdentifier,
 		ConversionOptions: nil,
@@ -233,7 +233,7 @@ func PrepareSendTokenPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) error
 	}
 
 	prepareResponse, err := sdk.PrepareSendPayment(breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{Input: paymentRequest},
 		Amount:            &amount,
 		TokenIdentifier:   &tokenIdentifier,
 		ConversionOptions: conversionOptions,

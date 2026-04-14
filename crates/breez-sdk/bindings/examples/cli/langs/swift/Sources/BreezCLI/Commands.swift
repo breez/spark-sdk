@@ -207,7 +207,7 @@ func readPaymentOptions(_ method: SendPaymentMethod) -> SendPaymentOptions? {
             expiryDurationSecs: expiryDuration
         ))
 
-    case .sparkInvoice:
+    case .sparkInvoice, .crossChainAddress:
         return nil
     }
 }
@@ -450,7 +450,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
 
     let prepareResponse = try await sdk.prepareSendPayment(request: PrepareSendPaymentRequest(
-        paymentRequest: .input(paymentRequest),
+        paymentRequest: .input(input: paymentRequest),
         amount: amount,
         tokenIdentifier: tokenIdentifier,
         conversionOptions: conversionOptions,
