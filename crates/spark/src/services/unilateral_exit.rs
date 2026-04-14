@@ -215,6 +215,194 @@ impl UnilateralExitService {
     }
 }
 
+/// Computes the CPFP package fee for a parent-child transaction pair.
+///
+/// The child transaction pays for both itself and the parent (which carries no fee
+/// via its ephemeral anchor). Returns the fee in satoshis.
+///
+/// # Arguments
+/// * `parent_weight_wu` - Weight of the parent transaction in weight units
+/// * `cpfp_input_weight_wu` - Total signed input weight of the CPFP inputs in weight units
+/// * `change_script_len` - Length of the change output's scriptPubKey in bytes
+/// * `fee_rate` - Fee rate in satoshis per virtual byte
+pub fn compute_cpfp_package_fee(
+    parent_weight_wu: u64,
+    cpfp_input_weight_wu: u64,
+    change_script_len: usize,
+    fee_rate: u64,
+) -> u64 {
+    // Anchor input: 41 non-witness × 4 + 1 witness = 165 WU
+    let anchor_weight: u64 = 165;
+    // Output: (value(8) + scriptPubKey_len(1) + scriptPubKey(N)) × 4
+    let output_weight: u64 = (9 + change_script_len as u64) * 4;
+    // Overhead: (version(4) + input_count(1) + output_count(1) + locktime(4)) × 4 + marker(1) + flag(1) = 42
+    let overhead_weight: u64 = 42;
+    let child_weight = cpfp_input_weight_wu + anchor_weight + output_weight + overhead_weight;
+    let package_weight = parent_weight_wu + child_weight;
+    (fee_rate * package_weight).div_ceil(4)
+}
+
+/// Computes the fee for a sweep transaction spending P2TR refund outputs.
+///
+/// # Arguments
+/// * `num_inputs` - Number of P2TR key-path inputs (one per exited leaf)
+/// * `destination_script_len` - Length of the destination output's scriptPubKey in bytes
+/// * `fee_rate` - Fee rate in satoshis per virtual byte
+pub fn compute_sweep_fee(num_inputs: usize, destination_script_len: usize, fee_rate: u64) -> u64 {
+    // P2TR key-path input: 41 non-witness × 4 + 66 witness = 230 WU
+    let input_weight = num_inputs as u64 * 230;
+    // Output: (value(8) + scriptPubKey_len(1) + scriptPubKey(N)) × 4
+    let output_weight = (9 + destination_script_len as u64) * 4;
+    // Overhead: 42 WU (same as CPFP)
+    let total_weight = 42 + input_weight + output_weight;
+    (fee_rate * total_weight).div_ceil(4)
+}
+
+/// Parameters for the greedy leaf-selection algorithm.
+pub struct LeafExitCostParams {
+    /// Total signed weight of all initial CPFP inputs (used for the very first
+    /// CPFP child transaction in the chain).
+    pub initial_cpfp_input_weight: u64,
+    /// Signed weight of a single CPFP change-output input (used for every
+    /// subsequent CPFP child transaction in the chain).
+    pub single_cpfp_input_weight: u64,
+    /// Length in bytes of the change scriptPubKey carried through the CPFP chain.
+    pub change_script_len: usize,
+    /// Total satoshi value available across all CPFP inputs (fee budget).
+    pub total_cpfp_budget: u64,
+    /// Length in bytes of the destination scriptPubKey for the sweep transaction.
+    pub destination_script_len: usize,
+    /// Target fee rate in satoshis per virtual byte.
+    pub fee_rate: u64,
+}
+
+/// Selects leaves that are profitable for unilateral exit.
+///
+/// Uses a greedy algorithm: leaves are sorted by value descending and each leaf
+/// is included when its value strictly exceeds the marginal cost of exiting it.
+/// Marginal cost comprises CPFP fees for any not-yet-covered ancestor and refund
+/// transactions, plus the incremental sweep-transaction input fee.  Leaves that
+/// share ancestors with previously selected leaves benefit from reduced marginal
+/// cost.
+///
+/// Returns the IDs of the selected leaves (order matches the CPFP broadcast
+/// sequence: highest-value first).
+pub fn select_profitable_leaves(
+    tree_nodes: &HashMap<TreeNodeId, TreeNode>,
+    leaf_ids: &[TreeNodeId],
+    params: &LeafExitCostParams,
+) -> Vec<TreeNodeId> {
+    // Collect leaves we can actually look up, sorted by value descending.
+    let mut leaves: Vec<_> = leaf_ids
+        .iter()
+        .filter_map(|id| tree_nodes.get(id).map(|node| (id, node)))
+        .collect();
+    leaves.sort_by(|a, b| b.1.value.cmp(&a.1.value));
+
+    let mut selected: Vec<TreeNodeId> = Vec::new();
+    let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
+    let mut remaining_budget = params.total_cpfp_budget;
+    // The very first CPFP child tx in the chain spends all initial inputs;
+    // every subsequent one spends a single change output.
+    let mut first_cpfp_pending = true;
+
+    for (leaf_id, leaf) in &leaves {
+        // Leaves without a refund tx cannot be unilaterally exited.
+        let Some(refund_tx) = &leaf.refund_tx else {
+            continue;
+        };
+
+        // Walk the ancestor chain from root to leaf.
+        let Some(ancestors) = ancestor_chain(tree_nodes, leaf) else {
+            continue; // incomplete chain — skip
+        };
+
+        // --- marginal CPFP cost ------------------------------------------
+        let mut cpfp_cost: u64 = 0;
+        let mut local_first = first_cpfp_pending;
+
+        for ancestor in &ancestors {
+            let txid = ancestor.node_tx.compute_txid();
+            if covered_txids.contains(&txid) {
+                continue;
+            }
+            let input_w = if local_first {
+                local_first = false;
+                params.initial_cpfp_input_weight
+            } else {
+                params.single_cpfp_input_weight
+            };
+            cpfp_cost += compute_cpfp_package_fee(
+                ancestor.node_tx.weight().to_wu(),
+                input_w,
+                params.change_script_len,
+                params.fee_rate,
+            );
+        }
+
+        // Refund-tx CPFP
+        let refund_input_w = if local_first {
+            params.initial_cpfp_input_weight
+        } else {
+            params.single_cpfp_input_weight
+        };
+        cpfp_cost += compute_cpfp_package_fee(
+            refund_tx.weight().to_wu(),
+            refund_input_w,
+            params.change_script_len,
+            params.fee_rate,
+        );
+
+        // --- marginal sweep cost -----------------------------------------
+        let sweep_cost = if selected.is_empty() {
+            compute_sweep_fee(1, params.destination_script_len, params.fee_rate)
+        } else {
+            compute_sweep_fee(
+                selected.len() + 1,
+                params.destination_script_len,
+                params.fee_rate,
+            ) - compute_sweep_fee(
+                selected.len(),
+                params.destination_script_len,
+                params.fee_rate,
+            )
+        };
+
+        let total_marginal_cost = cpfp_cost + sweep_cost;
+
+        // Include the leaf only when it strictly adds value and the CPFP
+        // budget can cover the fee chain (remaining budget must stay > 0).
+        if leaf.value > total_marginal_cost && remaining_budget > cpfp_cost {
+            selected.push((*leaf_id).clone());
+            remaining_budget -= cpfp_cost;
+            first_cpfp_pending = false;
+            for ancestor in &ancestors {
+                covered_txids.insert(ancestor.node_tx.compute_txid());
+            }
+        }
+    }
+
+    selected
+}
+
+/// Walks from `leaf` up to the root, returning the chain `[root, …, leaf]`.
+/// Returns `None` if any parent is missing from `tree_nodes` or the chain
+/// doesn't reach a root (node with no `parent_node_id`).
+fn ancestor_chain<'a>(
+    tree_nodes: &'a HashMap<TreeNodeId, TreeNode>,
+    leaf: &'a TreeNode,
+) -> Option<Vec<&'a TreeNode>> {
+    let mut chain = vec![leaf];
+    let mut current = leaf;
+    while let Some(pid) = &current.parent_node_id {
+        let parent = tree_nodes.get(pid)?;
+        chain.push(parent);
+        current = parent;
+    }
+    chain.reverse();
+    Some(chain)
+}
+
 /// Creates a Partially Signed Bitcoin Transaction (PSBT) to CPFP a parent transaction.
 ///
 /// This function creates a PSBT that spends from both CPFP inputs and the ephemeral anchor output
@@ -280,41 +468,13 @@ fn create_tx_cpfp_psbt(
         ..Default::default()
     });
 
-    // Calculate the maximum child transaction weight in weight units (WU).
-    // Computing in WU avoids rounding errors from per-component vbyte estimates.
-    //
-    // Non-witness bytes cost 4 WU each, witness bytes cost 1 WU each.
-    // Anchor witness: count(1) = 1 byte (empty witness)
-    // Overhead non-witness: version(4) + input_count(1) + output_count(1) + locktime(4) = 10 bytes
-    // Overhead witness: marker(1) + flag(1) = 2 bytes
     let input_weight: u64 = inputs.iter().map(|i| i.signed_input_weight).sum();
-    // Anchor input: 41 * 4 + 1 = 165 WU
-    let anchor_weight: u64 = 165;
-    // Output weight: (value(8) + scriptPubKey_len(1) + scriptPubKey(N)) * 4
-    let output_weight: u64 = (9 + change_script_pubkey.len() as u64) * 4;
-    // 10 * 4 + 2 = 42 WU
-    let overhead_weight: u64 = 42;
-    let child_weight = input_weight + anchor_weight + output_weight + overhead_weight;
-    trace!(
-        "Estimated child weight: {} WU ({} vbytes)",
-        child_weight,
-        child_weight.div_ceil(4)
+    let fee_amount = compute_cpfp_package_fee(
+        tx.weight().to_wu(),
+        input_weight,
+        change_script_pubkey.len(),
+        fee_rate,
     );
-
-    // For package relay, the fee must cover both parent and child at the target rate.
-    // The parent tx has no fee (ephemeral anchor), so the child pays for the whole package.
-    // Fee is calculated from weight directly: ceil(fee_rate * weight / 4) to ensure we
-    // at least meet the target rate.
-    let parent_weight = tx.weight().to_wu();
-    let package_weight = parent_weight + child_weight;
-    trace!(
-        "Parent: {} WU, package total: {} WU ({} vbytes)",
-        parent_weight,
-        package_weight,
-        package_weight.div_ceil(4)
-    );
-
-    let fee_amount = (fee_rate * package_weight).div_ceil(4);
     trace!("Calculated fee: {} sats", fee_amount);
 
     // Adjust output value to account for fees
@@ -640,6 +800,353 @@ mod tests {
         assert!(script.is_p2wpkh());
         // Change carries forward first input's weight
         assert_eq!(inputs[0].signed_input_weight, P2WPKH_INPUT_WEIGHT);
+    }
+
+    // ---- helpers for select_profitable_leaves tests ----
+
+    use crate::tree::{SigningKeyshare, TreeNodeStatus};
+    use frost_secp256k1_tr::Identifier;
+    use std::str::FromStr;
+
+    /// Creates a unique transaction with an ephemeral anchor output.
+    ///
+    /// Each call produces a different txid (via a random dummy input) while
+    /// keeping the same weight as the basic anchor tx used in CPFP tests.
+    fn create_unique_anchor_tx() -> Transaction {
+        let random_bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
+        let txid = bitcoin::Txid::from_slice(&random_bytes).unwrap();
+        Transaction {
+            version: Version::non_standard(3),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint { txid, vout: 0 },
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(1000),
+                    script_pubkey: ScriptBuf::from(
+                        vec![0x00, 0x14]
+                            .into_iter()
+                            .chain(std::iter::repeat_n(0x00, 20))
+                            .collect::<Vec<_>>(),
+                    ),
+                },
+                TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+                },
+            ],
+        }
+    }
+
+    /// Build a minimal [`TreeNode`] for selection tests.
+    ///
+    /// Each node gets a unique `node_tx` (and `refund_tx` when requested) so
+    /// txid deduplication in `select_profitable_leaves` works correctly.
+    fn make_node(
+        id: &str,
+        value: u64,
+        parent_id: Option<&str>,
+        has_refund: bool,
+        pubkey: PublicKey,
+    ) -> TreeNode {
+        use crate::tree::TreeNode;
+
+        TreeNode {
+            id: TreeNodeId::from_str(id).unwrap(),
+            tree_id: "test-tree".to_string(),
+            value,
+            parent_node_id: parent_id.map(|p| TreeNodeId::from_str(p).unwrap()),
+            node_tx: create_unique_anchor_tx(),
+            refund_tx: if has_refund {
+                Some(create_unique_anchor_tx())
+            } else {
+                None
+            },
+            direct_tx: None,
+            direct_refund_tx: None,
+            direct_from_cpfp_refund_tx: None,
+            vout: 0,
+            verifying_public_key: pubkey,
+            owner_identity_public_key: None,
+            signing_keyshare: SigningKeyshare {
+                owner_identifiers: vec![Identifier::try_from(1u16).unwrap()],
+                threshold: 1,
+                public_key: pubkey,
+            },
+            status: TreeNodeStatus::Available,
+        }
+    }
+
+    /// Collect nodes into the HashMap expected by `select_profitable_leaves`.
+    fn node_map(nodes: Vec<TreeNode>) -> HashMap<TreeNodeId, TreeNode> {
+        nodes.into_iter().map(|n| (n.id.clone(), n)).collect()
+    }
+
+    const FEE_RATE: u64 = 4;
+    const CHANGE_SCRIPT_LEN: usize = 34; // P2TR scriptPubKey
+    const DEST_SCRIPT_LEN: usize = 34;
+
+    /// Default params using a single P2TR CPFP input.
+    fn default_params(budget: u64) -> LeafExitCostParams {
+        LeafExitCostParams {
+            initial_cpfp_input_weight: P2TR_INPUT_WEIGHT,
+            single_cpfp_input_weight: P2TR_INPUT_WEIGHT,
+            change_script_len: CHANGE_SCRIPT_LEN,
+            total_cpfp_budget: budget,
+            destination_script_len: DEST_SCRIPT_LEN,
+            fee_rate: FEE_RATE,
+        }
+    }
+
+    /// Computes the CPFP fee for one of our test anchor transactions.
+    fn cpfp_fee(input_weight: u64) -> u64 {
+        let tx_weight = create_unique_anchor_tx().weight().to_wu();
+        compute_cpfp_package_fee(tx_weight, input_weight, CHANGE_SCRIPT_LEN, FEE_RATE)
+    }
+
+    /// Total cost for the first depth-1 leaf (root→leaf) with a single
+    /// P2TR CPFP input: 3 CPFP txs + sweep(1).
+    fn first_depth1_leaf_cost() -> u64 {
+        3 * cpfp_fee(P2TR_INPUT_WEIGHT) + compute_sweep_fee(1, DEST_SCRIPT_LEN, FEE_RATE)
+    }
+
+    /// Marginal cost for a second depth-1 leaf sharing the same root:
+    /// 2 CPFP txs (leaf node + refund, root already covered) + marginal sweep.
+    fn second_shared_root_leaf_cost() -> u64 {
+        2 * cpfp_fee(P2TR_INPUT_WEIGHT) + compute_sweep_fee(2, DEST_SCRIPT_LEN, FEE_RATE)
+            - compute_sweep_fee(1, DEST_SCRIPT_LEN, FEE_RATE)
+    }
+
+    /// Total CPFP-only cost (no sweep) for the first depth-1 leaf.
+    fn first_depth1_cpfp_cost() -> u64 {
+        3 * cpfp_fee(P2TR_INPUT_WEIGHT)
+    }
+
+    /// CPFP-only cost for a second leaf sharing the root.
+    fn second_shared_root_cpfp_cost() -> u64 {
+        2 * cpfp_fee(P2TR_INPUT_WEIGHT)
+    }
+
+    #[test_all]
+    fn test_select_single_leaf_one_sat_profit() {
+        let pubkey = test_pubkey();
+        let cost = first_depth1_leaf_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf = make_node("leaf", cost + 1, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert_eq!(
+            selected.len(),
+            1,
+            "leaf with 1 sat profit should be selected"
+        );
+    }
+
+    #[test_all]
+    fn test_select_single_leaf_zero_profit() {
+        let pubkey = test_pubkey();
+        let cost = first_depth1_leaf_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf = make_node("leaf", cost, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert!(
+            selected.is_empty(),
+            "leaf with 0 profit must not be selected"
+        );
+    }
+
+    #[test_all]
+    fn test_select_single_leaf_unprofitable() {
+        let pubkey = test_pubkey();
+        let cost = first_depth1_leaf_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf = make_node("leaf", cost - 1, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert!(
+            selected.is_empty(),
+            "unprofitable leaf must not be selected"
+        );
+    }
+
+    #[test_all]
+    fn test_select_shared_ancestor_reduces_cost() {
+        // Tree: root → leaf-a (high value), root → leaf-b (lower value)
+        // leaf-b's marginal cost is lower because root CPFP is already covered.
+        let pubkey = test_pubkey();
+        let second_cost = second_shared_root_leaf_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf_a = make_node("leaf-a", 100_000, Some("root"), true, pubkey);
+        let leaf_b = make_node("leaf-b", second_cost + 1, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf_a, leaf_b]);
+        let leaf_ids = vec![
+            TreeNodeId::from_str("leaf-a").unwrap(),
+            TreeNodeId::from_str("leaf-b").unwrap(),
+        ];
+        let params = default_params(1_000_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert_eq!(selected.len(), 2, "both leaves should be selected");
+        assert_eq!(selected[0].to_string(), "leaf-a");
+        assert_eq!(selected[1].to_string(), "leaf-b");
+    }
+
+    #[test_all]
+    fn test_select_shared_ancestor_second_leaf_zero_profit() {
+        let pubkey = test_pubkey();
+        let second_cost = second_shared_root_leaf_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf_a = make_node("leaf-a", 100_000, Some("root"), true, pubkey);
+        let leaf_b = make_node("leaf-b", second_cost, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf_a, leaf_b]);
+        let leaf_ids = vec![
+            TreeNodeId::from_str("leaf-a").unwrap(),
+            TreeNodeId::from_str("leaf-b").unwrap(),
+        ];
+        let params = default_params(1_000_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert_eq!(selected.len(), 1, "only leaf-a should be selected");
+        assert_eq!(selected[0].to_string(), "leaf-a");
+    }
+
+    #[test_all]
+    fn test_select_budget_exhaustion() {
+        let pubkey = test_pubkey();
+        let first_cpfp = first_depth1_cpfp_cost();
+        let second_cpfp = second_shared_root_cpfp_cost();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf_a = make_node("leaf-a", 500_000, Some("root"), true, pubkey);
+        let leaf_b = make_node("leaf-b", 500_000, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf_a, leaf_b]);
+        let leaf_ids = vec![
+            TreeNodeId::from_str("leaf-a").unwrap(),
+            TreeNodeId::from_str("leaf-b").unwrap(),
+        ];
+        // Budget: covers first leaf's CPFP but not enough remaining for second
+        let budget = first_cpfp + second_cpfp; // exactly at boundary → remaining == 0 → rejected
+        let params = default_params(budget);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert_eq!(selected.len(), 1, "budget should prevent second leaf");
+
+        // One more sat of budget allows the second leaf
+        let params2 = default_params(budget + 1);
+        let root2 = make_node("root", 0, None, false, pubkey);
+        let leaf_a2 = make_node("leaf-a", 500_000, Some("root"), true, pubkey);
+        let leaf_b2 = make_node("leaf-b", 500_000, Some("root"), true, pubkey);
+        let nodes2 = node_map(vec![root2, leaf_a2, leaf_b2]);
+        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params2);
+        assert_eq!(selected2.len(), 2, "budget + 1 should allow second leaf");
+    }
+
+    #[test_all]
+    fn test_select_skip_no_refund_tx() {
+        let pubkey = test_pubkey();
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf = make_node("leaf", 100_000, Some("root"), false, pubkey);
+        let nodes = node_map(vec![root, leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert!(
+            selected.is_empty(),
+            "leaf without refund_tx must be skipped"
+        );
+    }
+
+    #[test_all]
+    fn test_select_skip_missing_parent() {
+        let pubkey = test_pubkey();
+        let leaf = make_node("leaf", 100_000, Some("root"), true, pubkey);
+        let nodes = node_map(vec![leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert!(
+            selected.is_empty(),
+            "leaf with missing parent must be skipped"
+        );
+    }
+
+    #[test_all]
+    fn test_select_empty_leaf_list() {
+        let nodes = HashMap::new();
+        let leaf_ids: Vec<TreeNodeId> = vec![];
+        let params = default_params(100_000);
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert!(selected.is_empty());
+    }
+
+    #[test_all]
+    fn test_select_initial_cpfp_weight_affects_first_leaf() {
+        let pubkey = test_pubkey();
+        let tx_weight = create_unique_anchor_tx().weight().to_wu();
+        // First CPFP uses doubled input weight
+        let first_fee = compute_cpfp_package_fee(
+            tx_weight,
+            2 * P2TR_INPUT_WEIGHT,
+            CHANGE_SCRIPT_LEN,
+            FEE_RATE,
+        );
+        let subsequent_fee = cpfp_fee(P2TR_INPUT_WEIGHT);
+        let cost = first_fee + 2 * subsequent_fee + compute_sweep_fee(1, DEST_SCRIPT_LEN, FEE_RATE);
+
+        let root = make_node("root", 0, None, false, pubkey);
+        let leaf = make_node("leaf", cost + 1, Some("root"), true, pubkey);
+        let nodes = node_map(vec![root, leaf]);
+        let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
+        let mut params = default_params(100_000);
+        params.initial_cpfp_input_weight = 2 * P2TR_INPUT_WEIGHT;
+
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        assert_eq!(selected.len(), 1, "should be selected with 1 sat profit");
+
+        // Value exactly at cost → not selected
+        let root2 = make_node("root", 0, None, false, pubkey);
+        let leaf2 = make_node("leaf", cost, Some("root"), true, pubkey);
+        let nodes2 = node_map(vec![root2, leaf2]);
+        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params);
+        assert!(selected2.is_empty(), "zero profit must not be selected");
+    }
+
+    #[test_all]
+    fn test_compute_cpfp_package_fee_matches_create_psbt() {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
+        let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
+
+        let tx = create_test_transaction_with_anchor();
+        let mut inputs = vec![create_test_input_p2tr(pubkey, 50_000)];
+        let fee_rate = 7;
+
+        let expected_fee =
+            compute_cpfp_package_fee(tx.weight().to_wu(), P2TR_INPUT_WEIGHT, 34, fee_rate);
+
+        let psbt = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate).unwrap();
+        let actual_fee = 50_000 - psbt.unsigned_tx.output[0].value.to_sat();
+        assert_eq!(actual_fee, expected_fee);
+    }
+
+    fn test_pubkey() -> PublicKey {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
+        PublicKey::from_secret_key(&secp, &secret_key)
     }
 
     #[test_all]

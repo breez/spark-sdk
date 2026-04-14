@@ -1330,15 +1330,12 @@ impl SparkWallet {
                 })?;
         }
 
-        // Estimate fee from weight
-        // P2TR key-path input: 41 non-witness * 4 + 66 witness = 230 WU
-        // Overhead: (version 4 + input_count 1 + output_count 1 + locktime 4) * 4 + (marker 1 + flag 1) = 42 WU
         let dest_script = destination.script_pubkey();
-        // Output: (value 8 + script_len varint 1 + script) * 4 = all non-witness
-        let output_weight: u64 = (9u64 + dest_script.len() as u64) * 4;
-        let input_weight: u64 = refund_outputs.len() as u64 * 230;
-        let total_weight = 42 + input_weight + output_weight;
-        let fee = (fee_rate_sat_per_vbyte * total_weight).div_ceil(4);
+        let fee = spark::services::compute_sweep_fee(
+            refund_outputs.len(),
+            dest_script.len(),
+            fee_rate_sat_per_vbyte,
+        );
 
         if total_value <= fee {
             return Err(SparkWalletError::ValidationError(format!(
