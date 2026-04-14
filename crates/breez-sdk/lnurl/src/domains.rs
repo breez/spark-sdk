@@ -15,7 +15,9 @@ where
     DB: LnurlRepository + Clone + Send + Sync + 'static,
 {
     let initial: HashSet<String> = db.list_domains().await?.into_iter().collect();
-    info!("loaded {} allowed domains from database", initial.len());
+    let mut sorted: Vec<&str> = initial.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    info!("loaded allowed domains: {}", sorted.join(", "));
     let domains = Arc::new(RwLock::new(initial));
 
     let db_clone = db.clone();
