@@ -97,7 +97,7 @@ impl BreezSdk {
                         }
                     }
 
-                    () = tokio::time::sleep(sdk.jwt_interval(refresh_counter).await), if should_refresh_jwt => {
+                    () = sdk.jwt_interval(should_refresh_jwt, refresh_counter) => {
                         refresh_counter = refresh_counter.saturating_add(1);
                         let api_key = sdk.config.api_key.as_ref().unwrap();
 
@@ -738,15 +738,19 @@ mod jwt {
             }
         }
 
-        pub(super) async fn jwt_interval(&self, refresh_counter: u8) -> Duration {
+        pub(super) async fn jwt_interval(&self, should_refresh_jwt: bool, refresh_counter: u8) {
+            if !should_refresh_jwt {
+                std::future::pending::<()>().await;
+            }
             let token = self.session_manager.get_token().await;
-            Duration::from_secs(match (token, refresh_counter) {
+            let duration = Duration::from_secs(match (token, refresh_counter) {
                 (None, counter) if counter < 3 => 0,
                 (None, _) => JWT_REFRESH_RETRY_SECS,
                 (Some(token), _) => {
                     jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry)
                 }
-            })
+            });
+            tokio::time::sleep(duration).await;
         }
     }
 
