@@ -57,24 +57,6 @@ pub enum SparkWalletError {
     Generic(String),
 }
 
-impl SparkWalletError {
-    /// Returns `true` when the underlying gRPC error has status code `NotFound`.
-    pub fn is_not_found(&self) -> bool {
-        let rpc_err = match self {
-            Self::ServiceError(spark::services::ServiceError::ServiceConnectionError(e)) => {
-                e.as_ref()
-            }
-            Self::OperatorRpcError(e) => e.as_ref(),
-            _ => return false,
-        };
-        matches!(
-            rpc_err,
-            spark::operator::rpc::OperatorRpcError::Connection(status)
-                if status.code() == tonic::Code::NotFound
-        )
-    }
-}
-
 impl From<spark::operator::rpc::OperatorRpcError> for SparkWalletError {
     fn from(error: spark::operator::rpc::OperatorRpcError) -> Self {
         SparkWalletError::OperatorRpcError(Box::new(error))
