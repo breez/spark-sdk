@@ -261,7 +261,7 @@ class PostgresMigrationManager {
       {
         name: "Backfill conversion_info type discriminator",
         sql: [
-          `UPDATE payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::text WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
+          `UPDATE payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
         ],
       },
     ];

@@ -96,7 +96,7 @@ async fn test_01_token_transfer(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
             amount: Some(5),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -300,7 +300,7 @@ async fn test_02_token_invoice(
     let prepare_response = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_invoice.payment_request.clone()),
+            payment_request: PaymentRequest::Input(bob_invoice.payment_request.clone()),
             amount: None, // Amount comes from invoice
             token_identifier: None,
             conversion_options: None,
@@ -581,7 +581,7 @@ async fn test_04_token_freeze_unfreeze(
     let prepare_send = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_address),
+            payment_request: PaymentRequest::Input(bob_address),
             amount: Some(100),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -660,7 +660,7 @@ async fn test_04_token_freeze_unfreeze(
     let bob_prepare_result = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(alice_address.clone()),
+            payment_request: PaymentRequest::Input(alice_address.clone()),
             amount: Some(50),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -720,7 +720,7 @@ async fn test_04_token_freeze_unfreeze(
     let bob_prepare_after_unfreeze = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(alice_address),
+            payment_request: PaymentRequest::Input(alice_address),
             amount: Some(50),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -795,7 +795,7 @@ async fn test_05_invoice_expiry(
     let alice_prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_invoice.payment_request.clone()),
+            payment_request: PaymentRequest::Input(bob_invoice.payment_request.clone()),
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -812,7 +812,7 @@ async fn test_05_invoice_expiry(
     let alice_prepare_expired = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_invoice.payment_request.clone()),
+            payment_request: PaymentRequest::Input(bob_invoice.payment_request.clone()),
             amount: None,
             token_identifier: None,
             conversion_options: None,

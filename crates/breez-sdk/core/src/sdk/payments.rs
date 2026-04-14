@@ -1,6 +1,11 @@
 use bitcoin::hashes::sha256;
+use bitcoin::secp256k1::PublicKey;
+use breez_sdk_common::input;
 use platform_utils::time::Duration;
+use platform_utils::time::SystemTime;
+use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -14,6 +19,7 @@ use crate::{
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
+    cross_chain::{CrossChainPrepared, CrossChainRoutePair},
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -32,10 +38,6 @@ use crate::{
         token::map_and_persist_token_transaction,
     },
 };
-use bitcoin::secp256k1::PublicKey;
-use platform_utils::time::SystemTime;
-use platform_utils::tokio;
-use spark_wallet::{InvoiceDescription, Preimage};
 
 use super::{
     BreezSdk, SyncType,
@@ -152,9 +154,7 @@ impl BreezSdk {
         // Handle structured CrossChain variant directly — no parse step needed.
         if let PaymentRequest::CrossChain {
             ref address,
-            ref chain,
-            ref asset,
-            ref provider,
+            ref route,
         } = request.payment_request
         {
             let amount = request.amount.ok_or(SdkError::InvalidInput(
@@ -162,26 +162,18 @@ impl BreezSdk {
             ))?;
 
             return self
-                .prepare_cross_chain_send(
-                    *provider,
-                    address,
-                    chain,
-                    asset,
-                    amount,
-                    token_identifier,
-                    fee_policy,
-                )
+                .prepare_cross_chain_send(address, route, amount, token_identifier, fee_policy)
                 .await;
         }
 
-        // Raw string path — parse and dispatch as before.
-        let PaymentRequest::Raw(ref raw_str) = request.payment_request else {
+        // Input string path — parse and dispatch as before.
+        let PaymentRequest::Input(ref input_str) = request.payment_request else {
             return Err(SdkError::InvalidInput(
-                "Expected PaymentRequest::Raw".to_string(),
+                "Expected PaymentRequest::Input".to_string(),
             ));
         };
 
-        let parsed_input = self.parse(raw_str).await?;
+        let parsed_input = self.parse(input_str).await?;
 
         validate_prepare_send_payment_request(
             &parsed_input,
@@ -283,7 +275,7 @@ impl BreezSdk {
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
                 let spark_address: Option<SparkAddress> =
-                    self.spark_wallet.extract_spark_address(raw_str)?;
+                    self.spark_wallet.extract_spark_address(input_str)?;
 
                 let spark_transfer_fee_sats = if spark_address.is_some() {
                     Some(0)
@@ -314,7 +306,7 @@ impl BreezSdk {
                 // For FeesIncluded, estimate fee for user's full amount
                 let lightning_fee_sats = self
                     .spark_wallet
-                    .fetch_lightning_send_fee_estimate(raw_str, Some(amount.try_into()?))
+                    .fetch_lightning_send_fee_estimate(input_str, Some(amount.try_into()?))
                     .await?;
 
                 // Validate receiver amount is positive for FeesIncluded
@@ -431,41 +423,16 @@ impl BreezSdk {
                     fee_policy,
                 })
             }
-            InputType::CrossChainAddress(cross_chain_address_details) => {
-                let amount = cross_chain_address_details
-                    .amount
-                    .or(request.amount)
-                    .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-
-                // Chain and asset must be known — either from URI params or
-                // the caller must use PaymentRequest::CrossChain instead.
-                let chain =
-                    cross_chain_address_details
-                        .chain
-                        .as_deref()
-                        .ok_or(SdkError::InvalidInput(
-                            "Cross-chain address requires chain selection. \
-                         Use PaymentRequest::CrossChain or pass a URI with ?chain=&asset="
-                                .to_string(),
-                        ))?;
-                let asset =
-                    cross_chain_address_details
-                        .asset
-                        .as_deref()
-                        .ok_or(SdkError::InvalidInput(
-                            "Cross-chain address requires asset selection.".to_string(),
-                        ))?;
-
-                self.prepare_cross_chain_send(
-                    None,
-                    &cross_chain_address_details.address,
-                    chain,
-                    asset,
-                    amount,
-                    token_identifier,
-                    fee_policy,
-                )
-                .await
+            InputType::CrossChainAddress(_) => {
+                // Cross-chain addresses detected via parse() require route
+                // selection. The caller should use get_cross_chain_routes()
+                // to discover routes, then PaymentRequest::CrossChain with
+                // the selected route.
+                Err(SdkError::InvalidInput(
+                    "Cross-chain address detected. Use get_cross_chain_routes() to discover \
+                     routes, then PaymentRequest::CrossChain { address, route }."
+                        .to_string(),
+                ))
             }
             _ => Err(SdkError::InvalidInput(
                 "Unsupported payment method".to_string(),
@@ -591,66 +558,34 @@ impl BreezSdk {
         })
     }
 
-    /// Shared helper for cross-chain send preparation. Used by both
-    /// `PaymentRequest::Raw` (when the parsed URI has chain + asset hints)
-    /// and `PaymentRequest::CrossChain`.
-    ///
-    /// When `preferred_provider` is `None`, the SDK finds the first provider
-    /// that supports the requested chain/asset route and uses it.
-    #[allow(clippy::too_many_arguments)]
+    /// Prepare a cross-chain send using the given route.
     async fn prepare_cross_chain_send(
         &self,
-        preferred_provider: Option<crate::cross_chain::CrossChainProvider>,
         address: &str,
-        chain: &str,
-        asset: &str,
+        route: &CrossChainRoutePair,
         amount: u128,
         token_identifier: Option<String>,
         fee_policy: FeePolicy,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
-        let family = breez_sdk_common::input::detect_address_family(address).ok_or_else(|| {
-            SdkError::InvalidInput("Address is not a recognized cross-chain address".to_string())
-        })?;
+        // Validate address is a recognized cross-chain address.
+        if input::detect_address_family(address).is_none() {
+            return Err(SdkError::InvalidInput(
+                "Address is not a recognized cross-chain address".to_string(),
+            ));
+        }
 
-        let (provider_key, service) = if let Some(key) = preferred_provider {
-            let svc = self.cross_chain_providers.get(key)?;
-            (key, svc.as_ref())
-        } else {
-            // Find the first provider that offers a route for this chain/asset.
-            let mut found = None;
-            for (key, svc) in self.cross_chain_providers.iter() {
-                if let Ok(routes) = svc.get_routes(family, Some(asset)).await
-                    && routes.iter().any(|r| r.chain.eq_ignore_ascii_case(chain))
-                {
-                    found = Some((*key, svc.as_ref()));
-                    break;
-                }
-            }
-            found.ok_or_else(|| {
-                SdkError::Generic(format!("No cross-chain provider supports {chain}/{asset}"))
-            })?
-        };
+        let service = self.cross_chain_providers.get(route.provider)?;
 
         let prepared = service
-            .prepare(
-                address,
-                chain,
-                asset,
-                amount,
-                token_identifier.clone(),
-                None,
-            )
+            .prepare(address, route, amount, token_identifier.clone(), None)
             .await?;
 
         Ok(PrepareSendPaymentResponse {
             payment_method: SendPaymentMethod::CrossChainAddress {
-                provider: provider_key,
+                route: prepared.pair,
                 recipient_address: prepared.recipient_address,
-                destination_chain: prepared.pair.chain,
-                destination_asset: prepared.pair.asset,
-                destination_contract_address: prepared.pair.contract_address,
                 quote_id: prepared.quote_id,
-                deposit_address: prepared.deposit_address,
+                deposit_request: prepared.deposit_request,
                 amount_in: prepared.amount_in,
                 estimated_out: prepared.estimated_out,
                 fee_amount: prepared.fee_amount,
@@ -1145,37 +1080,27 @@ impl BreezSdk {
                     .await
             }
             SendPaymentMethod::CrossChainAddress {
-                provider,
+                route,
                 recipient_address,
-                destination_chain,
-                destination_asset,
-                destination_contract_address,
                 quote_id,
-                deposit_address,
+                deposit_request,
                 amount_in,
                 estimated_out,
                 fee_amount,
                 fee_bps,
                 expires_at,
             } => {
-                let service = self.cross_chain_providers.get(*provider)?;
+                let service = self.cross_chain_providers.get(route.provider)?;
 
-                let pair = breez_sdk_common::input::CrossChainRoutePair {
-                    chain: destination_chain.clone(),
-                    asset: destination_asset.clone(),
-                    contract_address: destination_contract_address.clone(),
-                    decimals: 0,
-                    exact_out_eligible: false,
-                };
-                let prepared = crate::cross_chain::CrossChainPrepared {
+                let prepared = CrossChainPrepared {
                     quote_id: quote_id.clone(),
-                    deposit_address: deposit_address.clone(),
+                    deposit_request: deposit_request.clone(),
                     amount_in: *amount_in,
                     estimated_out: *estimated_out,
                     fee_amount: *fee_amount,
                     fee_bps: *fee_bps,
                     expires_at: expires_at.clone(),
-                    pair,
+                    pair: route.clone(),
                     recipient_address: recipient_address.clone(),
                     token_identifier: token_identifier.clone(),
                 };
@@ -2003,8 +1928,8 @@ impl BreezSdk {
             return Ok(None);
         }
 
-        let raw_str = match &request.payment_request {
-            PaymentRequest::Raw(s) => s.as_str(),
+        let input_str = match &request.payment_request {
+            PaymentRequest::Input(s) => s.as_str(),
             PaymentRequest::CrossChain { .. } => {
                 return Err(SdkError::InvalidInput(
                     "Token conversion is not supported for cross-chain sends".to_string(),
@@ -2013,7 +1938,7 @@ impl BreezSdk {
         };
         let lightning_fee_sats = self
             .spark_wallet
-            .fetch_lightning_send_fee_estimate(raw_str, Some(estimated_sats.try_into()?))
+            .fetch_lightning_send_fee_estimate(input_str, Some(estimated_sats.try_into()?))
             .await?;
 
         let total_u64: u64 = estimated_sats.try_into()?;

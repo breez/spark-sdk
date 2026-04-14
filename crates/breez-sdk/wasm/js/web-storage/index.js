@@ -2095,6 +2095,10 @@ class IndexedDBStorage {
       // Filter by payment details. If any filter matches, we include the payment
       let paymentDetailsFilterMatches = false;
       for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+        // Base type check: the payment's details type must match the filter type
+        if (details.type !== paymentDetailsFilter.type) {
+          continue;
+        }
         // Filter by HTLC status (Spark or Lightning)
         if (
           (paymentDetailsFilter.type === "spark" ||
@@ -2127,11 +2131,11 @@ class IndexedDBStorage {
 
           const ci = details.conversionInfo;
           if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
-            if (ci.type !== "amm" || ci.status !== "RefundNeeded") {
+            if (ci.type !== "amm" || ci.status !== "refundNeeded") {
               continue;
             }
           } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
-            if (ci.type !== "orchestra" || ["Completed", "Failed", "Refunded"].includes(ci.status)) {
+            if (ci.type !== "orchestra" || ["completed", "failed", "refunded"].includes(ci.status)) {
               continue;
             }
           }

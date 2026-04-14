@@ -228,8 +228,8 @@ pub enum InputType {
 pub struct CrossChainAddressDetails {
     pub address: String,
     pub address_family: CrossChainAddressFamily,
-    pub chain: Option<String>,
-    pub asset: Option<String>,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
     pub amount: Option<u128>,
 }
 
@@ -815,6 +815,7 @@ pub enum CrossChainAddressFamily {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRoutePair)]
 pub struct CrossChainRoutePair {
+    pub provider: CrossChainProvider,
     pub chain: String,
     pub asset: String,
     pub contract_address: Option<String>,
@@ -824,12 +825,10 @@ pub struct CrossChainRoutePair {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequest)]
 pub enum PaymentRequest {
-    Raw(String),
+    Input(String),
     CrossChain {
         address: String,
-        chain: String,
-        asset: String,
-        provider: Option<CrossChainProvider>,
+        route: CrossChainRoutePair,
     },
 }
 
@@ -859,13 +858,10 @@ pub enum SendPaymentMethod {
         token_identifier: Option<String>,
     },
     CrossChainAddress {
-        provider: CrossChainProvider,
+        route: CrossChainRoutePair,
         recipient_address: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_contract_address: Option<String>,
         quote_id: String,
-        deposit_address: String,
+        deposit_request: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         amount_in: u128,

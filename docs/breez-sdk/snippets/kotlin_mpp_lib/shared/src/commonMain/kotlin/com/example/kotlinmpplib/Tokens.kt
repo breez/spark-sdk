@@ -101,7 +101,7 @@ class Tokens {
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
-                        paymentRequest = paymentRequest,
+                        paymentRequest = PaymentRequest.Input(paymentRequest),
                         amount = amount,
                         tokenIdentifier = tokenIdentifier,
                         conversionOptions = null,
@@ -198,7 +198,7 @@ class Tokens {
             val prepareResponse =
                 sdk.prepareSendPayment(
                     PrepareSendPaymentRequest(
-                        paymentRequest = paymentRequest,
+                        paymentRequest = PaymentRequest.Input(paymentRequest),
                         amount = amount,
                         tokenIdentifier = tokenIdentifier,
                         conversionOptions = conversionOptions,

@@ -77,7 +77,7 @@ Future<void> sendTokenPayment(BreezSdk sdk) async {
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(paymentRequest),
       amount: amount,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: null,
@@ -163,7 +163,7 @@ Future<void> prepareSendPaymentTokenConversion(BreezSdk sdk) async {
 
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(paymentRequest),
       amount: amount,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,

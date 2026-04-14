@@ -9,7 +9,7 @@ func prepareSendPaymentLightningBolt11(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: optionalAmountSats,
             tokenIdentifier: nil,
             conversionOptions: nil,
@@ -37,7 +37,7 @@ func prepareSendPaymentOnchain(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: amountSats,
             tokenIdentifier: nil,
             conversionOptions: nil,
@@ -64,7 +64,7 @@ func prepareSendPaymentSparkAddress(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: amountSats,
             tokenIdentifier: nil,
             conversionOptions: nil,
@@ -85,7 +85,7 @@ func prepareSendPaymentSparkInvoice(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: optionalAmountSats,
             tokenIdentifier: nil,
             conversionOptions: nil,
@@ -114,7 +114,7 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: nil,
             tokenIdentifier: nil,
             conversionOptions: conversionOptions,
@@ -186,7 +186,7 @@ func prepareSendPaymentFeesIncluded(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: amountSats,
             tokenIdentifier: nil,
             conversionOptions: nil,
@@ -222,7 +222,7 @@ func prepareSendPaymentSendAll(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: tokenBalance.balance,
             tokenIdentifier: tokenIdentifier,
             conversionOptions: conversionOptions,

@@ -242,13 +242,14 @@ pub enum _CrossChainAddressFamily {
 pub struct _CrossChainAddressDetails {
     pub address: String,
     pub address_family: CrossChainAddressFamily,
-    pub chain: Option<String>,
-    pub asset: Option<String>,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
     pub amount: Option<u128>,
 }
 
 #[frb(mirror(CrossChainRoutePair))]
 pub struct _CrossChainRoutePair {
+    pub provider: CrossChainProvider,
     pub chain: String,
     pub asset: String,
     pub contract_address: Option<String>,
@@ -402,12 +403,10 @@ pub struct _PrepareLnurlPayResponse {
 
 #[frb(mirror(PaymentRequest))]
 pub enum _PaymentRequest {
-    Raw(String),
+    Input(String),
     CrossChain {
         address: String,
-        chain: String,
-        asset: String,
-        provider: Option<CrossChainProvider>,
+        route: CrossChainRoutePair,
     },
 }
 
@@ -517,13 +516,10 @@ pub enum _SendPaymentMethod {
         token_identifier: Option<String>,
     },
     CrossChainAddress {
-        provider: CrossChainProvider,
+        route: CrossChainRoutePair,
         recipient_address: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_contract_address: Option<String>,
         quote_id: String,
-        deposit_address: String,
+        deposit_request: String,
         amount_in: u128,
         estimated_out: u128,
         fee_amount: u128,

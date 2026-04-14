@@ -8,6 +8,7 @@ from breez_sdk_spark import (
     ListPaymentsRequest,
     PaymentDetails,
     PaymentDetailsFilter,
+    PaymentRequest,
     PaymentStatus,
     PaymentType,
     PrepareSendPaymentRequest,
@@ -25,7 +26,7 @@ async def send_htlc_payment(sdk: BreezSdk):
     payment_request = "<spark address>"
     amount_sats = 50_000
     prepare_request = PrepareSendPaymentRequest(
-        payment_request=payment_request,
+        payment_request=PaymentRequest.INPUT(payment_request),
         amount=amount_sats,
         token_identifier=None,
         conversion_options=None,

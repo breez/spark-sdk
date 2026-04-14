@@ -88,7 +88,7 @@ namespace BreezSdkSnippets
 
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
-                    paymentRequest: paymentRequest,
+                    paymentRequest: new PaymentRequest.Input(paymentRequest),
                     amount: amount,
                     tokenIdentifier: tokenIdentifier,
                     conversionOptions: null,
@@ -180,7 +180,7 @@ namespace BreezSdkSnippets
 
             var prepareResponse = await sdk.PrepareSendPayment(
                 request: new PrepareSendPaymentRequest(
-                    paymentRequest: paymentRequest,
+                    paymentRequest: new PaymentRequest.Input(paymentRequest),
                     amount: amount,
                     tokenIdentifier: tokenIdentifier,
                     conversionOptions: conversionOptions,

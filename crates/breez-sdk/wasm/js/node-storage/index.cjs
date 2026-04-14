@@ -204,6 +204,14 @@ class SqliteStorage {
         const allPaymentDetailsClauses = [];
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
+          // Base type check: ensure payment type matches the filter type
+          if (paymentDetailsFilter.type === "spark") {
+            paymentDetailsClauses.push("p.spark = 1");
+          } else if (paymentDetailsFilter.type === "token") {
+            paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
+          } else if (paymentDetailsFilter.type === "lightning") {
+            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+          }
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
             paymentDetailsFilter.type === "spark" ? "s"
@@ -238,9 +246,9 @@ class SqliteStorage {
             const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
             let statusClause;
             if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
-              statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'RefundNeeded'";
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
-              statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')";
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
               paymentDetailsClauses.push(

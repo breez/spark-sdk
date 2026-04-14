@@ -639,7 +639,7 @@ pub(crate) async fn execute_command(
             };
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: PaymentRequest::Raw(payment_request),
+                    payment_request: PaymentRequest::Input(payment_request),
                     amount,
                     token_identifier,
                     conversion_options,

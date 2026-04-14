@@ -5,8 +5,8 @@ mod parser;
 pub(crate) mod percent_encode;
 
 pub use cross_chain::{
-    CrossChainAddressFamily, CrossChainAddressInfo, CrossChainRoutePair, detect_address_family,
-    parse_cross_chain_uri, try_parse_cross_chain_address,
+    CrossChainAddressFamily, detect_address_family, parse_cross_chain_uri,
+    try_parse_cross_chain_address,
 };
 pub use error::*;
 pub use models::*;

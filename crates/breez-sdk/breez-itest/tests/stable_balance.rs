@@ -53,7 +53,7 @@ async fn test_stable_balance_auto_conversion(
     let prepare_small = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(alice_spark_address.clone()),
+            payment_request: PaymentRequest::Input(alice_spark_address.clone()),
             amount: Some(500),
             token_identifier: None,
             conversion_options: None,
@@ -125,7 +125,7 @@ async fn test_stable_balance_auto_conversion(
     let prepare_large = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(alice_spark_address.clone()),
+            payment_request: PaymentRequest::Input(alice_spark_address.clone()),
             amount: Some(5000),
             token_identifier: None,
             conversion_options: None,
@@ -204,7 +204,7 @@ async fn test_stable_balance_auto_conversion(
     let prepare_token = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(bob_spark_address.clone()),
+            payment_request: PaymentRequest::Input(bob_spark_address.clone()),
             amount: Some(token_payment_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: None,

@@ -290,18 +290,6 @@ pub enum CrossChainAddressFamily {
     Tron,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[macros::derive_from(breez_sdk_common::input::CrossChainRoutePair)]
-#[macros::derive_into(breez_sdk_common::input::CrossChainRoutePair)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct CrossChainRoutePair {
-    pub chain: String,
-    pub asset: String,
-    pub contract_address: Option<String>,
-    pub decimals: u8,
-    pub exact_out_eligible: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[macros::derive_from(breez_sdk_common::input::CrossChainAddressDetails)]
 #[macros::derive_into(breez_sdk_common::input::CrossChainAddressDetails)]
@@ -309,8 +297,8 @@ pub struct CrossChainRoutePair {
 pub struct CrossChainAddressDetails {
     pub address: String,
     pub address_family: CrossChainAddressFamily,
-    pub chain: Option<String>,
-    pub asset: Option<String>,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
     pub amount: Option<u128>,
 }
 

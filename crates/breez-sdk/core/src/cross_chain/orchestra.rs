@@ -8,9 +8,10 @@
 
 use std::sync::Arc;
 
+use breez_sdk_common::input::CrossChainAddressFamily;
 use flashnet::OrchestraClient;
 use flashnet::orchestra::{
-    AmountMode, QuoteRequest, QuoteResponse, StatusResponse, SubmitResponse,
+    AmountMode, OrderStatus, QuoteRequest, QuoteResponse, StatusResponse, SubmitResponse,
 };
 use platform_utils::time::Duration;
 use platform_utils::tokio;
@@ -21,12 +22,14 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info};
 
-use breez_sdk_common::input::{CrossChainAddressFamily, CrossChainRoutePair};
-
 use crate::error::SdkError;
-use crate::{Network, Storage};
+use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
+use crate::{ConversionInfo, ConversionStatus, Network, PaymentDetails, Storage};
 
-use super::{CrossChainPrepared, CrossChainSendResult, CrossChainService};
+use super::{
+    CrossChainPrepared, CrossChainProvider, CrossChainRoutePair, CrossChainSendResult,
+    CrossChainService,
+};
 
 /// The canonical Spark source chain string used by Orchestra.
 const SPARK_SOURCE_CHAIN: &str = "spark";
@@ -112,13 +115,133 @@ impl OrchestraService {
         );
     }
 
-    #[allow(clippy::unused_async)]
+    /// Polls Orchestra for status updates on in-flight cross-chain orders.
+    ///
+    /// Queries storage for payments with `ConversionFilter::OrchestraPending`,
+    /// calls the Orchestra `/status` endpoint for each, and updates the
+    /// `ConversionInfo::Orchestra` metadata when the order reaches a terminal
+    /// state (replacing the estimated output with the real `amount_out`).
+    #[allow(clippy::too_many_lines)]
     async fn poll_in_flight_orders(
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
     ) -> Result<(), SdkError> {
-        // No-op until the persistence layer exposes an "orchestra order pending" filter.
-        let _ = (storage, client);
+        let pending = storage
+            .list_payments(StorageListPaymentsRequest {
+                payment_details_filter: Some(vec![
+                    StoragePaymentDetailsFilter::Spark {
+                        htlc_status: None,
+                        conversion_filter: Some(ConversionFilter::OrchestraPending),
+                    },
+                    StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(ConversionFilter::OrchestraPending),
+                        tx_hash: None,
+                        tx_type: None,
+                    },
+                ]),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                SdkError::Generic(format!("Failed to list pending Orchestra orders: {e}"))
+            })?;
+
+        for payment in &pending {
+            // Extract all Orchestra metadata fields in one destructure.
+            let Some(
+                PaymentDetails::Spark {
+                    conversion_info: Some(conversion_info),
+                    ..
+                }
+                | PaymentDetails::Token {
+                    conversion_info: Some(conversion_info),
+                    ..
+                },
+            ) = &payment.details
+            else {
+                continue;
+            };
+
+            let ConversionInfo::Orchestra {
+                order_id,
+                quote_id,
+                destination_chain,
+                destination_asset,
+                destination_address,
+                estimated_out,
+                fee,
+                ..
+            } = conversion_info.clone()
+            else {
+                continue;
+            };
+
+            // Prefer order_id, fall back to quote_id if order_id is empty
+            // (can happen if /submit failed but we still want to track).
+            let status_response = if order_id.is_empty() {
+                client.status_by_quote_id(&quote_id).await
+            } else {
+                client.status_by_id(&order_id).await
+            };
+
+            let status_response = match status_response {
+                Ok(r) => r,
+                Err(e) => {
+                    debug!("Orchestra status query failed for order {order_id}: {e}");
+                    continue;
+                }
+            };
+
+            let order_status = status_response.order.status;
+            if !order_status.is_terminal() {
+                continue;
+            }
+
+            let new_status = match order_status {
+                OrderStatus::Completed => ConversionStatus::Completed,
+                OrderStatus::Refunded => ConversionStatus::Refunded,
+                _ => ConversionStatus::Failed,
+            };
+
+            // Use the real amount_out from Orchestra if available, otherwise
+            // keep the original estimate.
+            let final_out = status_response
+                .order
+                .amount_out
+                .as_deref()
+                .and_then(|s| s.parse::<u128>().ok())
+                .unwrap_or(estimated_out);
+
+            let updated_metadata = crate::PaymentMetadata {
+                conversion_info: Some(ConversionInfo::Orchestra {
+                    order_id,
+                    quote_id,
+                    destination_chain,
+                    destination_asset,
+                    destination_address,
+                    estimated_out: final_out,
+                    status: new_status.clone(),
+                    fee,
+                }),
+                ..Default::default()
+            };
+
+            if let Err(e) = storage
+                .insert_payment_metadata(payment.id.clone(), updated_metadata)
+                .await
+            {
+                error!(
+                    "Failed to update Orchestra status for payment {}: {e}",
+                    payment.id
+                );
+            } else {
+                info!(
+                    "Orchestra order for payment {} reached terminal state: {new_status:?}",
+                    payment.id
+                );
+            }
+        }
+
         Ok(())
     }
 }
@@ -127,10 +250,10 @@ impl OrchestraService {
 impl CrossChainService for OrchestraService {
     async fn get_routes(
         &self,
-        family: CrossChainAddressFamily,
-        asset: Option<&str>,
+        address_details: &crate::CrossChainAddressDetails,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        // Fetch all Spark-sourced routes and filter to those matching the address family.
+        let family: CrossChainAddressFamily = address_details.address_family.into();
+
         let routes =
             self.client.routes_for_chains(&[]).await.map_err(|e| {
                 SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
@@ -140,13 +263,17 @@ impl CrossChainService for OrchestraService {
             .iter()
             .filter(|r| family.matches_chain(&r.destination.chain))
             .filter(|r| {
-                if let Some(af) = asset {
-                    r.destination.asset.eq_ignore_ascii_case(af)
+                if let Some(ref ca) = address_details.contract_address {
+                    r.destination
+                        .contract_address
+                        .as_deref()
+                        .is_some_and(|c| c == ca.as_str())
                 } else {
                     true
                 }
             })
             .map(|r| CrossChainRoutePair {
+                provider: CrossChainProvider::Orchestra,
                 chain: r.destination.chain.clone(),
                 asset: r.destination.asset.clone(),
                 contract_address: r.destination.contract_address.clone(),
@@ -161,12 +288,13 @@ impl CrossChainService for OrchestraService {
     async fn prepare(
         &self,
         recipient_address: &str,
-        dest_chain: &str,
-        dest_asset: &str,
+        route: &CrossChainRoutePair,
         amount: u128,
         token_identifier: Option<String>,
         max_slippage_bps: Option<u32>,
     ) -> Result<CrossChainPrepared, SdkError> {
+        let dest_chain = &route.chain;
+        let dest_asset = &route.asset;
         let source_asset = match token_identifier.as_deref() {
             None => "BTC".to_string(),
             Some(_) => "USDB".to_string(),
@@ -175,8 +303,8 @@ impl CrossChainService for OrchestraService {
         let request = QuoteRequest {
             source_chain: SPARK_SOURCE_CHAIN.to_string(),
             source_asset: source_asset.clone(),
-            destination_chain: dest_chain.to_string(),
-            destination_asset: dest_asset.to_string(),
+            destination_chain: dest_chain.clone(),
+            destination_asset: dest_asset.clone(),
             amount: amount.to_string(),
             recipient_address: recipient_address.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
@@ -205,33 +333,15 @@ impl CrossChainService for OrchestraService {
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let fee_amount = parse_amount(&quote.fee_amount, "feeAmount")?;
 
-        // Look up route details (contract_address, decimals, etc.) from cached routes.
-        let route_pair = match self.client.find_route(dest_chain, dest_asset).await {
-            Ok(Some(route)) => CrossChainRoutePair {
-                chain: route.destination.chain.clone(),
-                asset: route.destination.asset.clone(),
-                contract_address: route.destination.contract_address.clone(),
-                decimals: route.destination.decimals,
-                exact_out_eligible: route.exact_out_eligible,
-            },
-            _ => CrossChainRoutePair {
-                chain: dest_chain.to_string(),
-                asset: dest_asset.to_string(),
-                contract_address: None,
-                decimals: 0,
-                exact_out_eligible: false,
-            },
-        };
-
         Ok(CrossChainPrepared {
             quote_id: quote.quote_id,
-            deposit_address: quote.deposit_address,
+            deposit_request: quote.deposit_address,
             amount_in,
             estimated_out,
             fee_amount,
             fee_bps: quote.fee_bps,
             expires_at: quote.expires_at,
-            pair: route_pair,
+            pair: route.clone(),
             recipient_address: recipient_address.to_string(),
             token_identifier,
         })
@@ -242,7 +352,7 @@ impl CrossChainService for OrchestraService {
         let spark_tx_hash = self
             .client
             .transfer_to_deposit(
-                &prepared.deposit_address,
+                &prepared.deposit_request,
                 prepared.amount_in,
                 prepared.token_identifier.as_deref(),
             )
@@ -266,15 +376,15 @@ impl CrossChainService for OrchestraService {
 
         // Step 3: Persist ConversionInfo::Orchestra metadata.
         let (status, order_id) = match &submit_result {
-            Ok(response) => (crate::ConversionStatus::Pending, response.order_id.clone()),
+            Ok(response) => (ConversionStatus::Pending, response.order_id.clone()),
             Err(e) => {
                 error!("Orchestra /submit failed after deposit transfer {spark_tx_hash}: {e}");
-                (crate::ConversionStatus::RefundNeeded, String::new())
+                (ConversionStatus::RefundNeeded, String::new())
             }
         };
 
         let metadata = crate::PaymentMetadata {
-            conversion_info: Some(crate::ConversionInfo::Orchestra {
+            conversion_info: Some(ConversionInfo::Orchestra {
                 order_id: order_id.clone(),
                 quote_id: prepared.quote_id.clone(),
                 destination_chain: prepared.pair.chain.clone(),

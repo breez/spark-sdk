@@ -198,7 +198,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
     let prepare = instance_0
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(counterparty_address.clone()),
+            payment_request: PaymentRequest::Input(counterparty_address.clone()),
             amount: Some(payment_amount.into()),
             token_identifier: None,
             fee_policy: None,
@@ -303,7 +303,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
     let prepare_return = counterparty
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: PaymentRequest::Raw(main_address),
+            payment_request: PaymentRequest::Input(main_address),
             amount: Some(return_amount.into()),
             token_identifier: None,
             fee_policy: None,
@@ -398,7 +398,7 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
         let prepare = instances[sender_idx]
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: PaymentRequest::Raw(cp_address),
+                payment_request: PaymentRequest::Input(cp_address),
                 amount: Some(payment_amt.into()),
                 token_identifier: None,
                 conversion_options: None,

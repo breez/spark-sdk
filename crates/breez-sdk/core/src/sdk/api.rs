@@ -1,15 +1,15 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+use breez_sdk_common::buy::cashapp::CashAppProvider;
 use std::str::FromStr;
 use tracing::info;
 
-use breez_sdk_common::buy::cashapp::CashAppProvider;
-
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationProgress, RegisterWebhookRequest,
-    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest,
-    UpdateUserSettingsRequest, UserSettings, Webhook,
+    CrossChainAddressDetails, CrossChainRoutePair, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    Network, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
+    UserSettings, Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -70,57 +70,27 @@ impl BreezSdk {
     }
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
-        match parse_input(input, Some(self.external_input_parsers.clone())).await {
-            Ok(parsed) => Ok(parsed),
-            Err(err) => {
-                // Fallback: attempt to recognize a cross-chain destination
-                // (EVM / Solana / Tron address, or canonical `ethereum:..`
-                // style URI). Pure address detection with no network calls.
-                if let Some(info) = breez_sdk_common::input::try_parse_cross_chain_address(input) {
-                    let common_it = breez_sdk_common::input::InputType::CrossChainAddress(
-                        breez_sdk_common::input::CrossChainAddressDetails {
-                            address: info.address,
-                            address_family: info.family,
-                            chain: info.chain,
-                            asset: info.asset,
-                            amount: info.amount,
-                        },
-                    );
-                    return Ok(common_it.into());
-                }
-                Err(err)
-            }
-        }
+        parse_input(input, Some(self.external_input_parsers.clone())).await
     }
 
-    /// Returns the available `{chain, asset}` routes for a given address family.
+    /// Returns the available cross-chain routes for the given parsed address.
     ///
-    /// The UI calls this after `parse()` returns `CrossChainAddress` to populate
-    /// the chain/asset picker. Optionally filter by a specific asset or provider.
+    /// The UI calls this after `parse()` returns `CrossChainAddress` to
+    /// populate the route picker. Routes are filtered by address family
+    /// and optionally by `contract_address` (from the parsed URI).
     pub async fn get_cross_chain_routes(
         &self,
-        family: crate::CrossChainAddressFamily,
-        asset: Option<String>,
-        provider: Option<crate::cross_chain::CrossChainProvider>,
-    ) -> Result<Vec<crate::CrossChainRoutePair>, SdkError> {
-        let common_family: breez_sdk_common::input::CrossChainAddressFamily = family.into();
-
-        let providers: Vec<_> = match provider {
-            Some(key) => {
-                vec![self.cross_chain_providers.get(key)?.clone()]
-            }
-            None => self.cross_chain_providers.values().cloned().collect(),
-        };
-
-        let mut all_pairs = Vec::new();
-        for svc in &providers {
-            match svc.get_routes(common_family, asset.as_deref()).await {
-                Ok(pairs) => all_pairs.extend(pairs),
+        address_details: &CrossChainAddressDetails,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        let mut all_routes = Vec::new();
+        for svc in self.cross_chain_providers.values() {
+            match svc.get_routes(address_details).await {
+                Ok(routes) => all_routes.extend(routes),
                 Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
             }
         }
 
-        Ok(all_pairs.into_iter().map(Into::into).collect())
+        Ok(all_routes)
     }
 
     /// Returns the balance of the wallet in satoshis

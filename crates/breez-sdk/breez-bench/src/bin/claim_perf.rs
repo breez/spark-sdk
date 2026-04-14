@@ -235,7 +235,7 @@ async fn run_single_claim_benchmark(
             async move {
                 let prepare = sdk
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: PaymentRequest::Raw(address),
+                        payment_request: PaymentRequest::Input(address),
                         amount: Some(u128::from(amount)),
                         token_identifier: None,
                         conversion_options: None,

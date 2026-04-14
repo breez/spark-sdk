@@ -217,6 +217,15 @@ class PostgresStorage {
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
 
+          // Base type check: ensure payment type matches the filter type
+          if (paymentDetailsFilter.type === "spark") {
+            paymentDetailsClauses.push("p.spark = true");
+          } else if (paymentDetailsFilter.type === "token") {
+            paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
+          } else if (paymentDetailsFilter.type === "lightning") {
+            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+          }
+
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
             paymentDetailsFilter.type === "spark"
@@ -256,9 +265,9 @@ class PostgresStorage {
                 : "p.spark IS NULL";
             let statusClause;
             if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
-              statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'RefundNeeded'";
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
-              statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')";
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
               paymentDetailsClauses.push(

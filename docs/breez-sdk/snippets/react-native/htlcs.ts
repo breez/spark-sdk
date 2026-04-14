@@ -18,7 +18,7 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // Set the amount you wish to pay the receiver
   const amountSats = BigInt(50_000)
   const prepareRequest = {
-    paymentRequest,
+    paymentRequest: { input: paymentRequest },
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,

@@ -88,7 +88,7 @@ async fn send_token_payment(sdk: &BreezSdk) -> Result<()> {
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request,
+            payment_request: PaymentRequest::Input(payment_request),
             amount,
             token_identifier,
             conversion_options: None,
@@ -186,7 +186,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
 
     let prepare_response = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request,
+            payment_request: PaymentRequest::Input(payment_request),
             amount,
             token_identifier,
             conversion_options,

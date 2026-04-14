@@ -730,7 +730,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
         let prepare = alice
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: PaymentRequest::Raw(bob_spark_address),
+                payment_request: PaymentRequest::Input(bob_spark_address),
                 amount: Some(excess as u128),
                 token_identifier: None,
                 conversion_options: None,

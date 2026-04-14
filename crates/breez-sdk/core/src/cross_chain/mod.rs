@@ -12,7 +12,6 @@ pub(crate) use orchestra::OrchestraService;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use breez_sdk_common::input::{CrossChainAddressFamily, CrossChainRoutePair};
 use serde::{Deserialize, Serialize};
 
 use crate::error::SdkError;
@@ -21,6 +20,25 @@ use crate::error::SdkError;
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {
     Orchestra,
+}
+
+/// A single route available for cross-chain sends, tagged with the provider
+/// that offers it. Returned by `get_cross_chain_routes()`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainRoutePair {
+    /// Which provider offers this route.
+    pub provider: CrossChainProvider,
+    /// Destination blockchain (e.g. `"base"`, `"solana"`, `"tron"`).
+    pub chain: String,
+    /// Destination asset symbol (e.g. `"USDC"`, `"USDT"`).
+    pub asset: String,
+    /// Token contract / mint address on the destination chain.
+    pub contract_address: Option<String>,
+    /// Decimal places for the destination asset.
+    pub decimals: u8,
+    /// Whether the route supports exact-out mode.
+    pub exact_out_eligible: bool,
 }
 
 /// Registry of cross-chain providers keyed by [`CrossChainProvider`].
@@ -49,10 +67,6 @@ impl CrossChainProviders {
     pub fn values(&self) -> impl Iterator<Item = &Arc<dyn CrossChainService>> {
         self.0.values()
     }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&CrossChainProvider, &Arc<dyn CrossChainService>)> {
-        self.0.iter()
-    }
 }
 
 /// Data stashed on the prepared send payment so the provider can resume
@@ -60,7 +74,9 @@ impl CrossChainProviders {
 #[derive(Debug, Clone)]
 pub(crate) struct CrossChainPrepared {
     pub quote_id: String,
-    pub deposit_address: String,
+    /// Provider-specific deposit request. Orchestra uses a Spark deposit
+    /// address; other providers (e.g. Boltz) may use a BOLT11 invoice.
+    pub deposit_request: String,
     pub amount_in: u128,
     pub estimated_out: u128,
     pub fee_amount: u128,
@@ -87,20 +103,18 @@ pub(crate) struct CrossChainSendResult {
 /// The SDK dispatches to the provider via this trait.
 #[macros::async_trait]
 pub(crate) trait CrossChainService: Send + Sync {
-    /// Returns the available `{chain, asset}` route pairs for a given address
-    /// family, optionally filtered by asset.
+    /// Returns the available route pairs for the given parsed address details.
+    /// Providers filter by address family, contract address, chain ID, etc.
     async fn get_routes(
         &self,
-        family: CrossChainAddressFamily,
-        asset: Option<&str>,
+        address_details: &crate::CrossChainAddressDetails,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError>;
 
     /// Fetch a quote for a cross-chain send.
     async fn prepare(
         &self,
         recipient_address: &str,
-        dest_chain: &str,
-        dest_asset: &str,
+        route: &CrossChainRoutePair,
         amount: u128,
         source_token_identifier: Option<String>,
         max_slippage_bps: Option<u32>,

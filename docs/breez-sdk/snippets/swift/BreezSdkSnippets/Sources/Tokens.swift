@@ -82,7 +82,7 @@ func sendTokenPayment(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: amount,
             tokenIdentifier: tokenIdentifier,
             conversionOptions: nil,
@@ -162,7 +162,7 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
 
     let prepareResponse = try await sdk.prepareSendPayment(
         request: PrepareSendPaymentRequest(
-            paymentRequest: paymentRequest,
+            paymentRequest: .input(paymentRequest),
             amount: amount,
             tokenIdentifier: tokenIdentifier,
             conversionOptions: conversionOptions,

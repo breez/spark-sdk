@@ -16,7 +16,7 @@ func SendHtlcPayment(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Payment, e
 	// Set the amount you wish to pay the receiver
 	amountSats := new(big.Int).SetInt64(50_000)
 	prepareRequest := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest:    paymentRequest,
+		PaymentRequest:    breez_sdk_spark.PaymentRequestInput{V: paymentRequest},
 		Amount:            &amountSats,
 		TokenIdentifier:   nil,
 		ConversionOptions: nil,

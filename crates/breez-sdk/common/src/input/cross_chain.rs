@@ -54,38 +54,6 @@ impl CrossChainAddressFamily {
     }
 }
 
-/// A single {chain, asset} pair available for cross-chain sends.
-/// Returned by `get_cross_chain_routes()` for route discovery.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct CrossChainRoutePair {
-    pub chain: String,
-    pub asset: String,
-    pub contract_address: Option<String>,
-    pub decimals: u8,
-    pub exact_out_eligible: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Lightweight parse result
-// ---------------------------------------------------------------------------
-
-/// Lightweight classification from the common-crate parser.
-/// No route/pair information — that's populated by the SDK layer via
-/// `get_cross_chain_routes()`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CrossChainAddressInfo {
-    /// The raw recipient address (e.g. `0xabc...`).
-    pub address: String,
-    /// Which address family this belongs to.
-    pub family: CrossChainAddressFamily,
-    /// Optional chain hint parsed from a URI `chain=` param (e.g. `"base"`).
-    pub chain: Option<String>,
-    /// Optional asset hint parsed from a URI `asset=` param (e.g. `"usdc"`).
-    pub asset: Option<String>,
-    /// Optional amount parsed from an `amount=` query param.
-    pub amount: Option<u128>,
-}
-
 // ---------------------------------------------------------------------------
 // Address detection
 // ---------------------------------------------------------------------------
@@ -127,39 +95,63 @@ pub fn detect_address_family(input: &str) -> Option<CrossChainAddressFamily> {
 // URI parsing
 // ---------------------------------------------------------------------------
 
-/// Parsed representation of a canonical cross-chain URI of the form
-/// `<scheme>:<address>?chain=<chain>&asset=<asset>&amount=<u128>&label=<text>`.
+/// Parsed representation of a cross-chain URI.
+///
+/// Supports:
+/// - **EIP-681** (EVM): `ethereum:<address>[@<chain_id>][/transfer?address=<to>&uint256=<amount>]`
+/// - **Solana**: `solana:<address>?amount=<amount>&spl-token=<mint>`
+/// - **Tron**: `tron:<address>?amount=<amount>&token=<contract>`
+///
 /// Unknown query params are ignored.
-pub struct ParsedCrossChainUri<'a> {
-    pub scheme: &'a str,
+pub struct ParsedCrossChainUri {
+    pub scheme: String,
+    /// The recipient address (for ERC-20 transfer URIs this is extracted from
+    /// the `address=` query param, not the path position).
     pub address: String,
-    pub chain: Option<String>,
-    pub asset: Option<String>,
+    /// Token contract / mint address parsed from the URI.
+    /// - EVM: the contract in the path position of a `/transfer` call
+    /// - Solana: `spl-token=` query param
+    /// - Tron: `token=` query param
+    pub contract_address: Option<String>,
+    /// EIP-681 chain ID parsed from `@<chain_id>` suffix on the address.
+    pub chain_id: Option<u64>,
+    /// Amount parsed from `amount=` or `value=` (EIP-681) query param.
     pub amount: Option<u128>,
 }
 
-/// Attempt to parse a canonical cross-chain URI. Returns `None` if `input` is
-/// not of the expected form (scheme, colon, address, optional query string).
-pub fn parse_cross_chain_uri(input: &str) -> Option<ParsedCrossChainUri<'_>> {
+/// Attempt to parse a cross-chain URI. Supports:
+///
+/// - **EIP-681** (EVM): `ethereum:<addr>[@<chain_id>]?value=<wei>&...`
+///   or ERC-20 transfer: `ethereum:<contract>[@<chain_id>]/transfer?address=<to>&uint256=<amount>`
+/// - **Solana**: `solana:<addr>?amount=<amount>&spl-token=<mint>`
+/// - **Tron**: `tron:<addr>?amount=<amount>&token=<contract>`
+///
+/// Returns `None` if the input is not a recognized cross-chain URI.
+pub fn parse_cross_chain_uri(input: &str) -> Option<ParsedCrossChainUri> {
     let (scheme, rest) = input.split_once(':')?;
     if scheme.is_empty() || rest.is_empty() {
         return None;
     }
-    // Only recognize the three canonical schemes we emit ourselves. This avoids
-    // accidentally swallowing other URI-like inputs (e.g. `lightning:...`).
-    if !matches!(scheme, "ethereum" | "solana" | "tron") {
-        return None;
-    }
 
-    let (addr_part, query_part) = match rest.split_once('?') {
-        Some((a, q)) => (a, Some(q)),
+    let (path_part, query_part) = match rest.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
         None => (rest, None),
     };
 
-    let mut chain = None;
-    let mut asset = None;
-    let mut amount = None;
+    let params = parse_query_params(query_part);
 
+    match scheme {
+        "ethereum" => parse_evm_uri(scheme, path_part, &params),
+        "solana" => Some(parse_solana_uri(scheme, path_part, &params)),
+        "tron" => Some(parse_tron_uri(scheme, path_part, &params)),
+        _ => None,
+    }
+}
+
+type QueryParams = std::collections::HashMap<String, String>;
+
+fn parse_query_params(query_part: Option<&str>) -> QueryParams {
+    let mut params = QueryParams::new();
     if let Some(qs) = query_part {
         for pair in qs.split('&').filter(|s| !s.is_empty()) {
             let Some((key, value)) = pair.split_once('=') else {
@@ -167,22 +159,70 @@ pub fn parse_cross_chain_uri(input: &str) -> Option<ParsedCrossChainUri<'_>> {
             };
             let decoded =
                 super::percent_encode::decode(value).unwrap_or_else(|_| value.to_string());
-            match key {
-                "chain" => chain = Some(decoded),
-                "asset" => asset = Some(decoded),
-                "amount" => amount = decoded.parse::<u128>().ok(),
-                _ => {}
-            }
+            params.insert(key.to_string(), decoded);
         }
     }
+    params
+}
 
+/// EIP-681: `ethereum:<addr>[@<chain_id>]?value=<wei>`
+/// or ERC-20: `ethereum:<contract>[@<chain_id>]/transfer?address=<to>&uint256=<amount>`
+fn parse_evm_uri(scheme: &str, path: &str, params: &QueryParams) -> Option<ParsedCrossChainUri> {
+    // ERC-20 transfer: `<contract>/transfer?address=<to>&uint256=<amount>`
+    if let Some((addr_or_contract, function)) = path.split_once('/') {
+        if function == "transfer" {
+            let (contract, chain_id) = parse_evm_address_and_chain_id(addr_or_contract);
+            let recipient = params.get("address").cloned()?;
+            let amount = params
+                .get("uint256")
+                .or(params.get("amount"))
+                .and_then(|s| s.parse::<u128>().ok());
+            return Some(ParsedCrossChainUri {
+                scheme: scheme.to_string(),
+                address: recipient,
+                contract_address: Some(contract),
+                chain_id,
+                amount,
+            });
+        }
+        return None; // Unknown function
+    }
+
+    // Simple send: `ethereum:<addr>[@<chain_id>]?value=<wei>`
+    let (address, chain_id) = parse_evm_address_and_chain_id(path);
+    let amount = params
+        .get("value")
+        .or(params.get("amount"))
+        .and_then(|s| s.parse::<u128>().ok());
     Some(ParsedCrossChainUri {
-        scheme,
-        address: addr_part.to_string(),
-        chain,
-        asset,
+        scheme: scheme.to_string(),
+        address,
+        contract_address: None,
+        chain_id,
         amount,
     })
+}
+
+/// Solana: `solana:<addr>?amount=<amount>&spl-token=<mint>`
+fn parse_solana_uri(scheme: &str, path: &str, params: &QueryParams) -> ParsedCrossChainUri {
+    ParsedCrossChainUri {
+        scheme: scheme.to_string(),
+        address: path.to_string(),
+        contract_address: params.get("spl-token").cloned(),
+        chain_id: None,
+        amount: params.get("amount").and_then(|s| s.parse::<u128>().ok()),
+    }
+}
+
+/// Tron: `tron:<addr>?amount=<amount>&token=<contract>`
+fn parse_tron_uri(scheme: &str, path: &str, params: &QueryParams) -> ParsedCrossChainUri {
+    ParsedCrossChainUri {
+        scheme: scheme.to_string(),
+        address: path.to_string(),
+        contract_address: params.get("token").cloned(),
+        chain_id: None,
+        amount: params.get("amount").and_then(|s| s.parse::<u128>().ok()),
+    }
 }
 
 /// Top-level entry point: attempt to classify `input` as a cross-chain
@@ -190,31 +230,32 @@ pub fn parse_cross_chain_uri(input: &str) -> Option<ParsedCrossChainUri<'_>> {
 ///
 /// This is a pure function with no network calls — route availability is
 /// checked separately via `get_cross_chain_routes()`.
-pub fn try_parse_cross_chain_address(input: &str) -> Option<CrossChainAddressInfo> {
-    // Case 1: canonical URI form.
+pub fn try_parse_cross_chain_address(
+    input: &str,
+) -> Option<super::models::CrossChainAddressDetails> {
+    // Case 1: URI form.
     if let Some(parsed) = parse_cross_chain_uri(input) {
-        let family = family_from_scheme(parsed.scheme)?;
-        // Sanity check the address matches the claimed family.
+        let family = family_from_scheme(&parsed.scheme)?;
+        // Sanity check: the recipient address must match the claimed family.
         if detect_address_family(&parsed.address) != Some(family) {
             return None;
         }
-        return Some(CrossChainAddressInfo {
+        return Some(super::models::CrossChainAddressDetails {
             address: parsed.address,
-            family,
-            chain: parsed.chain,
-            asset: parsed.asset,
+            address_family: family,
+            contract_address: parsed.contract_address,
+            chain_id: parsed.chain_id,
             amount: parsed.amount,
         });
     }
 
     // Case 2: bare address.
     let family = detect_address_family(input)?;
-    let address = input.trim().to_string();
-    Some(CrossChainAddressInfo {
-        address,
-        family,
-        chain: None,
-        asset: None,
+    Some(super::models::CrossChainAddressDetails {
+        address: input.trim().to_string(),
+        address_family: family,
+        contract_address: None,
+        chain_id: None,
         amount: None,
     })
 }
@@ -229,6 +270,17 @@ fn family_from_scheme(scheme: &str) -> Option<CrossChainAddressFamily> {
         "solana" => Some(CrossChainAddressFamily::Solana),
         "tron" => Some(CrossChainAddressFamily::Tron),
         _ => None,
+    }
+}
+
+/// Parse an EVM address that may have an `@<chain_id>` suffix (EIP-681).
+/// Returns `(address_string, optional_chain_id)`.
+fn parse_evm_address_and_chain_id(input: &str) -> (String, Option<u64>) {
+    if let Some((addr, chain_id_str)) = input.split_once('@') {
+        let chain_id = chain_id_str.parse::<u64>().ok();
+        (addr.to_string(), chain_id)
+    } else {
+        (input.to_string(), None)
     }
 }
 
@@ -315,56 +367,139 @@ mod tests {
         assert_eq!(detect_address_family(&bad), None);
     }
 
-    // -- URI parsing --------------------------------------------------------
+    // -- URI parsing: EVM (EIP-681) -----------------------------------------
+
+    const EVM_ADDR: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const USDC_CONTRACT: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
     #[test]
-    fn parses_canonical_uri() {
-        let parsed = parse_cross_chain_uri(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&asset=usdc&amount=1000",
-        )
-        .unwrap();
+    fn evm_simple_send() {
+        let parsed = parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}")).unwrap();
         assert_eq!(parsed.scheme, "ethereum");
-        assert_eq!(parsed.chain.as_deref(), Some("base"));
-        assert_eq!(parsed.asset.as_deref(), Some("usdc"));
+        assert_eq!(parsed.address, EVM_ADDR);
+        assert!(parsed.contract_address.is_none());
+        assert!(parsed.chain_id.is_none());
+        assert!(parsed.amount.is_none());
+    }
+
+    #[test]
+    fn evm_simple_send_with_value() {
+        let parsed = parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}?value=1000000")).unwrap();
+        assert_eq!(parsed.amount, Some(1_000_000));
+        assert!(parsed.contract_address.is_none());
+    }
+
+    #[test]
+    fn evm_with_chain_id() {
+        let parsed =
+            parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}@8453?value=1000")).unwrap();
+        assert_eq!(parsed.address, EVM_ADDR);
+        assert_eq!(parsed.chain_id, Some(8453)); // Base chain ID
         assert_eq!(parsed.amount, Some(1000));
     }
 
     #[test]
-    fn uri_without_query_has_no_pair() {
-        let parsed =
-            parse_cross_chain_uri("ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").unwrap();
-        assert!(parsed.chain.is_none());
-        assert!(parsed.asset.is_none());
+    fn evm_erc20_transfer() {
+        let uri = format!("ethereum:{USDC_CONTRACT}/transfer?address={EVM_ADDR}&uint256=1000000");
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.address, EVM_ADDR);
+        assert_eq!(parsed.contract_address.as_deref(), Some(USDC_CONTRACT));
+        assert_eq!(parsed.amount, Some(1_000_000));
+        assert!(parsed.chain_id.is_none());
     }
 
     #[test]
-    fn parses_solana_uri_with_chain_asset() {
-        let input = format!("solana:{SOLANA_ADDR}?chain=solana&asset=usdc");
-        let parsed = parse_cross_chain_uri(&input).unwrap();
+    fn evm_erc20_transfer_with_chain_id() {
+        let uri =
+            format!("ethereum:{USDC_CONTRACT}@8453/transfer?address={EVM_ADDR}&uint256=5000000");
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.address, EVM_ADDR);
+        assert_eq!(parsed.contract_address.as_deref(), Some(USDC_CONTRACT));
+        assert_eq!(parsed.chain_id, Some(8453));
+        assert_eq!(parsed.amount, Some(5_000_000));
+    }
+
+    #[test]
+    fn evm_erc20_transfer_missing_address_returns_none() {
+        // /transfer without address= query param should fail
+        let uri = format!("ethereum:{USDC_CONTRACT}/transfer?uint256=1000");
+        assert!(parse_cross_chain_uri(&uri).is_none());
+    }
+
+    #[test]
+    fn evm_unknown_function_returns_none() {
+        let uri = format!("ethereum:{EVM_ADDR}/approve?spender={USDC_CONTRACT}");
+        assert!(parse_cross_chain_uri(&uri).is_none());
+    }
+
+    #[test]
+    fn evm_amount_fallback_to_amount_param() {
+        // `amount=` works as fallback when `value=` is absent
+        let parsed = parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}?amount=500")).unwrap();
+        assert_eq!(parsed.amount, Some(500));
+    }
+
+    #[test]
+    fn evm_malformed_chain_id_ignored() {
+        let parsed = parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}@notanumber")).unwrap();
+        assert_eq!(parsed.address, EVM_ADDR);
+        assert!(parsed.chain_id.is_none());
+    }
+
+    // -- URI parsing: Solana ------------------------------------------------
+
+    #[test]
+    fn solana_simple_send() {
+        let parsed =
+            parse_cross_chain_uri(&format!("solana:{SOLANA_ADDR}?amount=1000000")).unwrap();
         assert_eq!(parsed.scheme, "solana");
         assert_eq!(parsed.address, SOLANA_ADDR);
-        assert_eq!(parsed.chain.as_deref(), Some("solana"));
-        assert_eq!(parsed.asset.as_deref(), Some("usdc"));
+        assert_eq!(parsed.amount, Some(1_000_000));
+        assert!(parsed.contract_address.is_none());
     }
 
     #[test]
-    fn parses_tron_uri() {
-        let input = format!("tron:{TRON_ADDR}?chain=tron&asset=usdt");
-        let parsed = parse_cross_chain_uri(&input).unwrap();
+    fn solana_spl_token() {
+        let mint = SOLANA_ADDR; // reuse as a plausible mint address
+        let recipient = "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN";
+        let uri = format!("solana:{recipient}?amount=100&spl-token={mint}");
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.address, recipient);
+        assert_eq!(parsed.contract_address.as_deref(), Some(mint));
+        assert_eq!(parsed.amount, Some(100));
+    }
+
+    #[test]
+    fn solana_no_query() {
+        let parsed = parse_cross_chain_uri(&format!("solana:{SOLANA_ADDR}")).unwrap();
+        assert_eq!(parsed.address, SOLANA_ADDR);
+        assert!(parsed.contract_address.is_none());
+        assert!(parsed.amount.is_none());
+    }
+
+    // -- URI parsing: Tron --------------------------------------------------
+
+    #[test]
+    fn tron_simple_send() {
+        let parsed = parse_cross_chain_uri(&format!("tron:{TRON_ADDR}?amount=100")).unwrap();
         assert_eq!(parsed.scheme, "tron");
         assert_eq!(parsed.address, TRON_ADDR);
-        assert_eq!(parsed.chain.as_deref(), Some("tron"));
-        assert_eq!(parsed.asset.as_deref(), Some("usdt"));
+        assert_eq!(parsed.amount, Some(100));
+        assert!(parsed.contract_address.is_none());
     }
 
     #[test]
-    fn uri_with_amount_and_label() {
-        let parsed = parse_cross_chain_uri(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&asset=usdc&amount=100000",
-        )
-        .unwrap();
-        assert_eq!(parsed.amount, Some(100_000));
+    fn tron_trc20_token() {
+        let trc20_contract = TRON_ADDR; // reuse as plausible contract
+        let recipient = "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9";
+        let uri = format!("tron:{recipient}?amount=500&token={trc20_contract}");
+        let parsed = parse_cross_chain_uri(&uri).unwrap();
+        assert_eq!(parsed.address, recipient);
+        assert_eq!(parsed.contract_address.as_deref(), Some(trc20_contract));
+        assert_eq!(parsed.amount, Some(500));
     }
+
+    // -- URI parsing: general -----------------------------------------------
 
     #[test]
     fn uri_rejects_unknown_scheme() {
@@ -373,22 +508,17 @@ mod tests {
     }
 
     #[test]
-    fn uri_ignores_unknown_query_params() {
-        let parsed = parse_cross_chain_uri(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&foo=bar&asset=usdc",
-        )
-        .unwrap();
-        assert_eq!(parsed.chain.as_deref(), Some("base"));
-        assert_eq!(parsed.asset.as_deref(), Some("usdc"));
+    fn uri_malformed_amount_is_dropped() {
+        let parsed =
+            parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}?value=notanumber")).unwrap();
+        assert!(parsed.amount.is_none());
     }
 
     #[test]
-    fn uri_malformed_amount_is_dropped() {
-        let parsed = parse_cross_chain_uri(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?amount=notanumber",
-        )
-        .unwrap();
-        assert!(parsed.amount.is_none());
+    fn uri_ignores_unknown_query_params() {
+        let parsed =
+            parse_cross_chain_uri(&format!("ethereum:{EVM_ADDR}?foo=bar&value=100")).unwrap();
+        assert_eq!(parsed.amount, Some(100));
     }
 
     // -- canonical_scheme / matches_chain -------------------------------------
@@ -454,43 +584,26 @@ mod tests {
 
     #[test]
     fn try_parse_bare_evm_address() {
-        let info =
-            try_parse_cross_chain_address("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Evm);
-        assert!(info.chain.is_none());
-        assert!(info.asset.is_none());
+        let info = try_parse_cross_chain_address(EVM_ADDR).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Evm);
+        assert_eq!(info.address, EVM_ADDR);
+        assert!(info.contract_address.is_none());
+        assert!(info.chain_id.is_none());
+        assert!(info.amount.is_none());
     }
 
     #[test]
-    fn try_parse_uri_with_chain_asset() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&asset=usdc",
-        )
-        .unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Evm);
-        assert_eq!(info.chain.as_deref(), Some("base"));
-        assert_eq!(info.asset.as_deref(), Some("usdc"));
+    fn try_parse_bare_solana_address() {
+        let info = try_parse_cross_chain_address(SOLANA_ADDR).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Solana);
+        assert!(info.contract_address.is_none());
     }
 
     #[test]
-    fn try_parse_uri_unknown_chain_passes_through() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=avalanche&asset=usdc",
-        )
-        .unwrap();
-        // avalanche passes through as a string now (not rejected)
-        assert_eq!(info.chain.as_deref(), Some("avalanche"));
-        assert_eq!(info.asset.as_deref(), Some("usdc"));
-    }
-
-    #[test]
-    fn try_parse_uri_unknown_asset_passes_through() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&asset=eth",
-        )
-        .unwrap();
-        assert_eq!(info.chain.as_deref(), Some("base"));
-        assert_eq!(info.asset.as_deref(), Some("eth"));
+    fn try_parse_bare_tron_address() {
+        let info = try_parse_cross_chain_address(TRON_ADDR).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Tron);
+        assert!(info.contract_address.is_none());
     }
 
     #[test]
@@ -499,65 +612,45 @@ mod tests {
     }
 
     #[test]
-    fn try_parse_bare_solana_address() {
-        let info = try_parse_cross_chain_address(SOLANA_ADDR).unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Solana);
-        assert!(info.chain.is_none());
-        assert!(info.asset.is_none());
+    fn try_parse_evm_erc20_uri() {
+        let uri = format!("ethereum:{USDC_CONTRACT}/transfer?address={EVM_ADDR}&uint256=1000000");
+        let info = try_parse_cross_chain_address(&uri).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Evm);
+        assert_eq!(info.address, EVM_ADDR);
+        assert_eq!(info.contract_address.as_deref(), Some(USDC_CONTRACT));
+        assert_eq!(info.amount, Some(1_000_000));
     }
 
     #[test]
-    fn try_parse_bare_tron_address() {
-        let info = try_parse_cross_chain_address(TRON_ADDR).unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Tron);
-        assert!(info.chain.is_none());
+    fn try_parse_evm_with_chain_id() {
+        let uri = format!("ethereum:{EVM_ADDR}@8453?value=5000");
+        let info = try_parse_cross_chain_address(&uri).unwrap();
+        assert_eq!(info.chain_id, Some(8453));
+        assert_eq!(info.amount, Some(5000));
     }
 
     #[test]
-    fn try_parse_uri_with_only_chain_hint() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base",
-        )
-        .unwrap();
-        assert_eq!(info.chain.as_deref(), Some("base"));
-        assert!(info.asset.is_none());
+    fn try_parse_solana_spl_token_uri() {
+        let mint = SOLANA_ADDR;
+        let recipient = "mvines9iiHiQTysrwkJjGf2gb9Ex9jXJX8ns3qwf2kN";
+        let uri = format!("solana:{recipient}?spl-token={mint}&amount=100");
+        let info = try_parse_cross_chain_address(&uri).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Solana);
+        assert_eq!(info.address, recipient);
+        assert_eq!(info.contract_address.as_deref(), Some(mint));
+        assert_eq!(info.amount, Some(100));
     }
 
     #[test]
-    fn try_parse_uri_with_only_asset_hint() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?asset=usdt",
-        )
-        .unwrap();
-        assert!(info.chain.is_none());
-        assert_eq!(info.asset.as_deref(), Some("usdt"));
-    }
-
-    #[test]
-    fn try_parse_uri_with_amount() {
-        let info = try_parse_cross_chain_address(
-            "ethereum:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913?chain=base&asset=usdc&amount=50000",
-        )
-        .unwrap();
-        assert_eq!(info.amount, Some(50000));
-    }
-
-    #[test]
-    fn try_parse_solana_uri() {
-        let input = format!("solana:{SOLANA_ADDR}?chain=solana&asset=usdc");
-        let info = try_parse_cross_chain_address(&input).unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Solana);
-        assert_eq!(info.chain.as_deref(), Some("solana"));
-        assert_eq!(info.asset.as_deref(), Some("usdc"));
-    }
-
-    #[test]
-    fn try_parse_tron_uri_usdt() {
-        let input = format!("tron:{TRON_ADDR}?chain=tron&asset=usdt");
-        let info = try_parse_cross_chain_address(&input).unwrap();
-        assert_eq!(info.family, CrossChainAddressFamily::Tron);
-        assert_eq!(info.chain.as_deref(), Some("tron"));
-        assert_eq!(info.asset.as_deref(), Some("usdt"));
+    fn try_parse_tron_trc20_uri() {
+        let contract = TRON_ADDR;
+        let recipient = "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9";
+        let uri = format!("tron:{recipient}?token={contract}&amount=200");
+        let info = try_parse_cross_chain_address(&uri).unwrap();
+        assert_eq!(info.address_family, CrossChainAddressFamily::Tron);
+        assert_eq!(info.address, recipient);
+        assert_eq!(info.contract_address.as_deref(), Some(contract));
+        assert_eq!(info.amount, Some(200));
     }
 
     #[test]

@@ -78,7 +78,7 @@ const exampleSendTokenPayment = async (sdk: BreezSdk) => {
   const amount = BigInt(1_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { input: paymentRequest },
     amount,
     tokenIdentifier,
     conversionOptions: undefined,
@@ -155,7 +155,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   }
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { input: paymentRequest },
     amount,
     tokenIdentifier,
     conversionOptions,

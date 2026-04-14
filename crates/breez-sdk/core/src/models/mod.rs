@@ -22,7 +22,8 @@ use std::{
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
-    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed, error::DepositClaimError,
+    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
+    cross_chain::CrossChainRoutePair, error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -1122,21 +1123,16 @@ pub enum SendPaymentMethod {
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
     },
+    /// A cross-chain send via a bridge/swap provider.
     CrossChainAddress {
-        /// Which cross-chain provider fulfilled this quote.
-        provider: crate::cross_chain::CrossChainProvider,
+        /// The route selected for this cross-chain send (includes provider, chain, asset).
+        route: CrossChainRoutePair,
         /// Raw destination address (e.g. `0xabc...`).
         recipient_address: String,
-        /// The chain the user has selected (`base`, `solana`, ...).
-        destination_chain: String,
-        /// The asset the user has selected (`usdc`, `usdt`, ...).
-        destination_asset: String,
-        /// Optional contract/mint address for the destination asset.
-        destination_contract_address: Option<String>,
         /// Provider quote id used when calling `/submit`.
         quote_id: String,
         /// Address the source Spark transfer should be sent to.
-        deposit_address: String,
+        deposit_request: String,
         /// Amount (in source base units) the user must transfer to `deposit_address`.
         amount_in: u128,
         /// Estimated amount the recipient will receive in the destination asset's base units.
@@ -1338,17 +1334,13 @@ pub enum OnchainConfirmationSpeed {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum PaymentRequest {
-    /// Existing string-based input (bolt11, spark address, BIP-21, cross-chain URI, etc.)
-    Raw(String),
-    /// Cross-chain send with explicit chain/asset selection.
+    /// Unparsed user input string (bolt11, spark address, BIP-21, cross-chain URI, etc.)
+    Input(String),
+    /// Cross-chain send with a selected route from `get_cross_chain_routes()`.
     /// Amount comes from `PrepareSendPaymentRequest.amount`, not here.
     CrossChain {
         address: String,
-        chain: String,
-        asset: String,
-        /// Optional cross-chain provider selection. When set, only the specified
-        /// provider is used. When `None`, the SDK selects the best available provider.
-        provider: Option<crate::cross_chain::CrossChainProvider>,
+        route: CrossChainRoutePair,
     },
 }
 

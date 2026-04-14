@@ -8,6 +8,8 @@ use crate::{
     network::BitcoinNetwork,
 };
 
+use super::cross_chain::CrossChainAddressFamily;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Amount {
     Bitcoin {
@@ -151,24 +153,24 @@ pub enum InputType {
     CrossChainAddress(CrossChainAddressDetails),
 }
 
-/// Cross-chain recipient details produced by the core SDK's `parse_input`
-/// fallback after the common parser fails to classify the input.
+/// Cross-chain recipient details returned by `parse()` when the input is
+/// recognized as an EVM / Solana / Tron address or URI.
 ///
-/// The UI calls `get_cross_chain_routes(family)` to discover available
-/// `{chain, asset}` pairs, then passes the selected chain + asset to
-/// `prepare_send_payment` via `PaymentRequest::CrossChain`.
+/// The UI passes these details to `get_cross_chain_routes()` to discover
+/// available routes, then selects one and calls `prepare_send_payment`
+/// with `PaymentRequest::CrossChain { address, route }`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CrossChainAddressDetails {
     /// The raw recipient address (e.g. `0xabc...`).
     pub address: String,
-    /// Which address family this belongs to.
-    pub address_family: super::cross_chain::CrossChainAddressFamily,
-    /// Optional chain hint parsed from a URI `chain=` param (e.g. `"base"`).
-    pub chain: Option<String>,
-    /// Optional asset hint parsed from a URI `asset=` param (e.g. `"usdc"`).
-    pub asset: Option<String>,
-    /// Optional amount (in the source asset's base units) parsed from an
-    /// `amount=` query param.
+    /// Which address family this belongs to (EVM / Solana / Tron).
+    pub address_family: CrossChainAddressFamily,
+    /// Token contract / mint address parsed from the URI.
+    /// Used to filter routes by matching against `CrossChainRoutePair.contract_address`.
+    pub contract_address: Option<String>,
+    /// EIP-681 chain ID parsed from `@<chain_id>` suffix.
+    pub chain_id: Option<u64>,
+    /// Optional amount parsed from the URI.
     pub amount: Option<u128>,
 }
 

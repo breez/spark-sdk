@@ -410,7 +410,7 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType) -
         PaymentType::Transfer { address, amount } => {
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: PaymentRequest::Raw(address.clone()),
+                    payment_request: PaymentRequest::Input(address.clone()),
                     amount: Some(*amount as u128),
                     token_identifier: None,
                     conversion_options: None,
@@ -431,7 +431,7 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType) -
         PaymentType::Lightning { invoice, .. } => {
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: PaymentRequest::Raw(invoice.clone()),
+                    payment_request: PaymentRequest::Input(invoice.clone()),
                     amount: None,
                     token_identifier: None,
                     conversion_options: None,

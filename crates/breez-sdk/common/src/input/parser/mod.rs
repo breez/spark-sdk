@@ -139,6 +139,13 @@ where
             return Ok(Some(input_type));
         }
 
+        // Cross-chain address detection (EVM / Solana / Tron bare addresses
+        // and EIP-681 / Solana / Tron URIs). Pure address format detection
+        // with no network calls.
+        if let Some(details) = super::cross_chain::try_parse_cross_chain_address(input) {
+            return Ok(Some(InputType::CrossChainAddress(details)));
+        }
+
         Ok(None)
     }
 

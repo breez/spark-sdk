@@ -450,7 +450,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
 
     let prepareResponse = try await sdk.prepareSendPayment(request: PrepareSendPaymentRequest(
-        paymentRequest: paymentRequest,
+        paymentRequest: .input(paymentRequest),
         amount: amount,
         tokenIdentifier: tokenIdentifier,
         conversionOptions: conversionOptions,
