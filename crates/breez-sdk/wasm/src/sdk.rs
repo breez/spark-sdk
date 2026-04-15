@@ -112,11 +112,12 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "getCrossChainRoutes")]
     pub async fn get_cross_chain_routes(
         &self,
-        address_details: CrossChainAddressDetails,
+        filter: CrossChainRouteFilter,
     ) -> WasmResult<Vec<CrossChainRoutePair>> {
+        let filter: breez_sdk_spark::CrossChainRouteFilter = filter.into();
         Ok(self
             .sdk
-            .get_cross_chain_routes(&address_details.into())
+            .get_cross_chain_routes(&filter)
             .await?
             .into_iter()
             .map(Into::into)

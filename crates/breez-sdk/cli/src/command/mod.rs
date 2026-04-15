@@ -642,11 +642,9 @@ pub(crate) async fn execute_command(
             // route selection before we can prepare.
             let payment_request = match sdk.parse(&payment_request).await {
                 Ok(InputType::CrossChainAddress(address_details)) => {
-                    let route = select_cross_chain_route(sdk, rl, &address_details).await?;
-                    PaymentRequest::CrossChain {
-                        address: address_details.address,
-                        route,
-                    }
+                    let address = address_details.address.clone();
+                    let route = select_cross_chain_route(sdk, rl, address_details).await?;
+                    PaymentRequest::CrossChain { address, route }
                 }
                 _ => PaymentRequest::Input {
                     input: payment_request,
@@ -995,9 +993,10 @@ pub(crate) async fn execute_command(
 async fn select_cross_chain_route(
     sdk: &BreezSdk,
     rl: &mut Editor<CliHelper, DefaultHistory>,
-    address_details: &breez_sdk_spark::CrossChainAddressDetails,
+    address_details: breez_sdk_spark::CrossChainAddressDetails,
 ) -> Result<CrossChainRoutePair, anyhow::Error> {
-    let routes = sdk.get_cross_chain_routes(address_details).await?;
+    let filter = breez_sdk_spark::CrossChainRouteFilter::Send { address_details };
+    let routes = sdk.get_cross_chain_routes(&filter).await?;
     if routes.is_empty() {
         return Err(anyhow::anyhow!(
             "No cross-chain routes available for this address"

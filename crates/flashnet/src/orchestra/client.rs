@@ -65,46 +65,27 @@ impl OrchestraClient {
         Ok(response)
     }
 
-    /// Return the subset of routes whose source is Spark and whose destination
-    /// chain matches one of `allowed_chains`. Passing an empty slice returns
-    /// all Spark-sourced routes regardless of destination chain.
+    /// Return routes where Spark is involved as source or destination.
+    ///
+    /// When `is_send` is `true`, returns routes with `source_chain == "spark"`
+    /// (sending from Spark to another chain). When `false`, returns routes with
+    /// `destination_chain == "spark"` (receiving into Spark from another chain).
     ///
     /// Driven by the cached [`Self::routes`] response — cheap to call
     /// repeatedly from the parser / UI layer.
-    pub async fn routes_for_chains(
-        &self,
-        allowed_chains: &[&str],
-    ) -> Result<Vec<Route>, FlashnetError> {
+    pub async fn spark_routes(&self, is_send: bool) -> Result<Vec<Route>, FlashnetError> {
         let response = self.routes().await?;
-        let mut out = Vec::new();
-        for route in response.routes {
-            if !route.source_chain.eq_ignore_ascii_case("spark") {
-                continue;
-            }
-            let matches_chain = allowed_chains.is_empty()
-                || allowed_chains
-                    .iter()
-                    .any(|c| route.destination_chain.eq_ignore_ascii_case(c));
-            if matches_chain {
-                out.push(route);
-            }
-        }
-        Ok(out)
-    }
-
-    /// Find a single Spark-sourced route by destination chain + asset
-    /// (case-insensitive).
-    pub async fn find_route(
-        &self,
-        chain: &str,
-        asset: &str,
-    ) -> Result<Option<Route>, FlashnetError> {
-        let response = self.routes().await?;
-        Ok(response.routes.into_iter().find(|r| {
-            r.source_chain.eq_ignore_ascii_case("spark")
-                && r.destination_chain.eq_ignore_ascii_case(chain)
-                && r.destination_asset.eq_ignore_ascii_case(asset)
-        }))
+        Ok(response
+            .routes
+            .into_iter()
+            .filter(|r| {
+                if is_send {
+                    r.source_chain.eq_ignore_ascii_case("spark")
+                } else {
+                    r.destination_chain.eq_ignore_ascii_case("spark")
+                }
+            })
+            .collect())
     }
 
     /// Price preview (no auth).

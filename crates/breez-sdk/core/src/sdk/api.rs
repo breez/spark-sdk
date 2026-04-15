@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    CrossChainAddressDetails, CrossChainRoutePair, GetTokensMetadataRequest,
+    CrossChainRouteFilter, CrossChainRoutePair, GetTokensMetadataRequest,
     GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
     Network, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
     SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
@@ -73,23 +73,30 @@ impl BreezSdk {
         parse_input(input, Some(self.external_input_parsers.clone())).await
     }
 
-    /// Returns the available cross-chain routes for the given parsed address.
+    /// Returns the available cross-chain routes.
     ///
-    /// The UI calls this after `parse()` returns `CrossChainAddress` to
-    /// populate the route picker. Routes are filtered by address family
-    /// and optionally by `contract_address` (from the parsed URI).
+    /// Use [`CrossChainRouteFilter::Send`] to get routes for sending from Spark
+    /// (filtered by the parsed recipient address), or
+    /// [`CrossChainRouteFilter::Receive`] to get routes for receiving into Spark
+    /// (optionally filtered by a source contract address).
     pub async fn get_cross_chain_routes(
         &self,
-        address_details: &CrossChainAddressDetails,
+        filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
         let mut all_routes = Vec::new();
         for svc in self.cross_chain_providers.values() {
-            match svc.get_routes(address_details).await {
+            match svc.get_routes(filter).await {
                 Ok(routes) => all_routes.extend(routes),
                 Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
             }
         }
 
+        all_routes.sort_by(|a, b| {
+            a.asset
+                .cmp(&b.asset)
+                .then_with(|| a.chain.cmp(&b.chain))
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
         Ok(all_routes)
     }
 

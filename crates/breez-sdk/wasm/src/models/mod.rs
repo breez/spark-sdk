@@ -813,6 +813,16 @@ pub enum CrossChainAddressFamily {
     Tron,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteFilter)]
+pub enum CrossChainRouteFilter {
+    Send {
+        address_details: CrossChainAddressDetails,
+    },
+    Receive {
+        contract_address: Option<String>,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRoutePair)]
 pub struct CrossChainRoutePair {
     pub provider: CrossChainProvider,

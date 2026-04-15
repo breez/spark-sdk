@@ -58,10 +58,10 @@ impl BreezSdk {
 
     pub async fn get_cross_chain_routes(
         &self,
-        address_details: CrossChainAddressDetails,
+        filter: CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
         self.inner
-            .get_cross_chain_routes(&address_details)
+            .get_cross_chain_routes(&filter)
             .await
     }
 

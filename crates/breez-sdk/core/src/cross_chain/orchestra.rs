@@ -6,12 +6,13 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use breez_sdk_common::input::CrossChainAddressFamily;
 use flashnet::OrchestraClient;
 use flashnet::orchestra::{
-    AmountMode, OrderStatus, QuoteRequest, QuoteResponse, StatusResponse, SubmitResponse,
+    AmountMode, OrderStatus, QuoteRequest, QuoteResponse, Route, RouteAsset, StatusResponse,
+    SubmitResponse,
 };
 use platform_utils::time::Duration;
 use platform_utils::tokio;
@@ -27,8 +28,8 @@ use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymen
 use crate::{ConversionInfo, ConversionStatus, Network, PaymentDetails, Storage};
 
 use super::{
-    CrossChainPrepared, CrossChainProvider, CrossChainRoutePair, CrossChainSendResult,
-    CrossChainService,
+    CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair,
+    CrossChainSendResult, CrossChainService,
 };
 
 /// The canonical Spark source chain string used by Orchestra.
@@ -251,63 +252,55 @@ impl OrchestraService {
 impl CrossChainService for OrchestraService {
     async fn get_routes(
         &self,
-        address_details: &crate::CrossChainAddressDetails,
+        filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        let family: CrossChainAddressFamily = address_details.address_family.into();
+        let (is_send, contract_filter) = match filter {
+            CrossChainRouteFilter::Send { address_details } => {
+                (true, address_details.contract_address.as_deref())
+            }
+            CrossChainRouteFilter::Receive { contract_address } => {
+                (false, contract_address.as_deref())
+            }
+        };
 
         let routes =
-            self.client.routes_for_chains(&[]).await.map_err(|e| {
+            self.client.spark_routes(is_send).await.map_err(|e| {
                 SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
             })?;
 
-        // Multiple raw routes may exist for the same destination (e.g.
+        // The non-Spark side of the route: for send it's the destination,
+        // for receive it's the source (the chain the user sends from).
+        fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
+            if is_send { &r.destination } else { &r.source }
+        }
+
+        // Multiple raw routes may exist for the same external chain (e.g.
         // BTC→USDT-on-tron and USDB→USDT-on-tron). Dedup by (chain, asset,
-        // contract_address) so the caller only sees one route per destination.
-        // The source asset is determined later at prepare time via
-        // `token_identifier`.
-        let mut seen = std::collections::HashSet::new();
+        // contract_address) so the caller only sees one route per external endpoint.
+        let mut seen = HashSet::new();
         let mut pairs: Vec<CrossChainRoutePair> = Vec::new();
 
-        for r in routes
-            .iter()
-            .filter(|r| family.matches_chain(&r.destination.chain))
-            .filter(|r| {
-                if let Some(ref ca) = address_details.contract_address {
-                    r.destination
-                        .contract_address
-                        .as_deref()
-                        .is_some_and(|c| c == ca.as_str())
-                } else {
-                    true
-                }
-            })
-        {
+        for r in routes.iter().filter(|r| {
+            let side = non_spark_side(r, is_send);
+            contract_filter
+                .is_none_or(|ca| side.contract_address.as_deref().is_some_and(|c| c == ca))
+        }) {
+            let side = non_spark_side(r, is_send);
             let key = (
-                r.destination.chain.clone(),
-                r.destination.asset.clone(),
-                r.destination.contract_address.clone(),
+                side.chain.clone(),
+                side.asset.clone(),
+                side.contract_address.clone(),
             );
-            if seen.contains(&key) {
-                // Merge: if any source route supports exact-out, propagate it.
-                if r.exact_out_eligible
-                    && let Some(existing) = pairs.iter_mut().find(|p| {
-                        p.chain == key.0 && p.asset == key.1 && p.contract_address == key.2
-                    })
-                {
-                    existing.exact_out_eligible = true;
-                }
-
-                continue;
+            if seen.insert(key) {
+                pairs.push(CrossChainRoutePair {
+                    provider: CrossChainProvider::Orchestra,
+                    chain: side.chain.clone(),
+                    asset: side.asset.clone(),
+                    contract_address: side.contract_address.clone(),
+                    decimals: side.decimals,
+                    exact_out_eligible: r.exact_out_eligible,
+                });
             }
-            seen.insert(key);
-            pairs.push(CrossChainRoutePair {
-                provider: CrossChainProvider::Orchestra,
-                chain: r.destination.chain.clone(),
-                asset: r.destination.asset.clone(),
-                contract_address: r.destination.contract_address.clone(),
-                decimals: r.destination.decimals,
-                exact_out_eligible: r.exact_out_eligible,
-            });
         }
 
         Ok(pairs)

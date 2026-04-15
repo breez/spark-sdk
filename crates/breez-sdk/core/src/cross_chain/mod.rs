@@ -14,15 +14,30 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::SdkError;
+use crate::{CrossChainAddressDetails, error::SdkError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {
     Orchestra,
 }
 
-/// A single route available for cross-chain sends, tagged with the provider
+/// Filter for [`CrossChainService::get_routes`] and the public
+/// `get_cross_chain_routes()` API.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CrossChainRouteFilter {
+    /// Routes for sending from Spark to another chain.
+    /// Filtered by the parsed recipient address details.
+    Send {
+        address_details: CrossChainAddressDetails,
+    },
+    /// Routes for receiving to Spark from another chain.
+    /// Optionally filtered by the source token contract address.
+    Receive { contract_address: Option<String> },
+}
+
+/// A single route available for cross-chain transfers, tagged with the provider
 /// that offers it. Returned by `get_cross_chain_routes()`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -103,11 +118,14 @@ pub(crate) struct CrossChainSendResult {
 /// The SDK dispatches to the provider via this trait.
 #[macros::async_trait]
 pub(crate) trait CrossChainService: Send + Sync {
-    /// Returns the available route pairs for the given parsed address details.
-    /// Providers filter by address family, contract address, chain ID, etc.
+    /// Returns the available cross-chain route pairs.
+    ///
+    /// The returned [`CrossChainRoutePair`] always describes the non-Spark
+    /// side of the route. The [`CrossChainRouteFilter`] controls direction
+    /// and optional filtering.
     async fn get_routes(
         &self,
-        address_details: &crate::CrossChainAddressDetails,
+        filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError>;
 
     /// Fetch a quote for a cross-chain send.
