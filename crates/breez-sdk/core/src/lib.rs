@@ -14,6 +14,7 @@ mod persist;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
+mod session_manager;
 pub mod signer;
 mod stable_balance;
 mod sync;

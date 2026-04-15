@@ -39,6 +39,7 @@ impl BreezSdk {
             token_converter: params.token_converter,
             stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
+            session_manager: params.session_manager,
         };
 
         sdk.start(initial_synced_sender);
