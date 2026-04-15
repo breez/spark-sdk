@@ -467,9 +467,19 @@ class MigrationManager {
               const cursor = event.target.result;
               if (cursor) {
                 const record = cursor.value;
-                if (record.conversionInfo && !record.conversionInfo.type) {
-                  record.conversionInfo.type = "amm";
-                  cursor.update(record);
+                if (record.conversionInfo) {
+                  try {
+                    const ci = typeof record.conversionInfo === "string"
+                      ? JSON.parse(record.conversionInfo)
+                      : record.conversionInfo;
+                    if (!ci.type) {
+                      ci.type = "amm";
+                      record.conversionInfo = JSON.stringify(ci);
+                      cursor.update(record);
+                    }
+                  } catch (e) {
+                    // Skip unparseable records
+                  }
                 }
                 cursor.continue();
               }
@@ -500,7 +510,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 15; // Current schema version
+    this.dbVersion = 17; // Current schema version
   }
 
   /**

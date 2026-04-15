@@ -1006,8 +1006,8 @@ async fn select_cross_chain_route(
     if routes.len() == 1 {
         let route = routes.into_iter().next().unwrap();
         println!(
-            "Auto-selected route: {:?} → {} on {}",
-            route.provider, route.asset, route.chain
+            "Auto-selected route: {} on {} [{:?}]",
+            route.asset, route.chain, route.provider
         );
         return Ok(route);
     }
@@ -1016,15 +1016,21 @@ async fn select_cross_chain_route(
     for (i, route) in routes.iter().enumerate() {
         let idx = i.saturating_add(1);
         println!(
-            "  {idx}. {:?} → {} on {}{}",
-            route.provider,
+            "  {idx}. {} on {}{} [{:?}]",
             route.asset,
             route.chain,
             route
                 .contract_address
                 .as_deref()
-                .map(|c| format!(" ({c})"))
-                .unwrap_or_default()
+                .map(|c| {
+                    if c.len() > 12 {
+                        format!(" ({}...{})", &c[..6], &c[c.len() - 6..])
+                    } else {
+                        format!(" ({c})")
+                    }
+                })
+                .unwrap_or_default(),
+            route.provider,
         );
     }
 
