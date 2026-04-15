@@ -193,7 +193,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use boltz_client::models::{BoltzSwap, BoltzSwapStatus, Chain};
+    use boltz_client::models::{BoltzSwap, BoltzSwapStatus, ChainId};
 
     use super::*;
     use crate::persist::sqlite::SqliteStorage;
@@ -213,7 +213,7 @@ mod tests {
             chain_id: 42161,
             claim_address: "0xclaim".to_string(),
             destination_address: "0xdest".to_string(),
-            destination_chain: Chain::Arbitrum,
+            destination_chain: ChainId::new("arbitrum one"),
             refund_address: "0xrefund".to_string(),
             erc20swap_address: "0xswap".to_string(),
             router_address: "0xrouter".to_string(),

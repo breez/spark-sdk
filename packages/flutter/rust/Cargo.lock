@@ -1114,7 +1114,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1#891c40fe19f0d6d4d07a00727e4faf870807eff1"
+source = "git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815#5d48b2970a3c759a629226e19e195d42b46b7815"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1129,8 +1129,8 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815)",
  "serde",
  "serde_json",
  "sha2",
@@ -3213,7 +3213,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1#891c40fe19f0d6d4d07a00727e4faf870807eff1"
+source = "git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815#5d48b2970a3c759a629226e19e195d42b46b7815"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3622,12 +3622,12 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1#891c40fe19f0d6d4d07a00727e4faf870807eff1"
+source = "git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815#5d48b2970a3c759a629226e19e195d42b46b7815"
 dependencies = [
  "async-trait",
  "base64",
  "bitreq 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=891c40fe19f0d6d4d07a00727e4faf870807eff1)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=5d48b2970a3c759a629226e19e195d42b46b7815)",
  "reqwest",
  "serde",
  "serde_json",

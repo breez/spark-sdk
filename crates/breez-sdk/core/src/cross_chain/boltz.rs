@@ -11,7 +11,7 @@ use std::sync::Arc;
 use boltz_client::{
     BoltzError, BoltzService as BoltzClient,
     config::{BoltzConfig as BoltzClientConfig, MAX_SLIPPAGE_BPS},
-    models::{Chain, PreparedSwap},
+    models::{ChainId, PreparedSwap},
 };
 use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
@@ -21,8 +21,8 @@ use super::{
     CrossChainSendResult, CrossChainService,
 };
 use crate::{
-    ConversionInfo, ConversionStatus, CrossChainAddressFamily, Network, PaymentMetadata, Storage,
-    error::SdkError, sdk::LightningSender, utils::payments::insert_or_cache_payment_metadata,
+    ConversionInfo, ConversionStatus, Network, PaymentMetadata, Storage, error::SdkError,
+    sdk::LightningSender, utils::payments::insert_or_cache_payment_metadata,
 };
 
 /// Cache KV key used to look up the payment row attached to a given Boltz swap.
@@ -115,24 +115,22 @@ impl CrossChainService for BoltzService {
             CrossChainRouteFilter::Receive { .. } => return Ok(Vec::new()),
         };
 
-        // Each supported destination chain maps onto one route pair. Filter
-        // by the parsed recipient's address family so we never surface EVM
-        // routes for a Solana address (and vice versa).
+        // `chains_accepting` validates the raw recipient address against
+        // every destination's transport and returns only those whose parser
+        // accepts it — this replaces the old hand-written address-family
+        // filter and automatically picks up any new chains that USDT0
+        // publishes.
         let routes = self
             .client
-            .supported_chains()
+            .chains_accepting(&address_details.address)
             .into_iter()
-            .filter(|chain| chain_address_family(chain) == address_details.address_family)
-            .map(|chain| {
-                let contract_address = self.client.token_address(&chain);
-                CrossChainRoutePair {
-                    provider: CrossChainProvider::Boltz,
-                    chain: chain.registry_name().to_string(),
-                    asset: "USDT".to_string(),
-                    contract_address,
-                    decimals: 6,
-                    exact_out_eligible: false,
-                }
+            .map(|spec| CrossChainRoutePair {
+                provider: CrossChainProvider::Boltz,
+                chain: spec.id.as_str().to_string(),
+                asset: "USDT".to_string(),
+                contract_address: spec.token_address.clone(),
+                decimals: 6,
+                exact_out_eligible: false,
             })
             .collect();
         Ok(routes)
@@ -160,9 +158,7 @@ impl CrossChainService for BoltzService {
             ))
         })?;
 
-        let chain = chain_from_registry_name(&route.chain).ok_or_else(|| {
-            SdkError::InvalidInput(format!("Unknown Boltz destination chain: {}", route.chain))
-        })?;
+        let chain = ChainId::new(&route.chain);
 
         if let Some(bps) = max_slippage_bps
             && bps > MAX_SLIPPAGE_BPS
@@ -338,85 +334,4 @@ impl CrossChainService for BoltzService {
 
 fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
     SdkError::Generic(format!("Boltz: {err}"))
-}
-
-fn chain_address_family(chain: &Chain) -> CrossChainAddressFamily {
-    use boltz_client::models::NetworkTransport;
-    match chain.transport() {
-        NetworkTransport::Evm => CrossChainAddressFamily::Evm,
-        NetworkTransport::Solana => CrossChainAddressFamily::Solana,
-        NetworkTransport::Tron => CrossChainAddressFamily::Tron,
-    }
-}
-
-fn chain_from_registry_name(name: &str) -> Option<Chain> {
-    match name {
-        "arbitrum" => Some(Chain::Arbitrum),
-        "berachain" => Some(Chain::Berachain),
-        "conflux" => Some(Chain::Conflux),
-        "corn" => Some(Chain::Corn),
-        "ethereum" => Some(Chain::Ethereum),
-        "flare" => Some(Chain::Flare),
-        "hedera" => Some(Chain::Hedera),
-        "hyperevm" => Some(Chain::HyperEvm),
-        "ink" => Some(Chain::Ink),
-        "mantle" => Some(Chain::Mantle),
-        "megaeth" => Some(Chain::MegaEth),
-        "monad" => Some(Chain::Monad),
-        "morph" => Some(Chain::Morph),
-        "optimism" => Some(Chain::Optimism),
-        "plasma" => Some(Chain::Plasma),
-        "polygon" => Some(Chain::Polygon),
-        "rootstock" => Some(Chain::Rootstock),
-        "sei" => Some(Chain::Sei),
-        "stable" => Some(Chain::Stable),
-        "tempo" => Some(Chain::Tempo),
-        "solana" => Some(Chain::Solana),
-        "tron" => Some(Chain::Tron),
-        "unichain" => Some(Chain::Unichain),
-        "xlayer" => Some(Chain::XLayer),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chain_round_trip_through_registry_name() {
-        for chain in [
-            Chain::Arbitrum,
-            Chain::Ethereum,
-            Chain::Optimism,
-            Chain::Solana,
-            Chain::Tron,
-            Chain::Polygon,
-            Chain::HyperEvm,
-            Chain::XLayer,
-        ] {
-            let name = chain.registry_name();
-            let round_tripped = chain_from_registry_name(name).unwrap_or_else(|| {
-                panic!("no reverse mapping for chain {chain:?} (registry_name={name})")
-            });
-            assert_eq!(round_tripped, chain);
-        }
-    }
-
-    #[test]
-    fn address_family_maps_transport() {
-        assert_eq!(
-            chain_address_family(&Chain::Arbitrum),
-            CrossChainAddressFamily::Evm
-        );
-        assert_eq!(
-            chain_address_family(&Chain::Solana),
-            CrossChainAddressFamily::Solana
-        );
-        assert_eq!(
-            chain_address_family(&Chain::Tron),
-            CrossChainAddressFamily::Tron
-        );
-    }
 }
