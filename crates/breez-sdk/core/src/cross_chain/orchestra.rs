@@ -337,7 +337,7 @@ impl CrossChainService for OrchestraService {
         };
 
         debug!(
-            "Orchestra: requesting quote {}/{} -> {}/{} amount={}",
+            "Orchestra: requesting quote: {}/{} -> {}/{} amount={}",
             request.source_chain,
             request.source_asset,
             request.destination_chain,
@@ -349,6 +349,7 @@ impl CrossChainService for OrchestraService {
             .quote(request)
             .await
             .map_err(|e| SdkError::Generic(format!("Orchestra quote failed: {e}")))?;
+        debug!("Orchestra: quote response: {:?}", quote);
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
@@ -386,7 +387,7 @@ impl CrossChainService for OrchestraService {
         );
 
         // Step 2: Submit the deposit to Orchestra.
-        let submit_result: Result<SubmitResponse, _> = self
+        let submit_res: Result<SubmitResponse, _> = self
             .client
             .submit_spark(flashnet::orchestra::SubmitRequestSpark {
                 quote_id: prepared.quote_id.clone(),
@@ -394,9 +395,10 @@ impl CrossChainService for OrchestraService {
                 source_spark_address: None,
             })
             .await;
+        debug!("Orchestra: submit response: {:?}", submit_res);
 
         // Step 3: Persist ConversionInfo::Orchestra metadata.
-        let (status, order_id) = match &submit_result {
+        let (status, order_id) = match &submit_res {
             Ok(response) => (ConversionStatus::Pending, response.order_id.clone()),
             Err(e) => {
                 error!("Orchestra /submit failed after deposit transfer {spark_tx_hash}: {e}");
@@ -433,7 +435,7 @@ impl CrossChainService for OrchestraService {
 
         self.trigger_monitor();
 
-        submit_result
+        submit_res
             .map(|r| CrossChainSendResult {
                 order_id: r.order_id,
                 payment_id: payment_id.clone(),

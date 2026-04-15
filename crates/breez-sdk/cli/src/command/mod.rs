@@ -655,7 +655,7 @@ pub(crate) async fn execute_command(
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount,
-                    token_identifier,
+                    token_identifier: token_identifier.clone(),
                     conversion_options,
                     fee_policy,
                 })
@@ -702,16 +702,16 @@ pub(crate) async fn execute_command(
                 ..
             } = prepare_response.payment_method
             {
+                let denomination = if token_identifier.is_some() {
+                    "token base units"
+                } else {
+                    "sats"
+                };
                 println!(
-                    "Cross-chain send via {:?}: {} sats → ~{} {} on {} (to {})",
-                    route.provider,
-                    amount_in,
-                    estimated_out,
-                    route.asset,
-                    route.chain,
-                    recipient_address
+                    "Cross-chain send: {amount_in} {denomination} → ~{estimated_out} {} on {} to {recipient_address}",
+                    route.asset, route.chain,
                 );
-                println!("Fee: {fee_amount} ({fee_bps} bps)");
+                println!("Fee: {fee_amount} {denomination} ({fee_bps} bps)");
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
                     .to_lowercase();
@@ -1006,8 +1006,11 @@ async fn select_cross_chain_route(
     if routes.len() == 1 {
         let route = routes.into_iter().next().unwrap();
         println!(
-            "Auto-selected route: {} on {} [{:?}]",
-            route.asset, route.chain, route.provider
+            "Auto-selected route: {} on {}{} [{:?}]",
+            route.asset,
+            route.chain,
+            maybe_truncate_address(route.contract_address.as_deref()),
+            route.provider
         );
         return Ok(route);
     }
@@ -1019,17 +1022,7 @@ async fn select_cross_chain_route(
             "  {idx}. {} on {}{} [{:?}]",
             route.asset,
             route.chain,
-            route
-                .contract_address
-                .as_deref()
-                .map(|c| {
-                    if c.len() > 12 {
-                        format!(" ({}...{})", &c[..6], &c[c.len() - 6..])
-                    } else {
-                        format!(" ({c})")
-                    }
-                })
-                .unwrap_or_default(),
+            maybe_truncate_address(route.contract_address.as_deref()),
             route.provider,
         );
     }
@@ -1048,6 +1041,17 @@ async fn select_cross_chain_route(
         .ok_or_else(|| anyhow::anyhow!("Selection out of range"))?;
 
     Ok(route)
+}
+
+fn maybe_truncate_address(addr: Option<&str>) -> String {
+    addr.map(|c| {
+        if c.len() > 12 {
+            format!(" ({}...{})", &c[..6], &c[c.len() - 6..])
+        } else {
+            format!(" ({c})")
+        }
+    })
+    .unwrap_or_default()
 }
 
 fn read_payment_options(
