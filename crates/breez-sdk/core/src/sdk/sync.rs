@@ -94,11 +94,7 @@ impl BreezSdk {
 
                     // Only executes on mainnet with API key
                     () = sdk.jwt_refresh_interval() => {
-                        let Some(api_key) = sdk.config.api_key.as_ref() else {
-                            warn!("Could not refresh JWT: no API key provided");
-                            return;
-                        };
-                        let token = match Self::new_jwt(api_key).await {
+                        let token = match sdk.new_jwt().await {
                             Ok(token) => token,
                             Err(err) => {
                                 warn!("Could not fetch new JWT: {err}");
@@ -702,7 +698,10 @@ mod jwt {
     }
 
     impl BreezSdk {
-        pub(super) async fn new_jwt(api_key: &str) -> Result<String, SdkError> {
+        pub(super) async fn new_jwt(&self) -> Result<String, SdkError> {
+            let Some(api_key) = &self.config.api_key else {
+                return Err(SdkError::Generic("Missing Breez API key".to_string()));
+            };
             let client = DefaultHttpClient::new(None);
             let mut headers = HashMap::new();
             headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
