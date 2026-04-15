@@ -7,10 +7,9 @@ use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
 use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{Instrument, error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -23,17 +22,17 @@ use crate::{
     error::SdkError,
     events::SdkEvent,
     models::{
-        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
-        PaymentRequest, PrepareSendPaymentRequest, PrepareSendPaymentResponse,
-        ReceivePaymentMethod, ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest,
-        SendPaymentResponse, conversion_steps_from_payments,
+        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
+        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
+        ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
+        conversion_steps_from_payments,
     },
     persist::PaymentMetadata,
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        payments::get_payment_with_conversion_details,
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
@@ -1400,48 +1399,22 @@ impl BreezSdk {
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
 
-        let payment_response = Box::pin(
-            self.spark_wallet.pay_lightning_invoice(
+        let payment = self
+            .lightning_sender
+            .pay_and_persist_lightning_invoice(
                 &invoice_details.invoice.bolt11,
                 amount_to_send
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
                     .transpose()?,
-                Some(fee_sats),
+                fee_sats,
                 prefer_spark,
+                amount,
                 transfer_id,
-            ),
-        )
-        .await?;
-        let payment = match payment_response.lightning_payment {
-            Some(lightning_payment) => {
-                let ssp_id = lightning_payment.id.clone();
-                let htlc_details = payment_response
-                    .transfer
-                    .htlc_preimage_request
-                    .ok_or_else(|| {
-                        SdkError::Generic(
-                            "Missing HTLC details for Lightning send payment".to_string(),
-                        )
-                    })?
-                    .try_into()?;
-                let payment = Payment::from_lightning(
-                    lightning_payment,
-                    amount,
-                    payment_response.transfer.id.to_string(),
-                    htlc_details,
-                )?;
-                self.poll_lightning_send_payment(&payment, ssp_id);
-                payment
-            }
-            None => payment_response.transfer.try_into()?,
-        };
+            )
+            .await?;
 
         let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
-
         if completion_timeout_secs == 0 {
-            // Insert the payment into storage to make it immediately available for listing
-            self.storage.insert_payment(payment.clone()).await?;
-
             return Ok(SendPaymentResponse { payment });
         }
 
@@ -1453,7 +1426,7 @@ impl BreezSdk {
             .await
             .unwrap_or(payment);
 
-        // Insert the payment into storage to make it immediately available for listing
+        // Re-persist the waited-on payment so listing reflects the latest state.
         self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
@@ -1587,72 +1560,6 @@ impl BreezSdk {
 
         self.event_emitter.remove_internal_listener(&id).await;
         result
-    }
-
-    // Pools the lightning send payment until it is in completed state.
-    fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
-        const MAX_POLL_ATTEMPTS: u32 = 20;
-        let payment_id = payment.id.clone();
-        info!("Polling lightning send payment {}", payment_id);
-
-        let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
-            _ => None,
-        }) else {
-            error!(
-                "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
-            );
-            return;
-        };
-        let spark_wallet = self.spark_wallet.clone();
-        let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
-        let event_emitter = self.event_emitter.clone();
-        let payment = payment.clone();
-        let payment_id = payment_id.clone();
-        let mut shutdown = self.shutdown_sender.subscribe();
-        let span = tracing::Span::current();
-
-        tokio::spawn(async move {
-            for i in 0..MAX_POLL_ATTEMPTS {
-                info!(
-                    "Polling lightning send payment {} attempt {}",
-                    payment_id, i
-                );
-                select! {
-                    _ = shutdown.changed() => {
-                        info!("Shutdown signal received");
-                        return;
-                    },
-                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                            info!("Polling payment status = {} {:?}", payment.status, p.status);
-                            if payment.status != PaymentStatus::Pending {
-                                info!("Polling payment completed status = {}", payment.status);
-                                // Update storage before emitting event so that
-                                // get_payment returns the correct status immediately.
-                                if let Err(e) = storage.insert_payment(payment.clone()).await {
-                                    error!("Failed to update payment in storage: {e:?}");
-                                }
-                                // Fetch the payment to include already stored metadata
-                                get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                sync_coordinator
-                                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                                    .await;
-                                return;
-                            }
-                        }
-
-                        let sleep_time = if i < 5 {
-                            Duration::from_secs(1)
-                        } else {
-                            Duration::from_secs(i.into())
-                        };
-                        tokio::time::sleep(sleep_time).await;
-                    }
-                }
-            }
-        }.instrument(span));
     }
 
     #[expect(clippy::too_many_arguments)]

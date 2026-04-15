@@ -4,11 +4,13 @@ mod deposits;
 mod helpers;
 mod init;
 mod lightning_address;
+mod lightning_sender;
 mod lnurl;
 mod payments;
 mod sync;
 mod sync_coordinator;
 
+pub(crate) use lightning_sender::LightningSender;
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
@@ -94,6 +96,10 @@ pub struct BreezSdk {
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub(crate) cross_chain_providers: crate::cross_chain::CrossChainProviders,
+    /// Shared helper for paying LN invoices and persisting the resulting
+    /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
+    /// need to pay an LN invoice as part of a larger flow.
+    pub(crate) lightning_sender: Arc<LightningSender>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -112,6 +118,7 @@ pub(crate) struct BreezSdkParams {
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
     pub cross_chain_providers: crate::cross_chain::CrossChainProviders,
+    pub lightning_sender: Arc<LightningSender>,
 }
 
 pub async fn parse_input(

@@ -601,6 +601,22 @@ impl SdkBuilder {
         // Create the MoonPay provider for buying Bitcoin
         let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(breez_server.clone()));
 
+        // Create sync coordinator early so downstream services (stable
+        // balance, lightning sender, …) can trigger syncs after their
+        // respective flows.
+        let sync_coordinator = SyncCoordinator::new();
+
+        // Shared lightning-send helper used by `send_bolt11_invoice` and
+        // by cross-chain providers that pay LN invoices (currently: Boltz
+        // reverse swap).
+        let lightning_sender = Arc::new(crate::sdk::LightningSender::new(
+            Arc::clone(&spark_wallet),
+            Arc::clone(&storage),
+            sync_coordinator.clone(),
+            Arc::clone(&event_emitter),
+            shutdown_sender.clone(),
+        ));
+
         // Create the FlashnetTokenConverter (spawns its own refunder background task)
         let flashnet_config = FlashnetConfig::default_config(
             self.config.network.into(),
@@ -633,6 +649,7 @@ impl SdkBuilder {
                 self.config.network,
                 Arc::clone(&spark_wallet),
                 Arc::clone(&storage),
+                Arc::clone(&lightning_sender),
             )
             .await
             {
@@ -659,9 +676,6 @@ impl SdkBuilder {
             self.config.network,
             shutdown_sender.subscribe(),
         ));
-
-        // Create sync coordinator early so StableBalance can trigger syncs after conversions
-        let sync_coordinator = SyncCoordinator::new();
 
         // Create StableBalance if configured. It spawns its own background tasks
         // and registers itself as event middleware (must be before TokenConversionMiddleware
@@ -706,6 +720,7 @@ impl SdkBuilder {
             stable_balance,
             sync_coordinator,
             cross_chain_providers,
+            lightning_sender,
         })?;
         debug!("Initialized and started breez sdk.");
 
@@ -773,6 +788,7 @@ async fn build_boltz_service(
     network: Network,
     spark_wallet: Arc<spark_wallet::SparkWallet>,
     storage: Arc<dyn Storage>,
+    lightning_sender: Arc<crate::sdk::LightningSender>,
 ) -> Result<Option<Arc<dyn crate::cross_chain::CrossChainService>>, SdkError> {
     let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(
         network,
@@ -810,5 +826,6 @@ async fn build_boltz_service(
         spark_wallet,
         storage,
         network,
+        lightning_sender,
     ))))
 }

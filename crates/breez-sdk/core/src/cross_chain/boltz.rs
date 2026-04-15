@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     ConversionInfo, ConversionStatus, CrossChainAddressFamily, Network, PaymentMetadata, Storage,
-    error::SdkError, utils::payments::insert_or_cache_payment_metadata,
+    error::SdkError, sdk::LightningSender, utils::payments::insert_or_cache_payment_metadata,
 };
 
 /// Cache KV key used to look up the payment row attached to a given Boltz swap.
@@ -59,6 +59,11 @@ pub(crate) struct BoltzService {
     storage: Arc<dyn Storage>,
     #[allow(dead_code)] // surfaced for future multi-network support
     network: Network,
+    /// Shared helper that owns the "pay LN invoice + persist Payment row +
+    /// poll SSP" sequence. Reused by `send_bolt11_invoice` on the SDK and
+    /// by this provider so Boltz hold-invoice pays behave identically to
+    /// direct LN sends.
+    lightning_sender: Arc<LightningSender>,
 }
 
 impl BoltzService {
@@ -70,6 +75,7 @@ impl BoltzService {
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         network: Network,
+        lightning_sender: Arc<LightningSender>,
     ) -> Self {
         info!("Boltz service initialized");
         Self {
@@ -77,6 +83,7 @@ impl BoltzService {
             spark_wallet,
             storage,
             network,
+            lightning_sender,
         }
     }
 
@@ -259,21 +266,24 @@ impl CrossChainService for BoltzService {
         let context: PreparedContext = serde_json::from_str(&ctx_raw)
             .map_err(|e| SdkError::Generic(format!("Failed to deserialize Boltz context: {e}")))?;
 
-        // Pay the hold invoice through Spark lightning. On failure the hold
-        // invoice eventually times out on Boltz's side; no payment row is
-        // written, so there is nothing to reconcile on ours.
-        let payment = self
-            .spark_wallet
-            .pay_lightning_invoice(
+        // Delegate the LN leg to the shared helper. It pays the hold
+        // invoice, builds the Payment row, persists it, and spawns SSP-side
+        // polling — the same path `send_bolt11_invoice` takes. On failure
+        // the hold invoice eventually times out on Boltz's side; no payment
+        // row is written, so there is nothing to reconcile on ours.
+        let sdk_payment = self
+            .lightning_sender
+            .pay_and_persist_lightning_invoice(
                 &context.invoice,
                 None,
-                Some(context.ln_fee_sats),
+                context.ln_fee_sats,
                 false,
+                u128::from(context.invoice_amount_sats),
                 None,
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Boltz lightning payment failed: {e}")))?;
-        let spark_payment_id = payment.transfer.id.to_string();
+        let spark_payment_id = sdk_payment.id.clone();
 
         debug!(
             "Boltz: lightning payment {spark_payment_id} sent for swap {}",
