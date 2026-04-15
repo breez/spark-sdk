@@ -134,7 +134,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Hodl invoice support
 - [x] Passkey login for seedless experience
 - [x] Contacts management 
-- [ ] Stable balance
+- [x] Stable balance
 - [ ] USDT send support
 - [ ] USDC send support
 - [ ] USDT receive support
