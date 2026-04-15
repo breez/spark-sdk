@@ -627,6 +627,31 @@ impl SdkBuilder {
             );
         }
 
+        if let Some(boltz_config) = self.config.boltz.clone() {
+            match build_boltz_service(
+                &boltz_config,
+                self.config.network,
+                Arc::clone(&spark_wallet),
+                Arc::clone(&storage),
+            )
+            .await
+            {
+                Ok(Some(service)) => {
+                    cross_chain_providers
+                        .insert(crate::cross_chain::CrossChainProvider::Boltz, service);
+                }
+                Ok(None) => {
+                    info!(
+                        "Boltz provider skipped: no default configuration for network {:?}",
+                        self.config.network
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize Boltz provider: {e:?}");
+                }
+            }
+        }
+
         let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
             flashnet_config,
             Arc::clone(&storage),
@@ -697,4 +722,93 @@ fn default_storage(
     let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
     let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
     Ok(storage)
+}
+
+/// Loads or generates the device-local Boltz instance handle (random 32-byte
+/// seed + instance id). In v1 this is kept local only — cross-device recovery
+/// of swaps lands with the v2 submarine-swap feature.
+async fn load_or_create_boltz_instance(
+    storage: &Arc<dyn Storage>,
+) -> Result<BoltzInstanceHandle, SdkError> {
+    use bitcoin::secp256k1::rand::{RngCore, thread_rng};
+
+    const BOLTZ_INSTANCE_KEY: &str = "boltz_instance_current";
+
+    if let Some(raw) = storage
+        .get_cached_item(BOLTZ_INSTANCE_KEY.to_string())
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to read Boltz instance: {e}")))?
+        && let Ok(handle) = serde_json::from_str::<BoltzInstanceHandle>(&raw)
+    {
+        return Ok(handle);
+    }
+
+    let mut seed = [0u8; 32];
+    thread_rng().fill_bytes(&mut seed);
+    let handle = BoltzInstanceHandle {
+        instance_id: uuid::Uuid::new_v4().to_string(),
+        seed_hex: hex::encode(seed),
+    };
+    let serialized = serde_json::to_string(&handle)
+        .map_err(|e| SdkError::Generic(format!("Failed to serialize Boltz instance: {e}")))?;
+    storage
+        .set_cached_item(BOLTZ_INSTANCE_KEY.to_string(), serialized)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to persist Boltz instance: {e}")))?;
+    Ok(handle)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BoltzInstanceHandle {
+    instance_id: String,
+    seed_hex: String,
+}
+
+/// Initializes the Boltz reverse-swap cross-chain provider: loads or creates
+/// the local instance seed, constructs the inner `BoltzClient`, registers the
+/// event listener, resumes any active swaps, and returns an SDK-side wrapper
+/// ready to be inserted into the provider registry.
+async fn build_boltz_service(
+    config: &crate::models::BoltzConfig,
+    network: Network,
+    spark_wallet: Arc<spark_wallet::SparkWallet>,
+    storage: Arc<dyn Storage>,
+) -> Result<Option<Arc<dyn crate::cross_chain::CrossChainService>>, SdkError> {
+    let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(
+        network,
+        config.referral_id.clone(),
+    ) else {
+        return Ok(None);
+    };
+
+    let handle = load_or_create_boltz_instance(&storage).await?;
+    let seed = hex::decode(&handle.seed_hex)
+        .map_err(|e| SdkError::Generic(format!("Invalid Boltz instance seed hex: {e}")))?;
+
+    let adapter = Arc::new(
+        crate::cross_chain::boltz_storage_adapter::BoltzStorageAdapter::new(
+            Arc::clone(&storage),
+            handle.instance_id.clone(),
+        ),
+    );
+
+    let client = boltz_client::BoltzService::new(client_config, &seed, adapter)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to construct Boltz client: {e}")))?;
+
+    let listener = Box::new(
+        crate::cross_chain::boltz_event_listener::BoltzSdkEventListener::new(Arc::clone(&storage)),
+    );
+    client.add_event_listener(listener).await;
+
+    if let Err(e) = client.resume_swaps().await {
+        tracing::warn!("Boltz resume_swaps failed on startup: {e:?}");
+    }
+
+    Ok(Some(Arc::new(crate::cross_chain::BoltzService::new(
+        Arc::new(client),
+        spark_wallet,
+        storage,
+        network,
+    ))))
 }

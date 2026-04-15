@@ -176,6 +176,11 @@ pub async fn connect_with_signer(
     Ok(sdk)
 }
 
+/// Default Boltz referral id reported for SDK-initiated reverse swaps.
+/// Integrators that want their own attribution can override by setting
+/// [`Config::boltz`] after calling [`default_config`].
+const DEFAULT_BOLTZ_REFERRAL_ID: &str = "breez-sdk";
+
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_config(network: Network) -> Config {
     let lnurl_domain = match network {
@@ -200,6 +205,10 @@ pub fn default_config(network: Network) -> Config {
         stable_balance_config: None,
         max_concurrent_claims: 4,
         spark_config: None,
+        boltz: crate::BoltzConfig::default_for_network(
+            network,
+            DEFAULT_BOLTZ_REFERRAL_ID.to_string(),
+        ),
     }
 }
 

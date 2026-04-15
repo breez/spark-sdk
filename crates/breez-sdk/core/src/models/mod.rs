@@ -340,7 +340,7 @@ impl TryFrom<&Payment> for ConversionStep {
             ConversionInfo::Amm {
                 amount_adjustment, ..
             } => amount_adjustment.clone(),
-            ConversionInfo::Orchestra { .. } => None,
+            ConversionInfo::Orchestra { .. } | ConversionInfo::Boltz { .. } => None,
         };
         Ok(ConversionStep {
             payment_id: payment.id.clone(),
@@ -620,6 +620,38 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Optional configuration for the Boltz reverse-swap cross-chain provider.
+    ///
+    /// When set, the SDK exposes Boltz routes alongside Orchestra for
+    /// cross-chain sends (sats → USDT on external chains). Only mainnet is
+    /// supported today — see [`BoltzConfig::default_for_network`].
+    pub boltz: Option<BoltzConfig>,
+}
+
+/// Configuration for the Boltz reverse-swap cross-chain provider.
+///
+/// The SDK wraps boltz-client's own `BoltzConfig`. Alchemy credentials and
+/// RPC URLs live inside boltz-client as Boltz-operated defaults; integrators
+/// only need to pick a referral id.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct BoltzConfig {
+    /// Referral id reported to Boltz for attribution / TBTC pair unlock.
+    pub referral_id: String,
+}
+
+impl BoltzConfig {
+    /// Returns the default Boltz configuration for the given network.
+    ///
+    /// Currently returns `Some(..)` for mainnet only; returns `None` on
+    /// regtest since Boltz does not offer a regtest reverse-swap flow.
+    pub fn default_for_network(network: Network, referral_id: String) -> Option<Self> {
+        match network {
+            Network::Mainnet => Some(Self { referral_id }),
+            Network::Regtest => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

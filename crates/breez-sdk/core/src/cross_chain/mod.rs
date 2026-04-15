@@ -1,12 +1,14 @@
 //! Cross-chain payment providers.
 //!
 //! The [`CrossChainService`] trait abstracts route discovery, quoting, and
-//! sending. Each provider module (e.g. `orchestra`) implements it.
-//! Currently only Orchestra (Flashnet) is implemented; future providers
-//! (e.g. Boltz) will be sibling modules implementing the same trait.
+//! sending. Each provider module (e.g. `orchestra`, `boltz`) implements it.
 
+pub(crate) mod boltz;
+pub(crate) mod boltz_event_listener;
+pub(crate) mod boltz_storage_adapter;
 mod orchestra;
 
+pub(crate) use boltz::BoltzService;
 pub(crate) use orchestra::OrchestraService;
 
 use std::collections::HashMap;
@@ -20,6 +22,7 @@ use crate::{CrossChainAddressDetails, error::SdkError};
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {
     Orchestra,
+    Boltz,
 }
 
 /// Filter for [`CrossChainService::get_routes`] and the public

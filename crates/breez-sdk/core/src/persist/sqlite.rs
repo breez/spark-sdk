@@ -2303,4 +2303,18 @@ mod tests {
 
         crate::persist::tests::test_conversion_status_persistence(Box::new(storage)).await;
     }
+
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let temp_dir = create_temp_dir("sqlite_insert_boltz_conversion_info");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let temp_dir = create_temp_dir("sqlite_update_boltz_status_to_completed");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
+    }
 }

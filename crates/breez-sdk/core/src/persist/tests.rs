@@ -3287,3 +3287,153 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
         "conversion_status should be updated to Completed"
     );
 }
+
+fn boltz_conversion_info(
+    swap_id: &str,
+    status: crate::ConversionStatus,
+    estimated_out: u128,
+) -> crate::ConversionInfo {
+    crate::ConversionInfo::Boltz {
+        swap_id: swap_id.to_string(),
+        destination_chain: "arbitrum".to_string(),
+        destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+        invoice: "lnbc1000n1pexample".to_string(),
+        invoice_amount_sats: 100_000,
+        estimated_out,
+        status,
+        fee: Some(1_500),
+        max_slippage_bps: 100,
+        quote_degraded: false,
+    }
+}
+
+fn boltz_payment(id: &str) -> Payment {
+    Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 100_000,
+        fees: 0,
+        timestamp: 6000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    }
+}
+
+pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
+    let metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_pending",
+            crate::ConversionStatus::Pending,
+            71_000_000,
+        )),
+        conversion_status: Some(crate::ConversionStatus::Pending),
+        ..Default::default()
+    };
+    let payment = boltz_payment("boltz_pending_payment");
+    storage.insert_payment(payment).await.unwrap();
+    storage
+        .insert_payment_metadata("boltz_pending_payment".to_string(), metadata)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("boltz_pending_payment".to_string())
+        .await
+        .unwrap();
+
+    let Some(PaymentDetails::Spark {
+        conversion_info:
+            Some(crate::ConversionInfo::Boltz {
+                swap_id,
+                destination_chain,
+                destination_address,
+                invoice_amount_sats,
+                estimated_out,
+                status,
+                fee,
+                max_slippage_bps,
+                quote_degraded,
+                ..
+            }),
+        ..
+    }) = fetched.details
+    else {
+        panic!("expected Boltz ConversionInfo on inserted payment");
+    };
+    assert_eq!(swap_id, "boltz_swap_pending");
+    assert_eq!(destination_chain, "arbitrum");
+    assert_eq!(
+        destination_address,
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    );
+    assert_eq!(invoice_amount_sats, 100_000);
+    assert_eq!(estimated_out, 71_000_000);
+    assert_eq!(status, crate::ConversionStatus::Pending);
+    assert_eq!(fee, Some(1_500));
+    assert_eq!(max_slippage_bps, 100);
+    assert!(!quote_degraded);
+}
+
+pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
+    // Insert a pending Boltz payment.
+    let pending_metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_terminal",
+            crate::ConversionStatus::Pending,
+            71_000_000,
+        )),
+        conversion_status: Some(crate::ConversionStatus::Pending),
+        ..Default::default()
+    };
+    let payment = boltz_payment("boltz_terminal_payment");
+    storage.insert_payment(payment).await.unwrap();
+    storage
+        .insert_payment_metadata("boltz_terminal_payment".to_string(), pending_metadata)
+        .await
+        .unwrap();
+
+    // Simulate the event listener transitioning the swap to Completed and
+    // overwriting estimated_out with the real delivered amount.
+    let completed_metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_terminal",
+            crate::ConversionStatus::Completed,
+            70_900_000,
+        )),
+        conversion_status: Some(crate::ConversionStatus::Completed),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata("boltz_terminal_payment".to_string(), completed_metadata)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("boltz_terminal_payment".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Spark {
+        conversion_info:
+            Some(crate::ConversionInfo::Boltz {
+                status,
+                estimated_out,
+                ..
+            }),
+        ..
+    }) = fetched.details
+    else {
+        panic!("expected Boltz ConversionInfo after update");
+    };
+    assert_eq!(status, crate::ConversionStatus::Completed);
+    assert_eq!(estimated_out, 70_900_000);
+    assert_eq!(
+        fetched.conversion_details.as_ref().unwrap().status,
+        crate::ConversionStatus::Completed
+    );
+}

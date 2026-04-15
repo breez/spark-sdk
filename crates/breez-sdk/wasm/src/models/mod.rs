@@ -649,6 +649,12 @@ pub struct Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub boltz: Option<BoltzConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::BoltzConfig)]
+pub struct BoltzConfig {
+    pub referral_id: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]
@@ -804,6 +810,7 @@ pub struct SendOnchainSpeedFeeQuote {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProvider)]
 pub enum CrossChainProvider {
     Orchestra,
+    Boltz,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainAddressFamily)]
@@ -1412,6 +1419,23 @@ pub enum ConversionInfo {
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
+    },
+    Boltz {
+        swap_id: String,
+        destination_chain: String,
+        destination_address: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        status: ConversionStatus,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        max_slippage_bps: u32,
+        #[serde(default)]
+        quote_degraded: bool,
     },
 }
 

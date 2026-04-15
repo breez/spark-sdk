@@ -181,27 +181,65 @@ pub enum ConversionInfo {
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
     },
+    /// Boltz reverse swap — BTC/sats on Spark → USDT on an external chain via
+    /// Lightning hold invoice + on-chain claim.
+    #[serde(rename = "boltz")]
+    Boltz {
+        /// The Boltz swap id returned by `POST /swap/reverse`.
+        swap_id: String,
+        /// Destination chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
+        destination_chain: String,
+        /// Recipient address on the destination chain.
+        destination_address: String,
+        /// The BOLT11 hold invoice paid on the Spark/Lightning side.
+        invoice: String,
+        /// Amount of the hold invoice in sats.
+        invoice_amount_sats: u64,
+        /// Estimated USDT amount to be delivered on the destination chain,
+        /// in 6-decimal base units (overwritten with the actual delivered
+        /// amount when the swap reaches a terminal state).
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// The status of the reverse swap.
+        status: ConversionStatus,
+        /// Total fee in sats: the Boltz spread plus the Lightning routing
+        /// fee budget committed at prepare time.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// DEX slippage tolerance (basis points) committed at prepare time.
+        max_slippage_bps: u32,
+        /// Set by the event listener when Boltz reports the claim-time DEX
+        /// quote has drifted beyond `max_slippage_bps`. Not user-facing.
+        #[serde(default)]
+        quote_degraded: bool,
+    },
 }
 
 impl ConversionInfo {
     /// The current status, regardless of conversion type.
     pub fn status(&self) -> &ConversionStatus {
         match self {
-            ConversionInfo::Amm { status, .. } | ConversionInfo::Orchestra { status, .. } => status,
+            ConversionInfo::Amm { status, .. }
+            | ConversionInfo::Orchestra { status, .. }
+            | ConversionInfo::Boltz { status, .. } => status,
         }
     }
 
     /// A mutable reference to the status, for in-place updates.
     pub fn status_mut(&mut self) -> &mut ConversionStatus {
         match self {
-            ConversionInfo::Amm { status, .. } | ConversionInfo::Orchestra { status, .. } => status,
+            ConversionInfo::Amm { status, .. }
+            | ConversionInfo::Orchestra { status, .. }
+            | ConversionInfo::Boltz { status, .. } => status,
         }
     }
 
     /// The fee paid, regardless of conversion type.
     pub fn fee(&self) -> Option<u128> {
         match self {
-            ConversionInfo::Amm { fee, .. } | ConversionInfo::Orchestra { fee, .. } => *fee,
+            ConversionInfo::Amm { fee, .. }
+            | ConversionInfo::Orchestra { fee, .. }
+            | ConversionInfo::Boltz { fee, .. } => *fee,
         }
     }
 
@@ -213,6 +251,64 @@ impl ConversionInfo {
     /// Whether this is an Orchestra (cross-chain) conversion.
     pub fn is_orchestra(&self) -> bool {
         matches!(self, ConversionInfo::Orchestra { .. })
+    }
+
+    /// Whether this is a Boltz reverse swap.
+    pub fn is_boltz(&self) -> bool {
+        matches!(self, ConversionInfo::Boltz { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boltz_conversion_info_roundtrip() {
+        let original = ConversionInfo::Boltz {
+            swap_id: "boltz_swap_abc".to_string(),
+            destination_chain: "solana".to_string(),
+            destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            invoice: "lnbc1000n1pexample".to_string(),
+            invoice_amount_sats: 150_000,
+            estimated_out: 99_000_000,
+            status: ConversionStatus::Pending,
+            fee: Some(2_500),
+            max_slippage_bps: 100,
+            quote_degraded: false,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: ConversionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, original);
+        assert!(decoded.is_boltz());
+        assert!(!decoded.is_orchestra());
+        assert!(!decoded.is_amm());
+        assert_eq!(decoded.status(), &ConversionStatus::Pending);
+        assert_eq!(decoded.fee(), Some(2_500));
+
+        // The `"type"` tag discriminator must match the rename attribute.
+        assert!(json.contains(r#""type":"boltz""#));
+        // u128 fields serialize as strings, not JSON numbers.
+        assert!(json.contains(r#""estimated_out":"99000000""#));
+    }
+
+    #[test]
+    fn boltz_status_mut_updates_status_in_place() {
+        let mut info = ConversionInfo::Boltz {
+            swap_id: "s1".to_string(),
+            destination_chain: "arbitrum".to_string(),
+            destination_address: "0xdest".to_string(),
+            invoice: "lnbc".to_string(),
+            invoice_amount_sats: 100,
+            estimated_out: 1,
+            status: ConversionStatus::Pending,
+            fee: None,
+            max_slippage_bps: 100,
+            quote_degraded: false,
+        };
+        *info.status_mut() = ConversionStatus::Completed;
+        assert_eq!(info.status(), &ConversionStatus::Completed);
     }
 }
 

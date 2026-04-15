@@ -42,6 +42,12 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub boltz: Option<BoltzConfig>,
+}
+
+#[frb(mirror(BoltzConfig))]
+pub struct _BoltzConfig {
+    pub referral_id: String,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -257,6 +263,16 @@ pub struct _CrossChainRoutePair {
     pub exact_out_eligible: bool,
 }
 
+#[frb(mirror(CrossChainRouteFilter))]
+pub enum _CrossChainRouteFilter {
+    Send {
+        address_details: CrossChainAddressDetails,
+    },
+    Receive {
+        contract_address: Option<String>,
+    },
+}
+
 #[frb(mirror(PaymentDetailsFilter))]
 pub enum _PaymentDetailsFilter {
     Spark {
@@ -413,6 +429,7 @@ pub enum _PaymentRequest {
 #[frb(mirror(CrossChainProvider))]
 pub enum _CrossChainProvider {
     Orchestra,
+    Boltz,
 }
 
 #[frb(mirror(PrepareSendPaymentRequest))]
@@ -1213,6 +1230,18 @@ pub enum _ConversionInfo {
         fee: Option<u128>,
         purpose: Option<ConversionPurpose>,
         amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    Boltz {
+        swap_id: String,
+        destination_chain: String,
+        destination_address: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        estimated_out: u128,
+        status: ConversionStatus,
+        fee: Option<u128>,
+        max_slippage_bps: u32,
+        quote_degraded: bool,
     },
     Orchestra {
         order_id: String,

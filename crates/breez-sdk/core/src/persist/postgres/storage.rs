@@ -1718,6 +1718,19 @@ mod tests {
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
     }
 
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(fixture.storage))
+            .await;
+    }
+
     /// Generates a self-signed CA certificate in PEM format for testing.
     fn generate_test_ca_pem(common_name: &str) -> String {
         let mut params = rcgen::CertificateParams::new(vec![]).expect("valid params");
