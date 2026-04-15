@@ -116,13 +116,16 @@ impl CrossChainService for BoltzService {
             .supported_chains()
             .into_iter()
             .filter(|chain| chain_address_family(chain) == address_details.address_family)
-            .map(|chain| CrossChainRoutePair {
-                provider: CrossChainProvider::Boltz,
-                chain: chain.registry_name().to_string(),
-                asset: "USDT".to_string(),
-                contract_address: None,
-                decimals: 6,
-                exact_out_eligible: false,
+            .map(|chain| {
+                let contract_address = self.client.token_address(&chain);
+                CrossChainRoutePair {
+                    provider: CrossChainProvider::Boltz,
+                    chain: chain.registry_name().to_string(),
+                    asset: "USDT".to_string(),
+                    contract_address,
+                    decimals: 6,
+                    exact_out_eligible: false,
+                }
             })
             .collect();
         Ok(routes)
