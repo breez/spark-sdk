@@ -407,6 +407,11 @@ pub enum PaymentDetails {
 
         /// Lnurl receive information if this was a received lnurl payment.
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+
+        /// The information for a conversion — populated when this Lightning
+        /// payment is the source leg of a cross-chain conversion (e.g. a
+        /// Boltz reverse swap paying a hold invoice).
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,

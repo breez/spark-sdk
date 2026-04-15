@@ -481,6 +481,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: pay_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -508,6 +509,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: withdraw_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -536,6 +538,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -557,6 +560,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -585,6 +589,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -951,6 +956,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     lnurl_pay_info: r_pay_lnurl,
                     lnurl_withdraw_info: r_withdraw_lnurl,
                     lnurl_receive_metadata: r_receive_metadata,
+                    conversion_info: r_conversion_info,
                 }),
                 Some(PaymentDetails::Lightning {
                     description: e_description,
@@ -960,12 +966,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     lnurl_pay_info: e_pay_lnurl,
                     lnurl_withdraw_info: e_withdraw_lnurl,
                     lnurl_receive_metadata: e_receive_metadata,
+                    conversion_info: e_conversion_info,
                 }),
             ) => {
                 assert_eq!(r_description, e_description);
                 assert_eq!(r_invoice, e_invoice);
                 assert_eq!(r_dest_pubkey, e_dest_pubkey);
                 assert_eq!(r_htlc, e_htlc);
+                assert_eq!(r_conversion_info, e_conversion_info);
 
                 // Test LNURL pay info if present
                 match (r_pay_lnurl, e_pay_lnurl) {
@@ -1081,6 +1089,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1153,6 +1162,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1173,6 +1183,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1405,6 +1416,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1425,6 +1437,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1596,6 +1609,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2456,6 +2470,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2476,6 +2491,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2884,6 +2900,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2910,6 +2927,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2936,6 +2954,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -3308,6 +3327,10 @@ fn boltz_conversion_info(
 }
 
 fn boltz_payment(id: &str) -> Payment {
+    // Boltz reverse swaps pay a BOLT11 hold invoice, so the source-side
+    // Payment row is Lightning-flavored. Test coverage must reflect this —
+    // using Spark details here masked the listener bug that shipped in the
+    // Boltz cross-chain provider rollout.
     Payment {
         id: id.to_string(),
         payment_type: PaymentType::Send,
@@ -3316,9 +3339,14 @@ fn boltz_payment(id: &str) -> Payment {
         fees: 0,
         timestamp: 6000,
         method: PaymentMethod::Lightning,
-        details: Some(PaymentDetails::Spark {
-            invoice_details: None,
-            htlc_details: None,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Boltz hold invoice".to_string()),
+            invoice: "lnbc1000n1pexample".to_string(),
+            destination_pubkey: "02boltznode".to_string(),
+            htlc_details: test_lightning_htlc("deadbeefcafebabe"),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
             conversion_info: None,
         }),
         conversion_details: None,
@@ -3347,7 +3375,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
         .await
         .unwrap();
 
-    let Some(PaymentDetails::Spark {
+    let Some(PaymentDetails::Lightning {
         conversion_info:
             Some(crate::ConversionInfo::Boltz {
                 swap_id,
@@ -3364,7 +3392,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
         ..
     }) = fetched.details
     else {
-        panic!("expected Boltz ConversionInfo on inserted payment");
+        panic!("expected Boltz ConversionInfo on Lightning details after insert");
     };
     assert_eq!(swap_id, "boltz_swap_pending");
     assert_eq!(destination_chain, "arbitrum");
@@ -3418,7 +3446,7 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
         .get_payment_by_id("boltz_terminal_payment".to_string())
         .await
         .unwrap();
-    let Some(PaymentDetails::Spark {
+    let Some(PaymentDetails::Lightning {
         conversion_info:
             Some(crate::ConversionInfo::Boltz {
                 status,
@@ -3428,7 +3456,7 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
         ..
     }) = fetched.details
     else {
-        panic!("expected Boltz ConversionInfo after update");
+        panic!("expected Boltz ConversionInfo on Lightning details after update");
     };
     assert_eq!(status, crate::ConversionStatus::Completed);
     assert_eq!(estimated_out, 70_900_000);

@@ -1466,6 +1466,10 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             } else {
                 None
             };
+            let conversion_info_str: Option<String> = row.get(19)?;
+            let conversion_info: Option<ConversionInfo> = conversion_info_str
+                .map(|s: String| serde_json_from_str(&s, 19))
+                .transpose()?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1474,6 +1478,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),

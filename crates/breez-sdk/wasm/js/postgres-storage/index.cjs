@@ -754,6 +754,13 @@ class PostgresStorage {
           senderComment: row.lnurl_sender_comment || null,
         };
       }
+
+      if (row.conversion_info) {
+        details.conversionInfo =
+          typeof row.conversion_info === "string"
+            ? JSON.parse(row.conversion_info)
+            : row.conversion_info;
+      }
     } else if (row.withdraw_tx_id) {
       details = {
         type: "withdraw",

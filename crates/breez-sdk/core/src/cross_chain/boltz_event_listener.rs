@@ -54,17 +54,7 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("fetch payment {payment_id}: {e}"))?;
 
-        let Some(
-            PaymentDetails::Spark {
-                conversion_info: Some(conversion_info),
-                ..
-            }
-            | PaymentDetails::Token {
-                conversion_info: Some(conversion_info),
-                ..
-            },
-        ) = existing.details
-        else {
+        let Some(conversion_info) = extract_conversion_info(existing.details) else {
             return Err(format!(
                 "Payment {payment_id} has no ConversionInfo attached"
             ));
@@ -141,40 +131,18 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("fetch payment {payment_id}: {e}"))?;
 
-        let Some(
-            PaymentDetails::Spark {
-                conversion_info:
-                    Some(ConversionInfo::Boltz {
-                        swap_id,
-                        destination_chain,
-                        destination_address,
-                        invoice,
-                        invoice_amount_sats,
-                        estimated_out,
-                        status,
-                        fee,
-                        max_slippage_bps,
-                        ..
-                    }),
-                ..
-            }
-            | PaymentDetails::Token {
-                conversion_info:
-                    Some(ConversionInfo::Boltz {
-                        swap_id,
-                        destination_chain,
-                        destination_address,
-                        invoice,
-                        invoice_amount_sats,
-                        estimated_out,
-                        status,
-                        fee,
-                        max_slippage_bps,
-                        ..
-                    }),
-                ..
-            },
-        ) = existing.details
+        let Some(ConversionInfo::Boltz {
+            swap_id,
+            destination_chain,
+            destination_address,
+            invoice,
+            invoice_amount_sats,
+            estimated_out,
+            status,
+            fee,
+            max_slippage_bps,
+            ..
+        }) = extract_conversion_info(existing.details)
         else {
             return Ok(());
         };
@@ -199,6 +167,25 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("persist degraded-flag update: {e}"))?;
         Ok(())
+    }
+}
+
+/// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries
+/// it. Boltz conversions live on `Lightning` details (the hold-invoice pay);
+/// `Spark` and `Token` exist for other cross-chain providers and are included
+/// so a single helper serves every caller.
+fn extract_conversion_info(details: Option<PaymentDetails>) -> Option<ConversionInfo> {
+    match details? {
+        PaymentDetails::Spark {
+            conversion_info, ..
+        }
+        | PaymentDetails::Token {
+            conversion_info, ..
+        }
+        | PaymentDetails::Lightning {
+            conversion_info, ..
+        } => conversion_info,
+        _ => None,
     }
 }
 

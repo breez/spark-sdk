@@ -2288,17 +2288,23 @@ class IndexedDBStorage {
             );
           }
         }
-      } else if (details.type == "spark" || details.type == "token") {
-        // If conversionInfo exists, parse and add to details
-        if (metadata.conversionInfo) {
-          try {
-            details.conversionInfo = JSON.parse(metadata.conversionInfo);
-          } catch (e) {
-            throw new StorageError(
-              `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
-              e
-            );
-          }
+      }
+
+      // conversionInfo is surfaced on Lightning (Boltz hold-invoice pay),
+      // Spark, and Token details — every variant that can carry a conversion.
+      if (
+        (details.type == "lightning" ||
+          details.type == "spark" ||
+          details.type == "token") &&
+        metadata.conversionInfo
+      ) {
+        try {
+          details.conversionInfo = JSON.parse(metadata.conversionInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
         }
       }
     }

@@ -188,8 +188,14 @@ impl SyncedStorage {
                     description,
                     lnurl_pay_info,
                     lnurl_withdraw_info,
+                    conversion_info,
                     ..
-                } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
+                } => (
+                    description,
+                    lnurl_pay_info,
+                    lnurl_withdraw_info,
+                    conversion_info,
+                ),
                 PaymentDetails::Spark {
                     conversion_info, ..
                 }
@@ -741,6 +747,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         }

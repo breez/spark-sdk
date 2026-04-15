@@ -505,6 +505,7 @@ pub enum PaymentDetails {
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,

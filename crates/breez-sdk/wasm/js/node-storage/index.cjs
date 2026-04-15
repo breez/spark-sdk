@@ -771,6 +771,17 @@ class SqliteStorage {
           senderComment: row.lnurl_sender_comment || null,
         };
       }
+
+      if (row.conversion_info) {
+        try {
+          details.conversionInfo = JSON.parse(row.conversion_info);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse conversion_info JSON for payment ${row.id}: ${e.message}`,
+            e
+          );
+        }
+      }
     } else if (row.withdraw_tx_id) {
       details = {
         type: "withdraw",

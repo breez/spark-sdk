@@ -1461,6 +1461,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             } else {
                 None
             };
+            let conversion_info_json: Option<serde_json::Value> = row.get(19);
+            let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1469,6 +1471,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
