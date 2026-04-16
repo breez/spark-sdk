@@ -658,7 +658,7 @@ mod jwt {
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use breez_sdk_common::{breez_server::PRODUCTION_BREEZSERVER_URL, utils::now};
-    use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration};
+    use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration, tokio};
     use serde::Deserialize;
     use tracing::warn;
 
