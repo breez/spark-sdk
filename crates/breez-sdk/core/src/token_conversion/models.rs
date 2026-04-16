@@ -196,10 +196,19 @@ pub enum ConversionInfo {
         /// Amount of the hold invoice in sats.
         invoice_amount_sats: u64,
         /// Estimated USDT amount to be delivered on the destination chain,
-        /// in 6-decimal base units (overwritten with the actual delivered
-        /// amount when the swap reaches a terminal state).
+        /// in 6-decimal base units. Frozen at prepare time and never mutated.
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
+        /// Actual USDT amount delivered on the destination chain, in
+        /// 6-decimal base units. `None` until the claim receipt is processed
+        /// by the Boltz event listener.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        /// `LayerZero` message GUID (`0x`-prefixed hex) for bridged swaps.
+        /// `None` for Arbitrum-destination swaps (no bridge) and until the
+        /// claim receipt is processed.
+        #[serde(default)]
+        lz_guid: Option<String>,
         /// The status of the reverse swap.
         status: ConversionStatus,
         /// Total fee in sats: the Boltz spread plus the Lightning routing
@@ -272,6 +281,8 @@ mod tests {
             invoice: "lnbc1000n1pexample".to_string(),
             invoice_amount_sats: 150_000,
             estimated_out: 99_000_000,
+            delivered_amount: Some(98_750_000),
+            lz_guid: Some("0xdeadbeef".to_string()),
             status: ConversionStatus::Pending,
             fee: Some(2_500),
             max_slippage_bps: 100,
@@ -302,6 +313,8 @@ mod tests {
             invoice: "lnbc".to_string(),
             invoice_amount_sats: 100,
             estimated_out: 1,
+            delivered_amount: None,
+            lz_guid: None,
             status: ConversionStatus::Pending,
             fee: None,
             max_slippage_bps: 100,

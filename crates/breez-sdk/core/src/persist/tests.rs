@@ -3311,6 +3311,8 @@ fn boltz_conversion_info(
     swap_id: &str,
     status: crate::ConversionStatus,
     estimated_out: u128,
+    delivered_amount: Option<u128>,
+    lz_guid: Option<String>,
 ) -> crate::ConversionInfo {
     crate::ConversionInfo::Boltz {
         swap_id: swap_id.to_string(),
@@ -3319,6 +3321,8 @@ fn boltz_conversion_info(
         invoice: "lnbc1000n1pexample".to_string(),
         invoice_amount_sats: 100_000,
         estimated_out,
+        delivered_amount,
+        lz_guid,
         status,
         fee: Some(1_500),
         max_slippage_bps: 100,
@@ -3359,6 +3363,8 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
             "boltz_swap_pending",
             crate::ConversionStatus::Pending,
             71_000_000,
+            None,
+            None,
         )),
         conversion_status: Some(crate::ConversionStatus::Pending),
         ..Default::default()
@@ -3383,6 +3389,8 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
                 destination_address,
                 invoice_amount_sats,
                 estimated_out,
+                delivered_amount,
+                lz_guid,
                 status,
                 fee,
                 max_slippage_bps,
@@ -3402,6 +3410,8 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
     );
     assert_eq!(invoice_amount_sats, 100_000);
     assert_eq!(estimated_out, 71_000_000);
+    assert_eq!(delivered_amount, None);
+    assert_eq!(lz_guid, None);
     assert_eq!(status, crate::ConversionStatus::Pending);
     assert_eq!(fee, Some(1_500));
     assert_eq!(max_slippage_bps, 100);
@@ -3409,12 +3419,14 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
 }
 
 pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
-    // Insert a pending Boltz payment.
+    // Insert a pending Boltz payment with no delivered amount / lz guid yet.
     let pending_metadata = PaymentMetadata {
         conversion_info: Some(boltz_conversion_info(
             "boltz_swap_terminal",
             crate::ConversionStatus::Pending,
             71_000_000,
+            None,
+            None,
         )),
         conversion_status: Some(crate::ConversionStatus::Pending),
         ..Default::default()
@@ -3427,12 +3439,15 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
         .unwrap();
 
     // Simulate the event listener transitioning the swap to Completed and
-    // overwriting estimated_out with the real delivered amount.
+    // populating delivered_amount + lz_guid from the claim receipt.
+    // estimated_out must stay frozen at the prepare-time value.
     let completed_metadata = PaymentMetadata {
         conversion_info: Some(boltz_conversion_info(
             "boltz_swap_terminal",
             crate::ConversionStatus::Completed,
-            70_900_000,
+            71_000_000,
+            Some(70_900_000),
+            Some("0xabc123".to_string()),
         )),
         conversion_status: Some(crate::ConversionStatus::Completed),
         ..Default::default()
@@ -3451,6 +3466,8 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
             Some(crate::ConversionInfo::Boltz {
                 status,
                 estimated_out,
+                delivered_amount,
+                lz_guid,
                 ..
             }),
         ..
@@ -3459,7 +3476,11 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
         panic!("expected Boltz ConversionInfo on Lightning details after update");
     };
     assert_eq!(status, crate::ConversionStatus::Completed);
-    assert_eq!(estimated_out, 70_900_000);
+    // Regression guard: estimated_out is frozen at prepare time, never
+    // overwritten by the event listener.
+    assert_eq!(estimated_out, 71_000_000);
+    assert_eq!(delivered_amount, Some(70_900_000));
+    assert_eq!(lz_guid, Some("0xabc123".to_string()));
     assert_eq!(
         fetched.conversion_details.as_ref().unwrap().status,
         crate::ConversionStatus::Completed

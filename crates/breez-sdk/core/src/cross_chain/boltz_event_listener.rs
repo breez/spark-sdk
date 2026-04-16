@@ -80,14 +80,6 @@ impl BoltzSdkEventListener {
 
         let new_status = map_boltz_status_to_conversion(&swap.status);
 
-        // Overwrite the estimated amount with the delivered amount once the
-        // swap hits a terminal state.
-        let final_estimated_out = if new_status == ConversionStatus::Completed {
-            u128::from(swap.expected_usdt_amount)
-        } else {
-            estimated_out
-        };
-
         let updated = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
@@ -95,7 +87,9 @@ impl BoltzSdkEventListener {
                 destination_address,
                 invoice,
                 invoice_amount_sats,
-                estimated_out: final_estimated_out,
+                estimated_out,
+                delivered_amount: swap.delivered_amount.map(u128::from),
+                lz_guid: swap.lz_guid.clone(),
                 status: new_status,
                 fee,
                 max_slippage_bps,
@@ -137,6 +131,8 @@ impl BoltzSdkEventListener {
             invoice,
             invoice_amount_sats,
             estimated_out,
+            delivered_amount,
+            lz_guid,
             status,
             fee,
             max_slippage_bps,
@@ -154,6 +150,8 @@ impl BoltzSdkEventListener {
                 invoice,
                 invoice_amount_sats,
                 estimated_out,
+                delivered_amount,
+                lz_guid,
                 status,
                 fee,
                 max_slippage_bps,
@@ -254,6 +252,8 @@ mod tests {
             timeout_block_height: 123_456,
             lockup_tx_id: None,
             claim_tx_hash: None,
+            delivered_amount: None,
+            lz_guid: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }

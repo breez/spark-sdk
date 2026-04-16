@@ -1239,6 +1239,8 @@ pub enum _ConversionInfo {
         invoice: String,
         invoice_amount_sats: u64,
         estimated_out: u128,
+        delivered_amount: Option<u128>,
+        lz_guid: Option<String>,
         status: ConversionStatus,
         fee: Option<u128>,
         max_slippage_bps: u32,

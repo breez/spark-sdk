@@ -294,6 +294,8 @@ impl CrossChainService for BoltzService {
                 invoice: context.invoice.clone(),
                 invoice_amount_sats: context.invoice_amount_sats,
                 estimated_out: context.estimated_out,
+                delivered_amount: None,
+                lz_guid: None,
                 status: ConversionStatus::Pending,
                 fee: Some(context.fee_amount),
                 max_slippage_bps: context.max_slippage_bps,

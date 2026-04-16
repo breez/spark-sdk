@@ -1430,6 +1430,11 @@ pub enum ConversionInfo {
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        #[serde(default)]
+        lz_guid: Option<String>,
         status: ConversionStatus,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]

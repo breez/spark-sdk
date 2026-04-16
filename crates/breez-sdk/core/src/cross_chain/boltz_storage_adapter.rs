@@ -225,6 +225,8 @@ mod tests {
             timeout_block_height: 123_456,
             lockup_tx_id: None,
             claim_tx_hash: None,
+            delivered_amount: None,
+            lz_guid: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }
