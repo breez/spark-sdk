@@ -37,23 +37,23 @@ namespace BreezSdkSnippets
             );
 
             // The SDK automatically selects which leaves are profitable to exit.
-            foreach (var leaf in response.Leaves)
+            foreach (var leaf in response.leaves)
             {
-                Console.WriteLine($"Leaf {leaf.LeafId}: {leaf.Value} sats (exit cost: ~{leaf.EstimatedCost} sats)");
-                foreach (var tx in leaf.Transactions)
+                Console.WriteLine($"Leaf {leaf.leafId}: {leaf.value} sats (exit cost: ~{leaf.estimatedCost} sats)");
+                foreach (var tx in leaf.transactions)
                 {
-                    if (tx.CsvTimelockBlocks != null)
+                    if (tx.csvTimelockBlocks != null)
                     {
-                        Console.WriteLine($"Timelock: wait {tx.CsvTimelockBlocks} blocks");
+                        Console.WriteLine($"Timelock: wait {tx.csvTimelockBlocks} blocks");
                     }
-                    // tx.TxHex: pre-signed Spark transaction
-                    // tx.CpfpTxHex: signed CPFP transaction — broadcast alongside parent
+                    // tx.txHex: pre-signed Spark transaction
+                    // tx.cpfpTxHex: signed CPFP transaction — broadcast alongside parent
                 }
             }
 
-            if (response.UnverifiedNodeIds.Length > 0)
+            if (response.unverifiedNodeIds.Length > 0)
             {
-                Console.WriteLine($"Warning: could not verify confirmation status for {response.UnverifiedNodeIds.Length} nodes");
+                Console.WriteLine($"Warning: could not verify confirmation status for {response.unverifiedNodeIds.Length} nodes");
             }
             // ANCHOR_END: prepare-unilateral-exit
         }
