@@ -101,14 +101,18 @@ impl BreezSdk {
     /// building all necessary transactions, and signing the CPFP fee-bump
     /// transactions using the provided signer.
     ///
-    /// Returns signed transactions ready to broadcast and a summary of which
-    /// leaves were selected.
+    /// Uses a two-pass approach: first auto-selects leaves and builds CPFP
+    /// chains assuming all ancestors are unconfirmed, then checks the chain
+    /// service for already-confirmed ancestors. If any are found, rebuilds
+    /// the CPFP chain skipping confirmed nodes.
+    #[allow(clippy::too_many_lines)]
     pub async fn prepare_unilateral_exit(
         &self,
         request: crate::models::PrepareUnilateralExitRequest,
         signer: std::sync::Arc<dyn crate::signer::CpfpSigner>,
     ) -> Result<crate::models::PrepareUnilateralExitResponse, SdkError> {
         use bitcoin::consensus::encode::serialize_hex;
+        use std::collections::HashSet;
 
         let btc_network: bitcoin::Network = self.config.network.into();
         let destination = std::str::FromStr::from_str(&request.destination)
@@ -128,27 +132,87 @@ impl BreezSdk {
             .map(|input| convert_cpfp_input(input, btc_network))
             .collect::<Result<Vec<_>, SdkError>>()?;
 
+        // Pass 1: auto-select leaves and build CPFP chains assuming nothing is
+        // confirmed.
         let exit_result = self
             .spark_wallet
-            .unilateral_exit_autoselect(request.fee_rate, inputs, destination)
+            .unilateral_exit_autoselect(request.fee_rate, inputs.clone(), destination.clone())
             .await?;
 
-        // Map selected leaves to the public summary type
-        let selected_leaves: Vec<crate::models::UnilateralExitLeafSummary> = exit_result
-            .selected_leaves
-            .iter()
-            .map(|sl| crate::models::UnilateralExitLeafSummary {
-                id: sl.id.to_string(),
-                value: sl.value,
-                estimated_cost: sl.estimated_cost,
-            })
-            .collect();
+        // Check the chain service for already-confirmed ancestors. Walk each
+        // leaf's chain root-to-leaf and stop at the first unconfirmed node.
+        let mut confirmed_node_ids: HashSet<spark_wallet::TreeNodeId> = HashSet::new();
+        let mut unverified_node_ids: Vec<String> = Vec::new();
 
-        // Sign CPFPs and build the response
-        let mut transactions = Vec::with_capacity(exit_result.leaf_tx_cpfp_psbts.len());
-        for leaf in exit_result.leaf_tx_cpfp_psbts {
-            let mut tx_cpfp_pairs = Vec::with_capacity(leaf.tx_cpfp_psbts.len());
-            for tc in leaf.tx_cpfp_psbts {
+        for leaf_psbts in &exit_result.leaf_tx_cpfp_psbts {
+            for tc in &leaf_psbts.tx_cpfp_psbts {
+                if confirmed_node_ids.contains(&tc.node_id) {
+                    continue;
+                }
+                let txid = tc.parent_tx.compute_txid().to_string();
+                match self.chain_service.get_transaction_status(txid).await {
+                    Ok(status) if status.confirmed => {
+                        confirmed_node_ids.insert(tc.node_id.clone());
+                    }
+                    Ok(_) => {
+                        // Unconfirmed (possibly in mempool) — stop checking
+                        // deeper nodes for this leaf since they can't be
+                        // confirmed without their parent.
+                        break;
+                    }
+                    Err(_) => {
+                        // Chain service error — assume unconfirmed but record
+                        // that we couldn't verify.
+                        unverified_node_ids.push(tc.node_id.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Pass 2: if any ancestors are confirmed, rebuild the CPFP chain
+        // skipping those nodes so the CPFP inputs are threaded correctly.
+        // Reuse the prefetched nodes to ensure consistency between passes.
+        let leaf_tx_cpfp_psbts = if confirmed_node_ids.is_empty() {
+            exit_result.leaf_tx_cpfp_psbts
+        } else {
+            let selected_ids = exit_result
+                .selected_leaves
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
+            self.spark_wallet
+                .unilateral_exit(
+                    request.fee_rate,
+                    selected_ids,
+                    inputs,
+                    Some(exit_result.prefetched_nodes),
+                    &confirmed_node_ids,
+                )
+                .await?
+        };
+
+        // Build a lookup for selected leaf metadata by leaf ID.
+        let selected_by_id: std::collections::HashMap<String, &spark_wallet::SelectedLeaf> =
+            exit_result
+                .selected_leaves
+                .iter()
+                .map(|s| (s.id.to_string(), s))
+                .collect();
+
+        // Sign CPFP PSBTs and group per leaf.
+        let mut leaves = Vec::with_capacity(leaf_tx_cpfp_psbts.len());
+        for leaf_psbts in leaf_tx_cpfp_psbts {
+            let selected = selected_by_id
+                .get(&leaf_psbts.leaf_id.to_string())
+                .ok_or_else(|| {
+                    SdkError::Generic(format!(
+                        "Selected leaf metadata not found for {}",
+                        leaf_psbts.leaf_id
+                    ))
+                })?;
+            let mut transactions = Vec::with_capacity(leaf_psbts.tx_cpfp_psbts.len());
+            for tc in leaf_psbts.tx_cpfp_psbts {
                 let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
                     let seq = input.sequence.to_consensus_u32();
                     // BIP68: bit 31 (disable flag) must be unset for relative lock
@@ -185,22 +249,25 @@ impl BreezSdk {
                 // Extract the final signed transaction
                 let signed_tx = signed_psbt.extract_tx_unchecked_fee_rate();
 
-                tx_cpfp_pairs.push(crate::models::UnilateralExitTxCpfpPair {
-                    parent_tx_hex: serialize_hex(&tc.parent_tx),
-                    child_tx_hex: serialize_hex(&signed_tx),
+                transactions.push(crate::models::UnilateralExitTransaction {
+                    node_id: tc.node_id.to_string(),
+                    tx_hex: serialize_hex(&tc.parent_tx),
+                    cpfp_tx_hex: Some(serialize_hex(&signed_tx)),
                     csv_timelock_blocks,
                 });
             }
-            transactions.push(crate::models::UnilateralExitLeafTxCpfpPairs {
-                leaf_id: leaf.leaf_id.to_string(),
-                tx_cpfp_pairs,
+            leaves.push(crate::models::UnilateralExitLeaf {
+                leaf_id: leaf_psbts.leaf_id.to_string(),
+                value: selected.value,
+                estimated_cost: selected.estimated_cost,
+                transactions,
             });
         }
 
         Ok(crate::models::PrepareUnilateralExitResponse {
-            selected_leaves,
-            transactions,
+            leaves,
             sweep_tx_hex: serialize_hex(&exit_result.sweep_tx),
+            unverified_node_ids,
         })
     }
 

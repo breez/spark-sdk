@@ -37,22 +37,19 @@ func PrepareExit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareUnilate
 	}
 
 	// The SDK automatically selects which leaves are profitable to exit.
-	for _, leaf := range response.SelectedLeaves {
-		log.Printf("Leaf %s: %d sats (exit cost: ~%d sats)", leaf.Id, leaf.Value, leaf.EstimatedCost)
+	for _, leaf := range response.Leaves {
+		log.Printf("Leaf %s: %d sats (exit cost: ~%d sats)", leaf.LeafId, leaf.Value, leaf.EstimatedCost)
+		for _, tx := range leaf.Transactions {
+			if tx.CsvTimelockBlocks != nil {
+				fmt.Printf("Timelock: wait %d blocks\n", *tx.CsvTimelockBlocks)
+			}
+			// tx.TxHex: pre-signed Spark transaction
+			// tx.CpfpTxHex: signed CPFP transaction — broadcast alongside parent
+		}
 	}
 
-	// The response contains signed transactions ready to broadcast:
-	// - response.Transactions: parent/child transaction pairs per leaf
-	// - response.SweepTxHex: signed sweep transaction for the final step
-	// Change from CPFP fee-bumping always goes back to the first input's address.
-	for _, leaf := range response.Transactions {
-		for _, pair := range leaf.TxCpfpPairs {
-			if pair.CsvTimelockBlocks != nil {
-				fmt.Printf("Timelock: wait %d blocks\n", *pair.CsvTimelockBlocks)
-			}
-			// pair.ParentTxHex: pre-signed Spark transaction
-			// pair.ChildTxHex: signed CPFP transaction — broadcast alongside parent
-		}
+	if len(response.UnverifiedNodeIds) > 0 {
+		log.Printf("Warning: could not verify confirmation status for %d nodes", len(response.UnverifiedNodeIds))
 	}
 	// ANCHOR_END: prepare-unilateral-exit
 	return &response, nil

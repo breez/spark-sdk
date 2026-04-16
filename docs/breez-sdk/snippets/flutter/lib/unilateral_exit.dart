@@ -27,23 +27,24 @@ Future<PrepareUnilateralExitResponse> prepareExit(BreezSdk sdk) async {
   );
 
   // The SDK automatically selects which leaves are profitable to exit.
-  for (UnilateralExitLeafSummary leaf in response.selectedLeaves) {
-    print("Leaf ${leaf.id}: ${leaf.value} sats (exit cost: ~${leaf.estimatedCost} sats)");
-  }
-
-  // The response contains signed transactions ready to broadcast:
-  // - response.transactions: parent/child transaction pairs per leaf
-  // - response.sweepTxHex: signed sweep transaction for the final step
-  // Change from CPFP fee-bumping always goes back to the first input's address.
-  for (UnilateralExitLeafTxCpfpPairs leaf in response.transactions) {
-    for (UnilateralExitTxCpfpPair pair in leaf.txCpfpPairs) {
-      if (pair.csvTimelockBlocks != null) {
-        print("Timelock: wait ${pair.csvTimelockBlocks} blocks");
+  for (UnilateralExitLeaf leaf in response.leaves) {
+    print("Leaf ${leaf.leafId}: ${leaf.value} sats (exit cost: ~${leaf.estimatedCost} sats)");
+    for (UnilateralExitTransaction tx in leaf.transactions) {
+      if (tx.csvTimelockBlocks != null) {
+        print("Timelock: wait ${tx.csvTimelockBlocks} blocks");
       }
-      // pair.parentTxHex: pre-signed Spark transaction
-      // pair.childTxHex: signed CPFP transaction — broadcast alongside parent
+      // tx.txHex: pre-signed Spark transaction
+      // tx.cpfpTxHex: signed CPFP transaction — broadcast alongside parent
     }
   }
+
+  // Check if any node confirmations couldn't be verified
+  if (response.unverifiedNodeIds.isNotEmpty) {
+    print("Warning: could not verify confirmation status for ${response.unverifiedNodeIds.length} nodes");
+  }
+
+  // response.sweepTxHex: signed sweep transaction for the final step
+  // Broadcast after refund transactions confirm and CSV timelocks expire.
   // ANCHOR_END: prepare-unilateral-exit
   return response;
 }

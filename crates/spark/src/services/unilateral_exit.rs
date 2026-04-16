@@ -4,7 +4,7 @@ use std::{
 };
 
 use bitcoin::{
-    Amount, OutPoint, Psbt, Transaction, TxIn, TxOut, absolute::LockTime, psbt,
+    Amount, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, absolute::LockTime, psbt,
     transaction::Version,
 };
 use tracing::trace;
@@ -30,6 +30,7 @@ use crate::{
 ///
 /// The caller provides the full `witness_utxo` (value + scriptPubKey) and the expected
 /// signed input weight. Change outputs reuse `witness_utxo.script_pubkey`.
+#[derive(Clone)]
 pub struct CpfpInput {
     pub outpoint: OutPoint,
     pub witness_utxo: TxOut,
@@ -37,6 +38,7 @@ pub struct CpfpInput {
 }
 
 pub struct TxCpfpPsbt {
+    pub node_id: TreeNodeId,
     pub parent_tx: Transaction,
     pub child_psbt: Psbt,
 }
@@ -70,14 +72,14 @@ impl UnilateralExitService {
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
         destination_script_len: usize,
-    ) -> Result<(Vec<SelectedLeaf>, Vec<LeafTxCpfpPsbts>), ServiceError> {
+    ) -> Result<(Vec<SelectedLeaf>, Vec<LeafTxCpfpPsbts>, Vec<TreeNode>), ServiceError> {
         if inputs.is_empty() {
             return Err(ServiceError::ValidationError(
                 "At least one CPFP input is required".to_string(),
             ));
         }
         if leaf_ids.is_empty() {
-            return Ok((vec![], vec![]));
+            return Ok((vec![], vec![], vec![]));
         }
 
         let tree_nodes_vec = self.fetch_leaves_parents(&leaf_ids).await?;
@@ -97,16 +99,22 @@ impl UnilateralExitService {
 
         let selected = select_profitable_leaves(&tree_nodes, &leaf_ids, &params);
         if selected.is_empty() {
-            return Ok((vec![], vec![]));
+            return Ok((vec![], vec![], vec![]));
         }
 
         let selected_ids: Vec<TreeNodeId> = selected.iter().map(|s| s.id.clone()).collect();
         let prefetched: Vec<TreeNode> = tree_nodes.into_values().collect();
         let psbts = self
-            .unilateral_exit(fee_rate, selected_ids, inputs, Some(prefetched))
+            .unilateral_exit(
+                fee_rate,
+                selected_ids,
+                inputs,
+                Some(prefetched.clone()),
+                &HashSet::new(),
+            )
             .await?;
 
-        Ok((selected, psbts))
+        Ok((selected, psbts, prefetched))
     }
 
     pub async fn unilateral_exit(
@@ -115,6 +123,7 @@ impl UnilateralExitService {
         leaf_ids: Vec<TreeNodeId>,
         mut inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<TreeNode>>,
+        confirmed_node_ids: &HashSet<TreeNodeId>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, ServiceError> {
         if leaf_ids.is_empty() {
             return Err(ServiceError::ValidationError(
@@ -176,7 +185,9 @@ impl UnilateralExitService {
 
             // For each node, check it hasn't already been processed and create a
             // child PSBT for its node tx. If the node is a leaf node, create a
-            // child PSBT also for its refund tx.
+            // child PSBT also for its refund tx. Nodes whose ID appears in
+            // `confirmed_node_ids` are already confirmed on-chain and don't need
+            // CPFP fee-bumping, so they are skipped.
             for node in nodes {
                 let txid = node.node_tx.compute_txid();
                 if checked_txs.contains(&txid) {
@@ -185,10 +196,15 @@ impl UnilateralExitService {
 
                 checked_txs.insert(txid);
 
+                if confirmed_node_ids.contains(&node.id) {
+                    continue;
+                }
+
                 // Create the PSBT to fee bump the node tx
                 let child_psbt = create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?;
 
                 tx_cpfp_psbts.push(TxCpfpPsbt {
+                    node_id: node.id.clone(),
                     parent_tx: node.node_tx.clone(),
                     child_psbt,
                 });
@@ -198,6 +214,7 @@ impl UnilateralExitService {
                     let child_psbt = create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?;
 
                     tx_cpfp_psbts.push(TxCpfpPsbt {
+                        node_id: node.id.clone(),
                         parent_tx: refund_tx.clone(),
                         child_psbt,
                     });
@@ -516,11 +533,13 @@ fn create_tx_cpfp_psbt(
     // Create transaction inputs for all CPFP inputs plus the ephemeral anchor
     let mut tx_inputs = Vec::with_capacity(inputs.len() + 1);
 
-    // Add all CPFP inputs
+    // Add all CPFP inputs with RBF signaling (BIP 125)
     // TODO: Improve UTXO selection for fees
+    let rbf_sequence = Sequence(0xffff_fffd);
     for cpfp_input in inputs.iter() {
         tx_inputs.push(TxIn {
             previous_output: cpfp_input.outpoint,
+            sequence: rbf_sequence,
             ..Default::default()
         });
     }
@@ -531,6 +550,7 @@ fn create_tx_cpfp_psbt(
             txid: tx.compute_txid(),
             vout: vout as u32,
         },
+        sequence: rbf_sequence,
         ..Default::default()
     });
 

@@ -23,18 +23,19 @@ func prepareExit(sdk: BreezSdk) async throws -> PrepareUnilateralExitResponse {
     )
 
     // The SDK automatically selects which leaves are profitable to exit.
-    for leaf in response.selectedLeaves {
-        print("Leaf \(leaf.id): \(leaf.value) sats (exit cost: ~\(leaf.estimatedCost) sats)")
-    }
-
-    for leaf in response.transactions {
-        for pair in leaf.txCpfpPairs {
-            if let blocks = pair.csvTimelockBlocks {
+    for leaf in response.leaves {
+        print("Leaf \(leaf.leafId): \(leaf.value) sats (exit cost: ~\(leaf.estimatedCost) sats)")
+        for tx in leaf.transactions {
+            if let blocks = tx.csvTimelockBlocks {
                 print("Timelock: wait \(blocks) blocks")
             }
-            // pair.parentTxHex: pre-signed Spark transaction
-            // pair.childTxHex: signed CPFP transaction — broadcast alongside parent
+            // tx.txHex: pre-signed Spark transaction
+            // tx.cpfpTxHex: signed CPFP transaction — broadcast alongside parent
         }
+    }
+
+    if !response.unverifiedNodeIds.isEmpty {
+        print("Warning: could not verify confirmation status for \(response.unverifiedNodeIds.count) nodes")
     }
     // ANCHOR_END: prepare-unilateral-exit
     return response

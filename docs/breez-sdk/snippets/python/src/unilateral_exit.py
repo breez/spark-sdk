@@ -31,22 +31,22 @@ async def prepare_exit(sdk: BreezSdk):
         )
 
         # The SDK automatically selects which leaves are profitable to exit.
-        for leaf in response.selected_leaves:
+        for leaf in response.leaves:
             logging.debug(
-                f"Leaf {leaf.id}: {leaf.value} sats "
+                f"Leaf {leaf.leaf_id}: {leaf.value} sats "
                 f"(exit cost: ~{leaf.estimated_cost} sats)"
             )
+            for tx in leaf.transactions:
+                if tx.csv_timelock_blocks is not None:
+                    logging.debug(f"Timelock: wait {tx.csv_timelock_blocks} blocks")
+                # tx.tx_hex: pre-signed Spark transaction
+                # tx.cpfp_tx_hex: signed CPFP transaction — broadcast alongside parent
 
-        # The response contains signed transactions ready to broadcast:
-        # - response.transactions: parent/child transaction pairs per leaf
-        # - response.sweep_tx_hex: signed sweep transaction for the final step
-        # Change from CPFP fee-bumping always goes back to the first input's address.
-        for leaf in response.transactions:
-            for pair in leaf.tx_cpfp_pairs:
-                if pair.csv_timelock_blocks is not None:
-                    logging.debug(f"Timelock: wait {pair.csv_timelock_blocks} blocks")
-                # pair.parent_tx_hex: pre-signed Spark transaction
-                # pair.child_tx_hex: signed CPFP transaction — broadcast alongside parent
+        if response.unverified_node_ids:
+            logging.warning(
+                f"Could not verify confirmation status for "
+                f"{len(response.unverified_node_ids)} nodes"
+            )
         # ANCHOR_END: prepare-unilateral-exit
     except Exception as error:
         logging.error(error)

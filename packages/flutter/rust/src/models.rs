@@ -203,31 +203,27 @@ pub struct _PrepareUnilateralExitRequest {
     pub destination: String,
 }
 
-#[frb(mirror(UnilateralExitTxCpfpPair))]
-pub struct _UnilateralExitTxCpfpPair {
-    pub parent_tx_hex: String,
-    pub child_tx_hex: String,
+#[frb(mirror(UnilateralExitTransaction))]
+pub struct _UnilateralExitTransaction {
+    pub node_id: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
     pub csv_timelock_blocks: Option<u32>,
 }
 
-#[frb(mirror(UnilateralExitLeafTxCpfpPairs))]
-pub struct _UnilateralExitLeafTxCpfpPairs {
+#[frb(mirror(UnilateralExitLeaf))]
+pub struct _UnilateralExitLeaf {
     pub leaf_id: String,
-    pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
-}
-
-#[frb(mirror(UnilateralExitLeafSummary))]
-pub struct _UnilateralExitLeafSummary {
-    pub id: String,
     pub value: u64,
     pub estimated_cost: u64,
+    pub transactions: Vec<UnilateralExitTransaction>,
 }
 
 #[frb(mirror(PrepareUnilateralExitResponse))]
 pub struct _PrepareUnilateralExitResponse {
-    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
-    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
+    pub leaves: Vec<UnilateralExitLeaf>,
     pub sweep_tx_hex: String,
+    pub unverified_node_ids: Vec<String>,
 }
 
 #[frb(mirror(GetInfoRequest))]

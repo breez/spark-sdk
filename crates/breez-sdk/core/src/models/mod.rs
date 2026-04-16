@@ -1049,52 +1049,52 @@ pub struct PrepareUnilateralExitRequest {
     pub destination: String,
 }
 
-/// A parent transaction and its signed CPFP fee-bumping child transaction
+/// A single transaction in a unilateral exit chain with its CPFP fee-bump
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitTxCpfpPair {
+pub struct UnilateralExitTransaction {
+    /// The node ID this transaction belongs to
+    pub node_id: String,
     /// The hex-encoded parent transaction (pre-signed by Spark)
-    pub parent_tx_hex: String,
-    /// The hex-encoded signed CPFP child transaction (ready to broadcast)
-    pub child_tx_hex: String,
+    pub tx_hex: String,
+    /// The hex-encoded signed CPFP child transaction (ready to broadcast).
+    /// `None` if this node was already confirmed on-chain.
+    pub cpfp_tx_hex: Option<String>,
     /// If this transaction has a relative timelock (CSV), the number of blocks that
     /// the previous transaction's output must be confirmed before this transaction
     /// can be included in a block. `None` if there is no timelock.
     pub csv_timelock_blocks: Option<u32>,
 }
 
-/// The signed transactions for a single leaf's unilateral exit
+/// A leaf selected for unilateral exit, with its full transaction chain
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitLeafTxCpfpPairs {
-    /// The leaf ID
-    pub leaf_id: String,
-    /// The parent/child transaction pairs (node TXs, leaf TX, refund TX)
-    pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
-}
-
-/// Summary of a leaf selected for unilateral exit
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitLeafSummary {
+pub struct UnilateralExitLeaf {
     /// The unique identifier of the leaf
-    pub id: String,
+    pub leaf_id: String,
     /// The value of the leaf in satoshis
     pub value: u64,
     /// Estimated marginal exit cost in satoshis (CPFP fees + sweep input fee)
     pub estimated_cost: u64,
+    /// Ordered list of transactions to broadcast for this leaf's exit.
+    /// Includes ancestor `node_txs`, the leaf `node_tx`, and the `refund_tx`,
+    /// each with their CPFP fee-bump child. Broadcast in order.
+    pub transactions: Vec<UnilateralExitTransaction>,
 }
 
 /// Response containing the prepared unilateral exit transactions
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
-    /// Summary of each leaf selected for exit
-    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
-    /// The signed transaction pairs for broadcasting, grouped per leaf
-    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
-    /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address
+    /// Per-leaf exit details, each containing the full broadcast chain
+    pub leaves: Vec<UnilateralExitLeaf>,
+    /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address.
     pub sweep_tx_hex: String,
+    /// Node IDs whose on-chain confirmation status could not be determined due to
+    /// chain service errors. These nodes were assumed unconfirmed (CPFP children
+    /// were built for them), but if they are actually confirmed, broadcasting their
+    /// CPFP children may fail.
+    pub unverified_node_ids: Vec<String>,
 }
 
 /// Request to get the balance of the wallet

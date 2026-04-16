@@ -1,4 +1,9 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
 
 use bitcoin::{
     Address, Amount, Transaction, TxIn, TxOut, Witness,
@@ -1280,7 +1285,7 @@ impl SparkWallet {
         let leaf_ids: Vec<TreeNodeId> = wallet_leaves.available.into_iter().map(|l| l.id).collect();
 
         let dest_script = destination.script_pubkey();
-        let (selected_leaves, leaf_tx_cpfp_psbts) = self
+        let (selected_leaves, leaf_tx_cpfp_psbts, prefetched_nodes) = self
             .unilateral_exit_service
             .unilateral_exit_autoselect(fee_rate, leaf_ids, inputs, dest_script.len())
             .await?;
@@ -1321,6 +1326,7 @@ impl SparkWallet {
             selected_leaves,
             leaf_tx_cpfp_psbts,
             sweep_tx,
+            prefetched_nodes,
         })
     }
 
@@ -1335,10 +1341,17 @@ impl SparkWallet {
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<spark::tree::TreeNode>>,
+        confirmed_node_ids: &HashSet<TreeNodeId>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
         Ok(self
             .unilateral_exit_service
-            .unilateral_exit(fee_rate, leaf_ids, inputs, prefetched_nodes)
+            .unilateral_exit(
+                fee_rate,
+                leaf_ids,
+                inputs,
+                prefetched_nodes,
+                confirmed_node_ids,
+            )
             .await?)
     }
 

@@ -24,27 +24,30 @@ async fn prepare_exit(sdk: &BreezSdk) -> Result<PrepareUnilateralExitResponse> {
         .await?;
 
     // The SDK automatically selects which leaves are profitable to exit.
-    // Review the selected leaves and their estimated costs:
-    for leaf in &response.selected_leaves {
+    for leaf in &response.leaves {
         println!(
             "Leaf {}: {} sats (exit cost: ~{} sats)",
-            leaf.id, leaf.value, leaf.estimated_cost
+            leaf.leaf_id, leaf.value, leaf.estimated_cost
+        );
+        for tx in &leaf.transactions {
+            if let Some(blocks) = tx.csv_timelock_blocks {
+                println!("Timelock: wait {} blocks", blocks);
+            }
+            // tx.tx_hex: pre-signed Spark transaction
+            // tx.cpfp_tx_hex: signed CPFP transaction — broadcast alongside parent
+        }
+    }
+
+    // Check if any node confirmations couldn't be verified
+    if !response.unverified_node_ids.is_empty() {
+        println!(
+            "Warning: could not verify confirmation status for {} nodes",
+            response.unverified_node_ids.len()
         );
     }
 
-    // The response contains signed transactions ready to broadcast:
-    // - response.transactions: parent/child transaction pairs per leaf
-    // - response.sweep_tx_hex: signed sweep transaction for the final step
-    // Change from CPFP fee-bumping always goes back to the first input's address.
-    for leaf in &response.transactions {
-        for pair in &leaf.tx_cpfp_pairs {
-            if let Some(blocks) = pair.csv_timelock_blocks {
-                println!("Timelock: wait {} blocks", blocks);
-            }
-            // pair.parent_tx_hex: pre-signed Spark transaction
-            // pair.child_tx_hex: signed CPFP transaction — broadcast alongside parent
-        }
-    }
+    // response.sweep_tx_hex: signed sweep transaction for the final step.
+    // Broadcast after refund transactions confirm and CSV timelocks expire.
     // ANCHOR_END: prepare-unilateral-exit
 
     Ok(response)

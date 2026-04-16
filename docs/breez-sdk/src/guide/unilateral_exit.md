@@ -54,18 +54,20 @@ The call returns an error if:
 ### Response
 
 The response contains:
-- **{{#name selected_leaves}}**: A summary of each leaf the SDK chose to exit, including its value and estimated exit cost
-- **{{#name transactions}}**: For each selected leaf, an ordered list of signed transaction pairs to broadcast
+- **{{#name leaves}}**: Per-leaf exit details, each containing the full broadcast chain
 - **{{#name sweep_tx_hex}}**: A fully signed transaction that sweeps all refund outputs to your destination
+- **{{#name unverified_node_ids}}**: Node IDs whose on-chain confirmation status could not be determined (see [Already-confirmed ancestors](#already-confirmed-ancestors) below)
 
-Each entry in {{#name selected_leaves}} contains:
-- **{{#name id}}**: The leaf's unique identifier
+Each entry in {{#name leaves}} contains:
+- **{{#name leaf_id}}**: The leaf's unique identifier
 - **{{#name value}}**: The leaf's value in satoshis
 - **{{#name estimated_cost}}**: The estimated marginal cost to exit this leaf (CPFP chain fees + sweep input fee). The actual profit per leaf is `value - estimated_cost`.
+- **{{#name transactions}}**: Ordered list of transactions to broadcast for this leaf
 
-Each transaction pair in {{#name transactions}} contains:
-- **{{#name parent_tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
-- **{{#name child_tx_hex}}**: The signed CPFP fee-bump transaction (ready to broadcast)
+Each transaction in {{#name transactions}} contains:
+- **{{#name node_id}}**: The node ID this transaction belongs to
+- **{{#name tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
+- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction (ready to broadcast). `None` if this node is already confirmed on-chain.
 - **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the previous transaction confirms before this pair can be broadcast
 
 ## Step 2: Broadcast the transaction packages
@@ -117,6 +119,18 @@ bitcoin-cli sendrawtransaction "<sweep_tx_hex>"
 ```
 
 The sweep transaction will remain in the mempool until all refund transactions it depends on are confirmed.
+
+## Already-confirmed ancestors
+
+If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP fee-bump child is needed (their {{#name cpfp_tx_hex}} will be `None`).
+
+If the chain service is unavailable or rate-limited, the SDK assumes the node is unconfirmed and builds a CPFP child for it anyway. These nodes are listed in {{#name unverified_node_ids}}. If any of these nodes are actually confirmed, broadcasting their CPFP child will fail because the anchor output has already been spent. In that case, call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
+
+## RBF (Replace-By-Fee)
+
+All CPFP fee-bump transactions signal RBF (BIP 125). If you need to increase fees after an initial broadcast (e.g., because fees have risen and your transactions are not confirming), call {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate}}. The new CPFP transactions will replace the old ones in the mempool.
+
+Note that the replacement CPFP transactions must pay a higher total fee than the originals (this is a Bitcoin protocol requirement). The SDK does not track previous fee rates — it is your responsibility to provide a higher fee rate on subsequent calls.
 
 ## Fee considerations
 

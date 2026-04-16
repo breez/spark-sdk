@@ -742,31 +742,27 @@ pub struct PrepareUnilateralExitRequest {
     pub destination: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTxCpfpPair)]
-pub struct UnilateralExitTxCpfpPair {
-    pub parent_tx_hex: String,
-    pub child_tx_hex: String,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitTransaction)]
+pub struct UnilateralExitTransaction {
+    pub node_id: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
     pub csv_timelock_blocks: Option<u32>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeafTxCpfpPairs)]
-pub struct UnilateralExitLeafTxCpfpPairs {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeaf)]
+pub struct UnilateralExitLeaf {
     pub leaf_id: String,
-    pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeafSummary)]
-pub struct UnilateralExitLeafSummary {
-    pub id: String,
     pub value: u64,
     pub estimated_cost: u64,
+    pub transactions: Vec<UnilateralExitTransaction>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
 pub struct PrepareUnilateralExitResponse {
-    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
-    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
+    pub leaves: Vec<UnilateralExitLeaf>,
     pub sweep_tx_hex: String,
+    pub unverified_node_ids: Vec<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetInfoRequest)]

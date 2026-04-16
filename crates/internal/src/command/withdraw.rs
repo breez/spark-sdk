@@ -167,7 +167,13 @@ pub async fn handle_command(
                 .map(|s| ParsedCpfpInput::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
             let all_leaf_tx_cpfp_psbts = wallet
-                .unilateral_exit(fee_rate, leaf_ids, inputs, None)
+                .unilateral_exit(
+                    fee_rate,
+                    leaf_ids,
+                    inputs,
+                    None,
+                    &std::collections::HashSet::new(),
+                )
                 .await?;
 
             for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {

@@ -27,18 +27,19 @@ class UnilateralExit {
             )
 
             // The SDK automatically selects which leaves are profitable to exit.
-            for (leaf in response.selectedLeaves) {
-                println("Leaf ${leaf.id}: ${leaf.value} sats (exit cost: ~${leaf.estimatedCost} sats)")
-            }
-
-            for (leaf in response.transactions) {
-                for (pair in leaf.txCpfpPairs) {
-                    pair.csvTimelockBlocks?.let { blocks ->
+            for (leaf in response.leaves) {
+                println("Leaf ${leaf.leafId}: ${leaf.value} sats (exit cost: ~${leaf.estimatedCost} sats)")
+                for (tx in leaf.transactions) {
+                    tx.csvTimelockBlocks?.let { blocks ->
                         println("Timelock: wait $blocks blocks")
                     }
-                    // pair.parentTxHex: pre-signed Spark transaction
-                    // pair.childTxHex: signed CPFP transaction — broadcast alongside parent
+                    // tx.txHex: pre-signed Spark transaction
+                    // tx.cpfpTxHex: signed CPFP transaction — broadcast alongside parent
                 }
+            }
+
+            if (response.unverifiedNodeIds.isNotEmpty()) {
+                println("Warning: could not verify confirmation status for ${response.unverifiedNodeIds.size} nodes")
             }
         } catch (e: Exception) {
             // handle error

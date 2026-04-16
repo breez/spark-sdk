@@ -35,6 +35,8 @@ pub struct UnilateralExitAutoselect {
     pub leaf_tx_cpfp_psbts: Vec<LeafTxCpfpPsbts>,
     /// Signed sweep transaction that collects all refund outputs.
     pub sweep_tx: Transaction,
+    /// The tree nodes fetched during autoselect, for reuse in a second pass.
+    pub prefetched_nodes: Vec<spark::tree::TreeNode>,
 }
 
 /// Describes a refund output sitting on-chain after a unilateral exit.

@@ -487,21 +487,16 @@ pub(crate) async fn execute_command(
                 )
                 .await?;
 
-            println!("Selected leaves:");
-            for sl in &response.selected_leaves {
+            for leaf in &response.leaves {
+                println!();
                 println!(
-                    "  {} — {} sats (estimated cost: {} sats)",
-                    sl.id, sl.value, sl.estimated_cost
+                    "Leaf {}: {} sats (estimated cost: {} sats)",
+                    leaf.leaf_id, leaf.value, leaf.estimated_cost
                 );
-            }
-
-            for leaf in &response.transactions {
-                println!();
-                println!("Leaf ID: {}", leaf.leaf_id);
                 println!();
 
-                let total_txs = leaf.tx_cpfp_pairs.len();
-                for (index, tc) in leaf.tx_cpfp_pairs.iter().enumerate() {
+                let total_txs = leaf.transactions.len();
+                for (index, tc) in leaf.transactions.iter().enumerate() {
                     let index_str = format!("{}. ", index.saturating_add(1));
                     let index_spaces = " ".repeat(index_str.len());
 
@@ -516,19 +511,25 @@ pub(crate) async fn execute_command(
                     };
 
                     if let Some(blocks) = tc.csv_timelock_blocks {
-                        println!(
-                            "{index_str}{tx_type} (CSV: {blocks} blocks): {}",
-                            tc.parent_tx_hex
-                        );
+                        println!("{index_str}{tx_type} (CSV: {blocks} blocks): {}", tc.tx_hex);
                     } else {
-                        println!("{index_str}{tx_type}: {}", tc.parent_tx_hex);
+                        println!("{index_str}{tx_type}: {}", tc.tx_hex);
                     }
-                    println!("{index_spaces}CPFP TX: {}", tc.child_tx_hex);
-                    println!(
-                        "{index_spaces}Package: {},{}",
-                        tc.parent_tx_hex, tc.child_tx_hex
-                    );
+                    if let Some(cpfp_hex) = &tc.cpfp_tx_hex {
+                        println!("{index_spaces}CPFP TX: {cpfp_hex}");
+                        println!("{index_spaces}Package: {},{}", tc.tx_hex, cpfp_hex);
+                    } else {
+                        println!("{index_spaces}(already confirmed, no CPFP needed)");
+                    }
                 }
+            }
+
+            if !response.unverified_node_ids.is_empty() {
+                println!();
+                println!(
+                    "Warning: could not verify confirmation status for {} nodes",
+                    response.unverified_node_ids.len()
+                );
             }
 
             println!();
