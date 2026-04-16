@@ -299,7 +299,6 @@ impl CrossChainService for BoltzService {
                 max_slippage_bps: context.max_slippage_bps,
                 quote_degraded: false,
             }),
-            conversion_status: Some(ConversionStatus::Pending),
             ..Default::default()
         };
 

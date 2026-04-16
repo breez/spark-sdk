@@ -96,12 +96,11 @@ impl BoltzSdkEventListener {
                 invoice,
                 invoice_amount_sats,
                 estimated_out: final_estimated_out,
-                status: new_status.clone(),
+                status: new_status,
                 fee,
                 max_slippage_bps,
                 quote_degraded,
             }),
-            conversion_status: Some(new_status),
             ..Default::default()
         };
         self.storage
