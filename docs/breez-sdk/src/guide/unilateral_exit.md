@@ -22,8 +22,8 @@ The diagram above shows the structure for a single leaf. The node transactions f
 ## Overview of the process
 
 1. **Prepare the unilateral exit** — the SDK selects profitable leaves, builds all transactions, and signs the CPFP fee-bump transactions using your provided signer. It returns all transactions ready to broadcast.
-2. **Broadcast the transaction packages** — you broadcast each parent+child pair, respecting dependencies and timelocks
-3. **Broadcast the sweep transaction** — once all refund transactions are at least in the mempool, you broadcast the sweep to collect your funds
+2. **Broadcast the transaction packages** — you broadcast each parent+child pair in order, respecting dependencies and timelocks.
+3. **Broadcast the sweep transaction** — once all refund transactions are in the mempool, broadcast the sweep to collect your funds.
 
 ## Step 1: Prepare the unilateral exit
 
@@ -55,38 +55,42 @@ The call returns an error if:
 
 The response contains:
 - **{{#name leaves}}**: Per-leaf exit details, each containing the full broadcast chain
-- **{{#name sweep_tx_hex}}**: A fully signed transaction that sweeps all refund outputs to your destination
-- **{{#name unverified_node_ids}}**: Node IDs whose on-chain confirmation status could not be determined (see [Already-confirmed ancestors](#already-confirmed-ancestors) below)
+- **{{#name sweep_tx_hex}}**: A fully signed sweep transaction (see [Step 3](#step-3-broadcast-the-sweep-transaction))
+- **{{#name unverified_node_ids}}**: Node IDs whose on-chain confirmation status could not be determined (see [Already-confirmed ancestors](#already-confirmed-ancestors))
 
 Each entry in {{#name leaves}} contains:
 - **{{#name leaf_id}}**: The leaf's unique identifier
 - **{{#name value}}**: The leaf's value in satoshis
 - **{{#name estimated_cost}}**: The estimated marginal cost to exit this leaf (CPFP chain fees + sweep input fee). The actual profit per leaf is `value - estimated_cost`.
-- **{{#name transactions}}**: Ordered list of transactions to broadcast for this leaf
+- **{{#name transactions}}**: Ordered list of transactions to broadcast for this leaf (see [Step 2](#step-2-broadcast-the-transaction-packages))
 
 Each transaction in {{#name transactions}} contains:
-- **{{#name node_id}}**: The node ID this transaction belongs to
+- **{{#name node_id}}**: The tree node ID this transaction belongs to
 - **{{#name tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
-- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction (ready to broadcast). `None` if this node is already confirmed on-chain.
-- **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the previous transaction confirms before this pair can be broadcast
+- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction. `None` if this node is already confirmed on-chain — skip it, there is nothing to broadcast.
+- **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the *previous* transaction confirms before broadcasting this one
 
 ## Step 2: Broadcast the transaction packages
 
-You are responsible for broadcasting the transactions yourself. Bitcoin Core enforces a **1-parent-1-child (1p1c)** package relay policy — each parent+child pair must be broadcast together as a package.
+You are responsible for broadcasting the transactions yourself. For each transaction in a leaf's {{#name transactions}} list:
+
+1. **If {{#name cpfp_tx_hex}} is `None`**: skip this entry — the transaction is already confirmed on-chain.
+2. **If {{#name csv_timelock_blocks}} is set**: wait until the previous transaction has the required number of confirmations before proceeding.
+3. **Broadcast as a package**: submit {{#name tx_hex}} and {{#name cpfp_tx_hex}} together as a single package.
 
 ### How to broadcast a package
 
-If your Bitcoin node supports `submitpackage` (Bitcoin Core 28.0+), use it:
+Bitcoin Core enforces a **1-parent-1-child (1p1c)** package relay policy. If your Bitcoin node supports `submitpackage` (Bitcoin Core 28.0+), use it:
 
 ```
-bitcoin-cli submitpackage '["<parent_tx_hex>", "<child_tx_hex>"]'
+bitcoin-cli submitpackage '["<tx_hex>", "<cpfp_tx_hex>"]'
 ```
 
 Many block explorers also support package submission.
 
-### Dependencies and broadcast order
+### Broadcast order
 
-Within each leaf's transaction list, the pairs must be broadcast in order — each transaction spends from the previous one's output. A pair can only be broadcast once the previous pair's parent transaction is confirmed (or in the mempool, for non-timelocked transactions).
+Within each leaf's transaction list, broadcast the entries **in order** — each transaction spends from the previous one's output. For non-timelocked transactions, the previous transaction only needs to be in the mempool. For timelocked transactions ({{#name csv_timelock_blocks}} is set), you must wait for the required confirmations before broadcasting.
 
 A single leaf's chain looks like:
 
@@ -94,51 +98,47 @@ A single leaf's chain looks like:
 |---|-------------|----------|-------------|
 | 1 | Root Node TX | None | First in the chain, spends from the on-chain commitment |
 | 2+ | Intermediate Node TXs | None | Each spends from the previous node's output |
-| | Leaf TX | **Yes** | Spends from the last node; has a relative timelock |
-| | Refund TX | **Yes** | Spends from the leaf TX; pays to your Spark-derived refund address |
+| N-1 | Leaf TX | **Yes** | Spends from the last node; has a relative timelock |
+| N | Refund TX | **Yes** | Spends from the leaf TX; pays to your Spark-derived refund address |
 
-When exiting **multiple leaves**, some node transactions may be shared between leaves (they share the same path from the root). The SDK deduplicates these — each unique node transaction appears only once, in the first leaf that uses it. Subsequent leaves only contain the pairs from where their path diverges.
+When exiting **multiple leaves**, some node transactions may be shared between leaves (they share the same path from the root). The SDK deduplicates these — each unique node transaction appears only once, in the first leaf that uses it. Subsequent leaves only contain the entries from where their path diverges.
 
 ### Handling timelocks
 
-When a pair has a {{#name csv_timelock_blocks}} value, you **cannot broadcast it** until the specified number of blocks have been mined after the previous transaction confirms. For example, if the leaf TX has {{#name csv_timelock_blocks}}: 2000, you must wait 2,000 blocks (~14 days) after the last node TX confirms before broadcasting the leaf TX package.
+When an entry has a {{#name csv_timelock_blocks}} value, you **cannot broadcast it** until the specified number of blocks have been mined after the previous transaction confirms. For example, if the leaf TX has {{#name csv_timelock_blocks}}: 2000, you must wait 2,000 blocks (~14 days) after the last node TX confirms before broadcasting the leaf TX package.
 
 <div class="warning">
 <h4>Developer note</h4>
 The timelock is a <b>relative</b> lock (BIP68 CSV). It counts blocks from the confirmation of the output being spent, not from any absolute block height. Your application should monitor the blockchain and broadcast the next package as soon as the timelock expires.
 </div>
 
-Because of the timelocks on leaf and refund transactions, a full unilateral exit takes multiple days. Your application should persist the transaction data from the prepare response and schedule broadcasts as timelocks expire.
+Because of the timelocks on leaf and refund transactions, a full unilateral exit takes multiple days. Your application should **persist the transaction data** from the prepare response and schedule broadcasts as timelocks expire.
 
 ## Step 3: Broadcast the sweep transaction
 
-Once all refund transactions are at least in the mempool, broadcast the sweep transaction ({{#name sweep_tx_hex}}). This is a standard Bitcoin transaction (not a package) that spends from all refund outputs and sends the total value (minus fees) to your destination address.
+Once all refund transactions are at least in the mempool, broadcast the sweep transaction ({{#name sweep_tx_hex}}). This is a standard Bitcoin transaction (not a package) — broadcast it with `sendrawtransaction`:
 
 ```
 bitcoin-cli sendrawtransaction "<sweep_tx_hex>"
 ```
 
-The sweep transaction will remain in the mempool until all refund transactions it depends on are confirmed.
+The sweep transaction spends from all refund outputs and sends the total value (minus fees) to your destination address.
 
 ## Already-confirmed ancestors
 
-If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP fee-bump child is needed (their {{#name cpfp_tx_hex}} will be `None`).
+If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP child is needed — their {{#name cpfp_tx_hex}} will be `None` and you should skip them during broadcast.
 
 If the chain service is unavailable or rate-limited, the SDK assumes the node is unconfirmed and builds a CPFP child for it anyway. These nodes are listed in {{#name unverified_node_ids}}. If any of these nodes are actually confirmed, broadcasting their CPFP child will fail because the anchor output has already been spent. In that case, call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
 
-### Custom chain service
-
-By default, the SDK uses a public Esplora API (Blockstream on mainnet) to check transaction confirmation status. Public APIs are rate-limited and may be unreliable during high-traffic periods — exactly when you are most likely to need a unilateral exit (e.g., during a fee spike or network congestion).
-
-If reliability is a concern, consider providing your own chain service. Public APIs can be rate-limited or unavailable during high-traffic periods, which is often when you need a unilateral exit most. A private endpoint ensures the SDK can always check confirmation status.
-
-See [Customizing the SDK — Chain Service](customizing.md#with-chain-service) for how to configure a custom chain service.
+If reliability is a concern, consider providing your own chain service. Public APIs can be rate-limited or unavailable during high-traffic periods, which is often when you need a unilateral exit most. A private endpoint ensures the SDK can always check confirmation status. See [Customizing the SDK — Chain Service](customizing.md#with-chain-service) for how to configure a custom chain service.
 
 ## RBF (Replace-By-Fee)
 
-All CPFP fee-bump transactions signal RBF (BIP 125). If you need to increase fees after an initial broadcast (e.g., because fees have risen and your transactions are not confirming), call {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate}}. The new CPFP transactions will replace the old ones in the mempool.
+All CPFP fee-bump transactions signal RBF (BIP 125). If your transactions are not confirming because fees have risen, you can bump fees by calling {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate}}. The new CPFP transactions will replace the old ones in the mempool.
 
-Note that the replacement CPFP transactions must pay a higher total fee than the originals (this is a Bitcoin protocol requirement). The SDK does not track previous fee rates — it is your responsibility to provide a higher fee rate on subsequent calls.
+For the retry, provide the **change output** from the last confirmed CPFP transaction as your CPFP input. If no CPFP transactions have confirmed yet, use the same original inputs — the new transactions will replace the old ones entirely.
+
+Note that replacement transactions must pay a higher total fee than the originals (Bitcoin protocol requirement). The SDK does not track previous fee rates — it is your responsibility to provide a higher fee rate on subsequent calls.
 
 ## Fee considerations
 
@@ -156,7 +156,7 @@ The SDK automatically determines which leaves are worth exiting. For each leaf, 
 
 A leaf is only included when its value strictly exceeds this marginal cost. The SDK processes leaves from highest to lowest value, so higher-value leaves cover the shared ancestor costs and make it cheaper for smaller leaves to be included.
 
-The {{#name estimated_cost}} field in each selected leaf's summary reflects this marginal cost, so you can inspect the expected profit per leaf.
+The {{#name estimated_cost}} field in each leaf reflects this marginal cost, so you can inspect the expected profit per leaf.
 
 ### CPFP change output
 
@@ -175,5 +175,5 @@ Ensure the external UTXO has enough value to cover all CPFP fees for all selecte
 | "non-BIP68-final" | Timelock has not expired | Wait for the required number of confirmations on the previous transaction |
 | Transaction not relayed | Parent+child not submitted as package | Use `submitpackage` or a block explorer's package submission |
 | Sweep transaction rejected | Not all refund TXs are in the mempool yet | Wait for all refund transactions to be broadcast before broadcasting the sweep |
-| CPFP broadcast fails with "missing inputs" | An ancestor was already confirmed but the SDK couldn't detect it (chain service error) | Check {{#name unverified_node_ids}} — call {{#name prepare_unilateral_exit}} again, or provide a more reliable chain service via {{#name with_chain_service}} |
-| {{#name unverified_node_ids}} is non-empty | Chain service was unavailable or rate-limited | Retry, or switch to a private chain service (see [Custom chain service](#custom-chain-service)) |
+| CPFP broadcast fails with "missing inputs" | An ancestor was already confirmed but the SDK couldn't detect it (chain service error) | Check {{#name unverified_node_ids}} — call {{#name prepare_unilateral_exit}} again, or use a more reliable chain service (see [Custom chain service](#already-confirmed-ancestors)) |
+| {{#name unverified_node_ids}} is non-empty | Chain service was unavailable or rate-limited | Retry, or use a private chain service (see [Customizing the SDK](customizing.md#with-chain-service)) |
