@@ -167,6 +167,7 @@ pub enum ConversionInfo {
         /// Destination chain (e.g. `"base"`, `"solana"`, `"tron"`).
         destination_chain: String,
         /// Destination asset (e.g. `"USDC"`, `"USDT"`).
+        #[serde(default)]
         destination_asset: String,
         /// Recipient address on the destination chain.
         destination_address: String,
@@ -189,6 +190,12 @@ pub enum ConversionInfo {
         swap_id: String,
         /// Destination chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
         destination_chain: String,
+        /// Destination asset ticker (`"USDT"` for canonical Tether, `"USDT0"`
+        /// for distinct `LayerZero` OFT deployments). Captured at prepare
+        /// time from the route so the payment row reflects what was labeled
+        /// when the user committed — not whatever the provider returns now.
+        #[serde(default)]
+        destination_asset: String,
         /// Recipient address on the destination chain.
         destination_address: String,
         /// The BOLT11 hold invoice paid on the Spark/Lightning side.
@@ -277,6 +284,7 @@ mod tests {
         let original = ConversionInfo::Boltz {
             swap_id: "boltz_swap_abc".to_string(),
             destination_chain: "solana".to_string(),
+            destination_asset: "USDT0".to_string(),
             destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             invoice: "lnbc1000n1pexample".to_string(),
             invoice_amount_sats: 150_000,
@@ -309,6 +317,7 @@ mod tests {
         let mut info = ConversionInfo::Boltz {
             swap_id: "s1".to_string(),
             destination_chain: "arbitrum".to_string(),
+            destination_asset: "USDT".to_string(),
             destination_address: "0xdest".to_string(),
             invoice: "lnbc".to_string(),
             invoice_amount_sats: 100,

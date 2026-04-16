@@ -3317,6 +3317,7 @@ fn boltz_conversion_info(
     crate::ConversionInfo::Boltz {
         swap_id: swap_id.to_string(),
         destination_chain: "arbitrum".to_string(),
+        destination_asset: "USDT".to_string(),
         destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
         invoice: "lnbc1000n1pexample".to_string(),
         invoice_amount_sats: 100_000,
@@ -3386,6 +3387,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
             Some(crate::ConversionInfo::Boltz {
                 swap_id,
                 destination_chain,
+                destination_asset,
                 destination_address,
                 invoice_amount_sats,
                 estimated_out,
@@ -3404,6 +3406,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
     };
     assert_eq!(swap_id, "boltz_swap_pending");
     assert_eq!(destination_chain, "arbitrum");
+    assert_eq!(destination_asset, "USDT");
     assert_eq!(
         destination_address,
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"

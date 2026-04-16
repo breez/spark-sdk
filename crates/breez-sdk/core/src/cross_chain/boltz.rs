@@ -48,6 +48,7 @@ struct PreparedContext {
     ln_fee_sats: u64,
     max_slippage_bps: u32,
     destination_chain: String,
+    destination_asset: String,
     destination_address: String,
     estimated_out: u128,
     fee_amount: u128,
@@ -127,7 +128,7 @@ impl CrossChainService for BoltzService {
             .map(|spec| CrossChainRoutePair {
                 provider: CrossChainProvider::Boltz,
                 chain: spec.id.as_str().to_string(),
-                asset: "USDT".to_string(),
+                asset: spec.asset_symbol().to_string(),
                 contract_address: spec.token_address.clone(),
                 decimals: 6,
                 exact_out_eligible: false,
@@ -221,6 +222,7 @@ impl CrossChainService for BoltzService {
             ln_fee_sats,
             max_slippage_bps: resolved_slippage,
             destination_chain: route.chain.clone(),
+            destination_asset: route.asset.clone(),
             destination_address: recipient_address.to_string(),
             estimated_out,
             fee_amount,
@@ -290,6 +292,7 @@ impl CrossChainService for BoltzService {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id: context.swap_id.clone(),
                 destination_chain: context.destination_chain.clone(),
+                destination_asset: context.destination_asset.clone(),
                 destination_address: context.destination_address.clone(),
                 invoice: context.invoice.clone(),
                 invoice_amount_sats: context.invoice_amount_sats,

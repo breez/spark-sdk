@@ -63,6 +63,7 @@ impl BoltzSdkEventListener {
         let ConversionInfo::Boltz {
             swap_id,
             destination_chain,
+            destination_asset,
             destination_address,
             invoice,
             invoice_amount_sats,
@@ -84,6 +85,7 @@ impl BoltzSdkEventListener {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
                 destination_chain,
+                destination_asset,
                 destination_address,
                 invoice,
                 invoice_amount_sats,
@@ -127,6 +129,7 @@ impl BoltzSdkEventListener {
         let Some(ConversionInfo::Boltz {
             swap_id,
             destination_chain,
+            destination_asset,
             destination_address,
             invoice,
             invoice_amount_sats,
@@ -146,6 +149,7 @@ impl BoltzSdkEventListener {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
                 destination_chain,
+                destination_asset,
                 destination_address,
                 invoice,
                 invoice_amount_sats,

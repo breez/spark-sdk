@@ -1235,6 +1235,7 @@ pub enum _ConversionInfo {
     Boltz {
         swap_id: String,
         destination_chain: String,
+        destination_asset: String,
         destination_address: String,
         invoice: String,
         invoice_amount_sats: u64,
