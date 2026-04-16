@@ -19,7 +19,7 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
         type: 'p2wpkh',
         txid: 'your-utxo-txid',
         vout: 0,
-        value: BigInt(50_000),
+        value: 50_000,
         pubkey: 'your-compressed-pubkey-hex'
       }],
       destination: 'bc1q...your-destination-address'

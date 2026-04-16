@@ -11,7 +11,7 @@ Future<PrepareUnilateralExitResponse> prepareExit(BreezSdk sdk) async {
   PrepareUnilateralExitRequest request = PrepareUnilateralExitRequest(
     feeRate: BigInt.from(2),
     inputs: [
-      UnilateralExitCpfpInput.p2wpkh(
+      UnilateralExitCpfpInput.p2Wpkh(
         txid: "your-utxo-txid",
         vout: 0,
         value: BigInt.from(50000),
