@@ -184,6 +184,12 @@ pub enum ConversionInfo {
     },
     /// Boltz reverse swap — BTC/sats on Spark → USDT on an external chain via
     /// Lightning hold invoice + on-chain claim.
+    ///
+    /// `instance_id` and `claim_key_index` are intentionally not stored on
+    /// the payment row in v1: they would only be needed for cross-device
+    /// re-derivation of the preimage, which v1 does not support. v2
+    /// (submarine swaps) will introduce a `BoltzInstance` rtsync record
+    /// type and add these fields.
     #[serde(rename = "boltz")]
     Boltz {
         /// The Boltz swap id returned by `POST /swap/reverse`.

@@ -6,6 +6,11 @@
 //! event already emitted by `spark_wallet.pay_lightning_invoice`, so the
 //! listener intentionally does not emit any SDK event of its own — matching
 //! Orchestra's current behavior.
+//!
+//! Follow-up: decide whether any cross-chain provider should emit a
+//! distinct terminal event when the destination-chain claim lands. The
+//! gap is less pressing for Boltz (UIs react to the LN-leg event) than
+//! for Orchestra, but both are silent today.
 
 use std::sync::Arc;
 

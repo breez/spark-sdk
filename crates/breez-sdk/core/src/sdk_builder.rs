@@ -742,6 +742,14 @@ fn default_storage(
 /// Loads or generates the device-local Boltz instance handle (random 32-byte
 /// seed + instance id). In v1 this is kept local only — cross-device recovery
 /// of swaps lands with the v2 submarine-swap feature.
+///
+/// Cross-device consequence in v1: a user who restores from mnemonic on a
+/// second device cannot claim destination-chain payouts for reverse swaps
+/// initiated on the first device. Funds are not at risk — Boltz's
+/// hold-invoice timeout refunds the lightning leg — but the second device
+/// is blind to the in-flight swap until it terminates on Boltz's side.
+/// v2 is expected to retroactively publish the existing local seed on
+/// first boot so new devices can bootstrap from rtsync.
 async fn load_or_create_boltz_instance(
     storage: &Arc<dyn Storage>,
 ) -> Result<BoltzInstanceHandle, SdkError> {
