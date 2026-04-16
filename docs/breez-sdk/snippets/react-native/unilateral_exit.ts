@@ -11,7 +11,7 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
   // ANCHOR: prepare-unilateral-exit
   // Create a signer from your UTXO private key (32-byte secret key)
   const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
-  const signer = new SingleKeySigner(secretKeyBytes)
+  const signer = new SingleKeySigner(secretKeyBytes.buffer as ArrayBuffer)
 
   const response = await sdk.prepareUnilateralExit({
     feeRate: BigInt(2),
