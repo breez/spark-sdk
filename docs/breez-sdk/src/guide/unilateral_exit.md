@@ -126,6 +126,14 @@ If another party has already exited a different leaf from the same tree, some an
 
 If the chain service is unavailable or rate-limited, the SDK assumes the node is unconfirmed and builds a CPFP child for it anyway. These nodes are listed in {{#name unverified_node_ids}}. If any of these nodes are actually confirmed, broadcasting their CPFP child will fail because the anchor output has already been spent. In that case, call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
 
+### Custom chain service
+
+By default, the SDK uses a public Esplora API (Blockstream on mainnet) to check transaction confirmation status. Public APIs are rate-limited and may be unreliable during high-traffic periods — exactly when you are most likely to need a unilateral exit (e.g., during a fee spike or network congestion).
+
+If reliability is a concern, consider providing your own chain service. Public APIs can be rate-limited or unavailable during high-traffic periods, which is often when you need a unilateral exit most. A private endpoint ensures the SDK can always check confirmation status.
+
+See [Customizing the SDK — Chain Service](customizing.md#with-chain-service) for how to configure a custom chain service.
+
 ## RBF (Replace-By-Fee)
 
 All CPFP fee-bump transactions signal RBF (BIP 125). If you need to increase fees after an initial broadcast (e.g., because fees have risen and your transactions are not confirming), call {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate}}. The new CPFP transactions will replace the old ones in the mempool.
@@ -167,3 +175,5 @@ Ensure the external UTXO has enough value to cover all CPFP fees for all selecte
 | "non-BIP68-final" | Timelock has not expired | Wait for the required number of confirmations on the previous transaction |
 | Transaction not relayed | Parent+child not submitted as package | Use `submitpackage` or a block explorer's package submission |
 | Sweep transaction rejected | Not all refund TXs are in the mempool yet | Wait for all refund transactions to be broadcast before broadcasting the sweep |
+| CPFP broadcast fails with "missing inputs" | An ancestor was already confirmed but the SDK couldn't detect it (chain service error) | Check {{#name unverified_node_ids}} — call {{#name prepare_unilateral_exit}} again, or provide a more reliable chain service via {{#name with_chain_service}} |
+| {{#name unverified_node_ids}} is non-empty | Chain service was unavailable or rate-limited | Retry, or switch to a private chain service (see [Custom chain service](#custom-chain-service)) |
