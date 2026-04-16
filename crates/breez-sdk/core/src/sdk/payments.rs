@@ -592,7 +592,7 @@ impl BreezSdk {
                 amount_in: prepared.amount_in,
                 estimated_out: prepared.estimated_out,
                 fee_amount: prepared.fee_amount,
-                fee_bps: prepared.fee_bps,
+                fee_asset: prepared.fee_asset,
                 expires_at: prepared.expires_at,
             },
             amount,
@@ -1090,7 +1090,7 @@ impl BreezSdk {
                 amount_in,
                 estimated_out,
                 fee_amount,
-                fee_bps,
+                fee_asset,
                 expires_at,
             } => {
                 let service = self.cross_chain_providers.get(route.provider)?;
@@ -1101,7 +1101,7 @@ impl BreezSdk {
                     amount_in: *amount_in,
                     estimated_out: *estimated_out,
                     fee_amount: *fee_amount,
-                    fee_bps: *fee_bps,
+                    fee_asset: fee_asset.clone(),
                     expires_at: expires_at.clone(),
                     pair: route.clone(),
                     recipient_address: recipient_address.clone(),

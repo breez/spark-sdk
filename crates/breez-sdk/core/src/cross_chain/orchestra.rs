@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use breez_sdk_common::input::CrossChainAddressFamily;
 use flashnet::OrchestraClient;
 use flashnet::orchestra::{
     AmountMode, OrderStatus, QuoteRequest, QuoteResponse, Route, RouteAsset, StatusResponse,
@@ -254,12 +255,17 @@ impl CrossChainService for OrchestraService {
         &self,
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
-        let (is_send, contract_filter) = match filter {
+        let (is_send, contract_filter, family_filter) = match filter {
             CrossChainRouteFilter::Send { address_details } => {
-                (true, address_details.contract_address.as_deref())
+                let family: CrossChainAddressFamily = address_details.address_family.into();
+                (
+                    true,
+                    address_details.contract_address.as_deref(),
+                    Some(family),
+                )
             }
             CrossChainRouteFilter::Receive { contract_address } => {
-                (false, contract_address.as_deref())
+                (false, contract_address.as_deref(), None)
             }
         };
 
@@ -282,8 +288,9 @@ impl CrossChainService for OrchestraService {
 
         for r in routes.iter().filter(|r| {
             let side = non_spark_side(r, is_send);
-            contract_filter
-                .is_none_or(|ca| side.contract_address.as_deref().is_some_and(|c| c == ca))
+            let ca = side.contract_address.as_deref();
+            family_filter.is_none_or(|f| f.matches_chain(&side.chain, ca))
+                && contract_filter.is_none_or(|filter_ca| ca.is_some_and(|c| c == filter_ca))
         }) {
             let side = non_spark_side(r, is_send);
             let key = (
@@ -361,7 +368,11 @@ impl CrossChainService for OrchestraService {
             amount_in,
             estimated_out,
             fee_amount,
-            fee_bps: quote.fee_bps,
+            fee_asset: if quote.fee_asset.eq_ignore_ascii_case("BTC") {
+                None
+            } else {
+                Some(quote.fee_asset)
+            },
             expires_at: quote.expires_at,
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),

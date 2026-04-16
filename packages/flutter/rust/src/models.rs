@@ -523,7 +523,7 @@ pub enum _SendPaymentMethod {
         amount_in: u128,
         estimated_out: u128,
         fee_amount: u128,
-        fee_bps: u32,
+        fee_asset: Option<String>,
         expires_at: String,
     },
 }

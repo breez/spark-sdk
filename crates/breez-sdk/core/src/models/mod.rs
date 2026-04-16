@@ -1137,10 +1137,10 @@ pub enum SendPaymentMethod {
         amount_in: u128,
         /// Estimated amount the recipient will receive in the destination asset's base units.
         estimated_out: u128,
-        /// Provider's reported fee amount in the source asset's base units.
+        /// Provider's reported fee amount in `fee_asset` base units.
         fee_amount: u128,
-        /// Provider's reported fee in basis points.
-        fee_bps: u32,
+        /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
+        fee_asset: Option<String>,
         /// ISO8601 timestamp after which this quote is no longer valid.
         expires_at: String,
     },

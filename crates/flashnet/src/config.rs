@@ -35,17 +35,15 @@ impl std::fmt::Debug for OrchestraConfig {
     }
 }
 
-// Orchestra API key, injected at compile time via the ORCHESTRA_API_KEY env var.
-// In CI this is set from GitHub secrets; locally export it in your shell.
-const ORCHESTRA_API_KEY: Option<&str> = option_env!("ORCHESTRA_API_KEY");
+const ORCHESTRA_API_KEY: &str = "fnp_7NLgx9aK-57OAhnRbpAm-VUbpYxReW8f5eDWddRDpm8";
 const ORCHESTRA_BASE_URL: &str = "https://orchestration.flashnet.xyz";
 
 impl OrchestraConfig {
     pub fn default_for_network(network: Network) -> Option<Self> {
         match network {
-            Network::Mainnet => ORCHESTRA_API_KEY.map(|api_key| Self {
+            Network::Mainnet => Some(Self {
                 base_url: ORCHESTRA_BASE_URL.to_string(),
-                api_key: api_key.to_string(),
+                api_key: ORCHESTRA_API_KEY.to_string(),
             }),
             Network::Regtest | Network::Testnet | Network::Signet => None,
         }

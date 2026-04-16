@@ -95,7 +95,8 @@ pub(crate) struct CrossChainPrepared {
     pub amount_in: u128,
     pub estimated_out: u128,
     pub fee_amount: u128,
-    pub fee_bps: u32,
+    /// The asset the fee is denominated in. `None` means BTC (sats).
+    pub fee_asset: Option<String>,
     pub expires_at: String,
     pub pair: CrossChainRoutePair,
     pub recipient_address: String,

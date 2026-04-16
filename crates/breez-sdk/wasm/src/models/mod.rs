@@ -883,7 +883,7 @@ pub enum SendPaymentMethod {
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee_amount: u128,
-        fee_bps: u32,
+        fee_asset: Option<String>,
         expires_at: String,
     },
 }

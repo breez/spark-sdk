@@ -698,10 +698,11 @@ pub(crate) async fn execute_command(
                 amount_in,
                 estimated_out,
                 fee_amount,
-                fee_bps,
+                ref fee_asset,
                 ..
             } = prepare_response.payment_method
             {
+                let fee_denom = fee_asset.as_deref().unwrap_or("sats");
                 let denomination = if token_identifier.is_some() {
                     "token base units"
                 } else {
@@ -711,7 +712,7 @@ pub(crate) async fn execute_command(
                     "Cross-chain send: {amount_in} {denomination} → ~{estimated_out} {} on {} to {recipient_address}",
                     route.asset, route.chain,
                 );
-                println!("Fee: {fee_amount} {denomination} ({fee_bps} bps)");
+                println!("Fee: {fee_amount} {fee_denom}");
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
                     .to_lowercase();
@@ -1046,7 +1047,7 @@ async fn select_cross_chain_route(
 fn maybe_truncate_address(addr: Option<&str>) -> String {
     addr.map(|c| {
         if c.len() > 12 {
-            format!(" ({}...{})", &c[..6], &c[c.len() - 6..])
+            format!(" ({}...{})", &c[..6], &c[c.len().saturating_sub(6)..])
         } else {
             format!(" ({c})")
         }

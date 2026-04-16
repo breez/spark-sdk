@@ -39,17 +39,23 @@ impl CrossChainAddressFamily {
         }
     }
 
-    /// Whether `chain` belongs to this address family.
+    /// Whether a route is compatible with this address family.
     ///
-    /// Solana and Tron match their exact chain name. EVM is the catch-all for
-    /// everything else — any chain Orchestra returns that isn't Solana or Tron
-    /// is assumed to use EVM-style addresses. This avoids hardcoding a list of
-    /// EVM chains that would need updating every time a new one is added.
-    pub fn matches_chain(self, chain: &str) -> bool {
+    /// For **EVM**, a route matches if the chain is `"ethereum"` (native ETH)
+    /// or the route's `contract_address` is detected as an EVM address
+    /// (`0x` + 40 hex chars). This avoids false positives for non-EVM chains
+    /// like `"bitcoin"` or `"spark"` that lack EVM contract addresses.
+    ///
+    /// For **Solana** and **Tron**, matching is by chain name only.
+    pub fn matches_chain(self, chain: &str, contract_address: Option<&str>) -> bool {
         match self {
             Self::Solana => chain.eq_ignore_ascii_case("solana"),
             Self::Tron => chain.eq_ignore_ascii_case("tron"),
-            Self::Evm => !Self::Solana.matches_chain(chain) && !Self::Tron.matches_chain(chain),
+            Self::Evm => {
+                chain.eq_ignore_ascii_case("ethereum")
+                    || contract_address
+                        .is_some_and(|addr| detect_address_family(addr).is_some_and(|f| f == self))
+            }
         }
     }
 }
@@ -539,45 +545,56 @@ mod tests {
     }
 
     #[test]
-    fn matches_chain_evm_known() {
+    fn matches_chain_evm_by_chain_name() {
         let evm = CrossChainAddressFamily::Evm;
-        assert!(evm.matches_chain("ethereum"));
-        assert!(evm.matches_chain("base"));
-        assert!(evm.matches_chain("arbitrum"));
-        assert!(evm.matches_chain("optimism"));
-        assert!(evm.matches_chain("polygon"));
+        // Only "ethereum" matches EVM by chain name alone (native ETH)
+        assert!(evm.matches_chain("ethereum", None));
+        assert!(evm.matches_chain("Ethereum", None));
+        // Other chains without a contract address do NOT match
+        assert!(!evm.matches_chain("base", None));
+        assert!(!evm.matches_chain("arbitrum", None));
+        assert!(!evm.matches_chain("solana", None));
+        assert!(!evm.matches_chain("bitcoin", None));
+        assert!(!evm.matches_chain("spark", None));
     }
 
     #[test]
-    fn matches_chain_evm_unknown_chain_is_evm() {
-        // Any new chain Orchestra adds that isn't Solana/Tron is assumed EVM.
+    fn matches_chain_evm_by_contract_address() {
         let evm = CrossChainAddressFamily::Evm;
-        assert!(evm.matches_chain("avalanche"));
-        assert!(evm.matches_chain("zksync"));
-        assert!(evm.matches_chain("fantom"));
-    }
-
-    #[test]
-    fn matches_chain_evm_excludes_solana_and_tron() {
-        let evm = CrossChainAddressFamily::Evm;
-        assert!(!evm.matches_chain("solana"));
-        assert!(!evm.matches_chain("tron"));
+        // EVM contract address → matches EVM regardless of chain name
+        assert!(evm.matches_chain("base", Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")));
+        assert!(evm.matches_chain(
+            "arbitrum",
+            Some("0xaf88d065e77c8cC2239327C5EDb3A432268e5831")
+        ));
+        assert!(evm.matches_chain(
+            "polygon",
+            Some("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
+        ));
+        // Non-EVM contract addresses → do not match EVM
+        assert!(!evm.matches_chain(
+            "solana",
+            Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        ));
+        assert!(!evm.matches_chain("tron", Some("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")));
     }
 
     #[test]
     fn matches_chain_solana() {
-        assert!(CrossChainAddressFamily::Solana.matches_chain("solana"));
-        assert!(CrossChainAddressFamily::Solana.matches_chain("Solana"));
-        assert!(!CrossChainAddressFamily::Solana.matches_chain("ethereum"));
-        assert!(!CrossChainAddressFamily::Solana.matches_chain("tron"));
+        let sol = CrossChainAddressFamily::Solana;
+        assert!(sol.matches_chain("solana", None));
+        assert!(sol.matches_chain("Solana", None));
+        assert!(!sol.matches_chain("ethereum", None));
+        assert!(!sol.matches_chain("tron", None));
     }
 
     #[test]
     fn matches_chain_tron() {
-        assert!(CrossChainAddressFamily::Tron.matches_chain("tron"));
-        assert!(CrossChainAddressFamily::Tron.matches_chain("TRON"));
-        assert!(!CrossChainAddressFamily::Tron.matches_chain("ethereum"));
-        assert!(!CrossChainAddressFamily::Tron.matches_chain("solana"));
+        let tron = CrossChainAddressFamily::Tron;
+        assert!(tron.matches_chain("tron", None));
+        assert!(tron.matches_chain("TRON", None));
+        assert!(!tron.matches_chain("ethereum", None));
+        assert!(!tron.matches_chain("solana", None));
     }
 
     // -- try_parse_cross_chain_address ----------------------------------------
