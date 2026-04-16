@@ -620,7 +620,6 @@ impl SdkBuilder {
                 crate::cross_chain::CrossChainProvider::Orchestra,
                 std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
                     orchestra_config.clone(),
-                    self.config.network,
                     Arc::clone(&spark_wallet),
                     Arc::clone(&storage),
                     shutdown_sender.subscribe(),

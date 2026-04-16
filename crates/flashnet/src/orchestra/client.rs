@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
-use spark::bech32m_encode_token_id;
 use spark_wallet::{SparkAddress, SparkWallet, TransferTokenOutput};
 use tracing::debug;
 
@@ -24,21 +23,15 @@ const ROUTES_TTL_MS: u128 = 60 * 60 * 1000;
 
 pub struct OrchestraClient {
     config: OrchestraConfig,
-    network: spark::Network,
     http_client: platform_utils::DefaultHttpClient,
     cache_store: CacheStore,
     spark_wallet: Arc<SparkWallet>,
 }
 
 impl OrchestraClient {
-    pub fn new(
-        config: OrchestraConfig,
-        network: spark::Network,
-        spark_wallet: Arc<SparkWallet>,
-    ) -> Self {
+    pub fn new(config: OrchestraConfig, spark_wallet: Arc<SparkWallet>) -> Self {
         Self {
             config,
-            network,
             http_client: platform_utils::DefaultHttpClient::default(),
             cache_store: CacheStore::default(),
             spark_wallet,
@@ -119,30 +112,8 @@ impl OrchestraClient {
     ///
     /// * `quote_id` / `deposit_address` / `amount_in` come from the
     ///   [`QuoteResponse`] returned by [`Self::quote`].
-    /// * `source_token_identifier` is `None` for BTC sats and
-    ///   `Some(token_id_hex)` for Spark token sends (e.g. USDB).
-    pub async fn submit_deposit_spark(
-        &self,
-        quote_id: String,
-        deposit_address: &str,
-        amount_in: u128,
-        source_token_identifier: Option<&str>,
-    ) -> Result<SubmitResponse, FlashnetError> {
-        let spark_tx_hash = self
-            .transfer_to_deposit(deposit_address, amount_in, source_token_identifier)
-            .await?;
-        debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
-        self.submit_spark(SubmitRequestSpark {
-            quote_id,
-            spark_tx_hash,
-            source_spark_address: None,
-        })
-        .await
-    }
-
-    /// Low-level: submit an already-sent deposit tx hash for an existing
-    /// quote. Prefer [`Self::submit_deposit_spark`] which also performs the
-    /// Spark transfer.
+    ///
+    /// Submit an already-sent deposit tx hash for an existing quote.
     ///
     /// Requires auth and an idempotency key. The key is derived
     /// deterministically from the quote id so retries are safe.
@@ -167,7 +138,7 @@ impl OrchestraClient {
         &self,
         deposit_address: &str,
         amount_in: u128,
-        source_token_identifier: Option<&str>,
+        token_identifier: Option<&str>,
     ) -> Result<String, FlashnetError> {
         let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
             FlashnetError::Generic(format!(
@@ -175,7 +146,7 @@ impl OrchestraClient {
             ))
         })?;
 
-        let id = match source_token_identifier {
+        let id = match token_identifier {
             None => {
                 // BTC sats — plain Spark transfer.
                 let amount_sats = u64::try_from(amount_in)
@@ -186,21 +157,13 @@ impl OrchestraClient {
                     .id
                     .to_string()
             }
-            Some(token_identifier_hex) => {
-                // USDB (or other Spark token) — token transfer. The
-                // `token_identifier` is the hex-encoded raw id; encode it as
-                // a bech32m token id the wallet expects.
-                let token_bytes = hex::decode(token_identifier_hex).map_err(|e| {
-                    FlashnetError::Generic(format!("Failed to decode token identifier hex: {e}"))
-                })?;
-                let token_id =
-                    bech32m_encode_token_id(&token_bytes, self.network).map_err(|e| {
-                        FlashnetError::Generic(format!("Failed to encode token id: {e}"))
-                    })?;
+            Some(token_identifier) => {
+                // USDB (or other Spark token) — token transfer.
+                // `token_identifier` is already a bech32m-encoded token id (e.g. btkn1x...).
                 self.spark_wallet
                     .transfer_tokens(
                         vec![TransferTokenOutput {
-                            token_id,
+                            token_id: token_identifier.to_string(),
                             amount: amount_in,
                             receiver_address,
                             spark_invoice: None,

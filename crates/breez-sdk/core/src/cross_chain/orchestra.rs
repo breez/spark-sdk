@@ -26,7 +26,7 @@ use tracing::{Instrument, debug, error, info};
 
 use crate::error::SdkError;
 use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
-use crate::{ConversionInfo, ConversionStatus, Network, PaymentDetails, Storage};
+use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 
 use super::{
     CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair,
@@ -58,16 +58,11 @@ pub(crate) struct OrchestraService {
 impl OrchestraService {
     pub(crate) fn new(
         config: flashnet::OrchestraConfig,
-        network: Network,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
-        let client = Arc::new(OrchestraClient::new(
-            config,
-            network.into(),
-            Arc::clone(&spark_wallet),
-        ));
+        let client = Arc::new(OrchestraClient::new(config, Arc::clone(&spark_wallet)));
         let (monitor_trigger, _) = broadcast::channel(10);
 
         let service = Self {
@@ -129,6 +124,7 @@ impl OrchestraService {
         storage: &Arc<dyn Storage>,
         client: &Arc<OrchestraClient>,
     ) -> Result<(), SdkError> {
+        debug!("Orchestra monitor: polling for in-flight orders");
         let pending = storage
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![
@@ -149,6 +145,7 @@ impl OrchestraService {
                 SdkError::Generic(format!("Failed to list pending Orchestra orders: {e}"))
             })?;
 
+        debug!("Orchestra monitor: found {} pending orders", pending.len());
         for payment in &pending {
             // Extract all Orchestra metadata fields in one destructure.
             let Some(
@@ -162,6 +159,10 @@ impl OrchestraService {
                 },
             ) = &payment.details
             else {
+                debug!(
+                    "Orchestra monitor: payment {} has no Orchestra conversion_info, skipping",
+                    payment.id
+                );
                 continue;
             };
 
@@ -176,8 +177,22 @@ impl OrchestraService {
                 ..
             } = conversion_info.clone()
             else {
+                debug!(
+                    "Orchestra monitor: payment {} conversion_info is not Orchestra variant, skipping",
+                    payment.id
+                );
                 continue;
             };
+
+            let lookup_id = if order_id.is_empty() {
+                &quote_id
+            } else {
+                &order_id
+            };
+            debug!(
+                "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={destination_chain}/{destination_asset})",
+                payment.id
+            );
 
             // Prefer order_id, fall back to quote_id if order_id is empty
             // (can happen if /submit failed but we still want to track).
@@ -190,13 +205,22 @@ impl OrchestraService {
             let status_response = match status_response {
                 Ok(r) => r,
                 Err(e) => {
-                    debug!("Orchestra status query failed for order {order_id}: {e}");
+                    debug!("Orchestra monitor: status query failed for {lookup_id}: {e}");
                     continue;
                 }
             };
 
             let order_status = status_response.order.status;
+            debug!(
+                "Orchestra monitor: payment {} order status: {order_status:?} (amount_out={:?})",
+                payment.id, status_response.order.amount_out,
+            );
+
             if !order_status.is_terminal() {
+                debug!(
+                    "Orchestra monitor: payment {} still in progress",
+                    payment.id
+                );
                 continue;
             }
 
@@ -214,6 +238,11 @@ impl OrchestraService {
                 .as_deref()
                 .and_then(|s| s.parse::<u128>().ok())
                 .unwrap_or(estimated_out);
+
+            debug!(
+                "Orchestra monitor: payment {} terminal → {new_status:?}, final_out={final_out} (estimated was {estimated_out})",
+                payment.id
+            );
 
             let updated_metadata = crate::PaymentMetadata {
                 conversion_info: Some(ConversionInfo::Orchestra {
@@ -360,7 +389,7 @@ impl CrossChainService for OrchestraService {
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
-        let fee_amount = parse_amount(&quote.fee_amount, "feeAmount")?;
+        let fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
 
         Ok(CrossChainPrepared {
             quote_id: quote.quote_id,
@@ -391,19 +420,32 @@ impl CrossChainService for OrchestraService {
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Orchestra deposit transfer failed: {e}")))?;
-
         debug!(
             "Orchestra: deposit transfer {spark_tx_hash} sent for quote {}",
             prepared.quote_id
         );
 
         // Step 2: Submit the deposit to Orchestra.
+        // Include the source spark address for BTC transfers so Orchestra
+        // can verify the deposit sender.
+        let source_spark_address = if prepared.token_identifier.is_none() {
+            let addr = self
+                .spark_wallet
+                .get_spark_address()?
+                .to_address_string()
+                .map_err(|e| {
+                    SdkError::Generic(format!("Failed to convert Spark address to string: {e}"))
+                })?;
+            Some(addr)
+        } else {
+            None
+        };
         let submit_res: Result<SubmitResponse, _> = self
             .client
             .submit_spark(flashnet::orchestra::SubmitRequestSpark {
                 quote_id: prepared.quote_id.clone(),
                 spark_tx_hash: spark_tx_hash.clone(),
-                source_spark_address: None,
+                source_spark_address,
             })
             .await;
         debug!("Orchestra: submit response: {:?}", submit_res);
