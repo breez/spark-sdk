@@ -42,6 +42,16 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
 }
 
+/// Provider-internal state carried in [`CrossChainPrepared::provider_context`]
+/// between `prepare` and `send`. Serialized as JSON; not exposed to callers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct OrchestraContext {
+    /// Orchestra quote id, passed back on `/submit`.
+    quote_id: String,
+    /// Spark address Orchestra expects the deposit transfer to land on.
+    deposit_address: String,
+}
+
 const DEFAULT_SLIPPAGE_BPS: u32 = 50;
 
 /// How often the background monitor polls in-flight orders.
@@ -391,9 +401,15 @@ impl CrossChainService for OrchestraService {
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
 
-        Ok(CrossChainPrepared {
+        let context = OrchestraContext {
             quote_id: quote.quote_id,
-            deposit_request: quote.deposit_address,
+            deposit_address: quote.deposit_address,
+        };
+        let provider_context = serde_json::to_string(&context).map_err(|e| {
+            SdkError::Generic(format!("Failed to serialize Orchestra context: {e}"))
+        })?;
+
+        Ok(CrossChainPrepared {
             amount_in,
             estimated_out,
             fee_amount,
@@ -406,15 +422,21 @@ impl CrossChainService for OrchestraService {
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
             token_identifier,
+            provider_context,
         })
     }
 
     async fn send(&self, prepared: &CrossChainPrepared) -> Result<CrossChainSendResult, SdkError> {
+        let context: OrchestraContext =
+            serde_json::from_str(&prepared.provider_context).map_err(|e| {
+                SdkError::Generic(format!("Failed to deserialize Orchestra context: {e}"))
+            })?;
+
         // Step 1: Spark transfer to the Orchestra deposit address.
         let spark_tx_hash = self
             .client
             .transfer_to_deposit(
-                &prepared.deposit_request,
+                &context.deposit_address,
                 prepared.amount_in,
                 prepared.token_identifier.as_deref(),
             )
@@ -422,7 +444,7 @@ impl CrossChainService for OrchestraService {
             .map_err(|e| SdkError::Generic(format!("Orchestra deposit transfer failed: {e}")))?;
         debug!(
             "Orchestra: deposit transfer {spark_tx_hash} sent for quote {}",
-            prepared.quote_id
+            context.quote_id
         );
 
         // Step 2: Submit the deposit to Orchestra.
@@ -443,7 +465,7 @@ impl CrossChainService for OrchestraService {
         let submit_res: Result<SubmitResponse, _> = self
             .client
             .submit_spark(flashnet::orchestra::SubmitRequestSpark {
-                quote_id: prepared.quote_id.clone(),
+                quote_id: context.quote_id.clone(),
                 spark_tx_hash: spark_tx_hash.clone(),
                 source_spark_address,
             })
@@ -462,7 +484,7 @@ impl CrossChainService for OrchestraService {
         let metadata = crate::PaymentMetadata {
             conversion_info: Some(ConversionInfo::Orchestra {
                 order_id: order_id.clone(),
-                quote_id: prepared.quote_id.clone(),
+                quote_id: context.quote_id.clone(),
                 destination_chain: prepared.pair.chain.clone(),
                 destination_asset: prepared.pair.asset.clone(),
                 destination_address: prepared.recipient_address.clone(),

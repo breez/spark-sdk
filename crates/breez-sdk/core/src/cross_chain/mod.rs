@@ -91,10 +91,6 @@ impl CrossChainProviders {
 /// the send stage without re-quoting.
 #[derive(Debug, Clone)]
 pub(crate) struct CrossChainPrepared {
-    pub quote_id: String,
-    /// Provider-specific deposit request. Orchestra uses a Spark deposit
-    /// address; other providers (e.g. Boltz) may use a BOLT11 invoice.
-    pub deposit_request: String,
     pub amount_in: u128,
     pub estimated_out: u128,
     pub fee_amount: u128,
@@ -105,6 +101,10 @@ pub(crate) struct CrossChainPrepared {
     pub recipient_address: String,
     /// The `token_identifier` on the Spark source (e.g. USDB). `None` for BTC sats.
     pub token_identifier: Option<String>,
+    /// Opaque, provider-internal state produced by `prepare` and consumed by
+    /// `send`. Encoded as JSON whose schema is owned by the provider.
+    /// Callers must not inspect or mutate this value.
+    pub provider_context: String,
 }
 
 /// Result of a cross-chain send submission.

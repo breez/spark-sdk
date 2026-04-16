@@ -880,8 +880,6 @@ pub enum SendPaymentMethod {
     CrossChainAddress {
         route: CrossChainRoutePair,
         recipient_address: String,
-        quote_id: String,
-        deposit_request: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         amount_in: u128,
@@ -893,6 +891,7 @@ pub enum SendPaymentMethod {
         fee_amount: u128,
         fee_asset: Option<String>,
         expires_at: String,
+        provider_context: String,
     },
 }
 

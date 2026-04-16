@@ -1166,11 +1166,7 @@ pub enum SendPaymentMethod {
         route: CrossChainRoutePair,
         /// Raw destination address (e.g. `0xabc...`).
         recipient_address: String,
-        /// Provider quote id used when calling `/submit`.
-        quote_id: String,
-        /// Address the source Spark transfer should be sent to.
-        deposit_request: String,
-        /// Amount (in source base units) the user must transfer to `deposit_address`.
+        /// Amount (in source base units) the user must transfer.
         amount_in: u128,
         /// Estimated amount the recipient will receive in the destination asset's base units.
         estimated_out: u128,
@@ -1180,6 +1176,11 @@ pub enum SendPaymentMethod {
         fee_asset: Option<String>,
         /// ISO8601 timestamp after which this quote is no longer valid.
         expires_at: String,
+        /// Opaque, provider-internal state produced by `prepareSendPayment`
+        /// and required by `sendPayment`. Encoded as JSON whose schema is
+        /// owned by the provider. Callers must round-trip this value as-is
+        /// and must not inspect or mutate it.
+        provider_context: String,
     },
 }
 

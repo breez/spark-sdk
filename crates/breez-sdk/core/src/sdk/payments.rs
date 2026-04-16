@@ -586,13 +586,12 @@ impl BreezSdk {
             payment_method: SendPaymentMethod::CrossChainAddress {
                 route: prepared.pair,
                 recipient_address: prepared.recipient_address,
-                quote_id: prepared.quote_id,
-                deposit_request: prepared.deposit_request,
                 amount_in: prepared.amount_in,
                 estimated_out: prepared.estimated_out,
                 fee_amount: prepared.fee_amount,
                 fee_asset: prepared.fee_asset,
                 expires_at: prepared.expires_at,
+                provider_context: prepared.provider_context,
             },
             amount,
             token_identifier,
@@ -1084,19 +1083,16 @@ impl BreezSdk {
             SendPaymentMethod::CrossChainAddress {
                 route,
                 recipient_address,
-                quote_id,
-                deposit_request,
                 amount_in,
                 estimated_out,
                 fee_amount,
                 fee_asset,
                 expires_at,
+                provider_context,
             } => {
                 let service = self.cross_chain_providers.get(route.provider)?;
 
                 let prepared = CrossChainPrepared {
-                    quote_id: quote_id.clone(),
-                    deposit_request: deposit_request.clone(),
                     amount_in: *amount_in,
                     estimated_out: *estimated_out,
                     fee_amount: *fee_amount,
@@ -1105,6 +1101,7 @@ impl BreezSdk {
                     pair: route.clone(),
                     recipient_address: recipient_address.clone(),
                     token_identifier: token_identifier.clone(),
+                    provider_context: provider_context.clone(),
                 };
 
                 let response = service.send(&prepared).await?;

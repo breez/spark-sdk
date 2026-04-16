@@ -30,16 +30,9 @@ pub(crate) fn swap_payment_map_key(swap_id: &str) -> String {
     format!("boltz_swap_{swap_id}")
 }
 
-/// Cache KV key used to stash provider-side context between `prepare` and
-/// `send`. Keyed by the Boltz swap id so a single adapter KV lookup reloads
-/// everything the send stage needs.
-fn prepared_context_key(swap_id: &str) -> String {
-    format!("boltz_prepared_ctx_{swap_id}")
-}
-
-/// Provider-specific context stashed on the prepared response. We serialize
-/// it into the SDK cache KV keyed by swap id, keeping `CrossChainPrepared`
-/// unchanged so the send dispatcher stays generic.
+/// Provider-internal state carried in [`CrossChainPrepared::provider_context`]
+/// between `prepare` and `send`. Serialized as JSON; not exposed to callers.
+/// Only fields not already on the public [`CrossChainPrepared`] live here.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PreparedContext {
     swap_id: String,
@@ -47,11 +40,6 @@ struct PreparedContext {
     invoice_amount_sats: u64,
     ln_fee_sats: u64,
     max_slippage_bps: u32,
-    destination_chain: String,
-    destination_asset: String,
-    destination_address: String,
-    estimated_out: u128,
-    fee_amount: u128,
 }
 
 pub(crate) struct BoltzService {
@@ -217,26 +205,15 @@ impl CrossChainService for BoltzService {
 
         let context = PreparedContext {
             swap_id: created.swap_id.clone(),
-            invoice: created.invoice.clone(),
+            invoice: created.invoice,
             invoice_amount_sats,
             ln_fee_sats,
             max_slippage_bps: resolved_slippage,
-            destination_chain: route.chain.clone(),
-            destination_asset: route.asset.clone(),
-            destination_address: recipient_address.to_string(),
-            estimated_out,
-            fee_amount,
         };
-        let ctx_json = serde_json::to_string(&context)
+        let provider_context = serde_json::to_string(&context)
             .map_err(|e| SdkError::Generic(format!("Failed to serialize Boltz context: {e}")))?;
-        self.storage
-            .set_cached_item(prepared_context_key(&created.swap_id), ctx_json)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to cache Boltz context: {e}")))?;
 
         Ok(CrossChainPrepared {
-            quote_id: created.swap_id.clone(),
-            deposit_request: created.invoice,
             amount_in: u128::from(invoice_amount_sats),
             estimated_out,
             fee_amount,
@@ -245,23 +222,13 @@ impl CrossChainService for BoltzService {
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
             token_identifier: None,
+            provider_context,
         })
     }
 
     #[allow(clippy::large_futures)]
     async fn send(&self, prepared: &CrossChainPrepared) -> Result<CrossChainSendResult, SdkError> {
-        let ctx_raw = self
-            .storage
-            .get_cached_item(prepared_context_key(&prepared.quote_id))
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to read Boltz context: {e}")))?
-            .ok_or_else(|| {
-                SdkError::Generic(format!(
-                    "Boltz prepare context missing for swap {}",
-                    prepared.quote_id
-                ))
-            })?;
-        let context: PreparedContext = serde_json::from_str(&ctx_raw)
+        let context: PreparedContext = serde_json::from_str(&prepared.provider_context)
             .map_err(|e| SdkError::Generic(format!("Failed to deserialize Boltz context: {e}")))?;
 
         // Delegate the LN leg to the shared helper. It pays the hold
@@ -291,16 +258,16 @@ impl CrossChainService for BoltzService {
         let metadata = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id: context.swap_id.clone(),
-                destination_chain: context.destination_chain.clone(),
-                destination_asset: context.destination_asset.clone(),
-                destination_address: context.destination_address.clone(),
+                destination_chain: prepared.pair.chain.clone(),
+                destination_asset: prepared.pair.asset.clone(),
+                destination_address: prepared.recipient_address.clone(),
                 invoice: context.invoice.clone(),
                 invoice_amount_sats: context.invoice_amount_sats,
-                estimated_out: context.estimated_out,
+                estimated_out: prepared.estimated_out,
                 delivered_amount: None,
                 lz_guid: None,
                 status: ConversionStatus::Pending,
-                fee: Some(context.fee_amount),
+                fee: Some(prepared.fee_amount),
                 max_slippage_bps: context.max_slippage_bps,
                 quote_degraded: false,
             }),

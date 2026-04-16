@@ -535,13 +535,12 @@ pub enum _SendPaymentMethod {
     CrossChainAddress {
         route: CrossChainRoutePair,
         recipient_address: String,
-        quote_id: String,
-        deposit_request: String,
         amount_in: u128,
         estimated_out: u128,
         fee_amount: u128,
         fee_asset: Option<String>,
         expires_at: String,
+        provider_context: String,
     },
 }
 
