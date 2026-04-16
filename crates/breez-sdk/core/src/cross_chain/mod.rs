@@ -92,7 +92,12 @@ impl CrossChainProviders {
 #[derive(Debug, Clone)]
 pub(crate) struct CrossChainPrepared {
     pub amount_in: u128,
+    /// Amount the recipient will receive, already net of any destination-chain
+    /// costs (gas, bridge messaging). Destination-side costs are implicit in
+    /// `amount_in - estimated_out` and are not re-counted in `fee_amount`.
     pub estimated_out: u128,
+    /// Sender-side service fee charged by the provider. Excludes
+    /// destination-chain costs, which are already deducted from `estimated_out`.
     pub fee_amount: u128,
     /// The asset the fee is denominated in. `None` means BTC (sats).
     pub fee_asset: Option<String>,

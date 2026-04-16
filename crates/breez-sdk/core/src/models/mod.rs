@@ -1168,9 +1168,15 @@ pub enum SendPaymentMethod {
         recipient_address: String,
         /// Amount (in source base units) the user must transfer.
         amount_in: u128,
-        /// Estimated amount the recipient will receive in the destination asset's base units.
+        /// Estimated amount the recipient will receive in the destination
+        /// asset's base units. Already nets out any destination-chain costs
+        /// (e.g. gas, bridge messaging fees): those are reflected in the gap
+        /// between `amount_in` and `estimated_out` rather than in `fee_amount`.
         estimated_out: u128,
-        /// Provider's reported fee amount in `fee_asset` base units.
+        /// Sender-side service fee charged by the provider, in `fee_asset`
+        /// base units. Does **not** include destination-chain costs (gas,
+        /// bridge messaging, etc.), which are already deducted from
+        /// `estimated_out`.
         fee_amount: u128,
         /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
         fee_asset: Option<String>,
