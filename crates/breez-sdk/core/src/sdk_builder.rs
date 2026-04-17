@@ -631,19 +631,19 @@ impl SdkBuilder {
         // Build cross-chain providers. Each provider owns its own HTTP
         // client, route cache, and background monitor task.
         let mut cross_chain_providers = crate::cross_chain::CrossChainProviders::new();
-        if let Some(orchestra_config) = &flashnet_config.orchestra {
-            cross_chain_providers.insert(
-                crate::cross_chain::CrossChainProvider::Orchestra,
-                std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
-                    orchestra_config.clone(),
-                    Arc::clone(&spark_wallet),
-                    Arc::clone(&storage),
-                    shutdown_sender.subscribe(),
-                )),
-            );
-        }
+        if self.config.cross_chain_enabled {
+            if let Some(orchestra_config) = &flashnet_config.orchestra {
+                cross_chain_providers.insert(
+                    crate::cross_chain::CrossChainProvider::Orchestra,
+                    std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
+                        orchestra_config.clone(),
+                        Arc::clone(&spark_wallet),
+                        Arc::clone(&storage),
+                        shutdown_sender.subscribe(),
+                    )),
+                );
+            }
 
-        if self.config.boltz_enabled {
             match build_boltz_service(
                 self.config.network,
                 Arc::clone(&spark_wallet),

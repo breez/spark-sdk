@@ -42,7 +42,7 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
-    pub boltz_enabled: bool,
+    pub cross_chain_enabled: bool,
 }
 
 #[frb(mirror(SparkConfig))]

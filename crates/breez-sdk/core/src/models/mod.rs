@@ -627,14 +627,12 @@ pub struct Config {
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
 
-    /// Whether the Boltz reverse-swap cross-chain provider is enabled.
+    /// Whether cross-chain providers (Orchestra and Boltz) are enabled.
     ///
-    /// When `true` (default on mainnet) the SDK exposes Boltz routes
-    /// alongside Orchestra for cross-chain sends (sats → USDT on external
-    /// chains). Ignored on regtest, since Boltz does not offer a regtest
-    /// reverse-swap flow. The Boltz endpoint and referral id are managed
-    /// internally by the SDK and are not user-configurable.
-    pub boltz_enabled: bool,
+    /// When `true` (default on mainnet) the SDK enables cross-chain sends
+    /// (sats → USDT on external chains) via Orchestra and Boltz. On regtest
+    /// the flag has no effect since no provider is available.
+    pub cross_chain_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
