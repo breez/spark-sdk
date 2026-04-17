@@ -17,7 +17,10 @@ use std::sync::Arc;
 use boltz_client::{BoltzEventListener, BoltzSwapEvent, events, models::BoltzSwapStatus};
 use tracing::{debug, error};
 
-use crate::{ConversionInfo, ConversionStatus, PaymentDetails, PaymentMetadata, Storage};
+use crate::{
+    ConversionInfo, ConversionStatus, PaymentMetadata, Storage,
+    utils::payments::extract_conversion_info,
+};
 
 pub(crate) struct BoltzSdkEventListener {
     storage: Arc<dyn Storage>,
@@ -123,6 +126,10 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("fetch payment by invoice for swap {}: {e}", swap.id))?
         else {
+            debug!(
+                swap_id = %swap.id,
+                "No payment row for Boltz swap invoice, skipping quote-degraded update"
+            );
             return Ok(());
         };
 
@@ -144,6 +151,11 @@ impl BoltzSdkEventListener {
             ..
         }) = extract_conversion_info(existing.details)
         else {
+            debug!(
+                swap_id = %swap.id,
+                payment_id = %payment_id,
+                "Payment has no Boltz ConversionInfo, skipping quote-degraded update"
+            );
             return Ok(());
         };
 
@@ -170,25 +182,6 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("persist degraded-flag update: {e}"))?;
         Ok(())
-    }
-}
-
-/// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries
-/// it. Boltz conversions live on `Lightning` details (the hold-invoice pay);
-/// `Spark` and `Token` exist for other cross-chain providers and are included
-/// so a single helper serves every caller.
-fn extract_conversion_info(details: Option<PaymentDetails>) -> Option<ConversionInfo> {
-    match details? {
-        PaymentDetails::Spark {
-            conversion_info, ..
-        }
-        | PaymentDetails::Token {
-            conversion_info, ..
-        }
-        | PaymentDetails::Lightning {
-            conversion_info, ..
-        } => conversion_info,
-        _ => None,
     }
 }
 

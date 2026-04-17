@@ -4,6 +4,16 @@
 //! rather than on payment metadata rows. The adapter is payment-row
 //! agnostic: it can run at prepare time, before any [`crate::Payment`]
 //! has been written.
+//!
+//! # Retention
+//!
+//! Terminal swap rows are intentionally **not** removed from the cache:
+//! only the `boltz_active_swap_ids` list is pruned on terminal transitions
+//! (see [`BoltzStorage::update_swap`]). This keeps terminal swaps queryable
+//! by id for the lifetime of the wallet — aligned with payment-history
+//! retention, and lets `boltz-client` re-inspect a completed swap (e.g.
+//! during debug/recovery) without a separate archive. Growth is bounded by
+//! swap volume; no TTL in v1.
 
 use std::sync::Arc;
 

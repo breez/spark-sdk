@@ -5,10 +5,29 @@ use spark_wallet::SparkWallet;
 use tracing::{debug, info, warn};
 
 use crate::{
-    EventEmitter, Payment, PaymentMetadata, Storage, error::SdkError, events::SdkEvent,
-    models::conversion_steps_from_payments, persist::ObjectCacheRepository,
-    utils::token::token_transaction_to_payments,
+    ConversionInfo, EventEmitter, Payment, PaymentDetails, PaymentMetadata, Storage,
+    error::SdkError, events::SdkEvent, models::conversion_steps_from_payments,
+    persist::ObjectCacheRepository, utils::token::token_transaction_to_payments,
 };
+
+/// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries
+/// it. Cross-chain conversion info can sit on `Lightning` (Boltz hold-invoice
+/// pays), `Spark`, or `Token` details — this helper hides the variant match
+/// so callers can write a single destructure regardless of provider.
+pub(crate) fn extract_conversion_info(details: Option<PaymentDetails>) -> Option<ConversionInfo> {
+    match details? {
+        PaymentDetails::Spark {
+            conversion_info, ..
+        }
+        | PaymentDetails::Token {
+            conversion_info, ..
+        }
+        | PaymentDetails::Lightning {
+            conversion_info, ..
+        } => conversion_info,
+        _ => None,
+    }
+}
 
 /// Gets the payment from storage to include already stored metadata and conversion details.
 /// Emits the appropriate event based on its status. Falls back to the provided
