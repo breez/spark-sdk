@@ -101,14 +101,7 @@ impl BreezSdk {
                                 continue;
                             }
                         };
-                        sdk.session_manager.set_token(token.clone()).await;
-                        if let Err(err) = sdk
-                            .storage
-                            .set_cached_item(jwt::KEY_BREEZ_JWT.to_string(), token)
-                            .await
-                        {
-                            warn!("Could not persist JWT: {err}");
-                        }
+                        sdk.set_and_save_jwt(token).await;
                     }
 
                     // Ensure we sync at least the configured interval
@@ -699,6 +692,17 @@ mod jwt {
     }
 
     impl BreezSdk {
+        pub(super) async fn set_and_save_jwt(&self, token: String) {
+            self.session_manager.set_token(token.clone()).await;
+            if let Err(err) = self
+                .storage
+                .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
+                .await
+            {
+                warn!("Could not persist JWT: {err}");
+            }
+        }
+
         pub(super) async fn new_jwt(&self) -> Result<String, SdkError> {
             let Some(api_key) = &self.config.api_key else {
                 return Err(SdkError::Generic("Missing Breez API key".to_string()));
@@ -727,7 +731,7 @@ mod jwt {
                 _ => self.new_jwt().await,
             };
             match token {
-                Ok(token) => self.session_manager.set_token(token).await,
+                Ok(token) => self.set_and_save_jwt(token).await,
                 Err(err) => warn!("Could not init JWT: {err}"),
             }
         }
