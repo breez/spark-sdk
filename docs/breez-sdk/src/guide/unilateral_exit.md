@@ -41,7 +41,13 @@ The total value of the CPFP inputs must be sufficient to cover all CPFP fees for
 
 ### Signer
 
-The SDK provides a default `SingleKeySigner` that handles P2WPKH and P2TR inputs from a single private key. If your CPFP inputs require a different signing scheme (e.g., multisig, hardware wallet, or you don't want to pass raw key material into the SDK), you can implement the `CpfpSigner` trait yourself. The trait receives a PSBT (Partially Signed Bitcoin Transaction) and must return it with the external inputs signed.
+The SDK provides a default `SingleKeySigner` that handles P2WPKH and P2TR inputs from a single private key. If your CPFP inputs require a different signing scheme (e.g., multisig, hardware wallet, or you don't want to pass raw key material into the SDK), you can implement the `CpfpSigner` interface yourself. The interface receives a PSBT (Partially Signed Bitcoin Transaction) and must return it with the external inputs signed.
+
+<div class="warning">
+<h4>Flutter Limitation</h4>
+
+Custom `CpfpSigner` implementations are not supported in Flutter due to limitations with passing trait objects through the flutter_rust_bridge FFI. Flutter applications must pass a raw secret key to {{#name prepare_unilateral_exit}}; the SDK uses the built-in `SingleKeySigner` internally.
+</div>
 
 ### Error cases
 
@@ -67,14 +73,14 @@ Each entry in {{#name leaves}} contains:
 Each transaction in {{#name transactions}} contains:
 - **{{#name node_id}}**: The tree node ID this transaction belongs to
 - **{{#name tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
-- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction. `None` if this node is already confirmed on-chain — skip it, there is nothing to broadcast.
+- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction. Not set if this node is already confirmed on-chain — skip it, there is nothing to broadcast.
 - **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the *previous* transaction confirms before broadcasting this one
 
 ## Step 2: Broadcast the transaction packages
 
 You are responsible for broadcasting the transactions yourself. For each transaction in a leaf's {{#name transactions}} list:
 
-1. **If {{#name cpfp_tx_hex}} is `None`**: skip this entry — the transaction is already confirmed on-chain.
+1. **If {{#name cpfp_tx_hex}} is not set**: skip this entry — the transaction is already confirmed on-chain.
 2. **If {{#name csv_timelock_blocks}} is set**: wait until the previous transaction has the required number of confirmations before proceeding.
 3. **Broadcast as a package**: submit {{#name tx_hex}} and {{#name cpfp_tx_hex}} together as a single package.
 
@@ -126,7 +132,7 @@ The sweep transaction spends from all refund outputs and sends the total value (
 
 ## Already-confirmed ancestors
 
-If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP child is needed — their {{#name cpfp_tx_hex}} will be `None` and you should skip them during broadcast.
+If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP child is needed — their {{#name cpfp_tx_hex}} will not be set and you should skip them during broadcast.
 
 If the chain service is unavailable or rate-limited, the SDK assumes the node is unconfirmed and builds a CPFP child for it anyway. These nodes are listed in {{#name unverified_node_ids}}. If any of these nodes are actually confirmed, broadcasting their CPFP child will fail because the anchor output has already been spent. In that case, call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
 
