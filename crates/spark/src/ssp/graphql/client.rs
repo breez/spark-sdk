@@ -120,7 +120,7 @@ impl GraphQLClient {
     {
         let session = self.get_session().await?;
         let full_url = self.get_full_url();
-        let mut headers = session.headers.clone();
+        let mut headers = HashMap::new();
         self.add_auth_headers(&session, &mut headers)?;
 
         match self
@@ -137,7 +137,7 @@ impl GraphQLClient {
                     && status_code == 401
                 {
                     let session = self.get_session().await?;
-                    let mut headers = session.headers.clone();
+                    let mut headers = HashMap::new();
                     self.add_auth_headers(&session, &mut headers)?;
 
                     return self
