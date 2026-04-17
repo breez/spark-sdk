@@ -10,6 +10,10 @@ BigInt.prototype.toJSON = function () {
     return this.toString()
 }
 
+Map.prototype.toJSON = function () {
+    return Object.fromEntries(this)
+}
+
 const logFile = fs.createWriteStream(__dirname + '/../sdk.log', { flags: 'a' })
 
 class JsFileLogger {
@@ -55,7 +59,8 @@ const initSdk = async () => {
     const mnemonic = process.env.MNEMONIC
 
     // Connect using the config
-    let config = defaultConfig('regtest')
+    const network = process.env.NETWORK || 'regtest'
+    let config = defaultConfig(network)
     config.apiKey = process.env.BREEZ_API_KEY
 
     let sdkBuilder = SdkBuilder.new(config, { type: 'mnemonic', mnemonic: mnemonic })
@@ -67,7 +72,7 @@ const initSdk = async () => {
     sdkBuilder = sdkBuilder.withPaymentObserver(paymentObserver)
     if (process.env.CHAIN_SERVICE_USERNAME && process.env.CHAIN_SERVICE_PASSWORD) {
         sdkBuilder = sdkBuilder.withRestChainService(
-            'https://regtest-mempool.us-west-2.sparkinfra.net/api',
+            process.env.CHAIN_SERVICE_URL || 'https://regtest-mempool.us-west-2.sparkinfra.net/api',
             'mempoolSpace',
             {
                 username: process.env.CHAIN_SERVICE_USERNAME,
@@ -142,10 +147,34 @@ const receivePayment = async (options) => {
 const sendPayment = async (options) => {
     const sdk = await initSdk()
 
-    const prepareResponse = await sdk.prepareSendPayment({
+    let conversionOptions
+    if (options.fromBitcoin) {
+        conversionOptions = {
+            conversionType: { type: 'fromBitcoin' },
+            maxSlippageBps: options.maxSlippageBps,
+        }
+    } else if (options.fromToken) {
+        conversionOptions = {
+            conversionType: { type: 'toBitcoin', fromTokenIdentifier: options.fromToken },
+            maxSlippageBps: options.maxSlippageBps,
+        }
+    }
+
+    const request = {
         paymentRequest: options.paymentRequest,
-        amount: options.amount
-    })
+        amount: options.amount,
+        tokenIdentifier: options.tokenIdentifier,
+        conversionOptions
+    }
+
+    const prepareResponse = await sdk.prepareSendPayment(request)
+
+    if (prepareResponse.conversionEstimate) {
+        const est = prepareResponse.conversionEstimate
+        console.log(`Conversion estimate: ${est.amountIn} in -> ${est.amountOut} out (fee: ${est.fee})`)
+    } else {
+        console.log('No conversion estimate in response')
+    }
 
     const paymentMethod = prepareResponse.paymentMethod
     if (paymentMethod.type == 'bolt11Invoice') {
@@ -155,7 +184,7 @@ const sendPayment = async (options) => {
                 : paymentMethod.lightningFeeSats
         const amount = prepareResponse.amount
 
-        const message = `Amount: ${amount} sat. Fees: ${fees} sat. Are the fees acceptable?`
+        const message = `Amount: ${amount}. Fees: ${fees} sat. Are the fees acceptable?`
         if (await confirm(message)) {
             const res = await sdk.sendPayment({
                 prepareResponse
@@ -166,7 +195,7 @@ const sendPayment = async (options) => {
         const fees = paymentMethod.fee
         const amount = prepareResponse.amount
 
-        const message = `Amount: ${amount} sat. Fees: ${fees} sat. Are the fees acceptable?`
+        const message = `Amount: ${amount}. Fees: ${fees}. Are the fees acceptable?`
         if (await confirm(message)) {
             const res = await sdk.sendPayment({
                 prepareResponse
