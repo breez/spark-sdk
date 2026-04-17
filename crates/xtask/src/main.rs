@@ -719,6 +719,11 @@ fn itest_cmd() -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("invalid spark-so.dockerfile path"))?;
 
+    let bitcoind_df = docker_dir.join("bitcoind.dockerfile");
+    let bitcoind_df_str = bitcoind_df
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid bitcoind.dockerfile path"))?;
+
     cmd!(
         sh,
         "docker build -t spark-migrations -f {migrations_df_str} {docker_dir_str}"
@@ -729,9 +734,20 @@ fn itest_cmd() -> Result<()> {
         "docker build -t spark-so -f {spark_so_df_str} {docker_dir_str}"
     )
     .run()?;
+    cmd!(
+        sh,
+        "docker build -t spark-itest-bitcoind:29.0 -f {bitcoind_df_str} {docker_dir_str}"
+    )
+    .run()?;
 
-    // Run the integration tests
-    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
+    // Run the integration tests with limited parallelism to avoid
+    // overwhelming Docker with too many concurrent container startups.
+    // Each test spins up its own bitcoind + operator containers.
+    cmd!(
+        sh,
+        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
+    )
+    .run()?;
     Ok(())
 }
 

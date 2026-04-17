@@ -20,8 +20,8 @@ use tracing::info;
 
 use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
 
-const BITCOIND_VERSION: &str = "v28.0";
-const BITCOIND_DOCKER_IMAGE: &str = "lncm/bitcoind";
+const BITCOIND_IMAGE: &str = "spark-itest-bitcoind";
+const BITCOIND_TAG: &str = "29.0";
 const REGTEST_RPC_USER: &str = "rpcuser";
 const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
 const REGTEST_RPC_PORT: u16 = 8332;
@@ -51,12 +51,12 @@ impl BitcoindFixture {
     pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
         // Define bitcoind container with command line arguments
         let container_name = format!("bitcoind-{fixture_id}");
-        let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
+        let container = GenericImage::new(BITCOIND_IMAGE, BITCOIND_TAG)
             .with_exposed_port(ContainerPort::Tcp(REGTEST_RPC_PORT))
             .with_exposed_port(ContainerPort::Tcp(ZMQPUBRAWBLOCK_RPC_PORT))
-            .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
-                "init message: Done loading",
-            )))
+            .with_wait_for(WaitFor::Log(
+                LogWaitStrategy::stdout("Done loading").with_times(1),
+            ))
             .with_network(fixture_id.to_network())
             .with_container_name(&container_name)
             .with_log_consumer(TracingConsumer::new("bitcoind"))
@@ -120,8 +120,10 @@ impl BitcoindFixture {
     }
 
     async fn ensure_wallet_created(&self) -> Result<()> {
-        // Try to create wallet with retries
-        let max_retries = 10;
+        // Try to create wallet with retries.  The RPC server may need a moment
+        // to accept connections after the "Done loading" log appears,
+        // especially when multiple containers start concurrently.
+        let max_retries = 20;
         let mut retries = 0;
         let mut last_error = None;
 
@@ -138,7 +140,7 @@ impl BitcoindFixture {
                         retries, max_retries, &e
                     );
                     last_error = Some(e);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
         }
@@ -194,6 +196,15 @@ impl BitcoindFixture {
     pub async fn broadcast_transaction(&self, tx: &Transaction) -> Result<Txid> {
         let tx_hex = hex::encode(bitcoin::consensus::serialize(tx));
         self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex)])
+            .map_ok(|txid_str| txid_str.parse().unwrap())
+            .await
+    }
+
+    /// Broadcast a transaction with maxfeerate=0, bypassing fee-rate checks.
+    /// Useful for v3 transactions with ephemeral anchors on regtest.
+    pub async fn broadcast_transaction_no_fee_check(&self, tx: &Transaction) -> Result<Txid> {
+        let tx_hex = hex::encode(bitcoin::consensus::serialize(tx));
+        self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex), json!(0)])
             .map_ok(|txid_str| txid_str.parse().unwrap())
             .await
     }
