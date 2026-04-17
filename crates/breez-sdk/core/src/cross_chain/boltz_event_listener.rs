@@ -17,10 +17,7 @@ use std::sync::Arc;
 use boltz_client::{BoltzEventListener, BoltzSwapEvent, events, models::BoltzSwapStatus};
 use tracing::{debug, error};
 
-use crate::{
-    ConversionInfo, ConversionStatus, PaymentDetails, PaymentMetadata, Storage,
-    cross_chain::boltz::swap_payment_map_key,
-};
+use crate::{ConversionInfo, ConversionStatus, PaymentDetails, PaymentMetadata, Storage};
 
 pub(crate) struct BoltzSdkEventListener {
     storage: Arc<dyn Storage>,
@@ -35,38 +32,36 @@ impl BoltzSdkEventListener {
         &self,
         swap: &boltz_client::models::BoltzSwap,
     ) -> Result<(), String> {
-        let mapping_key = swap_payment_map_key(&swap.id);
-        let Some(payment_id) = self
+        let Some(existing) = self
             .storage
-            .get_cached_item(mapping_key.clone())
+            .get_payment_by_invoice(swap.invoice.clone())
             .await
-            .map_err(|e| format!("read mapping {mapping_key}: {e}"))?
+            .map_err(|e| format!("fetch payment by invoice for swap {}: {e}", swap.id))?
         else {
-            // Mapping absent. Three cases land here:
-            //   1. Prepare-without-send orphan (no payment row will ever exist).
-            //   2. Send still in flight — the mapping is written after the LN
-            //      payment and metadata are persisted, so early WS events race it.
-            //   3. First WS update for a swap whose mapping is about to be written.
-            // Skipping is safe: the adapter KV row is updated by boltz-client via
-            // `BoltzStorage::update_swap` independently, and the next non-terminal
-            // WS transition re-syncs the payment metadata.
+            // Prepare-without-send orphan, or send still in flight: no payment
+            // row yet carries this hold invoice. Boltz-client updates its own
+            // swap KV via `BoltzStorage::update_swap` independently, and the
+            // next WS transition will re-sync the payment metadata once the
+            // row exists.
             debug!(
                 swap_id = %swap.id,
-                "No payment mapping for Boltz swap, skipping payment-row update"
+                "No payment row for Boltz swap invoice, skipping payment-row update"
             );
             return Ok(());
         };
 
-        let existing = self
-            .storage
-            .get_payment_by_id(payment_id.clone())
-            .await
-            .map_err(|e| format!("fetch payment {payment_id}: {e}"))?;
+        let payment_id = existing.id.clone();
 
         let Some(conversion_info) = extract_conversion_info(existing.details) else {
-            return Err(format!(
-                "Payment {payment_id} has no ConversionInfo attached"
-            ));
+            // Race window between `insert_payment` and `insert_payment_metadata`
+            // in the send flow, or a non-conversion payment sharing this
+            // invoice. A later swap event carries the full state and retries.
+            debug!(
+                swap_id = %swap.id,
+                payment_id = %payment_id,
+                "Payment has no ConversionInfo attached, skipping"
+            );
+            return Ok(());
         };
 
         let ConversionInfo::Boltz {
@@ -83,9 +78,12 @@ impl BoltzSdkEventListener {
             ..
         } = conversion_info
         else {
-            return Err(format!(
-                "Payment {payment_id} has non-Boltz ConversionInfo attached"
-            ));
+            debug!(
+                swap_id = %swap.id,
+                payment_id = %payment_id,
+                "Payment has non-Boltz ConversionInfo, skipping"
+            );
+            return Ok(());
         };
 
         let new_status = map_boltz_status_to_conversion(&swap.status);
@@ -119,21 +117,16 @@ impl BoltzSdkEventListener {
         &self,
         swap: &boltz_client::models::BoltzSwap,
     ) -> Result<(), String> {
-        let mapping_key = swap_payment_map_key(&swap.id);
-        let Some(payment_id) = self
+        let Some(existing) = self
             .storage
-            .get_cached_item(mapping_key.clone())
+            .get_payment_by_invoice(swap.invoice.clone())
             .await
-            .map_err(|e| format!("read mapping {mapping_key}: {e}"))?
+            .map_err(|e| format!("fetch payment by invoice for swap {}: {e}", swap.id))?
         else {
             return Ok(());
         };
 
-        let existing = self
-            .storage
-            .get_payment_by_id(payment_id.clone())
-            .await
-            .map_err(|e| format!("fetch payment {payment_id}: {e}"))?;
+        let payment_id = existing.id.clone();
 
         let Some(ConversionInfo::Boltz {
             swap_id,
@@ -307,13 +300,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_mapping_is_silent_noop() {
-        let dir = create_temp_dir("boltz_event_missing_mapping");
+    async fn missing_payment_is_silent_noop() {
+        let dir = create_temp_dir("boltz_event_missing_payment");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
         let listener = BoltzSdkEventListener::new(Arc::clone(&storage));
 
-        // No mapping cache entry, no payment row, no metadata — nothing to
-        // write. The listener should short-circuit without erroring.
+        // No payment row carrying this invoice — the listener should
+        // short-circuit without erroring.
         let swap = make_swap("orphan_swap", BoltzSwapStatus::InvoicePaid);
         listener.handle_swap_updated(&swap).await.unwrap();
     }

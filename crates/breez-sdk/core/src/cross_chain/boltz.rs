@@ -25,11 +25,6 @@ use crate::{
     sdk::LightningSender, utils::payments::insert_or_cache_payment_metadata,
 };
 
-/// Cache KV key used to look up the payment row attached to a given Boltz swap.
-pub(crate) fn swap_payment_map_key(swap_id: &str) -> String {
-    format!("boltz_swap_{swap_id}")
-}
-
 pub(crate) struct BoltzService {
     client: Arc<BoltzClient>,
     spark_wallet: Arc<SparkWallet>,
@@ -276,15 +271,6 @@ impl CrossChainService for BoltzService {
             error!("Failed to persist Boltz metadata for payment {spark_payment_id}: {e:?}");
             spark_payment_id.clone()
         });
-
-        // Handle the event listener uses to map swap → payment row for
-        // in-place metadata updates.
-        self.storage
-            .set_cached_item(swap_payment_map_key(swap_id), payment_id.clone())
-            .await
-            .map_err(|e| {
-                SdkError::Generic(format!("Failed to cache Boltz swap → payment map: {e}"))
-            })?;
 
         Ok(CrossChainSendResult {
             order_id: swap_id.clone(),
