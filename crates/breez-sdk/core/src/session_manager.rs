@@ -4,7 +4,7 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio::sync::RwLock;
 use spark_wallet::{Session, SessionManager, SessionManagerError};
 
-const PARTNER_ID_HEADER: &str = "partner_id";
+const PARTNER_ID_HEADER: &str = "x-partner-jwt";
 
 pub(crate) struct BreezSessionManager {
     inner: Arc<dyn SessionManager>,

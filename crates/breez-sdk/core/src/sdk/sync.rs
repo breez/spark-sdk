@@ -101,14 +101,7 @@ impl BreezSdk {
                                 continue;
                             }
                         };
-                        sdk.session_manager.set_token(token.clone()).await;
-                        if let Err(err) = sdk
-                            .storage
-                            .set_cached_item(jwt::KEY_BREEZ_JWT.to_string(), token)
-                            .await
-                        {
-                            warn!("Could not persist JWT: {err}");
-                        }
+                        sdk.set_and_save_jwt(token).await;
                     }
 
                     // Ensure we sync at least the configured interval
@@ -657,8 +650,8 @@ mod jwt {
     use std::collections::HashMap;
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use breez_sdk_common::{breez_server::PRODUCTION_BREEZSERVER_URL, utils::now};
-    use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration};
+    use breez_sdk_common::utils::now;
+    use platform_utils::{DefaultHttpClient, HttpClient as _, time::Duration, tokio};
     use serde::Deserialize;
     use tracing::warn;
 
@@ -667,6 +660,7 @@ mod jwt {
     pub(super) const KEY_BREEZ_JWT: &str = "breez_jwt";
     const JWT_REFRESH_RETRY_SECS: u64 = 10;
     const JWT_EXPIRY_GRACE_PERIOD_SECS: u64 = 60 * 5; // Token expires 5 minutes in advance
+    const JWT_BREEZSERVER_URL: &str = "https://nd1.breez.technology:443";
 
     #[derive(Deserialize)]
     struct Jwt {
@@ -698,6 +692,17 @@ mod jwt {
     }
 
     impl BreezSdk {
+        pub(super) async fn set_and_save_jwt(&self, token: String) {
+            self.session_manager.set_token(token.clone()).await;
+            if let Err(err) = self
+                .storage
+                .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
+                .await
+            {
+                warn!("Could not persist JWT: {err}");
+            }
+        }
+
         pub(super) async fn new_jwt(&self) -> Result<String, SdkError> {
             let Some(api_key) = &self.config.api_key else {
                 return Err(SdkError::Generic("Missing Breez API key".to_string()));
@@ -706,10 +711,7 @@ mod jwt {
             let mut headers = HashMap::new();
             headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
             let res = client
-                .get(
-                    format!("{PRODUCTION_BREEZSERVER_URL}/api/jwt"),
-                    Some(headers),
-                )
+                .get(format!("{JWT_BREEZSERVER_URL}/api/jwt"), Some(headers))
                 .await
                 .map_err(|err| SdkError::Generic(format!("Could not retrieve JWT token: {err}")))?;
 
@@ -720,16 +722,17 @@ mod jwt {
         }
 
         pub(super) async fn init_jwt(&self) {
-            match self
+            let token = match self
                 .storage
                 .get_cached_item(KEY_BREEZ_JWT.to_string())
                 .await
             {
-                Ok(Some(stored_token)) if !is_jwt_expired(&stored_token) => {
-                    self.session_manager.set_token(stored_token).await;
-                }
-                Err(err) => warn!("Could not fetch stored JWT: {err}"),
-                _ => {}
+                Ok(Some(stored_token)) if !is_jwt_expired(&stored_token) => Ok(stored_token),
+                _ => self.new_jwt().await,
+            };
+            match token {
+                Ok(token) => self.set_and_save_jwt(token).await,
+                Err(err) => warn!("Could not init JWT: {err}"),
             }
         }
 
