@@ -1,4 +1,5 @@
 pub(crate) mod background;
+pub(crate) mod config;
 pub(crate) mod repository;
 pub(crate) mod service;
 
