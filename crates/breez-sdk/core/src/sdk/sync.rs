@@ -718,16 +718,17 @@ mod jwt {
         }
 
         pub(super) async fn init_jwt(&self) {
-            match self
+            let token = match self
                 .storage
                 .get_cached_item(KEY_BREEZ_JWT.to_string())
                 .await
             {
-                Ok(Some(stored_token)) if !is_jwt_expired(&stored_token) => {
-                    self.session_manager.set_token(stored_token).await;
-                }
-                Err(err) => warn!("Could not fetch stored JWT: {err}"),
-                _ => {}
+                Ok(Some(stored_token)) if !is_jwt_expired(&stored_token) => Ok(stored_token),
+                _ => self.new_jwt().await,
+            };
+            match token {
+                Ok(token) => self.session_manager.set_token(token).await,
+                Err(err) => warn!("Could not init JWT: {err}"),
             }
         }
 
