@@ -637,12 +637,14 @@ impl BreezSdk {
     ) -> Result<(TokenConversionResponse, ConversionPurpose, bool), SdkError> {
         let amount = request.prepare_response.amount;
 
-        // Extract from_token_identifier from conversion options for ToBitcoin conversions.
+        // Extract the token identifier for the conversion.
+        // For ToBitcoin, it's embedded in the conversion type.
+        // For FromBitcoin, it comes from the prepare response's root token_identifier.
         let from_token_identifier = match &conversion_options.conversion_type {
             ConversionType::ToBitcoin {
                 from_token_identifier,
             } => Some(from_token_identifier.clone()),
-            ConversionType::FromBitcoin => None,
+            ConversionType::FromBitcoin => request.prepare_response.token_identifier.clone(),
         };
 
         // AmountIn vs MinAmountOut at convert time:
