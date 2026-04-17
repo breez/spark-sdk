@@ -152,7 +152,7 @@ pub trait LnurlRepository {
 
     /// Get data needed to build webhook payloads for the given payment hashes.
     /// Joins invoices, users, `sender_comments`, and `domain_webhooks`.
-    /// Only returns rows where the invoice has a domain with a configured webhook.
+    /// Returns rows for invoices that have a domain and a preimage.
     async fn get_webhook_payloads(
         &self,
         payment_hashes: &[String],
@@ -168,5 +168,5 @@ pub struct WebhookPayloadData {
     pub amount_received_sat: Option<i64>,
     pub lightning_address: Option<String>,
     pub sender_comment: Option<String>,
-    pub webhook_url: String,
+    pub domain: String,
 }

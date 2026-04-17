@@ -62,7 +62,7 @@ where
 
         deliveries.push(NewWebhookDelivery {
             identifier: item.payment_hash,
-            url: item.webhook_url,
+            domain: item.domain,
             payload: json,
         });
     }
@@ -110,8 +110,6 @@ mod shared_tests {
     use crate::time::now_millis;
     use crate::webhooks::{WebhookRepository, WebhookService};
 
-    /// Assumes the domain webhook for "enqueue-test.example.com" is already
-    /// configured in the database before calling this function.
     pub async fn enqueue_webhooks_creates_delivery<DB>(db: &DB)
     where
         DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
@@ -122,7 +120,6 @@ mod shared_tests {
             super::test_helpers::generate_test_invoice(&preimage_bytes);
 
         let domain = "enqueue-test.example.com";
-        let webhook_url = "https://enqueue-test.example.com/hook";
 
         db.add_domain(domain).await.unwrap();
         db.upsert_user(&crate::user::User {
@@ -159,7 +156,7 @@ mod shared_tests {
         let deliveries = db.take_pending_webhook_deliveries().await.unwrap();
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].identifier, payment_hash);
-        assert_eq!(deliveries[0].url, webhook_url);
+        assert_eq!(deliveries[0].domain, domain);
 
         let payload: serde_json::Value = serde_json::from_str(&deliveries[0].payload).unwrap();
         assert_eq!(payload["template"], "spark_payment_received");
@@ -205,8 +202,6 @@ mod shared_tests {
         );
     }
 
-    /// Assumes the domain webhook for "idempotent-test.example.com" is already
-    /// configured in the database before calling this function.
     pub async fn enqueue_webhooks_is_idempotent<DB>(db: &DB)
     where
         DB: LnurlRepository + WebhookRepository + Clone + Send + Sync + 'static,
@@ -263,53 +258,30 @@ mod shared_tests {
 mod sqlite_tests {
     use super::shared_tests;
 
-    async fn setup_test_db() -> (crate::sqlite::LnurlRepository, sqlx::SqlitePool) {
+    async fn setup_test_db() -> crate::sqlite::LnurlRepository {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .connect(":memory:")
             .await
             .unwrap();
         crate::sqlite::run_migrations(&pool).await.unwrap();
-        (crate::sqlite::LnurlRepository::new(pool.clone()), pool)
-    }
-
-    async fn insert_domain_webhook(pool: &sqlx::SqlitePool, domain: &str, url: &str) {
-        sqlx::query(
-            "INSERT INTO domain_webhooks (domain, url) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(domain)
-        .bind(url)
-        .execute(pool)
-        .await
-        .unwrap();
+        crate::sqlite::LnurlRepository::new(pool)
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_creates_delivery() {
-        let (db, pool) = setup_test_db().await;
-        insert_domain_webhook(
-            &pool,
-            "enqueue-test.example.com",
-            "https://enqueue-test.example.com/hook",
-        )
-        .await;
+        let db = setup_test_db().await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_skips_invoice_without_domain() {
-        let (db, _) = setup_test_db().await;
+        let db = setup_test_db().await;
         shared_tests::enqueue_webhooks_skips_invoice_without_domain(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_is_idempotent() {
-        let (db, pool) = setup_test_db().await;
-        insert_domain_webhook(
-            &pool,
-            "idempotent-test.example.com",
-            "https://idempotent-test.example.com/hook",
-        )
-        .await;
+        let db = setup_test_db().await;
         shared_tests::enqueue_webhooks_is_idempotent(&db).await;
     }
 }
@@ -320,7 +292,7 @@ mod sqlite_tests {
 mod postgres_tests {
     use super::shared_tests;
 
-    async fn setup_test_db() -> Option<(crate::postgresql::LnurlRepository, sqlx::PgPool)> {
+    async fn setup_test_db() -> Option<crate::postgresql::LnurlRepository> {
         let url = std::env::var("LNURL_TEST_POSTGRES_URL").ok()?;
         let pool = sqlx::PgPool::connect(&url).await.ok()?;
         crate::postgresql::run_migrations(&pool).await.ok()?;
@@ -342,37 +314,20 @@ mod postgres_tests {
             .await
             .ok()?;
 
-        Some((crate::postgresql::LnurlRepository::new(pool.clone()), pool))
-    }
-
-    async fn insert_domain_webhook(pool: &sqlx::PgPool, domain: &str, url: &str) {
-        sqlx::query(
-            "INSERT INTO domain_webhooks (domain, url) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(domain)
-        .bind(url)
-        .execute(pool)
-        .await
-        .unwrap();
+        Some(crate::postgresql::LnurlRepository::new(pool))
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_creates_delivery() {
-        let Some((db, pool)) = setup_test_db().await else {
+        let Some(db) = setup_test_db().await else {
             return;
         };
-        insert_domain_webhook(
-            &pool,
-            "enqueue-test.example.com",
-            "https://enqueue-test.example.com/hook",
-        )
-        .await;
         shared_tests::enqueue_webhooks_creates_delivery(&db).await;
     }
 
     #[tokio::test]
     async fn enqueue_webhooks_skips_invoice_without_domain() {
-        let Some((db, _)) = setup_test_db().await else {
+        let Some(db) = setup_test_db().await else {
             return;
         };
         shared_tests::enqueue_webhooks_skips_invoice_without_domain(&db).await;
@@ -380,15 +335,9 @@ mod postgres_tests {
 
     #[tokio::test]
     async fn enqueue_webhooks_is_idempotent() {
-        let Some((db, pool)) = setup_test_db().await else {
+        let Some(db) = setup_test_db().await else {
             return;
         };
-        insert_domain_webhook(
-            &pool,
-            "idempotent-test.example.com",
-            "https://idempotent-test.example.com/hook",
-        )
-        .await;
         shared_tests::enqueue_webhooks_is_idempotent(&db).await;
     }
 }

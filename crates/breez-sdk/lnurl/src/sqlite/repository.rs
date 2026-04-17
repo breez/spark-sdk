@@ -2,7 +2,9 @@ use lnurl_models::ListMetadataMetadata;
 use sqlx::{Row, SqlitePool};
 
 use crate::repository::{Invoice, LnurlSenderComment, PendingZapReceipt, WebhookPayloadData};
-use crate::webhooks::repository::{NewWebhookDelivery, WebhookDelivery, WebhookRepositoryError};
+use crate::webhooks::repository::{
+    NewWebhookDelivery, WebhookConfig, WebhookDelivery, WebhookRepositoryError,
+};
 use crate::zap::Zap;
 use crate::{
     repository::LnurlRepositoryError,
@@ -586,9 +588,8 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             "SELECT i.payment_hash, i.user_pubkey, i.invoice, i.preimage, i.amount_received_sat,
                     u.name, u.domain,
                     sc.sender_comment,
-                    dw.url
+                    i.domain
              FROM invoices i
-             JOIN domain_webhooks dw ON dw.domain = i.domain
              LEFT JOIN users u ON u.pubkey = i.user_pubkey AND u.domain = i.domain
              LEFT JOIN sender_comments sc ON sc.payment_hash = i.payment_hash
              WHERE i.payment_hash IN ({})
@@ -618,7 +619,7 @@ impl crate::repository::LnurlRepository for LnurlRepository {
                     amount_received_sat: row.try_get(4)?,
                     lightning_address,
                     sender_comment: row.try_get(7)?,
-                    webhook_url: row.try_get(8)?,
+                    domain: row.try_get(8)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -643,12 +644,12 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             .map_err(|e| WebhookRepositoryError::General(e.into()))?;
         for d in deliveries {
             sqlx::query(
-                "INSERT INTO webhook_deliveries (identifier, url, payload, created_at, next_retry_at)
+                "INSERT INTO webhook_deliveries (identifier, domain, payload, created_at, next_retry_at)
                  VALUES ($1, $2, $3, $4, $4)
-                 ON CONFLICT (identifier, url) DO NOTHING",
+                 ON CONFLICT (identifier, domain) DO NOTHING",
             )
             .bind(&d.identifier)
-            .bind(&d.url)
+            .bind(&d.domain)
             .bind(&d.payload)
             .bind(now)
             .execute(&mut *tx)
@@ -667,7 +668,7 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         let stale_threshold = now.saturating_sub(300_000); // 5 minutes
         let rows = sqlx::query(
             "WITH candidates AS (
-                 SELECT id, ROW_NUMBER() OVER (PARTITION BY url ORDER BY next_retry_at ASC) AS rn
+                 SELECT id, ROW_NUMBER() OVER (PARTITION BY domain ORDER BY next_retry_at ASC) AS rn
                  FROM webhook_deliveries
                  WHERE next_retry_at <= $1
                    AND succeeded_at IS NULL
@@ -676,7 +677,7 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
              UPDATE webhook_deliveries
              SET claimed_at = $2
              WHERE id IN (SELECT id FROM candidates WHERE rn = 1)
-             RETURNING id, identifier, url, payload, created_at, retry_count, next_retry_at",
+             RETURNING id, identifier, domain, url, payload, created_at, retry_count, next_retry_at",
         )
         .bind(now)
         .bind(now)
@@ -689,11 +690,12 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
                 Ok::<_, sqlx::Error>(WebhookDelivery {
                     id: row.try_get(0)?,
                     identifier: row.try_get(1)?,
-                    url: row.try_get(2)?,
-                    payload: row.try_get(3)?,
-                    created_at: row.try_get(4)?,
-                    retry_count: row.try_get(5)?,
-                    next_retry_at: row.try_get(6)?,
+                    domain: row.try_get(2)?,
+                    url: row.try_get(3)?,
+                    payload: row.try_get(4)?,
+                    created_at: row.try_get(5)?,
+                    retry_count: row.try_get(6)?,
+                    next_retry_at: row.try_get(7)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -704,10 +706,12 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         &self,
         id: i64,
         succeeded_at: i64,
+        url: &str,
     ) -> Result<(), WebhookRepositoryError> {
-        sqlx::query("UPDATE webhook_deliveries SET succeeded_at = $2 WHERE id = $1")
+        sqlx::query("UPDATE webhook_deliveries SET succeeded_at = $2, url = $3 WHERE id = $1")
             .bind(id)
             .bind(succeeded_at)
+            .bind(url)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -720,11 +724,12 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         next_retry_at: i64,
         status_code: Option<i32>,
         body: Option<&str>,
+        url: &str,
     ) -> Result<(), WebhookRepositoryError> {
         sqlx::query(
             "UPDATE webhook_deliveries
              SET retry_count = $2, next_retry_at = $3, claimed_at = NULL,
-                 last_error_status_code = $4, last_error_body = $5
+                 last_error_status_code = $4, last_error_body = $5, url = $6
              WHERE id = $1",
         )
         .bind(id)
@@ -732,6 +737,7 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
         .bind(next_retry_at)
         .bind(status_code)
         .bind(body)
+        .bind(url)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -763,5 +769,40 @@ impl crate::webhooks::WebhookRepository for LnurlRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    async fn delete_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError> {
+        sqlx::query("DELETE FROM webhook_deliveries WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn park_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError> {
+        sqlx::query(
+            "UPDATE webhook_deliveries SET next_retry_at = $2, claimed_at = NULL WHERE id = $1",
+        )
+        .bind(id)
+        .bind(i64::MAX)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_webhook_configs(&self) -> Result<Vec<WebhookConfig>, WebhookRepositoryError> {
+        let rows = sqlx::query("SELECT domain, url, webhook_secret FROM domain_webhooks")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(WebhookConfig {
+                    domain: row.try_get(0)?,
+                    url: row.try_get(1)?,
+                    secret: row.try_get(2)?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(|e| WebhookRepositoryError::General(e.into()))
     }
 }
