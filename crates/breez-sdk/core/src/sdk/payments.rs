@@ -968,8 +968,9 @@ impl BreezSdk {
                 .prepare_response
                 .amount
                 .try_into()
-                .map(|amount: u64| amount.saturating_sub(estimated_conversion_out))
-                .unwrap_or(0);
+                .map_or(0, |amount: u64| {
+                    amount.saturating_sub(estimated_conversion_out)
+                });
             let total = converted_sats.saturating_add(sats_change);
             tracing::trace!(
                 converted_sats,

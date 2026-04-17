@@ -21,6 +21,7 @@ const MAX_ERROR_BODY_LEN: usize = 512;
 const WEBHOOK_TIMEOUT_SECS: u64 = 30;
 
 /// How often to run the webhook delivery cleanup (1 hour).
+#[allow(clippy::duration_suboptimal_units)]
 const CLEANUP_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(60 * 60);
 
 /// Per-URL concurrency limiter for webhook delivery.
@@ -73,7 +74,7 @@ async fn webhook_delivery_processor<DB>(
                     return;
                 }
             }
-            () = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
+            () = tokio::time::sleep(tokio::time::Duration::from_mins(1)) => {}
         }
 
         process_pending_webhook_deliveries(&db, &http_client, &url_semaphores).await;

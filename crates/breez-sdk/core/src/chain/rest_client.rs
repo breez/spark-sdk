@@ -342,7 +342,7 @@ mod tests {
             .unwrap();
 
         // Sort results by value for consistent testing
-        result.sort_by(|a, b| a.value.cmp(&b.value));
+        result.sort_by_key(|a| a.value);
 
         // Verify we got the expected number of UTXOs
         assert_eq!(result.len(), 5);

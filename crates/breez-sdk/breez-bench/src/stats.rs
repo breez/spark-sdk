@@ -245,11 +245,7 @@ impl Histogram {
         let max_count = self.buckets.iter().map(|b| b.count).max().unwrap_or(1);
 
         for bucket in &self.buckets {
-            let bar_len = if max_count > 0 {
-                (bucket.count * width) / max_count
-            } else {
-                0
-            };
+            let bar_len = (bucket.count * width).checked_div(max_count).unwrap_or(0);
 
             let percentage = (bucket.count as f64 / self.total_count as f64) * 100.0;
 

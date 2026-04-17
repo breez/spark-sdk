@@ -146,7 +146,7 @@ fn is_power_of_two(value: u64) -> bool {
 /// the remaining amount until the target is reached or no valid leaf can be found.
 fn greedy_exact_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<Vec<TreeNode>> {
     let mut sorted_leaves = leaves.to_vec();
-    sorted_leaves.sort_by(|a, b| b.value.cmp(&a.value));
+    sorted_leaves.sort_by_key(|b| std::cmp::Reverse(b.value));
 
     let mut result = Vec::new();
     let mut remaining = target_amount_sat;

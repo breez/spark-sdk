@@ -141,7 +141,7 @@ fn validate_spark_invoice_request(
         && identity_public_key != sender_public_key
     {
         return Err(SdkError::InvalidInput(
-            format!("Invoice can only be paid by sender public key {sender_public_key}",)
+            format!("Invoice can only be paid by sender public key {sender_public_key}")
                 .to_string(),
         ));
     }
