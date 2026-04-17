@@ -1419,6 +1419,13 @@ impl SparkWallet {
         }
         let output_value = total_value - fee;
 
+        let dust_limit = dest_script.minimal_non_dust().to_sat();
+        if output_value < dust_limit {
+            return Err(SparkWalletError::ValidationError(format!(
+                "Sweep output ({output_value} sats) is below the dust limit ({dust_limit} sats) for the destination address"
+            )));
+        }
+
         // Build the transaction
         let mut tx = Transaction {
             version: Version::TWO,

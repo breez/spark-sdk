@@ -88,16 +88,18 @@ impl UnilateralExitService {
             .map(|n| (n.id.clone(), n))
             .collect();
 
+        let change_script = &inputs[0].witness_utxo.script_pubkey;
         let params = LeafExitCostParams {
             initial_cpfp_input_weight: inputs.iter().map(|i| i.signed_input_weight).sum(),
             single_cpfp_input_weight: inputs[0].signed_input_weight,
-            change_script_len: inputs[0].witness_utxo.script_pubkey.len(),
+            change_script_len: change_script.len(),
+            change_dust_limit: change_script.minimal_non_dust().to_sat(),
             total_cpfp_budget: inputs.iter().map(|i| i.witness_utxo.value.to_sat()).sum(),
             destination_script_len,
             fee_rate,
         };
 
-        let selected = select_profitable_leaves(&tree_nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&tree_nodes, &leaf_ids, &params)?;
         if selected.is_empty() {
             return Ok((vec![], vec![], vec![]));
         }
@@ -347,6 +349,10 @@ pub struct LeafExitCostParams {
     pub single_cpfp_input_weight: u64,
     /// Length in bytes of the change scriptPubKey carried through the CPFP chain.
     pub change_script_len: usize,
+    /// Dust limit in satoshis for the change scriptPubKey. The last CPFP in the
+    /// chain must leave at least this much change, otherwise the transaction is
+    /// non-standard.
+    pub change_dust_limit: u64,
     /// Total satoshi value available across all CPFP inputs (fee budget).
     pub total_cpfp_budget: u64,
     /// Length in bytes of the destination scriptPubKey for the sweep transaction.
@@ -360,7 +366,7 @@ pub struct LeafExitCostParams {
 /// Uses a greedy algorithm: leaves are sorted by value descending and each leaf
 /// is included when its value strictly exceeds the marginal cost of exiting it.
 /// Marginal cost comprises CPFP fees for any not-yet-covered ancestor and refund
-/// transactions, plus the incremental sweep-transaction input fee.  Leaves that
+/// transactions, plus the incremental sweep-transaction input fee. Leaves that
 /// share ancestors with previously selected leaves benefit from reduced marginal
 /// cost.
 ///
@@ -370,7 +376,7 @@ pub fn select_profitable_leaves(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
     params: &LeafExitCostParams,
-) -> Vec<SelectedLeaf> {
+) -> Result<Vec<SelectedLeaf>, ServiceError> {
     // Collect leaves we can actually look up, sorted by value descending.
     let mut leaves: Vec<_> = leaf_ids
         .iter()
@@ -380,7 +386,7 @@ pub fn select_profitable_leaves(
 
     let mut selected: Vec<SelectedLeaf> = Vec::new();
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
-    let mut remaining_budget = params.total_cpfp_budget;
+    let mut total_cpfp_cost: u64 = 0;
     // The very first CPFP child tx in the chain spends all initial inputs;
     // every subsequent one spends a single change output.
     let mut first_cpfp_pending = true;
@@ -449,15 +455,16 @@ pub fn select_profitable_leaves(
 
         let total_marginal_cost = cpfp_cost + sweep_cost;
 
-        // Include the leaf only when it strictly adds value and the CPFP
-        // budget can cover the fee chain (remaining budget must stay > 0).
-        if leaf.value > total_marginal_cost && remaining_budget > cpfp_cost {
+        // Unprofitable leaves are skipped silently. Budget is checked after
+        // the full pass so the caller sees the total shortfall, not just the
+        // first leaf that couldn't fit.
+        if leaf.value > total_marginal_cost {
             selected.push(SelectedLeaf {
                 id: (*leaf_id).clone(),
                 value: leaf.value,
                 estimated_cost: total_marginal_cost,
             });
-            remaining_budget -= cpfp_cost;
+            total_cpfp_cost += cpfp_cost;
             first_cpfp_pending = false;
             for ancestor in &ancestors {
                 covered_txids.insert(ancestor.node_tx.compute_txid());
@@ -465,7 +472,18 @@ pub fn select_profitable_leaves(
         }
     }
 
-    selected
+    if !selected.is_empty() {
+        let required_budget = total_cpfp_cost + params.change_dust_limit;
+        if required_budget > params.total_cpfp_budget {
+            let shortfall = required_budget - params.total_cpfp_budget;
+            return Err(ServiceError::ValidationError(format!(
+                "CPFP input value ({} sats) is too low to exit the profitable leaves: need {} more sats (required {}, including {} sats to keep the final CPFP change above dust)",
+                params.total_cpfp_budget, shortfall, required_budget, params.change_dust_limit,
+            )));
+        }
+    }
+
+    Ok(selected)
 }
 
 /// Walks from `leaf` up to the root, returning the chain `[root, …, leaf]`.
@@ -567,11 +585,14 @@ fn create_tx_cpfp_psbt(
     let adjusted_output_value = total_input_value.saturating_sub(fee_amount);
     trace!("Remaining value: {} sats", adjusted_output_value);
 
-    // Make sure there's enough value to pay the fee
-    if adjusted_output_value == 0 {
-        return Err(ServiceError::ValidationError(
-            "CPFP input value is too low to cover the fee".to_string(),
-        ));
+    // The change output funds the next CPFP in the chain (and ultimately becomes
+    // the caller's spendable change). It must meet the dust limit for its script
+    // type, or the transaction will be rejected by the network as non-standard.
+    let dust_limit = change_script_pubkey.minimal_non_dust().to_sat();
+    if adjusted_output_value < dust_limit {
+        return Err(ServiceError::ValidationError(format!(
+            "CPFP change output ({adjusted_output_value} sats) is below the dust limit ({dust_limit} sats) for the input address"
+        )));
     }
 
     // Create the base transaction structure
@@ -980,6 +1001,7 @@ mod tests {
             initial_cpfp_input_weight: P2TR_INPUT_WEIGHT,
             single_cpfp_input_weight: P2TR_INPUT_WEIGHT,
             change_script_len: CHANGE_SCRIPT_LEN,
+            change_dust_limit: 1,
             total_cpfp_budget: budget,
             destination_script_len: DEST_SCRIPT_LEN,
             fee_rate: FEE_RATE,
@@ -1025,7 +1047,7 @@ mod tests {
         let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert_eq!(
             selected.len(),
             1,
@@ -1043,7 +1065,7 @@ mod tests {
         let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert!(
             selected.is_empty(),
             "leaf with 0 profit must not be selected"
@@ -1060,7 +1082,7 @@ mod tests {
         let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert!(
             selected.is_empty(),
             "unprofitable leaf must not be selected"
@@ -1083,7 +1105,7 @@ mod tests {
         ];
         let params = default_params(1_000_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert_eq!(selected.len(), 2, "both leaves should be selected");
         assert_eq!(selected[0].id.to_string(), "leaf-a");
         assert_eq!(selected[1].id.to_string(), "leaf-b");
@@ -1103,13 +1125,13 @@ mod tests {
         ];
         let params = default_params(1_000_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert_eq!(selected.len(), 1, "only leaf-a should be selected");
         assert_eq!(selected[0].id.to_string(), "leaf-a");
     }
 
     #[test_all]
-    fn test_select_budget_exhaustion() {
+    fn test_select_insufficient_budget_errors() {
         let pubkey = test_pubkey();
         let first_cpfp = first_depth1_cpfp_cost();
         let second_cpfp = second_shared_root_cpfp_cost();
@@ -1121,21 +1143,64 @@ mod tests {
             TreeNodeId::from_str("leaf-a").unwrap(),
             TreeNodeId::from_str("leaf-b").unwrap(),
         ];
-        // Budget: covers first leaf's CPFP but not enough remaining for second
-        let budget = first_cpfp + second_cpfp; // exactly at boundary → remaining == 0 → rejected
+        // Both leaves are profitable; budget covers the CPFP fees exactly but
+        // leaves nothing for the dust-sized final change output (default
+        // dust_limit = 1 sat in tests), so the selection must error.
+        let budget = first_cpfp + second_cpfp;
         let params = default_params(budget);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
-        assert_eq!(selected.len(), 1, "budget should prevent second leaf");
+        let err = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap_err();
+        match err {
+            ServiceError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("1 more sats"),
+                    "error should report 1-sat shortfall: {msg}"
+                );
+            }
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
 
-        // One more sat of budget allows the second leaf
+        // One more sat of budget lets both leaves through.
         let params2 = default_params(budget + 1);
         let root2 = make_node("root", 0, None, false, pubkey);
         let leaf_a2 = make_node("leaf-a", 500_000, Some("root"), true, pubkey);
         let leaf_b2 = make_node("leaf-b", 500_000, Some("root"), true, pubkey);
         let nodes2 = node_map(vec![root2, leaf_a2, leaf_b2]);
-        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params2);
-        assert_eq!(selected2.len(), 2, "budget + 1 should allow second leaf");
+        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params2).unwrap();
+        assert_eq!(selected2.len(), 2, "budget + 1 should allow both leaves");
+    }
+
+    #[test_all]
+    fn test_select_shortfall_accumulates_across_leaves() {
+        // Two independent profitable leaves; budget covers neither. The error
+        // message must quote the combined shortfall, not just the first leaf.
+        let pubkey = test_pubkey();
+        let first_cpfp = first_depth1_cpfp_cost();
+        let root_a = make_node("root-a", 0, None, false, pubkey);
+        let leaf_a = make_node("leaf-a", 500_000, Some("root-a"), true, pubkey);
+        let root_b = make_node("root-b", 0, None, false, pubkey);
+        let leaf_b = make_node("leaf-b", 500_000, Some("root-b"), true, pubkey);
+        let nodes = node_map(vec![root_a, leaf_a, root_b, leaf_b]);
+        let leaf_ids = vec![
+            TreeNodeId::from_str("leaf-a").unwrap(),
+            TreeNodeId::from_str("leaf-b").unwrap(),
+        ];
+        // Separate roots → no shared-ancestor discount; both leaves pay the
+        // full first_depth1 CPFP cost.
+        let required = 2 * first_cpfp + 1; // +1 for default dust_limit
+        let budget = required - 10;
+        let params = default_params(budget);
+
+        let err = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap_err();
+        match err {
+            ServiceError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("10 more sats"),
+                    "error should report 10-sat combined shortfall: {msg}"
+                );
+            }
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
     }
 
     #[test_all]
@@ -1147,7 +1212,7 @@ mod tests {
         let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert!(
             selected.is_empty(),
             "leaf without refund_tx must be skipped"
@@ -1162,7 +1227,7 @@ mod tests {
         let leaf_ids = vec![TreeNodeId::from_str("leaf").unwrap()];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert!(
             selected.is_empty(),
             "leaf with missing parent must be skipped"
@@ -1175,7 +1240,7 @@ mod tests {
         let leaf_ids: Vec<TreeNodeId> = vec![];
         let params = default_params(100_000);
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert!(selected.is_empty());
     }
 
@@ -1200,14 +1265,14 @@ mod tests {
         let mut params = default_params(100_000);
         params.initial_cpfp_input_weight = 2 * P2TR_INPUT_WEIGHT;
 
-        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
+        let selected = select_profitable_leaves(&nodes, &leaf_ids, &params).unwrap();
         assert_eq!(selected.len(), 1, "should be selected with 1 sat profit");
 
         // Value exactly at cost → not selected
         let root2 = make_node("root", 0, None, false, pubkey);
         let leaf2 = make_node("leaf", cost, Some("root"), true, pubkey);
         let nodes2 = node_map(vec![root2, leaf2]);
-        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params);
+        let selected2 = select_profitable_leaves(&nodes2, &leaf_ids, &params).unwrap();
         assert!(selected2.is_empty(), "zero profit must not be selected");
     }
 
