@@ -6,7 +6,7 @@ use bitcoin::{
     consensus::encode::serialize_hex,
     ecdsa::Signature,
     hashes::{Hash, sha256},
-    key::Secp256k1,
+    key::{Secp256k1, TapTweak as _},
     secp256k1::{PublicKey, SecretKey},
     sighash::{self, SighashCache},
 };
@@ -378,7 +378,9 @@ fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalle
 
     // Sign taproot inputs with Schnorr key-path spend
     if !taproot_indices.is_empty() {
-        let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner);
+        let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner)
+            .tap_tweak(&secp, None)
+            .to_keypair();
         let prevouts_ref = sighash::Prevouts::All(&prevouts);
         for i in taproot_indices {
             let sighash = cache

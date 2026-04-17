@@ -2,7 +2,7 @@ use bitcoin::{
     Witness,
     ecdsa::Signature,
     hashes::Hash as _,
-    key::Secp256k1,
+    key::{Secp256k1, TapTweak as _},
     secp256k1::SecretKey,
     sighash::{self, SighashCache},
 };
@@ -94,7 +94,9 @@ impl CpfpSigner for SingleKeySigner {
 
         // Sign and finalize taproot inputs
         if !taproot_indices.is_empty() {
-            let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &self.secret_key);
+            let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &self.secret_key)
+                .tap_tweak(&secp, None)
+                .to_keypair();
             let prevouts_ref = sighash::Prevouts::All(&prevouts);
             for i in taproot_indices {
                 let sighash = cache

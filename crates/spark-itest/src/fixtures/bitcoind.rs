@@ -198,6 +198,20 @@ impl BitcoindFixture {
             .await
     }
 
+    /// Submit a package of transactions to bitcoind via the `submitpackage` RPC.
+    ///
+    /// This is required for v3 transactions with ephemeral anchors, which cannot
+    /// be broadcast individually because the 0-value anchor output is non-standard
+    /// on its own.
+    pub async fn submit_package(&self, txs: &[&Transaction]) -> Result<Value> {
+        let hex_array: Vec<String> = txs
+            .iter()
+            .map(|tx| hex::encode(bitcoin::consensus::serialize(tx)))
+            .collect();
+        self.rpc_call::<Value>("submitpackage", &[json!(hex_array)])
+            .await
+    }
+
     pub async fn get_transaction(&self, txid: &Txid) -> Result<Transaction> {
         let tx_hex = self
             .rpc_call::<String>("getrawtransaction", &[json!(txid.to_string())])
