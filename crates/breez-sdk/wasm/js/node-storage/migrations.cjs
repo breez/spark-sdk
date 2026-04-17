@@ -410,6 +410,29 @@ class MigrationManager {
         name: "Add conversion_status to payment_metadata",
         sql: `ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT`,
       },
+      {
+        name: "Drop foreign key on payment_metadata",
+        sql: [
+          `CREATE TABLE payment_metadata_new (
+              payment_id TEXT PRIMARY KEY,
+              parent_payment_id TEXT,
+              lnurl_pay_info TEXT,
+              lnurl_description TEXT,
+              lnurl_withdraw_info TEXT,
+              conversion_info TEXT,
+              conversion_status TEXT
+          )`,
+          `INSERT INTO payment_metadata_new
+              (payment_id, parent_payment_id, lnurl_pay_info, lnurl_description,
+               lnurl_withdraw_info, conversion_info, conversion_status)
+           SELECT payment_id, parent_payment_id, lnurl_pay_info, lnurl_description,
+                  lnurl_withdraw_info, conversion_info, conversion_status
+           FROM payment_metadata`,
+          `DROP TABLE payment_metadata`,
+          `ALTER TABLE payment_metadata_new RENAME TO payment_metadata`,
+          `CREATE INDEX idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
+        ],
+      },
     ];
   }
 }
