@@ -42,10 +42,14 @@ impl BoltzSdkEventListener {
             .await
             .map_err(|e| format!("read mapping {mapping_key}: {e}"))?
         else {
-            // Prepare-without-send orphan: no payment row exists. The
-            // adapter KV row is updated by boltz-client via
-            // `BoltzStorage::update_swap` — that path is independent of
-            // this listener.
+            // Mapping absent. Three cases land here:
+            //   1. Prepare-without-send orphan (no payment row will ever exist).
+            //   2. Send still in flight — the mapping is written after the LN
+            //      payment and metadata are persisted, so early WS events race it.
+            //   3. First WS update for a swap whose mapping is about to be written.
+            // Skipping is safe: the adapter KV row is updated by boltz-client via
+            // `BoltzStorage::update_swap` independently, and the next non-terminal
+            // WS transition re-syncs the payment metadata.
             debug!(
                 swap_id = %swap.id,
                 "No payment mapping for Boltz swap, skipping payment-row update"

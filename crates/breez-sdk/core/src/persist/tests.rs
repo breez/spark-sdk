@@ -3367,7 +3367,6 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
             None,
             None,
         )),
-        conversion_status: Some(crate::ConversionStatus::Pending),
         ..Default::default()
     };
     let payment = boltz_payment("boltz_pending_payment");
@@ -3419,6 +3418,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
     assert_eq!(fee, Some(1_500));
     assert_eq!(max_slippage_bps, 100);
     assert!(!quote_degraded);
+    assert!(fetched.conversion_details.is_none());
 }
 
 pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
@@ -3431,7 +3431,6 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
             None,
             None,
         )),
-        conversion_status: Some(crate::ConversionStatus::Pending),
         ..Default::default()
     };
     let payment = boltz_payment("boltz_terminal_payment");
@@ -3452,7 +3451,6 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
             Some(70_900_000),
             Some("0xabc123".to_string()),
         )),
-        conversion_status: Some(crate::ConversionStatus::Completed),
         ..Default::default()
     };
     storage
@@ -3484,8 +3482,5 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
     assert_eq!(estimated_out, 71_000_000);
     assert_eq!(delivered_amount, Some(70_900_000));
     assert_eq!(lz_guid, Some("0xabc123".to_string()));
-    assert_eq!(
-        fetched.conversion_details.as_ref().unwrap().status,
-        crate::ConversionStatus::Completed
-    );
+    assert!(fetched.conversion_details.is_none());
 }

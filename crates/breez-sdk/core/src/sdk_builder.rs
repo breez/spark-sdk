@@ -664,7 +664,7 @@ impl SdkBuilder {
                     );
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to initialize Boltz provider: {e:?}");
+                    tracing::error!("Failed to initialize Boltz provider: {e:?}");
                 }
             }
         }
@@ -761,8 +761,9 @@ async fn load_or_create_boltz_instance(
         .get_cached_item(BOLTZ_INSTANCE_KEY.to_string())
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to read Boltz instance: {e}")))?
-        && let Ok(handle) = serde_json::from_str::<BoltzInstanceHandle>(&raw)
     {
+        let handle: BoltzInstanceHandle = serde_json::from_str(&raw)
+            .map_err(|e| SdkError::Generic(format!("Corrupted Boltz instance handle: {e}")))?;
         return Ok(handle);
     }
 
@@ -833,7 +834,6 @@ async fn build_boltz_service(
         Arc::new(client),
         spark_wallet,
         storage,
-        network,
         lightning_sender,
     ))))
 }

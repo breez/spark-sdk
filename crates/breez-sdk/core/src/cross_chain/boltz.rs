@@ -34,8 +34,6 @@ pub(crate) struct BoltzService {
     client: Arc<BoltzClient>,
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
-    #[allow(dead_code)] // surfaced for future multi-network support
-    network: Network,
     /// Shared helper that owns the "pay LN invoice + persist Payment row +
     /// poll SSP" sequence. Reused by `send_bolt11_invoice` on the SDK and
     /// by this provider so Boltz hold-invoice pays behave identically to
@@ -51,7 +49,6 @@ impl BoltzService {
         client: Arc<BoltzClient>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
-        network: Network,
         lightning_sender: Arc<LightningSender>,
     ) -> Self {
         info!("Boltz service initialized");
@@ -59,7 +56,6 @@ impl BoltzService {
             client,
             spark_wallet,
             storage,
-            network,
             lightning_sender,
         }
     }
