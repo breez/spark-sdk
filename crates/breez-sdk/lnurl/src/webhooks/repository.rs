@@ -13,7 +13,7 @@ impl From<sqlx::Error> for WebhookRepositoryError {
 #[derive(Debug, Clone)]
 pub struct NewWebhookDelivery {
     pub identifier: String,
-    pub url: String,
+    pub domain: String,
     pub payload: String,
 }
 
@@ -22,11 +22,20 @@ pub struct NewWebhookDelivery {
 pub struct WebhookDelivery {
     pub id: i64,
     pub identifier: String,
-    pub url: String,
+    pub domain: String,
+    pub url: Option<String>,
     pub payload: String,
     pub created_at: i64,
     pub retry_count: i32,
     pub next_retry_at: i64,
+}
+
+/// Webhook endpoint configuration loaded from `domain_webhooks`.
+#[derive(Debug, Clone)]
+pub struct WebhookConfig {
+    pub domain: String,
+    pub url: String,
+    pub secret: String,
 }
 
 #[async_trait::async_trait]
@@ -39,7 +48,7 @@ pub trait WebhookRepository {
 
     /// Claim pending webhook deliveries ready for processing
     /// (`next_retry_at` <= now, not yet succeeded, not recently claimed).
-    /// Returns at most one delivery per unique URL so that one slow domain
+    /// Returns at most one delivery per unique domain so that one slow domain
     /// cannot starve others.
     async fn take_pending_webhook_deliveries(
         &self,
@@ -50,6 +59,7 @@ pub trait WebhookRepository {
         &self,
         id: i64,
         succeeded_at: i64,
+        url: &str,
     ) -> Result<(), WebhookRepositoryError>;
 
     /// Record a webhook delivery failure and schedule the next retry.
@@ -60,6 +70,7 @@ pub trait WebhookRepository {
         next_retry_at: i64,
         status_code: Option<i32>,
         body: Option<&str>,
+        url: &str,
     ) -> Result<(), WebhookRepositoryError>;
 
     /// Release claimed webhook deliveries back to the queue so they can be
@@ -71,6 +82,16 @@ pub trait WebhookRepository {
         &self,
         before: i64,
     ) -> Result<u64, WebhookRepositoryError>;
+
+    /// Delete a single webhook delivery by ID.
+    async fn delete_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError>;
+
+    /// Park a webhook delivery so it is never picked up again
+    /// (`next_retry_at = i64::MAX`). Preserves existing error fields for audit.
+    async fn park_webhook_delivery(&self, id: i64) -> Result<(), WebhookRepositoryError>;
+
+    /// Load all webhook endpoint configurations (domain, url, secret).
+    async fn list_webhook_configs(&self) -> Result<Vec<WebhookConfig>, WebhookRepositoryError>;
 }
 
 #[cfg(test)]
@@ -85,7 +106,7 @@ pub mod shared_tests {
         let now = now_millis();
         let delivery = NewWebhookDelivery {
             identifier: "success_test".to_string(),
-            url: "https://success.example.com/hook".to_string(),
+            domain: "success.example.com".to_string(),
             payload: r#"{"test":true}"#.to_string(),
         };
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();
@@ -93,7 +114,7 @@ pub mod shared_tests {
         let claimed = db.take_pending_webhook_deliveries().await.unwrap();
         assert_eq!(claimed.len(), 1);
 
-        db.update_webhook_delivery_success(claimed[0].id, now)
+        db.update_webhook_delivery_success(claimed[0].id, now, "https://success.example.com/hook")
             .await
             .unwrap();
 
@@ -112,7 +133,7 @@ pub mod shared_tests {
         let now = now_millis();
         let delivery = NewWebhookDelivery {
             identifier: "failure_test".to_string(),
-            url: "https://failure.example.com/hook".to_string(),
+            domain: "failure.example.com".to_string(),
             payload: r#"{"test":true}"#.to_string(),
         };
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();
@@ -121,9 +142,16 @@ pub mod shared_tests {
         assert_eq!(claimed.len(), 1);
 
         let future = now.saturating_add(999_999_999);
-        db.update_webhook_delivery_failure(claimed[0].id, 1, future, Some(500), Some("error"))
-            .await
-            .unwrap();
+        db.update_webhook_delivery_failure(
+            claimed[0].id,
+            1,
+            future,
+            Some(500),
+            Some("error"),
+            "https://failure.example.com/hook",
+        )
+        .await
+        .unwrap();
 
         // Should not be claimable yet (next_retry_at is far in the future)
         let claimed_again = db.take_pending_webhook_deliveries().await.unwrap();
@@ -139,7 +167,7 @@ pub mod shared_tests {
     {
         let delivery = NewWebhookDelivery {
             identifier: "cleanup_delivery".to_string(),
-            url: "https://cleanup.example.com/hook".to_string(),
+            domain: "cleanup.example.com".to_string(),
             payload: r#"{"test":true}"#.to_string(),
         };
         db.insert_webhook_deliveries(&[delivery]).await.unwrap();

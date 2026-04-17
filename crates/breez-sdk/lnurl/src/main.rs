@@ -287,6 +287,10 @@ where
 
     let webhook_service = webhooks::WebhookService::new(repository.clone());
 
+    // Load webhook endpoint configs (domain → {url, secret}) and start
+    // a background refresher that keeps them in sync with the database.
+    let webhook_config_cache = webhooks::config::start(repository.clone()).await?;
+
     // Start background processors.
     zap::start_background_processor(
         repository.clone(),
@@ -298,6 +302,7 @@ where
         http_client,
         invoice_paid_rx,
         args.webhook_delivery_ttl_days,
+        webhook_config_cache,
     );
 
     // Get or create a shared webhook secret persisted in the database.

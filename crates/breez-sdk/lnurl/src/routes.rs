@@ -1565,6 +1565,7 @@ mod tests {
             &self,
             _: i64,
             _: i64,
+            _: &str,
         ) -> Result<(), WebhookRepositoryError> {
             Ok(())
         }
@@ -1575,6 +1576,7 @@ mod tests {
             _: i64,
             _: Option<i32>,
             _: Option<&str>,
+            _: &str,
         ) -> Result<(), WebhookRepositoryError> {
             Ok(())
         }
@@ -1589,6 +1591,18 @@ mod tests {
             _: i64,
         ) -> Result<u64, WebhookRepositoryError> {
             Ok(0)
+        }
+        async fn delete_webhook_delivery(&self, _: i64) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn park_webhook_delivery(&self, _: i64) -> Result<(), WebhookRepositoryError> {
+            Ok(())
+        }
+        async fn list_webhook_configs(
+            &self,
+        ) -> Result<Vec<crate::webhooks::repository::WebhookConfig>, WebhookRepositoryError>
+        {
+            Ok(vec![])
         }
     }
 
