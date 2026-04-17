@@ -1,5 +1,5 @@
 .env
 node_modules/
-sdk.log
+*.log
 package-lock.json
 .data/

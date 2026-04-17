@@ -36,8 +36,23 @@ const initCommand = () => {
             new Option('-p, --payment-request <text>', 'Payment request string').makeOptionMandatory(true)
         )
         .addOption(
-            new Option('-a, --amount <number>', 'Amount in satoshis for when the payment request doesn\'t specify it')
+            new Option('-a, --amount <number>', 'Amount (sats for BTC payments, token base units for token payments)')
                 .argParser(BigInt)
+        )
+        .addOption(
+            new Option('-t, --token-identifier <text>', 'Token identifier for token payments')
+        )
+        .addOption(
+            new Option('--from-bitcoin', 'Convert from Bitcoin to token')
+                .conflicts('fromToken')
+        )
+        .addOption(
+            new Option('--from-token <text>', 'Convert from token to Bitcoin (specify source token identifier)')
+                .conflicts('fromBitcoin')
+        )
+        .addOption(
+            new Option('-s, --max-slippage-bps <number>', 'Max slippage in basis points for conversion')
+                .argParser(parseInt)
         )
         .action(sendPayment)
 
