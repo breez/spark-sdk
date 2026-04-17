@@ -650,12 +650,7 @@ pub struct Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
-    pub boltz: Option<BoltzConfig>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::BoltzConfig)]
-pub struct BoltzConfig {
-    pub referral_id: String,
+    pub boltz_enabled: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]

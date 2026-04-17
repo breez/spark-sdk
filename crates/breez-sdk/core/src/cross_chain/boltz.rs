@@ -56,14 +56,12 @@ impl BoltzService {
     }
 
     /// Best-effort helper to build a boltz-client [`BoltzClientConfig`] for
-    /// the given network + referral id. Returns `None` on non-mainnet
-    /// networks since Boltz only supports mainnet today.
-    pub(crate) fn default_client_config(
-        network: Network,
-        referral_id: String,
-    ) -> Option<BoltzClientConfig> {
+    /// the given network. Returns `None` on non-mainnet networks since Boltz
+    /// only supports mainnet today.
+    pub(crate) fn default_client_config(network: Network) -> Option<BoltzClientConfig> {
+        const BREEZ_REFERRAL_ID: &str = "breez-sdk";
         match network {
-            Network::Mainnet => Some(BoltzClientConfig::mainnet(referral_id)),
+            Network::Mainnet => Some(BoltzClientConfig::mainnet(BREEZ_REFERRAL_ID.to_string())),
             Network::Regtest => None,
         }
     }

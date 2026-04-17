@@ -643,9 +643,8 @@ impl SdkBuilder {
             );
         }
 
-        if let Some(boltz_config) = self.config.boltz.clone() {
+        if self.config.boltz_enabled {
             match build_boltz_service(
-                &boltz_config,
                 self.config.network,
                 Arc::clone(&spark_wallet),
                 Arc::clone(&storage),
@@ -793,16 +792,13 @@ struct BoltzInstanceHandle {
 /// event listener, resumes any active swaps, and returns an SDK-side wrapper
 /// ready to be inserted into the provider registry.
 async fn build_boltz_service(
-    config: &crate::models::BoltzConfig,
     network: Network,
     spark_wallet: Arc<spark_wallet::SparkWallet>,
     storage: Arc<dyn Storage>,
     lightning_sender: Arc<crate::sdk::LightningSender>,
 ) -> Result<Option<Arc<dyn crate::cross_chain::CrossChainService>>, SdkError> {
-    let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(
-        network,
-        config.referral_id.clone(),
-    ) else {
+    let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(network)
+    else {
         return Ok(None);
     };
 
