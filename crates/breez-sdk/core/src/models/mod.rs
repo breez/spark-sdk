@@ -23,7 +23,8 @@ use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
-    cross_chain::CrossChainRoutePair, error::DepositClaimError,
+    cross_chain::{CrossChainProviderContext, CrossChainRoutePair},
+    error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -1182,11 +1183,10 @@ pub enum SendPaymentMethod {
         fee_asset: Option<String>,
         /// ISO8601 timestamp after which this quote is no longer valid.
         expires_at: String,
-        /// Opaque, provider-internal state produced by `prepareSendPayment`
-        /// and required by `sendPayment`. Encoded as JSON whose schema is
-        /// owned by the provider. Callers must round-trip this value as-is
-        /// and must not inspect or mutate it.
-        provider_context: String,
+        /// Provider-internal state produced by `prepareSendPayment` and
+        /// required by `sendPayment`. Callers should round-trip this value
+        /// as-is.
+        provider_context: CrossChainProviderContext,
     },
 }
 

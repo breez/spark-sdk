@@ -87,6 +87,32 @@ impl CrossChainProviders {
     }
 }
 
+/// Provider-internal state produced by `prepare` and consumed by `send`.
+/// Typed per provider so the send stage can resume without re-quoting and
+/// without a serde round-trip. Callers should round-trip this value as-is.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CrossChainProviderContext {
+    Orchestra {
+        /// Orchestra quote id, passed back on `/submit`.
+        quote_id: String,
+        /// Spark address Orchestra expects the deposit transfer to land on.
+        deposit_address: String,
+    },
+    Boltz {
+        /// Boltz swap id.
+        swap_id: String,
+        /// Hold invoice to pay. The invoice amount matches
+        /// [`CrossChainPrepared::amount_in`].
+        invoice: String,
+        /// Lightning routing fee budget in sats. Not recoverable from the
+        /// public `fee_amount`, which also folds in the Boltz spread.
+        ln_fee_sats: u64,
+        /// Slippage tolerance applied to this swap, in basis points.
+        max_slippage_bps: u32,
+    },
+}
+
 /// Data stashed on the prepared send payment so the provider can resume
 /// the send stage without re-quoting.
 #[derive(Debug, Clone)]
@@ -106,10 +132,8 @@ pub(crate) struct CrossChainPrepared {
     pub recipient_address: String,
     /// The `token_identifier` on the Spark source (e.g. USDB). `None` for BTC sats.
     pub token_identifier: Option<String>,
-    /// Opaque, provider-internal state produced by `prepare` and consumed by
-    /// `send`. Encoded as JSON whose schema is owned by the provider.
-    /// Callers must not inspect or mutate this value.
-    pub provider_context: String,
+    /// Provider-internal state carried between `prepare` and `send`.
+    pub provider_context: CrossChainProviderContext,
 }
 
 /// Result of a cross-chain send submission.

@@ -841,6 +841,20 @@ pub struct CrossChainRoutePair {
     pub exact_out_eligible: bool,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
+pub enum CrossChainProviderContext {
+    Orchestra {
+        quote_id: String,
+        deposit_address: String,
+    },
+    Boltz {
+        swap_id: String,
+        invoice: String,
+        ln_fee_sats: u64,
+        max_slippage_bps: u32,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequest)]
 pub enum PaymentRequest {
     Input {
@@ -891,7 +905,7 @@ pub enum SendPaymentMethod {
         fee_amount: u128,
         fee_asset: Option<String>,
         expires_at: String,
-        provider_context: String,
+        provider_context: CrossChainProviderContext,
     },
 }
 

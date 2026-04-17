@@ -17,8 +17,8 @@ use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
 
 use super::{
-    CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair,
-    CrossChainSendResult, CrossChainService,
+    CrossChainPrepared, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainSendResult, CrossChainService,
 };
 use crate::{
     ConversionInfo, ConversionStatus, Network, PaymentMetadata, Storage, error::SdkError,
@@ -28,18 +28,6 @@ use crate::{
 /// Cache KV key used to look up the payment row attached to a given Boltz swap.
 pub(crate) fn swap_payment_map_key(swap_id: &str) -> String {
     format!("boltz_swap_{swap_id}")
-}
-
-/// Provider-internal state carried in [`CrossChainPrepared::provider_context`]
-/// between `prepare` and `send`. Serialized as JSON; not exposed to callers.
-/// Only fields not already on the public [`CrossChainPrepared`] live here.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct PreparedContext {
-    swap_id: String,
-    invoice: String,
-    invoice_amount_sats: u64,
-    ln_fee_sats: u64,
-    max_slippage_bps: u32,
 }
 
 pub(crate) struct BoltzService {
@@ -203,15 +191,12 @@ impl CrossChainService for BoltzService {
         let invoice_amount_sats = created.invoice_amount_sats;
         let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
 
-        let context = PreparedContext {
+        let provider_context = CrossChainProviderContext::Boltz {
             swap_id: created.swap_id.clone(),
             invoice: created.invoice,
-            invoice_amount_sats,
             ln_fee_sats,
             max_slippage_bps: resolved_slippage,
         };
-        let provider_context = serde_json::to_string(&context)
-            .map_err(|e| SdkError::Generic(format!("Failed to serialize Boltz context: {e}")))?;
 
         Ok(CrossChainPrepared {
             amount_in: u128::from(invoice_amount_sats),
@@ -228,8 +213,20 @@ impl CrossChainService for BoltzService {
 
     #[allow(clippy::large_futures)]
     async fn send(&self, prepared: &CrossChainPrepared) -> Result<CrossChainSendResult, SdkError> {
-        let context: PreparedContext = serde_json::from_str(&prepared.provider_context)
-            .map_err(|e| SdkError::Generic(format!("Failed to deserialize Boltz context: {e}")))?;
+        let CrossChainProviderContext::Boltz {
+            swap_id,
+            invoice,
+            ln_fee_sats,
+            max_slippage_bps,
+        } = &prepared.provider_context
+        else {
+            return Err(SdkError::Generic(
+                "Boltz send called with non-Boltz provider context".to_string(),
+            ));
+        };
+
+        let invoice_amount_sats = u64::try_from(prepared.amount_in)
+            .map_err(|e| SdkError::Generic(format!("Boltz invoice amount exceeds u64: {e}")))?;
 
         // Delegate the LN leg to the shared helper. It pays the hold
         // invoice, builds the Payment row, persists it, and spawns SSP-side
@@ -239,36 +236,33 @@ impl CrossChainService for BoltzService {
         let sdk_payment = self
             .lightning_sender
             .pay_and_persist_lightning_invoice(
-                &context.invoice,
+                invoice,
                 None,
-                context.ln_fee_sats,
+                *ln_fee_sats,
                 false,
-                u128::from(context.invoice_amount_sats),
+                prepared.amount_in,
                 None,
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Boltz lightning payment failed: {e}")))?;
         let spark_payment_id = sdk_payment.id.clone();
 
-        debug!(
-            "Boltz: lightning payment {spark_payment_id} sent for swap {}",
-            context.swap_id
-        );
+        debug!("Boltz: lightning payment {spark_payment_id} sent for swap {swap_id}");
 
         let metadata = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
-                swap_id: context.swap_id.clone(),
+                swap_id: swap_id.clone(),
                 destination_chain: prepared.pair.chain.clone(),
                 destination_asset: prepared.pair.asset.clone(),
                 destination_address: prepared.recipient_address.clone(),
-                invoice: context.invoice.clone(),
-                invoice_amount_sats: context.invoice_amount_sats,
+                invoice: invoice.clone(),
+                invoice_amount_sats,
                 estimated_out: prepared.estimated_out,
                 delivered_amount: None,
                 lz_guid: None,
                 status: ConversionStatus::Pending,
                 fee: Some(prepared.fee_amount),
-                max_slippage_bps: context.max_slippage_bps,
+                max_slippage_bps: *max_slippage_bps,
                 quote_degraded: false,
             }),
             ..Default::default()
@@ -290,14 +284,14 @@ impl CrossChainService for BoltzService {
         // Handle the event listener uses to map swap → payment row for
         // in-place metadata updates.
         self.storage
-            .set_cached_item(swap_payment_map_key(&context.swap_id), payment_id.clone())
+            .set_cached_item(swap_payment_map_key(swap_id), payment_id.clone())
             .await
             .map_err(|e| {
                 SdkError::Generic(format!("Failed to cache Boltz swap → payment map: {e}"))
             })?;
 
         Ok(CrossChainSendResult {
-            order_id: context.swap_id,
+            order_id: swap_id.clone(),
             payment_id,
         })
     }

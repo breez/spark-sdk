@@ -263,6 +263,20 @@ pub struct _CrossChainRoutePair {
     pub exact_out_eligible: bool,
 }
 
+#[frb(mirror(CrossChainProviderContext))]
+pub enum _CrossChainProviderContext {
+    Orchestra {
+        quote_id: String,
+        deposit_address: String,
+    },
+    Boltz {
+        swap_id: String,
+        invoice: String,
+        ln_fee_sats: u64,
+        max_slippage_bps: u32,
+    },
+}
+
 #[frb(mirror(CrossChainRouteFilter))]
 pub enum _CrossChainRouteFilter {
     Send {
@@ -540,7 +554,7 @@ pub enum _SendPaymentMethod {
         fee_amount: u128,
         fee_asset: Option<String>,
         expires_at: String,
-        provider_context: String,
+        provider_context: CrossChainProviderContext,
     },
 }
 

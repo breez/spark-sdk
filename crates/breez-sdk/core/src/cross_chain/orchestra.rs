@@ -29,8 +29,8 @@ use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymen
 use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 
 use super::{
-    CrossChainPrepared, CrossChainProvider, CrossChainRouteFilter, CrossChainRoutePair,
-    CrossChainSendResult, CrossChainService,
+    CrossChainPrepared, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainSendResult, CrossChainService,
 };
 
 /// The canonical Spark source chain string used by Orchestra.
@@ -40,16 +40,6 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
     value
         .parse::<u128>()
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
-}
-
-/// Provider-internal state carried in [`CrossChainPrepared::provider_context`]
-/// between `prepare` and `send`. Serialized as JSON; not exposed to callers.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct OrchestraContext {
-    /// Orchestra quote id, passed back on `/submit`.
-    quote_id: String,
-    /// Spark address Orchestra expects the deposit transfer to land on.
-    deposit_address: String,
 }
 
 const DEFAULT_SLIPPAGE_BPS: u32 = 50;
@@ -401,13 +391,10 @@ impl CrossChainService for OrchestraService {
         let estimated_out = parse_amount(&quote.estimated_out, "estimatedOut")?;
         let fee_amount = parse_amount(&quote.total_fee_amount, "totalFeeAmount")?;
 
-        let context = OrchestraContext {
+        let provider_context = CrossChainProviderContext::Orchestra {
             quote_id: quote.quote_id,
             deposit_address: quote.deposit_address,
         };
-        let provider_context = serde_json::to_string(&context).map_err(|e| {
-            SdkError::Generic(format!("Failed to serialize Orchestra context: {e}"))
-        })?;
 
         Ok(CrossChainPrepared {
             amount_in,
@@ -427,25 +414,27 @@ impl CrossChainService for OrchestraService {
     }
 
     async fn send(&self, prepared: &CrossChainPrepared) -> Result<CrossChainSendResult, SdkError> {
-        let context: OrchestraContext =
-            serde_json::from_str(&prepared.provider_context).map_err(|e| {
-                SdkError::Generic(format!("Failed to deserialize Orchestra context: {e}"))
-            })?;
+        let CrossChainProviderContext::Orchestra {
+            quote_id,
+            deposit_address,
+        } = &prepared.provider_context
+        else {
+            return Err(SdkError::Generic(
+                "Orchestra send called with non-Orchestra provider context".to_string(),
+            ));
+        };
 
         // Step 1: Spark transfer to the Orchestra deposit address.
         let spark_tx_hash = self
             .client
             .transfer_to_deposit(
-                &context.deposit_address,
+                deposit_address,
                 prepared.amount_in,
                 prepared.token_identifier.as_deref(),
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Orchestra deposit transfer failed: {e}")))?;
-        debug!(
-            "Orchestra: deposit transfer {spark_tx_hash} sent for quote {}",
-            context.quote_id
-        );
+        debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
         // Step 2: Submit the deposit to Orchestra.
         // Include the source spark address for BTC transfers so Orchestra
@@ -465,7 +454,7 @@ impl CrossChainService for OrchestraService {
         let submit_res: Result<SubmitResponse, _> = self
             .client
             .submit_spark(flashnet::orchestra::SubmitRequestSpark {
-                quote_id: context.quote_id.clone(),
+                quote_id: quote_id.clone(),
                 spark_tx_hash: spark_tx_hash.clone(),
                 source_spark_address,
             })
@@ -484,7 +473,7 @@ impl CrossChainService for OrchestraService {
         let metadata = crate::PaymentMetadata {
             conversion_info: Some(ConversionInfo::Orchestra {
                 order_id: order_id.clone(),
-                quote_id: context.quote_id.clone(),
+                quote_id: quote_id.clone(),
                 destination_chain: prepared.pair.chain.clone(),
                 destination_asset: prepared.pair.asset.clone(),
                 destination_address: prepared.recipient_address.clone(),
