@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use anyhow::{Result, bail};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut,
-    Witness,
+    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Sequence, Transaction, Txid, TxIn,
+    TxOut, Witness,
     absolute::LockTime,
     ecdsa::Signature as EcdsaSignature,
     hashes::Hash as _,
@@ -13,7 +15,7 @@ use bitcoin::{
 use rstest::*;
 use spark_itest::{
     fixtures::bitcoind::BitcoindFixture,
-    helpers::{WalletsFixture, deposit_to_wallet, wallets},
+    helpers::{WalletsFixture, deposit_to_wallet, deposit_with_amount, wallets},
 };
 use spark_wallet::CpfpInput;
 use tracing::info;
@@ -364,7 +366,7 @@ async fn test_p2wpkh_cpfp_signature_accepted(#[future] wallets: WalletsFixture) 
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_p2tr(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2).await
+    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2, true).await
 }
 
 /// Full unilateral exit broadcast with P2WPKH CPFP inputs.
@@ -372,7 +374,7 @@ async fn test_full_exit_broadcast_p2tr(#[future] wallets: WalletsFixture) -> Res
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_p2wpkh(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2wpkh, 2).await
+    full_exit_broadcast_test(wallets.await, InputType::P2wpkh, 2, true).await
 }
 
 /// Full unilateral exit broadcast with a custom signer closure.
@@ -380,7 +382,19 @@ async fn test_full_exit_broadcast_p2wpkh(#[future] wallets: WalletsFixture) -> R
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_custom_signer(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::Custom, 2).await
+    full_exit_broadcast_test(wallets.await, InputType::Custom, 2, true).await
+}
+
+/// Full unilateral exit broadcast where the refund transactions stay in the
+/// mempool (unconfirmed) when the sweep is broadcast. Validates the guide's
+/// claim that the sweep can follow mempool-only refunds.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_full_exit_broadcast_sweep_on_mempool_refund(
+    #[future] wallets: WalletsFixture,
+) -> Result<()> {
+    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2, false).await
 }
 
 enum InputType {
@@ -393,6 +407,7 @@ async fn full_exit_broadcast_test(
     fixture: WalletsFixture,
     input_type: InputType,
     fee_rate: u64,
+    mine_after_refund_tx: bool,
 ) -> Result<()> {
     let wallet = &fixture.alice_wallet;
     let bitcoind = &fixture.fixtures.bitcoind;
@@ -438,7 +453,9 @@ async fn full_exit_broadcast_test(
 
     // Sign and broadcast each parent+child package in order
     for leaf_psbts in &exit_result.leaf_tx_cpfp_psbts {
+        let tc_count = leaf_psbts.tx_cpfp_psbts.len();
         for (psbt_idx, tc) in leaf_psbts.tx_cpfp_psbts.iter().enumerate() {
+            let is_refund_tx = psbt_idx + 1 == tc_count;
             // Log the parent tx's inputs for debugging
             for (i, input) in tc.parent_tx.input.iter().enumerate() {
                 info!(
@@ -553,8 +570,11 @@ async fn full_exit_broadcast_test(
                 }
             }
 
-            // Mine to confirm
-            bitcoind.generate_blocks(1).await?;
+            // Mine to confirm, unless the caller wants the refund tx to stay
+            // in the mempool so the sweep is broadcast on an unconfirmed parent.
+            if !is_refund_tx || mine_after_refund_tx {
+                bitcoind.generate_blocks(1).await?;
+            }
         }
     }
 
@@ -779,7 +799,7 @@ async fn test_unilateral_exit_insufficient_cpfp_value(
 #[tokio::test]
 #[test_log::test]
 async fn test_unilateral_exit_min_fee_rate(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2tr, 1).await
+    full_exit_broadcast_test(wallets.await, InputType::P2tr, 1, true).await
 }
 
 /// Test that CPFP PSBTs are correctly chained — each subsequent child
@@ -913,6 +933,96 @@ async fn test_unilateral_exit_sweep_tx_structure(#[future] wallets: WalletsFixtu
         sweep_tx.input.len(),
         output_value,
         total_leaf_value - output_value
+    );
+
+    Ok(())
+}
+
+/// Exits multiple leaves in a single call. Validates that autoselect accepts
+/// each leaf, produces one chain per leaf, and builds a sweep that consumes
+/// each leaf's refund output.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_unilateral_exit_multi_leaf(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+    let wallet = &fixture.alice_wallet;
+    let bitcoind = &fixture.fixtures.bitcoind;
+
+    // Two separate deposits produce two distinct wallet leaves.
+    deposit_with_amount(wallet, bitcoind, 100_000).await?;
+    deposit_with_amount(wallet, bitcoind, 100_000).await?;
+
+    let utxo = fund_p2tr_utxo(bitcoind, Amount::from_sat(100_000)).await?;
+    let cpfp_input = make_cpfp_input(&utxo, P2TR_INPUT_WEIGHT);
+
+    let exit_result = wallet
+        .unilateral_exit_autoselect(2, vec![cpfp_input], utxo.address.clone())
+        .await?;
+
+    assert!(
+        exit_result.selected_leaves.len() >= 2,
+        "expected at least two selected leaves, got {}",
+        exit_result.selected_leaves.len()
+    );
+    assert_eq!(
+        exit_result.leaf_tx_cpfp_psbts.len(),
+        exit_result.selected_leaves.len(),
+        "one CPFP chain per selected leaf"
+    );
+    assert_eq!(
+        exit_result.sweep_tx.input.len(),
+        exit_result.selected_leaves.len(),
+        "sweep must consume one input per selected leaf"
+    );
+
+    // The sweep inputs must point at the last parent_tx of each leaf chain
+    // (the refund tx).
+    let refund_txids: HashSet<Txid> = exit_result
+        .leaf_tx_cpfp_psbts
+        .iter()
+        .filter_map(|l| l.tx_cpfp_psbts.last())
+        .map(|tc| tc.parent_tx.compute_txid())
+        .collect();
+    let sweep_input_txids: HashSet<Txid> = exit_result
+        .sweep_tx
+        .input
+        .iter()
+        .map(|i| i.previous_output.txid)
+        .collect();
+    assert_eq!(
+        refund_txids, sweep_input_txids,
+        "sweep inputs must match refund txids"
+    );
+
+    Ok(())
+}
+
+/// Passing no CPFP inputs to unilateral_exit_autoselect fails with a clear
+/// validation error rather than silently producing an invalid exit package.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_unilateral_exit_empty_inputs(#[future] wallets: WalletsFixture) -> Result<()> {
+    let fixture = wallets.await;
+    let wallet = &fixture.alice_wallet;
+    let bitcoind = &fixture.fixtures.bitcoind;
+
+    deposit_to_wallet(wallet, bitcoind).await?;
+
+    let utxo = fund_p2tr_utxo(bitcoind, Amount::from_sat(100_000)).await?;
+
+    let result = wallet
+        .unilateral_exit_autoselect(2, vec![], utxo.address.clone())
+        .await;
+
+    let err_msg = match result {
+        Ok(_) => bail!("Expected an error for empty CPFP inputs"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err_msg.to_lowercase().contains("input"),
+        "error should mention the missing input: {err_msg}"
     );
 
     Ok(())
