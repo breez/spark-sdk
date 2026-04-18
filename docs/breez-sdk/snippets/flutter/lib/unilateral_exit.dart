@@ -9,7 +9,7 @@ Future<PrepareUnilateralExitResponse> prepareExit(BreezSdk sdk) async {
   List<int> secretKeyBytes = hex.decode("your-secret-key-hex");
 
   PrepareUnilateralExitRequest request = PrepareUnilateralExitRequest(
-    feeRate: BigInt.from(2),
+    feeRateSatPerVbyte: BigInt.from(2),
     inputs: [
       UnilateralExitCpfpInput.p2Wpkh(
         txid: "your-utxo-txid",

@@ -21,7 +21,7 @@ func PrepareExit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareUnilate
 	}
 
 	response, err := sdk.PrepareUnilateralExit(breez_sdk_spark.PrepareUnilateralExitRequest{
-		FeeRate: 2,
+		FeeRateSatPerVbyte: 2,
 		Inputs: []breez_sdk_spark.UnilateralExitCpfpInput{
 			breez_sdk_spark.UnilateralExitCpfpInputP2wpkh{
 				Txid:   "your-utxo-txid",

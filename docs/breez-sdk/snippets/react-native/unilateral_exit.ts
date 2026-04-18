@@ -14,7 +14,7 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
   const signer = new SingleKeySigner(secretKeyBytes.buffer)
 
   const response = await sdk.prepareUnilateralExit({
-    feeRate: BigInt(2),
+    feeRateSatPerVbyte: BigInt(2),
     inputs: [
       new UnilateralExitCpfpInput.P2wpkh({
         txid: 'your-utxo-txid',

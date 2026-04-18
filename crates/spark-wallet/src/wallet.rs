@@ -1277,7 +1277,7 @@ impl SparkWallet {
     /// sweep transaction.
     pub async fn unilateral_exit_autoselect(
         &self,
-        fee_rate: u64,
+        fee_rate_sat_per_vbyte: u64,
         inputs: Vec<CpfpInput>,
         destination: Address,
     ) -> Result<UnilateralExitAutoselect, SparkWalletError> {
@@ -1287,7 +1287,12 @@ impl SparkWallet {
         let dest_script = destination.script_pubkey();
         let (selected_leaves, leaf_tx_cpfp_psbts, prefetched_nodes) = self
             .unilateral_exit_service
-            .unilateral_exit_autoselect(fee_rate, leaf_ids, inputs, dest_script.len())
+            .unilateral_exit_autoselect(
+                fee_rate_sat_per_vbyte,
+                leaf_ids,
+                inputs,
+                dest_script.len(),
+            )
             .await?;
 
         if selected_leaves.is_empty() {
@@ -1319,7 +1324,7 @@ impl SparkWallet {
             .collect::<Result<Vec<_>, SparkWalletError>>()?;
 
         let sweep_tx = self
-            .create_refund_sweep_transaction(refund_outputs, destination, fee_rate)
+            .create_refund_sweep_transaction(refund_outputs, destination, fee_rate_sat_per_vbyte)
             .await?;
 
         Ok(UnilateralExitAutoselect {
@@ -1331,13 +1336,13 @@ impl SparkWallet {
     }
 
     /// # Arguments
-    /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
+    /// * `fee_rate_sat_per_vbyte` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
     /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
     /// * `inputs` - The CPFP inputs to use for fee-bumping
     /// * `prefetched_nodes` - Optional pre-fetched tree nodes to avoid a redundant fetch
     pub async fn unilateral_exit(
         &self,
-        fee_rate: u64,
+        fee_rate_sat_per_vbyte: u64,
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<spark::tree::TreeNode>>,
@@ -1346,7 +1351,7 @@ impl SparkWallet {
         Ok(self
             .unilateral_exit_service
             .unilateral_exit(
-                fee_rate,
+                fee_rate_sat_per_vbyte,
                 leaf_ids,
                 inputs,
                 prefetched_nodes,

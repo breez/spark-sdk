@@ -12,7 +12,7 @@ class UnilateralExit {
 
             val response = sdk.prepareUnilateralExit(
                 PrepareUnilateralExitRequest(
-                    feeRate = 2u,
+                    feeRateSatPerVbyte = 2u,
                     inputs = listOf(
                         UnilateralExitCpfpInput.P2wpkh(
                             txid = "your-utxo-txid",

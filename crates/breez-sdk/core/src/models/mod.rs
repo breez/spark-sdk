@@ -1041,8 +1041,8 @@ pub enum UnilateralExitCpfpInput {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitRequest {
-    /// Fee rate in sats/vbyte
-    pub fee_rate: u64,
+    /// Fee rate in satoshis per virtual byte
+    pub fee_rate_sat_per_vbyte: u64,
     /// CPFP inputs used to pay fees for the unilateral exit
     pub inputs: Vec<UnilateralExitCpfpInput>,
     /// Destination address for the sweep transaction that spends refund outputs

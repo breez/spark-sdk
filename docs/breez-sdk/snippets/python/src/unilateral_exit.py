@@ -16,7 +16,7 @@ async def prepare_exit(sdk: BreezSdk):
 
         response = await sdk.prepare_unilateral_exit(
             request=PrepareUnilateralExitRequest(
-                fee_rate=2,
+                fee_rate_sat_per_vbyte=2,
                 inputs=[
                     UnilateralExitCpfpInput.P2WPKH(  # type: ignore[list-item]
                         txid="your-utxo-txid",

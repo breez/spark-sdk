@@ -280,8 +280,8 @@ pub enum Command {
     },
     /// Prepare a unilateral exit package (auto-selects profitable leaves)
     PrepareUnilateralExit {
-        /// Fee rate in sats/vbyte
-        fee_rate: u64,
+        /// Fee rate in satoshis per virtual byte
+        fee_rate_sat_per_vbyte: u64,
         /// Destination address for the sweep transaction
         destination: String,
         /// CPFP inputs "txid:vout:value:pubkey[:type]" used to pay fees.
@@ -460,7 +460,7 @@ pub(crate) async fn execute_command(
             Ok(true)
         }
         Command::PrepareUnilateralExit {
-            fee_rate,
+            fee_rate_sat_per_vbyte,
             destination,
             utxos,
             signing_key,
@@ -479,7 +479,7 @@ pub(crate) async fn execute_command(
             let response = sdk
                 .prepare_unilateral_exit(
                     PrepareUnilateralExitRequest {
-                        fee_rate,
+                        fee_rate_sat_per_vbyte,
                         inputs,
                         destination,
                     },

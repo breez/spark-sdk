@@ -136,7 +136,11 @@ impl BreezSdk {
         // confirmed.
         let exit_result = self
             .spark_wallet
-            .unilateral_exit_autoselect(request.fee_rate, inputs.clone(), destination.clone())
+            .unilateral_exit_autoselect(
+                request.fee_rate_sat_per_vbyte,
+                inputs.clone(),
+                destination.clone(),
+            )
             .await?;
 
         // Check the chain service for already-confirmed ancestors. Walk each
@@ -183,7 +187,7 @@ impl BreezSdk {
                 .collect();
             self.spark_wallet
                 .unilateral_exit(
-                    request.fee_rate,
+                    request.fee_rate_sat_per_vbyte,
                     selected_ids,
                     inputs,
                     Some(exit_result.prefetched_nodes),

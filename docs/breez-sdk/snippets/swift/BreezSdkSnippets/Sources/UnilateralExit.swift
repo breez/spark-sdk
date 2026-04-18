@@ -9,7 +9,7 @@ func prepareExit(sdk: BreezSdk) async throws -> PrepareUnilateralExitResponse {
 
     let response = try await sdk.prepareUnilateralExit(
         request: PrepareUnilateralExitRequest(
-            feeRate: 2,
+            feeRateSatPerVbyte: 2,
             inputs: [
                 .p2wpkh(
                     txid: "your-utxo-txid",

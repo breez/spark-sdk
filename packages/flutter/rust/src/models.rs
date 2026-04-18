@@ -198,7 +198,7 @@ pub enum _UnilateralExitCpfpInput {
 
 #[frb(mirror(PrepareUnilateralExitRequest))]
 pub struct _PrepareUnilateralExitRequest {
-    pub fee_rate: u64,
+    pub fee_rate_sat_per_vbyte: u64,
     pub inputs: Vec<UnilateralExitCpfpInput>,
     pub destination: String,
 }

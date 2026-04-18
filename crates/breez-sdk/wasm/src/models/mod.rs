@@ -737,7 +737,7 @@ pub enum UnilateralExitCpfpInput {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
 pub struct PrepareUnilateralExitRequest {
-    pub fee_rate: u64,
+    pub fee_rate_sat_per_vbyte: u64,
     pub inputs: Vec<UnilateralExitCpfpInput>,
     pub destination: String,
 }

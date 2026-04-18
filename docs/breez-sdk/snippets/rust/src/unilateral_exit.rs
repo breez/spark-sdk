@@ -10,7 +10,7 @@ async fn prepare_exit(sdk: &BreezSdk) -> Result<PrepareUnilateralExitResponse> {
     let response = sdk
         .prepare_unilateral_exit(
             PrepareUnilateralExitRequest {
-                fee_rate: 2,
+                fee_rate_sat_per_vbyte: 2,
                 inputs: vec![UnilateralExitCpfpInput::P2wpkh {
                     txid: "your-utxo-txid".to_string(),
                     vout: 0,
