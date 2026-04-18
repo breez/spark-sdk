@@ -1,20 +1,18 @@
 import type {
   BreezSdk,
-  CpfpSigner,
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark'
+import { SingleKeySigner } from '@breeztech/breez-sdk-spark'
 
 const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitResponse> => {
   // ANCHOR: prepare-unilateral-exit
-  const signer: CpfpSigner = {
-    signPsbt: async (_psbtBytes: Uint8Array): Promise<Uint8Array> => {
-      // Sign the PSBT with your UTXO key and return the signed bytes
-      throw new Error('not implemented')
-    }
-  }
+  // Create a signer from your UTXO private key (32-byte secret key)
+  const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
+  const signer = new SingleKeySigner(secretKeyBytes.buffer)
+
   const response = await sdk.prepareUnilateralExit(
     {
-      feeRate: 2,
+      feeRateSatPerVbyte: 2,
       inputs: [{
         type: 'p2wpkh',
         txid: 'your-utxo-txid',

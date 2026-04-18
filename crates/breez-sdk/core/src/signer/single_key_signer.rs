@@ -15,7 +15,10 @@ use super::cpfp::CpfpSigner;
 ///
 /// This signer detects the input type from the `witness_utxo` scriptPubKey:
 /// - **P2WPKH** inputs are signed with ECDSA
-/// - **P2TR** inputs are signed with Schnorr (key-path spend)
+/// - **P2TR** inputs are signed with Schnorr as a key-path spend with no script
+///   tree (empty merkle root, BIP341 `tap_tweak` applied with `None`). Taproot
+///   outputs that commit to a script tree are not supported by this signer;
+///   callers with such outputs must implement `CpfpSigner` themselves.
 /// - **Ephemeral anchor** inputs (already finalized) are skipped
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SingleKeySigner {

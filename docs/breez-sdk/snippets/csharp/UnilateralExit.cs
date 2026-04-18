@@ -4,24 +4,16 @@ namespace BreezSdkSnippets
 {
     class UnilateralExit
     {
-        // ANCHOR: prepare-unilateral-exit
-        // Implement the CpfpSigner to sign CPFP transactions with your UTXO key
-        class MyCpfpSigner : CpfpSigner
-        {
-            public async Task<byte[]> SignPsbt(byte[] psbtBytes)
-            {
-                // Sign the PSBT with your UTXO private key and return the signed bytes
-                throw new NotImplementedException();
-            }
-        }
-
         async Task PrepareExit(BreezSdk sdk)
         {
-            var signer = new MyCpfpSigner();
+            // ANCHOR: prepare-unilateral-exit
+            // Create a signer from your UTXO private key (32-byte secret key)
+            var secretKeyBytes = Convert.FromHexString("your-secret-key-hex");
+            var signer = new SingleKeySigner(secretKeyBytes);
 
             var response = await sdk.PrepareUnilateralExit(
                 request: new PrepareUnilateralExitRequest(
-                    feeRate: 2,
+                    feeRateSatPerVbyte: 2,
                     inputs: new UnilateralExitCpfpInput[]
                     {
                         new UnilateralExitCpfpInput.P2wpkh(
