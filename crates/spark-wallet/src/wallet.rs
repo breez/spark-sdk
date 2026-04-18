@@ -1287,12 +1287,7 @@ impl SparkWallet {
         let dest_script = destination.script_pubkey();
         let (selected_leaves, leaf_tx_cpfp_psbts, prefetched_nodes) = self
             .unilateral_exit_service
-            .unilateral_exit_autoselect(
-                fee_rate_sat_per_vbyte,
-                leaf_ids,
-                inputs,
-                dest_script.len(),
-            )
+            .unilateral_exit_autoselect(fee_rate_sat_per_vbyte, leaf_ids, inputs, dest_script.len())
             .await?;
 
         if selected_leaves.is_empty() {

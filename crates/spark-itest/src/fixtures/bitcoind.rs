@@ -237,12 +237,8 @@ impl BitcoindFixture {
         txid: &Txid,
         min_confirmations: u64,
     ) -> Result<()> {
-        self.wait_for_tx_confirmation_with_timeout(
-            txid,
-            min_confirmations,
-            Duration::from_secs(60),
-        )
-        .await
+        self.wait_for_tx_confirmation_with_timeout(txid, min_confirmations, Duration::from_secs(60))
+            .await
     }
 
     pub async fn wait_for_tx_confirmation_with_timeout(

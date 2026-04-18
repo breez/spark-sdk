@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Sequence, Transaction, Txid, TxIn,
-    TxOut, Witness,
+    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Sequence, Transaction, TxIn, TxOut, Txid,
+    Witness,
     absolute::LockTime,
     ecdsa::Signature as EcdsaSignature,
     hashes::Hash as _,
