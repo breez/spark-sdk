@@ -20,9 +20,9 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::services::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource};
 use crate::ssp::BitcoinNetwork;
+use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
 use crate::tree::{SigningKeyshare, TreeNode, TreeNodeId, TreeNodeStatus};
 use crate::utils::byte_padding::BytePadding;
@@ -1317,8 +1317,8 @@ mod tests {
 
     use crate::Network;
     use crate::operator::rpc as operator_rpc;
-    use crate::services::bech32m_decode_token_id;
     use crate::token::TokenOutputWithPrevOut;
+    use crate::token::bech32m_decode_token_id;
     use crate::tree::TreeNode;
 
     #[cfg(feature = "browser-tests")]

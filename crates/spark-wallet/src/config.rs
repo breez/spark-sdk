@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
-    services::{LeafOptimizationOptions, TokensConfig},
     ssp::ServiceProviderConfig,
+    token::TokensConfig,
+    tree::LeafOptimizationOptions,
 };
 
 use crate::SparkWalletError;

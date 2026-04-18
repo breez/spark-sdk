@@ -1664,7 +1664,7 @@ mod tests {
                 TokenOutput, TokenOutputToSpend, TokenTransferInput, token_transaction::TokenInputs,
             },
         },
-        services::tokens::{HashableTokenTransaction, validate_create_token_params},
+        token::{HashableTokenTransaction, token_service::validate_create_token_params},
     };
 
     #[cfg(feature = "browser-tests")]

@@ -10,13 +10,16 @@ use spark::{
         invoice_response::TransferType as InvoiceTransferType,
     },
     services::{
-        ExitSpeed, LightningSendPayment, OptimizationEvent, Preimage, PreimageRequestStatus,
+        ExitSpeed, LightningSendPayment, Preimage, PreimageRequestStatus,
         PreimageRequestWithTransfer, TokenTransaction, Transfer, TransferId, TransferLeaf,
         TransferStatus, TransferType,
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
-    tree::{Leaves, LeavesReservation, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId},
+    tree::{
+        Leaves, LeavesReservation, OptimizationEvent, SigningKeyshare, TargetAmounts, TreeNode,
+        TreeNodeId,
+    },
     utils::paging::PagingFilter,
 };
 

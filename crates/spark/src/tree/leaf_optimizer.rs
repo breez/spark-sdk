@@ -6,7 +6,7 @@ use tokio::sync::{Notify, watch};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    services::{ServiceError, Swap},
+    services::Swap,
     tree::{
         ReservationPurpose, SelectLeavesOptions, TargetAmounts, TreeNode, TreeService,
         TreeServiceError,
@@ -36,14 +36,14 @@ impl Default for LeafOptimizationOptions {
 }
 
 impl LeafOptimizationOptions {
-    pub fn validate(&self) -> Result<(), ServiceError> {
+    pub fn validate(&self) -> Result<(), TreeServiceError> {
         if self.multiplicity > 5 {
             warn!(
                 "Multiplicity is greater than 5, you should only use this for high concurrency scenarios"
             );
         }
         if self.max_leaves_per_swap == 0 {
-            return Err(ServiceError::Generic(
+            return Err(TreeServiceError::Generic(
                 "max_leaves_per_swap must be greater than 0".to_string(),
             ));
         }
@@ -226,7 +226,10 @@ impl LeafOptimizer {
     /// Internal method that runs the actual optimization logic.
     /// The guard ensures is_running is cleared and
     /// interested parties (e.g. cancel()) are notified when this method completes.
-    async fn run_optimization_with_guard(&self, _guard: RunningGuard) -> Result<(), ServiceError> {
+    async fn run_optimization_with_guard(
+        &self,
+        _guard: RunningGuard,
+    ) -> Result<(), TreeServiceError> {
         // Reset cancellation flag
         let _ = self.cancel_tx.send(false);
 
@@ -313,7 +316,7 @@ impl LeafOptimizer {
     /// This sets a cancellation flag that is checked between rounds.
     /// The current round will complete before stopping. This method blocks
     /// until the optimization has fully stopped and leaves are available again.
-    pub async fn cancel(&self) -> Result<(), ServiceError> {
+    pub async fn cancel(&self) -> Result<(), TreeServiceError> {
         // First check if optimization is running
         if !self.progress.lock().unwrap().is_running {
             debug!("No optimization running to cancel");
@@ -347,7 +350,7 @@ impl LeafOptimizer {
     async fn execute_optimization_rounds(
         &self,
         swaps: Vec<SwapPlan>,
-    ) -> Result<bool, ServiceError> {
+    ) -> Result<bool, TreeServiceError> {
         let total_rounds = swaps.len() as u32;
 
         for (index, swap) in swaps.into_iter().enumerate() {
@@ -452,7 +455,7 @@ impl LeafOptimizer {
                         error!("Failed to cancel reservation on optimization round failure: {e:?}");
                     }
 
-                    return Err(ServiceError::Generic(format!(
+                    return Err(TreeServiceError::Generic(format!(
                         "Failed to perform swap in optimization round {round}: {e:?}"
                     )));
                 }
