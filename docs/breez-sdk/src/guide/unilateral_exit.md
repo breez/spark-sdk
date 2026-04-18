@@ -29,13 +29,15 @@ The diagram above shows the structure for a single leaf. The node transactions f
 
 Call {{#name prepare_unilateral_exit}} with:
 - One or more **CPFP inputs** (external UTXOs) to fund the CPFP fee-bump transactions
-- A **fee rate** in sats/vbyte
+- A **fee rate** in satoshis per virtual byte
 - A **destination address** where your funds will be swept to
 - A **signer** that can sign the CPFP transactions
 
+The SDK automatically selects which leaves are profitable to exit at the supplied fee rate.
+
 ### CPFP inputs
 
-The CPFP inputs must be UTXOs you control. The CPFP fee-bump chain produces change outputs that go back to the **same address** as the first CPFP input. This address is reused for every change output in the chain, so make sure you use an address you are comfortable reusing (e.g., a dedicated address for this purpose).
+The CPFP inputs must be UTXOs you control. The CPFP fee-bump chain produces change outputs that go back to the **same address** as the first CPFP input — that address is reused for every change output in the chain.
 
 The total value of the CPFP inputs must be sufficient to cover all CPFP fees for the selected leaves. If the inputs don't have enough value, the call returns an error.
 
@@ -96,7 +98,9 @@ Many block explorers also support package submission.
 
 ### Broadcast order
 
-Within each leaf's transaction list, broadcast the entries **in order** — each transaction spends from the previous one's output. For non-timelocked transactions, the previous transaction only needs to be in the mempool. For timelocked transactions ({{#name csv_timelock_blocks}} is set), you must wait for the required confirmations before broadcasting.
+Within each leaf's transaction list, broadcast the entries **in order** — each transaction spends from the previous one's output. For non-timelocked transactions, the previous transaction only needs to be in the mempool. For timelocked transactions ({{#name csv_timelock_blocks}} is set), the previous transaction must have enough confirmations to satisfy the relative timelock.
+
+Skip any entry whose {{#name cpfp_tx_hex}} is unset — that node is already confirmed on-chain and requires no further action.
 
 A single leaf's chain looks like:
 
@@ -107,7 +111,7 @@ A single leaf's chain looks like:
 | N-1 | Leaf TX | **Yes** | Spends from the last node; has a relative timelock |
 | N | Refund TX | **Yes** | Spends from the leaf TX; pays to your Spark-derived refund address |
 
-When exiting **multiple leaves**, some node transactions may be shared between leaves (they share the same path from the root). The SDK deduplicates these — each unique node transaction appears only once, in the first leaf that uses it. Subsequent leaves only contain the entries from where their path diverges.
+When exiting **multiple leaves**, some node transactions may be shared between leaves (they share the same path from the root). The SDK deduplicates these — each unique node transaction appears only once, in the first leaf that uses it. Subsequent leaves only contain the entries from where their path diverges. Divergent paths from two leaves can be broadcast independently once their shared ancestors are in the mempool.
 
 ### Handling timelocks
 
@@ -115,10 +119,10 @@ When an entry has a {{#name csv_timelock_blocks}} value, you **cannot broadcast 
 
 <div class="warning">
 <h4>Developer note</h4>
-The timelock is a <b>relative</b> lock (BIP68 CSV). It counts blocks from the confirmation of the output being spent, not from any absolute block height. Your application should monitor the blockchain and broadcast the next package as soon as the timelock expires.
+The timelock is a <b>relative</b> lock (BIP68 CSV). It counts blocks from the confirmation of the output being spent, not from any absolute block height.
 </div>
 
-Because of the timelocks on leaf and refund transactions, a full unilateral exit takes multiple days. Your application should **persist the transaction data** from the prepare response and schedule broadcasts as timelocks expire.
+Because of the timelocks on leaf and refund transactions, a full unilateral exit takes multiple days to complete.
 
 ## Step 3: Broadcast the sweep transaction
 
@@ -140,11 +144,9 @@ If reliability is a concern, consider providing your own chain service. Public A
 
 ## RBF (Replace-By-Fee)
 
-All CPFP fee-bump transactions signal RBF (BIP 125). If your transactions are not confirming because fees have risen, you can bump fees by calling {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate}}. The new CPFP transactions will replace the old ones in the mempool.
+All CPFP fee-bump transactions signal RBF (BIP 125). If the transactions are not confirming because fees have risen, call {{#name prepare_unilateral_exit}} again with a higher {{#name fee_rate_sat_per_vbyte}} and broadcast the returned CPFP children. As long as the new packages pay a higher total fee than the ones they replace, the mempool swaps them in.
 
-For the retry, provide the **change output** from the last confirmed CPFP transaction as your CPFP input. If no CPFP transactions have confirmed yet, use the same original inputs — the new transactions will replace the old ones entirely.
-
-Note that replacement transactions must pay a higher total fee than the originals (Bitcoin protocol requirement). The SDK does not track previous fee rates — it is your responsibility to provide a higher fee rate on subsequent calls.
+Supply the CPFP inputs that are most convenient — any UTXOs you control are acceptable, regardless of whether they originated from a previous exit attempt. The SDK does not track prior fee rates, so the caller is responsible for choosing a higher {{#name fee_rate_sat_per_vbyte}} than was used on previous attempts.
 
 ## Fee considerations
 
@@ -162,7 +164,7 @@ The SDK automatically determines which leaves are worth exiting. For each leaf, 
 
 A leaf is only included when its value strictly exceeds this marginal cost. The SDK processes leaves from highest to lowest value, so higher-value leaves cover the shared ancestor costs and make it cheaper for smaller leaves to be included.
 
-The {{#name estimated_cost}} field in each leaf reflects this marginal cost, so you can inspect the expected profit per leaf.
+The {{#name estimated_cost}} field in each leaf reflects this marginal cost, so you can inspect the expected profit per leaf. Summing {{#name estimated_cost}} across all selected leaves gives the total on-chain fee of the exit, but the per-leaf values are not equal shares: the first leaf to reach an ancestor absorbs that ancestor's full CPFP cost, while later leaves that inherit it pay nothing for it. A UI that displays per-leaf cost should therefore present {{#name estimated_cost}} as a marginal figure, not as each leaf's individual fair share.
 
 ### CPFP change output
 
@@ -174,9 +176,9 @@ Ensure the external UTXO has enough value to cover all CPFP fees for all selecte
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| "No leaves are profitable to exit" | Every leaf costs more to exit than it is worth at the current fee rate | Lower the {{#name fee_rate}} or wait for lower on-chain fees |
+| "No leaves are profitable to exit" | Every leaf costs more to exit than it is worth at the current fee rate | Lower the {{#name fee_rate_sat_per_vbyte}} or wait for lower on-chain fees |
 | "CPFP input value is too low to cover the fee" | The external UTXO doesn't have enough value for all CPFP fees | Provide a UTXO with more value |
-| "min relay fee not met" | CPFP fee too low for the package | Increase the {{#name fee_rate}} parameter |
+| "min relay fee not met" | CPFP fee too low for the package | Increase the {{#name fee_rate_sat_per_vbyte}} parameter |
 | "mandatory-script-verify-flag-failed" | CPFP transaction not signed correctly | Ensure your `CpfpSigner` implementation signs all inputs correctly |
 | "non-BIP68-final" | Timelock has not expired | Wait for the required number of confirmations on the previous transaction |
 | Transaction not relayed | Parent+child not submitted as package | Use `submitpackage` or a block explorer's package submission |
