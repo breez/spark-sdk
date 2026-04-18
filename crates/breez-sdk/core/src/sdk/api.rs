@@ -117,12 +117,13 @@ impl BreezSdk {
         let btc_network: bitcoin::Network = self.config.network.into();
         let destination = std::str::FromStr::from_str(&request.destination)
             .map_err(|e: bitcoin::address::ParseError| {
-                SdkError::Generic(format!("Invalid destination address: {e}"))
+                SdkError::InvalidInput(format!("Invalid destination address: {e}"))
             })
             .and_then(
                 |addr: bitcoin::Address<bitcoin::address::NetworkUnchecked>| {
-                    addr.require_network(btc_network)
-                        .map_err(|e| SdkError::Generic(format!("Address network mismatch: {e}")))
+                    addr.require_network(btc_network).map_err(|e| {
+                        SdkError::InvalidInput(format!("Address network mismatch: {e}"))
+                    })
                 },
             )?;
 
@@ -145,13 +146,21 @@ impl BreezSdk {
 
         // Check the chain service for already-confirmed ancestors. Walk each
         // leaf's chain root-to-leaf and stop at the first unconfirmed node.
+        // Shared ancestors resolve to the same TreeNodeId across leaves, so
+        // both caches below deduplicate repeated queries for the same node.
         let mut confirmed_node_ids: HashSet<spark_wallet::TreeNodeId> = HashSet::new();
+        let mut known_unconfirmed: HashSet<spark_wallet::TreeNodeId> = HashSet::new();
         let mut unverified_node_ids: Vec<String> = Vec::new();
 
         for leaf_psbts in &exit_result.leaf_tx_cpfp_psbts {
             for tc in &leaf_psbts.tx_cpfp_psbts {
                 if confirmed_node_ids.contains(&tc.node_id) {
                     continue;
+                }
+                if known_unconfirmed.contains(&tc.node_id) {
+                    // Ancestor already seen unconfirmed in a prior leaf; no
+                    // descendant in this leaf can be confirmed without it.
+                    break;
                 }
                 let txid = tc.parent_tx.compute_txid().to_string();
                 match self.chain_service.get_transaction_status(txid).await {
@@ -162,11 +171,13 @@ impl BreezSdk {
                         // Unconfirmed (possibly in mempool) — stop checking
                         // deeper nodes for this leaf since they can't be
                         // confirmed without their parent.
+                        known_unconfirmed.insert(tc.node_id.clone());
                         break;
                     }
                     Err(_) => {
                         // Chain service error — assume unconfirmed but record
                         // that we couldn't verify.
+                        known_unconfirmed.insert(tc.node_id.clone());
                         unverified_node_ids.push(tc.node_id.to_string());
                         break;
                     }
