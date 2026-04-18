@@ -60,9 +60,6 @@ debug = "line-tables-only"
 [profile.release.package.spark-cli]
 debug = "line-tables-only"
 
-[profile.release.package.lnurl]
-debug = "line-tables-only"
-
 [profile.release.package.lnurl-models]
 debug = "line-tables-only"
 
