@@ -23,7 +23,7 @@ The diagram above shows the structure for a single leaf. The node transactions f
 
 1. **Prepare the unilateral exit** — the SDK selects profitable leaves, builds all transactions, and signs the CPFP fee-bump transactions using your provided signer. It returns all transactions ready to broadcast.
 2. **Broadcast the transaction packages** — you broadcast each parent+child pair in order, respecting dependencies and timelocks.
-3. **Broadcast the sweep transaction** — once all refund transactions are in the mempool, broadcast the sweep to collect your funds.
+3. **Broadcast the sweep transaction** — once all refund transactions are confirmed on-chain, broadcast the sweep to collect your funds.
 
 ## Step 1: Prepare the unilateral exit
 
@@ -126,7 +126,7 @@ Because of the timelocks on leaf and refund transactions, a full unilateral exit
 
 ## Step 3: Broadcast the sweep transaction
 
-Once all refund transactions are at least in the mempool, broadcast the sweep transaction ({{#name sweep_tx_hex}}). This is a standard Bitcoin transaction (not a package) — broadcast it with `sendrawtransaction`:
+Once all refund transactions are confirmed on-chain, broadcast the sweep transaction ({{#name sweep_tx_hex}}). This is a standard Bitcoin transaction (not a package) — broadcast it with `sendrawtransaction`:
 
 ```
 bitcoin-cli sendrawtransaction "<sweep_tx_hex>"
@@ -182,6 +182,6 @@ Ensure the external UTXO has enough value to cover all CPFP fees for all selecte
 | "mandatory-script-verify-flag-failed" | CPFP transaction not signed correctly | Ensure your `CpfpSigner` implementation signs all inputs correctly |
 | "non-BIP68-final" | Timelock has not expired | Wait for the required number of confirmations on the previous transaction |
 | Transaction not relayed | Parent+child not submitted as package | Use `submitpackage` or a block explorer's package submission |
-| Sweep transaction rejected | Not all refund TXs are in the mempool yet | Wait for all refund transactions to be broadcast before broadcasting the sweep |
+| Sweep transaction rejected | Not all refund TXs are confirmed yet | Wait for all refund transactions to confirm before broadcasting the sweep |
 | CPFP broadcast fails with "missing inputs" | An ancestor was already confirmed but the SDK couldn't detect it (chain service error) | Check {{#name unverified_node_ids}} — call {{#name prepare_unilateral_exit}} again, or use a more reliable chain service (see [Custom chain service](#already-confirmed-ancestors)) |
 | {{#name unverified_node_ids}} is non-empty | Chain service was unavailable or rate-limited | Retry, or use a private chain service (see [Customizing the SDK](customizing.md#with-chain-service)) |

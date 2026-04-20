@@ -366,7 +366,7 @@ async fn test_p2wpkh_cpfp_signature_accepted(#[future] wallets: WalletsFixture) 
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_p2tr(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2, true).await
+    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2).await
 }
 
 /// Full unilateral exit broadcast with P2WPKH CPFP inputs.
@@ -374,7 +374,7 @@ async fn test_full_exit_broadcast_p2tr(#[future] wallets: WalletsFixture) -> Res
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_p2wpkh(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2wpkh, 2, true).await
+    full_exit_broadcast_test(wallets.await, InputType::P2wpkh, 2).await
 }
 
 /// Full unilateral exit broadcast with a custom signer closure.
@@ -382,19 +382,7 @@ async fn test_full_exit_broadcast_p2wpkh(#[future] wallets: WalletsFixture) -> R
 #[tokio::test]
 #[test_log::test]
 async fn test_full_exit_broadcast_custom_signer(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::Custom, 2, true).await
-}
-
-/// Full unilateral exit broadcast where the refund transactions stay in the
-/// mempool (unconfirmed) when the sweep is broadcast. Validates the guide's
-/// claim that the sweep can follow mempool-only refunds.
-#[rstest]
-#[tokio::test]
-#[test_log::test]
-async fn test_full_exit_broadcast_sweep_on_mempool_refund(
-    #[future] wallets: WalletsFixture,
-) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2tr, 2, false).await
+    full_exit_broadcast_test(wallets.await, InputType::Custom, 2).await
 }
 
 enum InputType {
@@ -407,7 +395,6 @@ async fn full_exit_broadcast_test(
     fixture: WalletsFixture,
     input_type: InputType,
     fee_rate: u64,
-    mine_after_refund_tx: bool,
 ) -> Result<()> {
     let wallet = &fixture.alice_wallet;
     let bitcoind = &fixture.fixtures.bitcoind;
@@ -453,9 +440,7 @@ async fn full_exit_broadcast_test(
 
     // Sign and broadcast each parent+child package in order
     for leaf_psbts in &exit_result.leaf_tx_cpfp_psbts {
-        let tc_count = leaf_psbts.tx_cpfp_psbts.len();
         for (psbt_idx, tc) in leaf_psbts.tx_cpfp_psbts.iter().enumerate() {
-            let is_refund_tx = psbt_idx + 1 == tc_count;
             // Log the parent tx's inputs for debugging
             for (i, input) in tc.parent_tx.input.iter().enumerate() {
                 info!(
@@ -570,11 +555,9 @@ async fn full_exit_broadcast_test(
                 }
             }
 
-            // Mine to confirm, unless the caller wants the refund tx to stay
-            // in the mempool so the sweep is broadcast on an unconfirmed parent.
-            if !is_refund_tx || mine_after_refund_tx {
-                bitcoind.generate_blocks(1).await?;
-            }
+            // Mine to confirm so the next parent+child package (or the sweep)
+            // can spend this one's output without violating TRUC topology.
+            bitcoind.generate_blocks(1).await?;
         }
     }
 
@@ -799,7 +782,7 @@ async fn test_unilateral_exit_insufficient_cpfp_value(
 #[tokio::test]
 #[test_log::test]
 async fn test_unilateral_exit_min_fee_rate(#[future] wallets: WalletsFixture) -> Result<()> {
-    full_exit_broadcast_test(wallets.await, InputType::P2tr, 1, true).await
+    full_exit_broadcast_test(wallets.await, InputType::P2tr, 1).await
 }
 
 /// Test that CPFP PSBTs are correctly chained — each subsequent child
