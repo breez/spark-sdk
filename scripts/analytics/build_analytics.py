@@ -25,6 +25,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, LineChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.layout import Layout, ManualLayout
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -258,6 +261,94 @@ def sheet_weekly_velocity(wb: Workbook, prs: list[dict], commits: list[dict]) ->
             len(pr_authors[w]), len(commit_authors[w]), cum,
         ])
     autosize(ws)
+    _weekly_velocity_charts(ws, headers, last_row=ws.max_row)
+
+
+def _weekly_velocity_charts(ws, headers: list[str], last_row: int) -> None:
+    """Attach a suite of charts to the Weekly Velocity sheet."""
+    col = {name: i + 1 for i, name in enumerate(headers)}
+    cats = Reference(ws, min_col=col["week"], min_row=2, max_row=last_row)
+
+    def bar(title: str, series_cols: list[str], y_title: str, style: int = 12) -> BarChart:
+        chart = BarChart()
+        chart.type = "col"
+        chart.style = style
+        chart.title = title
+        chart.y_axis.title = y_title
+        chart.x_axis.title = "ISO week"
+        chart.x_axis.tickLblSkip = 2  # show every other week label to reduce clutter
+        chart.height = 9
+        chart.width = 22
+        chart.legend.position = "b"
+        for cname in series_cols:
+            data = Reference(ws, min_col=col[cname], min_row=1,
+                             max_col=col[cname], max_row=last_row)
+            chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        return chart
+
+    def line(title: str, series_cols: list[str], y_title: str, style: int = 12) -> LineChart:
+        chart = LineChart()
+        chart.style = style
+        chart.title = title
+        chart.y_axis.title = y_title
+        chart.x_axis.title = "ISO week"
+        chart.x_axis.tickLblSkip = 2
+        chart.height = 9
+        chart.width = 22
+        chart.legend.position = "b"
+        for cname in series_cols:
+            data = Reference(ws, min_col=col[cname], min_row=1,
+                             max_col=col[cname], max_row=last_row)
+            chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        for s in chart.series:
+            s.smooth = True
+        return chart
+
+    # 1. PR flow per week — opened vs merged vs closed-unmerged (grouped bars).
+    pr_flow = bar(
+        "PR flow per week",
+        ["prs_opened", "prs_merged", "prs_closed_unmerged"],
+        "PR count",
+    )
+    pr_flow.grouping = "clustered"
+    ws.add_chart(pr_flow, "L2")
+
+    # 2. Cumulative merged PRs (line) — how the project has grown over time.
+    cum_chart = line(
+        "Cumulative merged PRs",
+        ["cumulative_merged"],
+        "PRs merged (running total)",
+    )
+    ws.add_chart(cum_chart, "L20")
+
+    # 3. Commits per week (bar).
+    commits_chart = bar(
+        "Commits to main per week (excl. merge commits)",
+        ["commits_to_main"],
+        "Commits",
+        style=11,
+    )
+    ws.add_chart(commits_chart, "L38")
+
+    # 4. Code churn — additions vs deletions per week (grouped bars).
+    churn = bar(
+        "Code churn per week",
+        ["commits_additions", "commits_deletions"],
+        "Lines of code",
+        style=13,
+    )
+    churn.grouping = "clustered"
+    ws.add_chart(churn, "L56")
+
+    # 5. Contributor count per week (line, two series).
+    contrib = line(
+        "Unique contributors per week",
+        ["unique_pr_authors", "unique_commit_authors"],
+        "Unique people",
+    )
+    ws.add_chart(contrib, "L74")
 
 
 def sheet_monthly_velocity(wb: Workbook, prs: list[dict], commits: list[dict]) -> None:
