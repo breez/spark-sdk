@@ -252,10 +252,16 @@ class PostgresMigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE`,
         ],
       },
-      { 
+      {
         name: "Add conversion_status to payment_metadata",
         sql: [
           `ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT`,
+        ],
+      },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: [
+          `UPDATE payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
         ],
       },
     ];

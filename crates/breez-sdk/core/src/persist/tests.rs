@@ -481,6 +481,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: pay_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: pay_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -508,6 +509,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: withdraw_metadata.lnurl_pay_info.clone(),
             lnurl_withdraw_info: withdraw_metadata.lnurl_withdraw_info.clone(),
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -536,6 +538,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -557,6 +560,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -585,6 +589,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: Some(lnurl_receive_metadata.clone()),
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -635,7 +640,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     // Test 13: Successful conversion payment
     let successful_sent_conversion_payment_metadata = PaymentMetadata {
         parent_payment_id: Some("after_conversion_pmt124".to_string()),
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool_abc".to_string(),
             conversion_id: "conversion_sent_pmt123".to_string(),
             status: crate::ConversionStatus::Completed,
@@ -703,7 +708,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
 
     // Test 14: Failed conversion payment with refund info
     let failed_with_refund_conversion_payment_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool_xyz".to_string(),
             conversion_id: "conversion_pmt789".to_string(),
             status: crate::ConversionStatus::Refunded,
@@ -733,7 +738,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
 
     // Test 15: Failed conversion payment with no refund info
     let failed_no_refund_conversion_payment_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool_xyz".to_string(),
             conversion_id: "conversion_pmt000".to_string(),
             status: crate::ConversionStatus::RefundNeeded,
@@ -951,6 +956,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     lnurl_pay_info: r_pay_lnurl,
                     lnurl_withdraw_info: r_withdraw_lnurl,
                     lnurl_receive_metadata: r_receive_metadata,
+                    conversion_info: r_conversion_info,
                 }),
                 Some(PaymentDetails::Lightning {
                     description: e_description,
@@ -960,12 +966,14 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
                     lnurl_pay_info: e_pay_lnurl,
                     lnurl_withdraw_info: e_withdraw_lnurl,
                     lnurl_receive_metadata: e_receive_metadata,
+                    conversion_info: e_conversion_info,
                 }),
             ) => {
                 assert_eq!(r_description, e_description);
                 assert_eq!(r_invoice, e_invoice);
                 assert_eq!(r_dest_pubkey, e_dest_pubkey);
                 assert_eq!(r_htlc, e_htlc);
+                assert_eq!(r_conversion_info, e_conversion_info);
 
                 // Test LNURL pay info if present
                 match (r_pay_lnurl, e_pay_lnurl) {
@@ -1081,6 +1089,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1153,6 +1162,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1173,6 +1183,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1405,6 +1416,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1425,6 +1437,7 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1596,6 +1609,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -1806,7 +1820,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -1820,7 +1834,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -1834,7 +1848,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -1851,7 +1865,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
                     SparkHtlcStatus::WaitingForPreimage,
                     SparkHtlcStatus::PreimageShared,
                 ]),
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -1870,7 +1884,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
                     SparkHtlcStatus::PreimageShared,
                     SparkHtlcStatus::Returned,
                 ]),
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -1884,7 +1898,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
 pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
     // Create payments with and without conversion info
     let payment_with_refund_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool1".to_string(),
             conversion_id: "with_refund".to_string(),
             status: crate::ConversionStatus::Refunded,
@@ -1921,7 +1935,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
     };
 
     let successful_conversion_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool1".to_string(),
             conversion_id: "successful_conversion".to_string(),
             status: crate::ConversionStatus::Completed,
@@ -1948,7 +1962,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
     };
 
     let payment_without_refund_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool1".to_string(),
             conversion_id: "without_refund".to_string(),
             status: crate::ConversionStatus::RefundNeeded,
@@ -2010,7 +2024,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: None,
-                conversion_refund_needed: Some(true),
+                conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
             }]),
             ..Default::default()
         })
@@ -2019,11 +2033,11 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
     assert_eq!(missing_refund_filter.len(), 1);
     assert_eq!(missing_refund_filter[0].id, "without_refund");
 
-    // Test filter for payments with transfer refund info present
-    let present_refund_filter = storage
+    // Test no conversion filter returns all token payments (only 1 is a Token payment)
+    let all_token_payments = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: Some(false),
+                conversion_filter: None,
                 tx_hash: None,
                 tx_type: None,
             }]),
@@ -2031,19 +2045,19 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         })
         .await
         .unwrap();
-    assert_eq!(present_refund_filter.len(), 1);
-    assert_eq!(present_refund_filter[0].id, "with_refund");
+    assert_eq!(all_token_payments.len(), 1);
+    assert_eq!(all_token_payments[0].id, "with_refund");
 
-    // Test multiple payment detail filters
+    // Test multiple payment detail filters (AmmRefundNeeded spark + all token)
     let multiple_filters = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![
                 crate::StoragePaymentDetailsFilter::Spark {
                     htlc_status: None,
-                    conversion_refund_needed: Some(true),
+                    conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
                 },
                 crate::StoragePaymentDetailsFilter::Token {
-                    conversion_refund_needed: Some(false),
+                    conversion_filter: None,
                     tx_hash: None,
                     tx_type: None,
                 },
@@ -2052,13 +2066,14 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         })
         .await
         .unwrap();
+    // 1 spark with refund_needed + 1 token payment (only 1 token in test data)
     assert_eq!(multiple_filters.len(), 2);
 
     // Test filter for token payments missing transfer refund info
     let token_no_refund_filter = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: Some(true),
+                conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
                 tx_hash: None,
                 tx_type: None,
             }]),
@@ -2068,31 +2083,154 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         .unwrap();
     assert_eq!(token_no_refund_filter.len(), 0);
 
-    // Test filter for spark payments with transfer refund info present
-    let spark_with_refund_filter = storage
+    // Test no conversion filter returns all spark payments (2 in test data)
+    let spark_all_filter = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: None,
-                conversion_refund_needed: Some(false),
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
         .await
         .unwrap();
-    assert_eq!(spark_with_refund_filter.len(), 1);
+    assert_eq!(spark_all_filter.len(), 2);
 
-    // Test filter for all payments regardless of transfer refund info
-    let all_payments_filter = storage
+    // Test filter for all spark payments (same as above, verifies consistency)
+    let all_spark_filter = storage
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: None,
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
         .await
         .unwrap();
-    assert_eq!(all_payments_filter.len(), 3);
+    assert_eq!(all_spark_filter.len(), 2);
+
+    // -----------------------------------------------------------------
+    // Orchestra-specific filter tests
+    // -----------------------------------------------------------------
+
+    // Add a Spark payment with Orchestra pending conversion_info
+    let orchestra_pending_metadata = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo::Orchestra {
+            order_id: "ord_123".to_string(),
+            quote_id: "q_456".to_string(),
+            destination_chain: "base".to_string(),
+            destination_asset: "USDC".to_string(),
+            destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+            estimated_out: 99_500_000,
+            status: crate::ConversionStatus::Pending,
+            fee: Some(500),
+            read_token: Some("rt_test_token".to_string()),
+        }),
+        ..Default::default()
+    };
+    let orchestra_payment = Payment {
+        id: "orchestra_pending".to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 100_000,
+        fees: 0,
+        timestamp: 4000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage.insert_payment(orchestra_payment).await.unwrap();
+    storage
+        .insert_payment_metadata("orchestra_pending".to_string(), orchestra_pending_metadata)
+        .await
+        .unwrap();
+
+    // Add a completed Orchestra payment (should NOT match OrchestraPending)
+    let orchestra_completed_metadata = PaymentMetadata {
+        conversion_info: Some(crate::ConversionInfo::Orchestra {
+            order_id: "ord_789".to_string(),
+            quote_id: "q_012".to_string(),
+            destination_chain: "solana".to_string(),
+            destination_asset: "USDC".to_string(),
+            destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            estimated_out: 50_000_000,
+            status: crate::ConversionStatus::Completed,
+            fee: Some(250),
+            read_token: None,
+        }),
+        ..Default::default()
+    };
+    let orchestra_completed_payment = Payment {
+        id: "orchestra_completed".to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 50_000,
+        fees: 0,
+        timestamp: 5000,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+    storage
+        .insert_payment(orchestra_completed_payment)
+        .await
+        .unwrap();
+    storage
+        .insert_payment_metadata(
+            "orchestra_completed".to_string(),
+            orchestra_completed_metadata,
+        )
+        .await
+        .unwrap();
+
+    // OrchestraPending should return only the pending orchestra payment
+    let orchestra_pending_filter = storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
+                htlc_status: None,
+                conversion_filter: Some(crate::persist::ConversionFilter::OrchestraPending),
+            }]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(orchestra_pending_filter.len(), 1);
+    assert_eq!(orchestra_pending_filter[0].id, "orchestra_pending");
+
+    // AmmRefundNeeded should still only return the AMM refund payment (not orchestra ones)
+    let amm_only = storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
+                htlc_status: None,
+                conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
+            }]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(amm_only.len(), 1);
+    assert_eq!(amm_only[0].id, "without_refund");
+
+    // No filter should return all spark payments (original 2 + 2 orchestra = 4)
+    let all_spark_with_orchestra = storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
+                htlc_status: None,
+                conversion_filter: None,
+            }]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(all_spark_with_orchestra.len(), 4);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2169,7 +2307,7 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Transfer),
                 tx_hash: None,
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -2185,7 +2323,7 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Mint),
                 tx_hash: None,
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -2200,7 +2338,7 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Burn),
                 tx_hash: None,
-                conversion_refund_needed: None,
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -2334,6 +2472,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2354,6 +2493,7 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2669,7 +2809,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
 
     // Step 1: Set metadata with only conversion_info
     let metadata1 = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
+        conversion_info: Some(crate::ConversionInfo::Amm {
             pool_id: "pool_123".to_string(),
             conversion_id: "conv_123".to_string(),
             status: crate::ConversionStatus::Completed,
@@ -2693,7 +2833,10 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         panic!("Expected Spark payment details");
     };
     assert!(conversion_info.is_some());
-    assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
+    assert!(matches!(
+        conversion_info.as_ref().unwrap(),
+        crate::ConversionInfo::Amm { conversion_id, .. } if conversion_id == "conv_123"
+    ));
 
     // Step 2: Set metadata with only parent_payment_id (conversion_info is None)
     let metadata2 = PaymentMetadata {
@@ -2729,7 +2872,10 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         conversion_info.is_some(),
         "conversion_info should be preserved, not cleared by partial update"
     );
-    assert_eq!(conversion_info.as_ref().unwrap().conversion_id, "conv_123");
+    assert!(matches!(
+        conversion_info.as_ref().unwrap(),
+        crate::ConversionInfo::Amm { conversion_id, .. } if conversion_id == "conv_123"
+    ));
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2756,6 +2902,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2782,6 +2929,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -2808,6 +2956,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         }),
         conversion_details: None,
     };
@@ -3158,4 +3307,182 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
         crate::ConversionStatus::Completed,
         "conversion_status should be updated to Completed"
     );
+}
+
+fn boltz_conversion_info(
+    swap_id: &str,
+    status: crate::ConversionStatus,
+    estimated_out: u128,
+    delivered_amount: Option<u128>,
+    lz_guid: Option<String>,
+) -> crate::ConversionInfo {
+    crate::ConversionInfo::Boltz {
+        swap_id: swap_id.to_string(),
+        destination_chain: "arbitrum".to_string(),
+        destination_asset: "USDT".to_string(),
+        destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+        invoice: "lnbc1000n1pexample".to_string(),
+        invoice_amount_sats: 100_000,
+        estimated_out,
+        delivered_amount,
+        lz_guid,
+        status,
+        fee: Some(1_500),
+        max_slippage_bps: 100,
+        quote_degraded: false,
+    }
+}
+
+fn boltz_payment(id: &str) -> Payment {
+    // Boltz reverse swaps pay a BOLT11 hold invoice, so the source-side
+    // Payment row is Lightning-flavored. Test coverage must reflect this —
+    // using Spark details here masked the listener bug that shipped in the
+    // Boltz cross-chain provider rollout.
+    Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 100_000,
+        fees: 0,
+        timestamp: 6000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Boltz hold invoice".to_string()),
+            invoice: "lnbc1000n1pexample".to_string(),
+            destination_pubkey: "02boltznode".to_string(),
+            htlc_details: test_lightning_htlc("deadbeefcafebabe"),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    }
+}
+
+pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
+    let metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_pending",
+            crate::ConversionStatus::Pending,
+            71_000_000,
+            None,
+            None,
+        )),
+        ..Default::default()
+    };
+    let payment = boltz_payment("boltz_pending_payment");
+    storage.insert_payment(payment).await.unwrap();
+    storage
+        .insert_payment_metadata("boltz_pending_payment".to_string(), metadata)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("boltz_pending_payment".to_string())
+        .await
+        .unwrap();
+
+    let Some(PaymentDetails::Lightning {
+        conversion_info:
+            Some(crate::ConversionInfo::Boltz {
+                swap_id,
+                destination_chain,
+                destination_asset,
+                destination_address,
+                invoice_amount_sats,
+                estimated_out,
+                delivered_amount,
+                lz_guid,
+                status,
+                fee,
+                max_slippage_bps,
+                quote_degraded,
+                ..
+            }),
+        ..
+    }) = fetched.details
+    else {
+        panic!("expected Boltz ConversionInfo on Lightning details after insert");
+    };
+    assert_eq!(swap_id, "boltz_swap_pending");
+    assert_eq!(destination_chain, "arbitrum");
+    assert_eq!(destination_asset, "USDT");
+    assert_eq!(
+        destination_address,
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    );
+    assert_eq!(invoice_amount_sats, 100_000);
+    assert_eq!(estimated_out, 71_000_000);
+    assert_eq!(delivered_amount, None);
+    assert_eq!(lz_guid, None);
+    assert_eq!(status, crate::ConversionStatus::Pending);
+    assert_eq!(fee, Some(1_500));
+    assert_eq!(max_slippage_bps, 100);
+    assert!(!quote_degraded);
+    assert!(fetched.conversion_details.is_none());
+}
+
+pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
+    // Insert a pending Boltz payment with no delivered amount / lz guid yet.
+    let pending_metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_terminal",
+            crate::ConversionStatus::Pending,
+            71_000_000,
+            None,
+            None,
+        )),
+        ..Default::default()
+    };
+    let payment = boltz_payment("boltz_terminal_payment");
+    storage.insert_payment(payment).await.unwrap();
+    storage
+        .insert_payment_metadata("boltz_terminal_payment".to_string(), pending_metadata)
+        .await
+        .unwrap();
+
+    // Simulate the event listener transitioning the swap to Completed and
+    // populating delivered_amount + lz_guid from the claim receipt.
+    // estimated_out must stay frozen at the prepare-time value.
+    let completed_metadata = PaymentMetadata {
+        conversion_info: Some(boltz_conversion_info(
+            "boltz_swap_terminal",
+            crate::ConversionStatus::Completed,
+            71_000_000,
+            Some(70_900_000),
+            Some("0xabc123".to_string()),
+        )),
+        ..Default::default()
+    };
+    storage
+        .insert_payment_metadata("boltz_terminal_payment".to_string(), completed_metadata)
+        .await
+        .unwrap();
+
+    let fetched = storage
+        .get_payment_by_id("boltz_terminal_payment".to_string())
+        .await
+        .unwrap();
+    let Some(PaymentDetails::Lightning {
+        conversion_info:
+            Some(crate::ConversionInfo::Boltz {
+                status,
+                estimated_out,
+                delivered_amount,
+                lz_guid,
+                ..
+            }),
+        ..
+    }) = fetched.details
+    else {
+        panic!("expected Boltz ConversionInfo on Lightning details after update");
+    };
+    assert_eq!(status, crate::ConversionStatus::Completed);
+    // Regression guard: estimated_out is frozen at prepare time, never
+    // overwritten by the event listener.
+    assert_eq!(estimated_out, 71_000_000);
+    assert_eq!(delivered_amount, Some(70_900_000));
+    assert_eq!(lz_guid, Some("0xabc123".to_string()));
+    assert!(fetched.conversion_details.is_none());
 }

@@ -1,0 +1,282 @@
+//! Boltz reverse-swap cross-chain provider.
+//!
+//! Implements [`CrossChainService`] for Boltz's sats → USDT reverse swap.
+//! Routing/quoting happens via the inner [`boltz_client::BoltzService`];
+//! payment rows are written at send time only (after the lightning leg
+//! succeeds) and updated silently by [`super::boltz_event_listener`] as the
+//! WebSocket drives the swap to a terminal state.
+
+use std::sync::Arc;
+
+use boltz_client::{
+    BoltzError, BoltzService as BoltzClient,
+    config::{BoltzConfig as BoltzClientConfig, MAX_SLIPPAGE_BPS},
+    models::{ChainId, PreparedSwap},
+};
+use spark_wallet::SparkWallet;
+use tracing::{debug, error, info};
+
+use super::{
+    CrossChainPrepared, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
+    CrossChainRoutePair, CrossChainSendResult, CrossChainService,
+};
+use crate::{
+    ConversionInfo, ConversionStatus, Network, PaymentMetadata, Storage, error::SdkError,
+    sdk::LightningSender, utils::payments::insert_or_cache_payment_metadata,
+};
+
+pub(crate) struct BoltzService {
+    client: Arc<BoltzClient>,
+    spark_wallet: Arc<SparkWallet>,
+    storage: Arc<dyn Storage>,
+    /// Shared helper that owns the "pay LN invoice + persist Payment row +
+    /// poll SSP" sequence. Reused by `send_bolt11_invoice` on the SDK and
+    /// by this provider so Boltz hold-invoice pays behave identically to
+    /// direct LN sends.
+    lightning_sender: Arc<LightningSender>,
+}
+
+impl BoltzService {
+    /// Construct the SDK-side wrapper. Does not perform I/O; the caller is
+    /// expected to construct the inner [`BoltzClient`] (which owns the
+    /// WebSocket + background monitor) and pass it in already initialized.
+    pub(crate) fn new(
+        client: Arc<BoltzClient>,
+        spark_wallet: Arc<SparkWallet>,
+        storage: Arc<dyn Storage>,
+        lightning_sender: Arc<LightningSender>,
+    ) -> Self {
+        info!("Boltz service initialized");
+        Self {
+            client,
+            spark_wallet,
+            storage,
+            lightning_sender,
+        }
+    }
+
+    /// Best-effort helper to build a boltz-client [`BoltzClientConfig`] for
+    /// the given network. Returns `None` on non-mainnet networks since Boltz
+    /// only supports mainnet today.
+    pub(crate) fn default_client_config(network: Network) -> Option<BoltzClientConfig> {
+        const BREEZ_REFERRAL_ID: &str = "breez-sdk";
+        match network {
+            Network::Mainnet => Some(BoltzClientConfig::mainnet(BREEZ_REFERRAL_ID.to_string())),
+            Network::Regtest => None,
+        }
+    }
+}
+
+#[macros::async_trait]
+impl CrossChainService for BoltzService {
+    async fn get_routes(
+        &self,
+        filter: &CrossChainRouteFilter,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        let address_details = match filter {
+            CrossChainRouteFilter::Send { address_details } => address_details,
+            // v1 Boltz is reverse-swap only (BTC/sats -> external). Submarine
+            // swaps (USDT -> LN) are out of scope for v1 and will populate
+            // this branch when they land.
+            CrossChainRouteFilter::Receive { .. } => return Ok(Vec::new()),
+        };
+
+        // `chains_accepting` validates the raw recipient address against
+        // every destination's transport and returns only those whose parser
+        // accepts it — this replaces the old hand-written address-family
+        // filter and automatically picks up any new chains that USDT0
+        // publishes.
+        let routes = self
+            .client
+            .chains_accepting(&address_details.address)
+            .into_iter()
+            .map(|spec| CrossChainRoutePair {
+                provider: CrossChainProvider::Boltz,
+                chain: spec.id.as_str().to_string(),
+                asset: spec.asset_symbol().to_string(),
+                contract_address: spec.token_address.clone(),
+                decimals: 6,
+                exact_out_eligible: false,
+            })
+            .collect();
+        Ok(routes)
+    }
+
+    async fn prepare(
+        &self,
+        recipient_address: &str,
+        route: &CrossChainRoutePair,
+        amount: u128,
+        token_identifier: Option<String>,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<CrossChainPrepared, SdkError> {
+        // v1 Boltz is BTC-only. Tokens must be rejected before we commit any
+        // state on Boltz's side.
+        if token_identifier.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Boltz does not support token sends in v1".to_string(),
+            ));
+        }
+
+        let invoice_amount_sats = u64::try_from(amount).map_err(|_| {
+            SdkError::InvalidInput(format!(
+                "Amount {amount} exceeds u64::MAX sats for Boltz reverse swap"
+            ))
+        })?;
+
+        let chain = ChainId::new(&route.chain);
+
+        if let Some(bps) = max_slippage_bps
+            && bps > MAX_SLIPPAGE_BPS
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "max_slippage_bps {bps} exceeds Boltz maximum {MAX_SLIPPAGE_BPS}"
+            )));
+        }
+
+        debug!(
+            "Boltz: preparing reverse swap to {recipient_address} on {}, amount {invoice_amount_sats} sats",
+            route.chain
+        );
+
+        let prepared: PreparedSwap = self
+            .client
+            .prepare_reverse_swap_from_sats(
+                recipient_address,
+                chain,
+                invoice_amount_sats,
+                max_slippage_bps,
+            )
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
+
+        // `create_reverse_swap` commits a HD key index, POSTs to Boltz to
+        // create the swap on the server, and writes a `BoltzSwap` row into
+        // the adapter cache KV. After this call Boltz is holding the swap
+        // state, so the only path back to a clean state is a timeout.
+        let created = self
+            .client
+            .create_reverse_swap(&prepared)
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
+
+        let ln_fee_sats = self
+            .spark_wallet
+            .fetch_lightning_send_fee_estimate(&created.invoice, None)
+            .await
+            .map_err(|e| {
+                SdkError::Generic(format!(
+                    "Failed to fetch lightning send fee estimate for Boltz invoice: {e}"
+                ))
+            })?;
+
+        // Fee denominated in sats: Boltz spread (invoice sats - on-chain sats
+        // paid out) + lightning routing fee budget.
+        let boltz_spread_sats = created
+            .invoice_amount_sats
+            .saturating_sub(prepared.estimated_onchain_amount);
+        let fee_amount = u128::from(boltz_spread_sats).saturating_add(u128::from(ln_fee_sats));
+        let estimated_out = u128::from(prepared.usdt_amount);
+        let invoice_amount_sats = created.invoice_amount_sats;
+        let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
+
+        let provider_context = CrossChainProviderContext::Boltz {
+            swap_id: created.swap_id.clone(),
+            invoice: created.invoice,
+            ln_fee_sats,
+            max_slippage_bps: resolved_slippage,
+        };
+
+        Ok(CrossChainPrepared {
+            amount_in: u128::from(invoice_amount_sats),
+            estimated_out,
+            fee_amount,
+            fee_asset: None,
+            expires_at: prepared.expires_at.to_string(),
+            pair: route.clone(),
+            recipient_address: recipient_address.to_string(),
+            token_identifier: None,
+            provider_context,
+        })
+    }
+
+    #[allow(clippy::large_futures)]
+    async fn send(&self, prepared: &CrossChainPrepared) -> Result<CrossChainSendResult, SdkError> {
+        let CrossChainProviderContext::Boltz {
+            swap_id,
+            invoice,
+            ln_fee_sats,
+            max_slippage_bps,
+        } = &prepared.provider_context
+        else {
+            return Err(SdkError::Generic(
+                "Boltz send called with non-Boltz provider context".to_string(),
+            ));
+        };
+
+        let invoice_amount_sats = u64::try_from(prepared.amount_in)
+            .map_err(|e| SdkError::Generic(format!("Boltz invoice amount exceeds u64: {e}")))?;
+
+        // Delegate the LN leg to the shared helper. It pays the hold
+        // invoice, builds the Payment row, persists it, and spawns SSP-side
+        // polling — the same path `send_bolt11_invoice` takes. On failure
+        // the hold invoice eventually times out on Boltz's side; no payment
+        // row is written, so there is nothing to reconcile on ours.
+        let sdk_payment = self
+            .lightning_sender
+            .pay_and_persist_lightning_invoice(
+                invoice,
+                None,
+                *ln_fee_sats,
+                false,
+                prepared.amount_in,
+                None,
+            )
+            .await
+            .map_err(|e| SdkError::Generic(format!("Boltz lightning payment failed: {e}")))?;
+        let spark_payment_id = sdk_payment.id.clone();
+
+        debug!("Boltz: lightning payment {spark_payment_id} sent for swap {swap_id}");
+
+        let metadata = PaymentMetadata {
+            conversion_info: Some(ConversionInfo::Boltz {
+                swap_id: swap_id.clone(),
+                destination_chain: prepared.pair.chain.clone(),
+                destination_asset: prepared.pair.asset.clone(),
+                destination_address: prepared.recipient_address.clone(),
+                invoice: invoice.clone(),
+                invoice_amount_sats,
+                estimated_out: prepared.estimated_out,
+                delivered_amount: None,
+                lz_guid: None,
+                status: ConversionStatus::Pending,
+                fee: Some(prepared.fee_amount),
+                max_slippage_bps: *max_slippage_bps,
+                quote_degraded: false,
+            }),
+            ..Default::default()
+        };
+
+        let payment_id = insert_or_cache_payment_metadata(
+            &spark_payment_id,
+            metadata,
+            &self.spark_wallet,
+            &self.storage,
+            true,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            error!("Failed to persist Boltz metadata for payment {spark_payment_id}: {e:?}");
+            spark_payment_id.clone()
+        });
+
+        Ok(CrossChainSendResult {
+            order_id: swap_id.clone(),
+            payment_id,
+        })
+    }
+}
+
+fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
+    SdkError::Generic(format!("Boltz: {err}"))
+}

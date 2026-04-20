@@ -27,6 +27,7 @@ spark.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]

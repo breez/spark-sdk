@@ -1,11 +1,15 @@
 use bitcoin::hashes::sha256;
+use bitcoin::secp256k1::PublicKey;
+use breez_sdk_common::input;
 use platform_utils::time::Duration;
+use platform_utils::time::SystemTime;
+use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{Instrument, error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -14,10 +18,11 @@ use crate::{
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
+    cross_chain::{CrossChainPrepared, CrossChainRoutePair},
     error::SdkError,
     events::SdkEvent,
     models::{
-        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
+        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
         PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
         conversion_steps_from_payments,
@@ -27,15 +32,11 @@ use crate::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        payments::get_payment_with_conversion_details,
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
 };
-use bitcoin::secp256k1::PublicKey;
-use platform_utils::time::SystemTime;
-use platform_utils::tokio;
-use spark_wallet::{InvoiceDescription, Preimage};
 
 use super::{
     BreezSdk, SyncType,
@@ -146,16 +147,41 @@ impl BreezSdk {
         &self,
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
-        let parsed_input = self.parse(&request.payment_request).await?;
+        let fee_policy = request.fee_policy.unwrap_or_default();
+        let token_identifier = request.token_identifier.clone();
+
+        // Handle structured CrossChain variant directly — no parse step needed.
+        if let PaymentRequest::CrossChain {
+            ref address,
+            ref route,
+        } = request.payment_request
+        {
+            let amount = request.amount.ok_or(SdkError::InvalidInput(
+                "Amount is required for cross-chain sends".to_string(),
+            ))?;
+
+            return self
+                .prepare_cross_chain_send(address, route, amount, token_identifier, fee_policy)
+                .await;
+        }
+
+        // Input string path — parse and dispatch as before.
+        let PaymentRequest::Input {
+            input: ref input_str,
+        } = request.payment_request
+        else {
+            return Err(SdkError::InvalidInput(
+                "Expected PaymentRequest::Input".to_string(),
+            ));
+        };
+
+        let parsed_input = self.parse(input_str).await?;
 
         validate_prepare_send_payment_request(
             &parsed_input,
             &request,
             &self.spark_wallet.get_identity_public_key().to_string(),
         )?;
-
-        let fee_policy = request.fee_policy.unwrap_or_default();
-        let token_identifier = request.token_identifier.clone();
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
@@ -250,9 +276,8 @@ impl BreezSdk {
                 })
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
-                let spark_address: Option<SparkAddress> = self
-                    .spark_wallet
-                    .extract_spark_address(&request.payment_request)?;
+                let spark_address: Option<SparkAddress> =
+                    self.spark_wallet.extract_spark_address(input_str)?;
 
                 let spark_transfer_fee_sats = if spark_address.is_some() {
                     Some(0)
@@ -283,10 +308,7 @@ impl BreezSdk {
                 // For FeesIncluded, estimate fee for user's full amount
                 let lightning_fee_sats = self
                     .spark_wallet
-                    .fetch_lightning_send_fee_estimate(
-                        &request.payment_request,
-                        Some(amount.try_into()?),
-                    )
+                    .fetch_lightning_send_fee_estimate(input_str, Some(amount.try_into()?))
                     .await?;
 
                 // Validate receiver amount is positive for FeesIncluded
@@ -402,6 +424,17 @@ impl BreezSdk {
                     conversion_estimate,
                     fee_policy,
                 })
+            }
+            InputType::CrossChainAddress(_) => {
+                // Cross-chain addresses detected via parse() require route
+                // selection. The caller should use get_cross_chain_routes()
+                // to discover routes, then PaymentRequest::CrossChain with
+                // the selected route.
+                Err(SdkError::InvalidInput(
+                    "Cross-chain address detected. Use get_cross_chain_routes() to discover \
+                     routes, then PaymentRequest::CrossChain { address, route }."
+                        .to_string(),
+                ))
             }
             _ => Err(SdkError::InvalidInput(
                 "Unsupported payment method".to_string(),
@@ -524,6 +557,46 @@ impl BreezSdk {
         Ok(ReceivePaymentResponse {
             payment_request: invoice,
             fee: 0,
+        })
+    }
+
+    /// Prepare a cross-chain send using the given route.
+    async fn prepare_cross_chain_send(
+        &self,
+        address: &str,
+        route: &CrossChainRoutePair,
+        amount: u128,
+        token_identifier: Option<String>,
+        fee_policy: FeePolicy,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        // Validate address is a recognized cross-chain address.
+        if input::detect_address_family(address).is_none() {
+            return Err(SdkError::InvalidInput(
+                "Address is not a recognized cross-chain address".to_string(),
+            ));
+        }
+
+        let service = self.cross_chain_providers.get(route.provider)?;
+
+        let prepared = service
+            .prepare(address, route, amount, token_identifier.clone(), None)
+            .await?;
+
+        Ok(PrepareSendPaymentResponse {
+            payment_method: SendPaymentMethod::CrossChainAddress {
+                route: prepared.pair,
+                recipient_address: prepared.recipient_address,
+                amount_in: prepared.amount_in,
+                estimated_out: prepared.estimated_out,
+                fee_amount: prepared.fee_amount,
+                fee_asset: prepared.fee_asset,
+                expires_at: prepared.expires_at,
+                provider_context: prepared.provider_context,
+            },
+            amount,
+            token_identifier,
+            conversion_estimate: None,
+            fee_policy,
         })
     }
 
@@ -777,6 +850,13 @@ impl BreezSdk {
                     .await?;
                 Ok((response, purpose, uses_amount_in))
             }
+            SendPaymentMethod::CrossChainAddress { .. } => {
+                // Cross-chain sends bypass the AMM token converter entirely;
+                // they should never reach pre-send conversion.
+                Err(SdkError::InvalidInput(
+                    "Cross-chain sends do not support AMM conversions".to_string(),
+                ))
+            }
         }
     }
 
@@ -1002,6 +1082,61 @@ impl BreezSdk {
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                 self.send_bitcoin_address(address, fee_quote, request, amount_override)
                     .await
+            }
+            SendPaymentMethod::CrossChainAddress {
+                route,
+                recipient_address,
+                amount_in,
+                estimated_out,
+                fee_amount,
+                fee_asset,
+                expires_at,
+                provider_context,
+            } => {
+                let service = self.cross_chain_providers.get(route.provider)?;
+
+                let prepared = CrossChainPrepared {
+                    amount_in: *amount_in,
+                    estimated_out: *estimated_out,
+                    fee_amount: *fee_amount,
+                    fee_asset: fee_asset.clone(),
+                    expires_at: expires_at.clone(),
+                    pair: route.clone(),
+                    recipient_address: recipient_address.clone(),
+                    token_identifier: token_identifier.clone(),
+                    provider_context: provider_context.clone(),
+                };
+
+                let response = service.send(&prepared).await?;
+
+                // Token transfers may not trigger the same wallet event
+                // path as BTC transfers — kick off a sync so the payment
+                // row is available for wait_for_payment.
+                if token_identifier.is_some() {
+                    self.sync_coordinator
+                        .trigger_sync_no_wait(SyncType::WalletState, true)
+                        .await;
+                }
+
+                // The Spark transfer leg produces a payment row via the
+                // existing wallet event path. The provider's send() has
+                // already attached conversion metadata to it. Wait for
+                // the payment to appear in storage — it may not be
+                // immediately available if async sync hasn't processed
+                // the Spark transfer yet.
+                let payment = self
+                    .wait_for_payment(
+                        WaitForPaymentIdentifier::PaymentId(response.payment_id.clone()),
+                        DEFAULT_CONVERSION_TIMEOUT_SECS,
+                    )
+                    .await
+                    .map_err(|_| {
+                        SdkError::Generic(format!(
+                            "Cross-chain send submitted (order {}), but payment row not yet synced.",
+                            response.order_id
+                        ))
+                    })?;
+                Ok(SendPaymentResponse { payment })
             }
         }
     }
@@ -1276,48 +1411,22 @@ impl BreezSdk {
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
 
-        let payment_response = Box::pin(
-            self.spark_wallet.pay_lightning_invoice(
+        let payment = self
+            .lightning_sender
+            .pay_and_persist_lightning_invoice(
                 &invoice_details.invoice.bolt11,
                 amount_to_send
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
                     .transpose()?,
-                Some(fee_sats),
+                fee_sats,
                 prefer_spark,
+                amount,
                 transfer_id,
-            ),
-        )
-        .await?;
-        let payment = match payment_response.lightning_payment {
-            Some(lightning_payment) => {
-                let ssp_id = lightning_payment.id.clone();
-                let htlc_details = payment_response
-                    .transfer
-                    .htlc_preimage_request
-                    .ok_or_else(|| {
-                        SdkError::Generic(
-                            "Missing HTLC details for Lightning send payment".to_string(),
-                        )
-                    })?
-                    .try_into()?;
-                let payment = Payment::from_lightning(
-                    lightning_payment,
-                    amount,
-                    payment_response.transfer.id.to_string(),
-                    htlc_details,
-                )?;
-                self.poll_lightning_send_payment(&payment, ssp_id);
-                payment
-            }
-            None => payment_response.transfer.try_into()?,
-        };
+            )
+            .await?;
 
         let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
-
         if completion_timeout_secs == 0 {
-            // Insert the payment into storage to make it immediately available for listing
-            self.storage.insert_payment(payment.clone()).await?;
-
             return Ok(SendPaymentResponse { payment });
         }
 
@@ -1329,7 +1438,7 @@ impl BreezSdk {
             .await
             .unwrap_or(payment);
 
-        // Insert the payment into storage to make it immediately available for listing
+        // Re-persist the waited-on payment so listing reflects the latest state.
         self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
@@ -1463,72 +1572,6 @@ impl BreezSdk {
 
         self.event_emitter.remove_internal_listener(&id).await;
         result
-    }
-
-    // Pools the lightning send payment until it is in completed state.
-    fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
-        const MAX_POLL_ATTEMPTS: u32 = 20;
-        let payment_id = payment.id.clone();
-        info!("Polling lightning send payment {}", payment_id);
-
-        let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
-            _ => None,
-        }) else {
-            error!(
-                "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
-            );
-            return;
-        };
-        let spark_wallet = self.spark_wallet.clone();
-        let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
-        let event_emitter = self.event_emitter.clone();
-        let payment = payment.clone();
-        let payment_id = payment_id.clone();
-        let mut shutdown = self.shutdown_sender.subscribe();
-        let span = tracing::Span::current();
-
-        tokio::spawn(async move {
-            for i in 0..MAX_POLL_ATTEMPTS {
-                info!(
-                    "Polling lightning send payment {} attempt {}",
-                    payment_id, i
-                );
-                select! {
-                    _ = shutdown.changed() => {
-                        info!("Shutdown signal received");
-                        return;
-                    },
-                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                            info!("Polling payment status = {} {:?}", payment.status, p.status);
-                            if payment.status != PaymentStatus::Pending {
-                                info!("Polling payment completed status = {}", payment.status);
-                                // Update storage before emitting event so that
-                                // get_payment returns the correct status immediately.
-                                if let Err(e) = storage.insert_payment(payment.clone()).await {
-                                    error!("Failed to update payment in storage: {e:?}");
-                                }
-                                // Fetch the payment to include already stored metadata
-                                get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                sync_coordinator
-                                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                                    .await;
-                                return;
-                            }
-                        }
-
-                        let sleep_time = if i < 5 {
-                            Duration::from_secs(1)
-                        } else {
-                            Duration::from_secs(i.into())
-                        };
-                        tokio::time::sleep(sleep_time).await;
-                    }
-                }
-            }
-        }.instrument(span));
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -1807,12 +1850,17 @@ impl BreezSdk {
             return Ok(None);
         }
 
+        let input_str = match &request.payment_request {
+            PaymentRequest::Input { input: s } => s.as_str(),
+            PaymentRequest::CrossChain { .. } => {
+                return Err(SdkError::InvalidInput(
+                    "Token conversion is not supported for cross-chain sends".to_string(),
+                ));
+            }
+        };
         let lightning_fee_sats = self
             .spark_wallet
-            .fetch_lightning_send_fee_estimate(
-                &request.payment_request,
-                Some(estimated_sats.try_into()?),
-            )
+            .fetch_lightning_send_fee_estimate(input_str, Some(estimated_sats.try_into()?))
             .await?;
 
         let total_u64: u64 = estimated_sats.try_into()?;

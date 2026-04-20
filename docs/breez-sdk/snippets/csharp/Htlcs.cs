@@ -11,7 +11,7 @@ namespace BreezSdkSnippets
             // Set the amount you wish the pay the receiver
             ulong? amountSats = 50_000UL;
             var prepareRequest = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: amountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
