@@ -139,7 +139,7 @@ bitcoin = { version = "0.32.6", features = ["serde"] }
 bitflags = "2.10.0"
 # bitreq = { version = "0.3.4" }
 bitreq = { git = "https://github.com/breez/corepc", branch = "yse-bitreq-rustls" }
-boltz-client = { git = "https://github.com/breez/boltz-client", rev = "0a3c49b404983529cd964c41a44cf99e8c755ef3" }
+boltz-client = { git = "https://github.com/breez/boltz-client", rev = "bc291392e232fe39741b988f484b540e4a827ec4" }
 breez-sdk-common = { path = "crates/breez-sdk/common", default-features = false }
 breez-sdk-spark = { path = "crates/breez-sdk/core" }
 built = { version = "0.8.0", features = ["git2"] }
