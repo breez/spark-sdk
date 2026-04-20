@@ -436,7 +436,7 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
 
     val prepareResponse = sdk.prepareSendPayment(
         PrepareSendPaymentRequest(
-            paymentRequest = paymentRequest,
+            paymentRequest = PaymentRequest.Input(input = paymentRequest),
             amount = amount,
             tokenIdentifier = tokenId,
             conversionOptions = conversionOptions,

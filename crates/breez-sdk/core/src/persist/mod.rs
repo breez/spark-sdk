@@ -115,16 +115,26 @@ impl From<std::num::TryFromIntError> for StorageError {
     }
 }
 
+/// Selects payments by conversion type + status for background tasks.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionFilter {
+    /// AMM conversions that need a refund (clawback).
+    AmmRefundNeeded,
+    /// Orchestra orders that have not yet reached a terminal state.
+    OrchestraPending,
+}
+
 /// Storage-internal variant of [`PaymentDetailsFilter`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StoragePaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
@@ -141,14 +151,16 @@ impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
                 conversion_refund_needed,
             } => StoragePaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_filter: conversion_refund_needed
+                    .and_then(|v| v.then_some(ConversionFilter::AmmRefundNeeded)),
             },
             PaymentDetailsFilter::Token {
                 conversion_refund_needed,
                 tx_hash,
                 tx_type,
             } => StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_filter: conversion_refund_needed
+                    .and_then(|v| v.then_some(ConversionFilter::AmmRefundNeeded)),
                 tx_hash,
                 tx_type,
             },
@@ -164,17 +176,19 @@ impl From<StoragePaymentDetailsFilter> for PaymentDetailsFilter {
         match filter {
             StoragePaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_filter,
             } => PaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_refund_needed: conversion_filter
+                    .map(|f| matches!(f, ConversionFilter::AmmRefundNeeded)),
             },
             StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_filter,
                 tx_hash,
                 tx_type,
             } => PaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_refund_needed: conversion_filter
+                    .map(|f| matches!(f, ConversionFilter::AmmRefundNeeded)),
                 tx_hash,
                 tx_type,
             },

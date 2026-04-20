@@ -22,7 +22,9 @@ use std::{
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
-    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed, error::DepositClaimError,
+    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
+    cross_chain::{CrossChainProviderContext, CrossChainRoutePair},
+    error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -335,15 +337,21 @@ impl TryFrom<&Payment> for ConversionStep {
                 )));
             }
         };
+        let amount_adjustment = match conversion_info {
+            ConversionInfo::Amm {
+                amount_adjustment, ..
+            } => amount_adjustment.clone(),
+            ConversionInfo::Orchestra { .. } | ConversionInfo::Boltz { .. } => None,
+        };
         Ok(ConversionStep {
             payment_id: payment.id.clone(),
             amount: payment.amount,
             fee: payment
                 .fees
-                .saturating_add(conversion_info.fee.unwrap_or(0)),
+                .saturating_add(conversion_info.fee().unwrap_or(0)),
             method: payment.method,
             token_metadata,
-            amount_adjustment: conversion_info.amount_adjustment.clone(),
+            amount_adjustment,
         })
     }
 }
@@ -400,6 +408,11 @@ pub enum PaymentDetails {
 
         /// Lnurl receive information if this was a received lnurl payment.
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+
+        /// The information for a conversion — populated when this Lightning
+        /// payment is the source leg of a cross-chain conversion (e.g. a
+        /// Boltz reverse swap paying a hold invoice).
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -613,6 +626,13 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Whether cross-chain providers (Orchestra and Boltz) are enabled.
+    ///
+    /// When `true` (default on mainnet) the SDK enables cross-chain sends
+    /// (sats → USDT on external chains) via Orchestra and Boltz. On regtest
+    /// the flag has no effect since no provider is available.
+    pub cross_chain_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1121,6 +1141,33 @@ pub enum SendPaymentMethod {
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
     },
+    /// A cross-chain send via a bridge/swap provider.
+    CrossChainAddress {
+        /// The route selected for this cross-chain send (includes provider, chain, asset).
+        route: CrossChainRoutePair,
+        /// Raw destination address (e.g. `0xabc...`).
+        recipient_address: String,
+        /// Amount (in source base units) the user must transfer.
+        amount_in: u128,
+        /// Estimated amount the recipient will receive in the destination
+        /// asset's base units. Already nets out any destination-chain costs
+        /// (e.g. gas, bridge messaging fees): those are reflected in the gap
+        /// between `amount_in` and `estimated_out` rather than in `fee_amount`.
+        estimated_out: u128,
+        /// Sender-side service fee charged by the provider, in `fee_asset`
+        /// base units. Does **not** include destination-chain costs (gas,
+        /// bridge messaging, etc.), which are already deducted from
+        /// `estimated_out`.
+        fee_amount: u128,
+        /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
+        fee_asset: Option<String>,
+        /// ISO8601 timestamp after which this quote is no longer valid.
+        expires_at: String,
+        /// Provider-internal state produced by `prepareSendPayment` and
+        /// required by `sendPayment`. Callers should round-trip this value
+        /// as-is.
+        provider_context: CrossChainProviderContext,
+    },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1305,9 +1352,25 @@ pub enum OnchainConfirmationSpeed {
     Slow,
 }
 
+/// The payment destination. Either a raw string (bolt11, spark address, BIP-21,
+/// cross-chain URI, etc.) that is parsed internally, or a structured
+/// cross-chain destination with explicit chain + asset selection.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentRequest {
+    /// Unparsed user input string (bolt11, spark address, BIP-21, cross-chain URI, etc.)
+    Input { input: String },
+    /// Cross-chain send with a selected route from `get_cross_chain_routes()`.
+    /// Amount comes from `PrepareSendPaymentRequest.amount`, not here.
+    CrossChain {
+        address: String,
+        route: CrossChainRoutePair,
+    },
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     /// The amount to send.
     /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
     /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.

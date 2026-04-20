@@ -153,6 +153,18 @@ async fn test_conversion_status_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_insert_boltz_conversion_info() {
+    let storage = create_test_storage("pg_insert_boltz_conversion_info").await;
+    breez_sdk_spark::storage_tests::test_insert_boltz_conversion_info(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_update_boltz_status_to_completed() {
+    let storage = create_test_storage("pg_update_boltz_status_to_completed").await;
+    breez_sdk_spark::storage_tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_sync_storage() {
     let storage = create_test_storage("pg_sync_storage").await;
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;

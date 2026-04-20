@@ -158,6 +158,7 @@ impl PaymentDetails {
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
+                    conversion_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -187,6 +188,7 @@ impl PaymentDetails {
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
+                    conversion_info: None,
                 }
             }
             SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
@@ -351,6 +353,7 @@ impl Payment {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         };
 
         Ok(Payment {

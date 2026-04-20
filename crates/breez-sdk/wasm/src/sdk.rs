@@ -109,6 +109,21 @@ impl BreezSdk {
         Ok(self.sdk.parse(input).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "getCrossChainRoutes")]
+    pub async fn get_cross_chain_routes(
+        &self,
+        filter: CrossChainRouteFilter,
+    ) -> WasmResult<Vec<CrossChainRoutePair>> {
+        let filter: breez_sdk_spark::CrossChainRouteFilter = filter.into();
+        Ok(self
+            .sdk
+            .get_cross_chain_routes(&filter)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     #[wasm_bindgen(js_name = "getInfo")]
     pub async fn get_info(&self, request: GetInfoRequest) -> WasmResult<GetInfoResponse> {
         Ok(self.sdk.get_info(request.into()).await?.into())

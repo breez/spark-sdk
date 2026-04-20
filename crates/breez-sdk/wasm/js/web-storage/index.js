@@ -457,6 +457,36 @@ class MigrationManager {
           }
         }
       },
+      {
+        name: "Backfill conversion_info type discriminator for serde tagged enum",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payment_metadata")) {
+            const store = transaction.objectStore("payment_metadata");
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (cursor) {
+                const record = cursor.value;
+                if (record.conversionInfo) {
+                  try {
+                    const ci = typeof record.conversionInfo === "string"
+                      ? JSON.parse(record.conversionInfo)
+                      : record.conversionInfo;
+                    if (!ci.type) {
+                      ci.type = "amm";
+                      record.conversionInfo = JSON.stringify(ci);
+                      cursor.update(record);
+                    }
+                  } catch (e) {
+                    // Skip unparseable records
+                  }
+                }
+                cursor.continue();
+              }
+            };
+          }
+        }
+      },
     ];
   }
 }
@@ -480,7 +510,7 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 15; // Current schema version
+    this.dbVersion = 17; // Current schema version
   }
 
   /**
@@ -2075,6 +2105,10 @@ class IndexedDBStorage {
       // Filter by payment details. If any filter matches, we include the payment
       let paymentDetailsFilterMatches = false;
       for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+        // Base type check: the payment's details type must match the filter type
+        if (details.type !== paymentDetailsFilter.type) {
+          continue;
+        }
         // Filter by HTLC status (Spark or Lightning)
         if (
           (paymentDetailsFilter.type === "spark" ||
@@ -2092,11 +2126,11 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by token conversion info presence
+        // Filter by conversion type + status
         if (
           (paymentDetailsFilter.type === "spark" ||
             paymentDetailsFilter.type === "token") &&
-          paymentDetailsFilter.conversionRefundNeeded != null
+          paymentDetailsFilter.conversionFilter != null
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
@@ -2105,11 +2139,15 @@ class IndexedDBStorage {
             continue;
           }
 
-          if (
-            paymentDetailsFilter.conversionRefundNeeded ===
-            (details.conversionInfo.status !== "refundNeeded")
-          ) {
-            continue;
+          const ci = details.conversionInfo;
+          if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+            if (ci.type !== "amm" || ci.status !== "refundNeeded") {
+              continue;
+            }
+          } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+            if (ci.type !== "orchestra" || ["completed", "failed", "refunded"].includes(ci.status)) {
+              continue;
+            }
           }
         }
         // Filter by token transaction hash
@@ -2250,17 +2288,23 @@ class IndexedDBStorage {
             );
           }
         }
-      } else if (details.type == "spark" || details.type == "token") {
-        // If conversionInfo exists, parse and add to details
-        if (metadata.conversionInfo) {
-          try {
-            details.conversionInfo = JSON.parse(metadata.conversionInfo);
-          } catch (e) {
-            throw new StorageError(
-              `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
-              e
-            );
-          }
+      }
+
+      // conversionInfo is surfaced on Lightning (Boltz hold-invoice pay),
+      // Spark, and Token details — every variant that can carry a conversion.
+      if (
+        (details.type == "lightning" ||
+          details.type == "spark" ||
+          details.type == "token") &&
+        metadata.conversionInfo
+      ) {
+        try {
+          details.conversionInfo = JSON.parse(metadata.conversionInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
         }
       }
     }

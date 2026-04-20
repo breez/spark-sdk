@@ -6,15 +6,15 @@ mod webhooks;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, CrossChainRoutePair, Fee,
+    FeePolicy, FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest,
+    GetTokensMetadataRequest, InputType, LightningAddressDetails, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentRequest, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    TokenTransactionType, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -648,11 +648,25 @@ pub(crate) async fn execute_command(
             } else {
                 None
             };
+
+            // Check if the input is a cross-chain address — if so, we need
+            // route selection before we can prepare.
+            let payment_request = match sdk.parse(&payment_request).await {
+                Ok(InputType::CrossChainAddress(address_details)) => {
+                    let address = address_details.address.clone();
+                    let route = select_cross_chain_route(sdk, rl, address_details).await?;
+                    PaymentRequest::CrossChain { address, route }
+                }
+                _ => PaymentRequest::Input {
+                    input: payment_request,
+                },
+            };
+
             let prepared_payment = sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
                     payment_request,
                     amount,
-                    token_identifier,
+                    token_identifier: token_identifier.clone(),
                     conversion_options,
                     fee_policy,
                 })
@@ -680,6 +694,36 @@ pub(crate) async fn execute_command(
                     out_units,
                     conversion_estimate.fee
                 );
+                let line = rl
+                    .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
+                    .to_lowercase();
+                if line != "y" {
+                    return Err(anyhow::anyhow!("Payment cancelled"));
+                }
+            }
+
+            // Show cross-chain quote details before confirming
+            if let SendPaymentMethod::CrossChainAddress {
+                ref route,
+                ref recipient_address,
+                amount_in,
+                estimated_out,
+                fee_amount,
+                ref fee_asset,
+                ..
+            } = prepare_response.payment_method
+            {
+                let fee_denom = fee_asset.as_deref().unwrap_or("sats");
+                let denomination = if token_identifier.is_some() {
+                    "token base units"
+                } else {
+                    "sats"
+                };
+                println!(
+                    "Cross-chain send: {amount_in} {denomination} → ~{estimated_out} {} on {} to {recipient_address}",
+                    route.asset, route.chain,
+                );
+                println!("Fee: {fee_amount} {fee_denom}");
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
                     .to_lowercase();
@@ -956,6 +1000,72 @@ pub(crate) async fn execute_command(
     }
 }
 
+/// Fetches cross-chain routes for the given address and prompts the user to
+/// select one. If only a single route is available it is auto-selected.
+async fn select_cross_chain_route(
+    sdk: &BreezSdk,
+    rl: &mut Editor<CliHelper, DefaultHistory>,
+    address_details: breez_sdk_spark::CrossChainAddressDetails,
+) -> Result<CrossChainRoutePair, anyhow::Error> {
+    let filter = breez_sdk_spark::CrossChainRouteFilter::Send { address_details };
+    let routes = sdk.get_cross_chain_routes(&filter).await?;
+    if routes.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No cross-chain routes available for this address"
+        ));
+    }
+
+    if routes.len() == 1 {
+        let route = routes.into_iter().next().unwrap();
+        println!(
+            "Auto-selected route: {} on {}{} [{:?}]",
+            route.asset,
+            route.chain,
+            maybe_truncate_address(route.contract_address.as_deref()),
+            route.provider
+        );
+        return Ok(route);
+    }
+
+    println!("Available cross-chain routes:");
+    for (i, route) in routes.iter().enumerate() {
+        let idx = i.saturating_add(1);
+        println!(
+            "  {idx}. {} on {}{} [{:?}]",
+            route.asset,
+            route.chain,
+            maybe_truncate_address(route.contract_address.as_deref()),
+            route.provider,
+        );
+    }
+
+    let line = rl.readline("Select route: ")?;
+    let choice: usize = line
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
+    let index = choice
+        .checked_sub(1)
+        .ok_or_else(|| anyhow::anyhow!("Selection out of range"))?;
+    let route = routes
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| anyhow::anyhow!("Selection out of range"))?;
+
+    Ok(route)
+}
+
+fn maybe_truncate_address(addr: Option<&str>) -> String {
+    addr.map(|c| {
+        if c.len() > 12 {
+            format!(" ({}...{})", &c[..6], &c[c.len().saturating_sub(6)..])
+        } else {
+            format!(" ({c})")
+        }
+    })
+    .unwrap_or_default()
+}
+
 fn read_payment_options(
     method: SendPaymentMethod,
     rl: &mut Editor<CliHelper, DefaultHistory>,
@@ -1040,7 +1150,9 @@ fn read_payment_options(
                 }),
             }))
         }
-        SendPaymentMethod::SparkInvoice { .. } => Ok(None),
+        SendPaymentMethod::SparkInvoice { .. } | SendPaymentMethod::CrossChainAddress { .. } => {
+            Ok(None)
+        }
     }
 }
 

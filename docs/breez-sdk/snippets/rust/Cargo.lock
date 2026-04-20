@@ -369,6 +369,7 @@ dependencies = [
  "dnssec-prover",
  "futures",
  "hex",
+ "http",
  "lightning",
  "macros",
  "platform-utils",
@@ -384,6 +385,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-web-wasm-client",
+ "tower-service",
  "tracing",
 ]
 

@@ -5,6 +5,7 @@ from breez_sdk_spark import (
     FetchConversionLimitsRequest,
     GetInfoRequest,
     GetTokensMetadataRequest,
+    PaymentRequest,
     PrepareSendPaymentRequest,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
@@ -99,7 +100,7 @@ async def send_token_payment(sdk: BreezSdk):
 
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
-                payment_request=payment_request,
+                payment_request=PaymentRequest.INPUT(input=payment_request),
                 amount=amount,
                 token_identifier=token_identifier,
                 conversion_options=None,
@@ -183,7 +184,7 @@ async def prepare_send_payment_token_conversion(sdk: BreezSdk):
 
         prepare_response = await sdk.prepare_send_payment(
             request=PrepareSendPaymentRequest(
-                payment_request=payment_request,
+                payment_request=PaymentRequest.INPUT(input=payment_request),
                 amount=amount,
                 token_identifier=token_identifier,
                 conversion_options=conversion_options,

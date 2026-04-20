@@ -316,7 +316,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const feePolicy = options.feesIncluded ? 'feesIncluded' : undefined
 
       const prepareResponse = await sdk.prepareSendPayment({
-        paymentRequest: options.paymentRequest,
+        paymentRequest: { input: options.paymentRequest },
         amount: options.amount != null ? BigInt(options.amount) : undefined,
         tokenIdentifier: options.tokenIdentifier,
         conversionOptions,
