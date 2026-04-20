@@ -920,24 +920,30 @@ impl Storage for MysqlStorage {
                 }
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'amm' \
+                             AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) \
+                             = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) \
+                             = 'orchestra' AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, \
+                             '$.status')) NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 if let StoragePaymentDetailsFilter::Token {
@@ -1918,6 +1924,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info: None,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),

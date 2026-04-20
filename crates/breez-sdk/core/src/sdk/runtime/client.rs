@@ -368,7 +368,7 @@ async fn token_tx_inputs_are_ours_cached_or_query(
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
                 tx_hash: Some(transaction.hash.clone()),
-                conversion_refund_needed: None,
+                conversion_filter: None,
                 tx_type: None,
             }]),
             limit: Some(1),

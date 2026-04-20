@@ -12,7 +12,7 @@ namespace BreezSdkSnippets
             ulong? optionalAmountSats = 5_000UL;
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: optionalAmountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
@@ -41,7 +41,7 @@ namespace BreezSdkSnippets
             ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: amountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
@@ -71,7 +71,7 @@ namespace BreezSdkSnippets
             ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: amountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
@@ -96,7 +96,7 @@ namespace BreezSdkSnippets
             ulong? optionalAmountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: optionalAmountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
@@ -123,7 +123,7 @@ namespace BreezSdkSnippets
             ulong? amountSats = 50_000UL;
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: amountSats,
                 tokenIdentifier: null,
                 conversionOptions: null,
@@ -159,7 +159,7 @@ namespace BreezSdkSnippets
             );
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: tokenBalance.balance,
                 tokenIdentifier: tokenIdentifier,
                 conversionOptions: conversionOptions,
@@ -197,7 +197,7 @@ namespace BreezSdkSnippets
             );
 
             var request = new PrepareSendPaymentRequest(
-                paymentRequest: paymentRequest,
+                paymentRequest: new PaymentRequest.Input(input: paymentRequest),
                 amount: null,
                 tokenIdentifier: null,
                 conversionOptions: conversionOptions,

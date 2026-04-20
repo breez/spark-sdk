@@ -7,8 +7,9 @@ use serde_with::serde_as;
 use spark::Network;
 use spark_wallet::{PublicKey, TokenTransaction, TransferId, WalletTransfer};
 
-use crate::utils::decode_token_identifier;
-use crate::{BTC_ASSET_ADDRESS, FlashnetError};
+use super::api::BTC_ASSET_ADDRESS;
+use super::utils::decode_token_identifier;
+use crate::error::FlashnetError;
 
 /// The asset transfer produced when we send the swap's "in" asset to the
 /// pool. Carries the rich wallet-side object so callers can record a

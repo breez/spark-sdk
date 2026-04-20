@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::SdkError;
 
+use crate::utils::serde_helpers::{serde_option_u128_as_string, serde_u128_as_string};
+
 /// Default maximum slippage for conversions in basis points (0.1%)
 pub const DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS: u32 = 10;
 /// Default timeout for conversion operations in seconds
@@ -128,23 +130,218 @@ impl FromStr for ConversionStatus {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+/// Conversion metadata stored on a payment's metadata row. Discriminated by a
+/// `"type"` tag in JSON so old data (AMM-only, no tag) must be backfilled via a
+/// DB migration that sets `"type": "amm"` on all existing rows.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConversionInfo {
-    /// The pool id associated with the conversion
-    pub pool_id: String,
-    /// The conversion id shared by both sides of the conversion
-    pub conversion_id: String,
-    /// The status of the conversion
-    pub status: ConversionStatus,
-    /// The fee paid for the conversion
-    /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
-    pub fee: Option<u128>,
-    /// The purpose of the conversion
-    pub purpose: Option<ConversionPurpose>,
-    /// The reason the conversion amount was adjusted, if applicable.
-    #[serde(default)]
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
+#[serde(tag = "type")]
+pub enum ConversionInfo {
+    /// AMM (Flashnet pool-based) conversion — Spark ↔ Spark token swaps.
+    #[serde(rename = "amm")]
+    Amm {
+        /// The pool id associated with the conversion
+        pool_id: String,
+        /// The conversion id shared by both sides of the conversion
+        conversion_id: String,
+        /// The status of the conversion
+        status: ConversionStatus,
+        /// The fee paid for the conversion.
+        /// Denominated in satoshis if converting from Bitcoin, otherwise in the token base units.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// The purpose of the conversion
+        purpose: Option<ConversionPurpose>,
+        /// The reason the conversion amount was adjusted, if applicable.
+        #[serde(default)]
+        amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    /// Orchestra (cross-chain) send — BTC/USDB on Spark → stablecoin on
+    /// an external chain (Base, Solana, Tron, Ethereum, etc.).
+    #[serde(rename = "orchestra")]
+    Orchestra {
+        /// The Orchestra order id returned by `/v1/orchestration/submit`.
+        order_id: String,
+        /// The Orchestra quote id used to create this order.
+        quote_id: String,
+        /// Destination chain (e.g. `"base"`, `"solana"`, `"tron"`).
+        destination_chain: String,
+        /// Destination asset (e.g. `"USDC"`, `"USDT"`).
+        #[serde(default)]
+        destination_asset: String,
+        /// Recipient address on the destination chain.
+        destination_address: String,
+        /// Estimated amount the recipient will receive, in the destination
+        /// asset's base units.
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// The status of the cross-chain order.
+        status: ConversionStatus,
+        /// The fee paid for the cross-chain send, in the source asset's base
+        /// units (sats for BTC, token base units for USDB).
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// Opaque token from the `/submit` response, required when querying
+        /// order status via the Orchestra `/status` endpoint.
+        #[serde(default)]
+        read_token: Option<String>,
+    },
+    /// Boltz reverse swap — BTC/sats on Spark → USDT on an external chain via
+    /// Lightning hold invoice + on-chain claim.
+    ///
+    /// `instance_id` and `claim_key_index` are intentionally not stored on
+    /// the payment row in v1: they would only be needed for cross-device
+    /// re-derivation of the preimage, which v1 does not support. v2
+    /// (submarine swaps) will introduce a `BoltzInstance` rtsync record
+    /// type and add these fields.
+    #[serde(rename = "boltz")]
+    Boltz {
+        /// The Boltz swap id returned by `POST /swap/reverse`.
+        swap_id: String,
+        /// Destination chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
+        destination_chain: String,
+        /// Destination asset ticker (`"USDT"` for canonical Tether, `"USDT0"`
+        /// for distinct `LayerZero` OFT deployments). Captured at prepare
+        /// time from the route so the payment row reflects what was labeled
+        /// when the user committed — not whatever the provider returns now.
+        #[serde(default)]
+        destination_asset: String,
+        /// Recipient address on the destination chain.
+        destination_address: String,
+        /// The BOLT11 hold invoice paid on the Spark/Lightning side.
+        invoice: String,
+        /// Amount of the hold invoice in sats.
+        invoice_amount_sats: u64,
+        /// Estimated USDT amount to be delivered on the destination chain,
+        /// in 6-decimal base units. Frozen at prepare time and never mutated.
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// Actual USDT amount delivered on the destination chain, in
+        /// 6-decimal base units. `None` until the claim receipt is processed
+        /// by the Boltz event listener.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        /// `LayerZero` message GUID (`0x`-prefixed hex) for bridged swaps.
+        /// `None` for Arbitrum-destination swaps (no bridge) and until the
+        /// claim receipt is processed.
+        #[serde(default)]
+        lz_guid: Option<String>,
+        /// The status of the reverse swap.
+        status: ConversionStatus,
+        /// Total fee in sats: the Boltz spread plus the Lightning routing
+        /// fee budget committed at prepare time.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// DEX slippage tolerance (basis points) committed at prepare time.
+        max_slippage_bps: u32,
+        /// Set by the event listener when Boltz reports the claim-time DEX
+        /// quote has drifted beyond `max_slippage_bps`. Not user-facing.
+        #[serde(default)]
+        quote_degraded: bool,
+    },
+}
+
+impl ConversionInfo {
+    /// The current status, regardless of conversion type.
+    pub fn status(&self) -> &ConversionStatus {
+        match self {
+            ConversionInfo::Amm { status, .. }
+            | ConversionInfo::Orchestra { status, .. }
+            | ConversionInfo::Boltz { status, .. } => status,
+        }
+    }
+
+    /// A mutable reference to the status, for in-place updates.
+    pub fn status_mut(&mut self) -> &mut ConversionStatus {
+        match self {
+            ConversionInfo::Amm { status, .. }
+            | ConversionInfo::Orchestra { status, .. }
+            | ConversionInfo::Boltz { status, .. } => status,
+        }
+    }
+
+    /// The fee paid, regardless of conversion type.
+    pub fn fee(&self) -> Option<u128> {
+        match self {
+            ConversionInfo::Amm { fee, .. }
+            | ConversionInfo::Orchestra { fee, .. }
+            | ConversionInfo::Boltz { fee, .. } => *fee,
+        }
+    }
+
+    /// Whether this is an AMM (Flashnet pool) conversion.
+    pub fn is_amm(&self) -> bool {
+        matches!(self, ConversionInfo::Amm { .. })
+    }
+
+    /// Whether this is an Orchestra (cross-chain) conversion.
+    pub fn is_orchestra(&self) -> bool {
+        matches!(self, ConversionInfo::Orchestra { .. })
+    }
+
+    /// Whether this is a Boltz reverse swap.
+    pub fn is_boltz(&self) -> bool {
+        matches!(self, ConversionInfo::Boltz { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boltz_conversion_info_roundtrip() {
+        let original = ConversionInfo::Boltz {
+            swap_id: "boltz_swap_abc".to_string(),
+            destination_chain: "solana".to_string(),
+            destination_asset: "USDT0".to_string(),
+            destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            invoice: "lnbc1000n1pexample".to_string(),
+            invoice_amount_sats: 150_000,
+            estimated_out: 99_000_000,
+            delivered_amount: Some(98_750_000),
+            lz_guid: Some("0xdeadbeef".to_string()),
+            status: ConversionStatus::Pending,
+            fee: Some(2_500),
+            max_slippage_bps: 100,
+            quote_degraded: false,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: ConversionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, original);
+        assert!(decoded.is_boltz());
+        assert!(!decoded.is_orchestra());
+        assert!(!decoded.is_amm());
+        assert_eq!(decoded.status(), &ConversionStatus::Pending);
+        assert_eq!(decoded.fee(), Some(2_500));
+
+        // The `"type"` tag discriminator must match the rename attribute.
+        assert!(json.contains(r#""type":"boltz""#));
+        // u128 fields serialize as strings, not JSON numbers.
+        assert!(json.contains(r#""estimated_out":"99000000""#));
+    }
+
+    #[test]
+    fn boltz_status_mut_updates_status_in_place() {
+        let mut info = ConversionInfo::Boltz {
+            swap_id: "s1".to_string(),
+            destination_chain: "arbitrum".to_string(),
+            destination_asset: "USDT".to_string(),
+            destination_address: "0xdest".to_string(),
+            invoice: "lnbc".to_string(),
+            invoice_amount_sats: 100,
+            estimated_out: 1,
+            delivered_amount: None,
+            lz_guid: None,
+            status: ConversionStatus::Pending,
+            fee: None,
+            max_slippage_bps: 100,
+            quote_degraded: false,
+        };
+        *info.status_mut() = ConversionStatus::Completed;
+        assert_eq!(info.status(), &ConversionStatus::Completed);
+    }
 }
 
 pub(crate) struct TokenConversionPool {

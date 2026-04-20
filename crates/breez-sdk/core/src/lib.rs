@@ -2,6 +2,7 @@
 pub mod bindings;
 mod chain;
 mod common;
+mod cross_chain;
 mod error;
 mod events;
 mod issuer;
@@ -30,14 +31,17 @@ pub use chain::{
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
+pub use cross_chain::{
+    CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter, CrossChainRoutePair,
+};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
 pub use logger::DEFAULT_FILTER;
 pub use models::*;
 pub use persist::{
-    PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
-    StoragePaymentDetailsFilter, UpdateDepositPayload,
+    ConversionFilter, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
+    StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
     backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
     path::default_storage_path,
 };

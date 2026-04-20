@@ -77,6 +77,7 @@ fn validate_request(
 
 pub(super) async fn prepare(
     sdk: &BreezSdk,
+    input: &str,
     request: &PrepareSendPaymentRequest,
     detailed_bolt11_invoice: &Bolt11InvoiceDetails,
     fee_policy: FeePolicy,
@@ -84,9 +85,7 @@ pub(super) async fn prepare(
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     validate_request(detailed_bolt11_invoice, request)?;
 
-    let spark_address: Option<SparkAddress> = sdk
-        .spark_wallet
-        .extract_spark_address(&request.payment_request)?;
+    let spark_address: Option<SparkAddress> = sdk.spark_wallet.extract_spark_address(input)?;
 
     let spark_transfer_fee_sats = if spark_address.is_some() {
         Some(0)
@@ -99,6 +98,7 @@ pub(super) async fn prepare(
     {
         return prepare_token_denominated(
             sdk,
+            input,
             opts,
             request,
             detailed_bolt11_invoice,
@@ -111,6 +111,7 @@ pub(super) async fn prepare(
 
     prepare_sats_denominated(
         sdk,
+        input,
         request,
         detailed_bolt11_invoice,
         spark_transfer_fee_sats,
@@ -126,6 +127,7 @@ pub(super) async fn prepare(
 /// `MinAmountOut` conversion estimate for display when conversion options are set.
 async fn prepare_sats_denominated(
     sdk: &BreezSdk,
+    input: &str,
     request: &PrepareSendPaymentRequest,
     invoice: &Bolt11InvoiceDetails,
     spark_transfer_fee_sats: Option<u64>,
@@ -142,7 +144,7 @@ async fn prepare_sats_denominated(
     // For FeesIncluded, estimate fee for user's full amount
     let lightning_fee_sats = sdk
         .spark_wallet
-        .fetch_lightning_send_fee_estimate(&request.payment_request, Some(amount.try_into()?))
+        .fetch_lightning_send_fee_estimate(input, Some(amount.try_into()?))
         .await?;
 
     // Validate receiver amount is positive for FeesIncluded
@@ -187,6 +189,7 @@ async fn prepare_sats_denominated(
 /// user's `amount` is in token units and would be misinterpreted as sats.
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
+    input: &str,
     conversion_options: &ConversionOptions,
     request: &PrepareSendPaymentRequest,
     invoice: &Bolt11InvoiceDetails,
@@ -214,10 +217,7 @@ async fn prepare_token_denominated(
 
     let lightning_fee_sats = sdk
         .spark_wallet
-        .fetch_lightning_send_fee_estimate(
-            &request.payment_request,
-            Some(estimated_sats.try_into()?),
-        )
+        .fetch_lightning_send_fee_estimate(input, Some(estimated_sats.try_into()?))
         .await?;
 
     let total_u64: u64 = estimated_sats.try_into()?;

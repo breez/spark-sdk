@@ -15,7 +15,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = optionalAmountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,
@@ -50,7 +50,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = amountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,
@@ -88,7 +88,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = amountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,
@@ -125,7 +125,7 @@ class SendPayment {
             )
 
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = tokenBalance.balance,
                 tokenIdentifier = tokenIdentifier,
                 conversionOptions = conversionOptions,
@@ -158,7 +158,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = amountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,
@@ -189,7 +189,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = optionalAmountSats,
                 tokenIdentifier = null,
                 conversionOptions = null,
@@ -225,7 +225,7 @@ class SendPayment {
 
         try {
             val req = PrepareSendPaymentRequest(
-                paymentRequest,
+                paymentRequest = PaymentRequest.Input(input = paymentRequest),
                 amount = null,
                 tokenIdentifier = null,
                 conversionOptions = conversionOptions,

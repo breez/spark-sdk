@@ -565,7 +565,7 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
   const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { input: paymentRequest },
     amount,
     tokenIdentifier,
     conversionOptions,

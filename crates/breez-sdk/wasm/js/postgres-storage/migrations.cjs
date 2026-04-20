@@ -467,6 +467,12 @@ class PostgresMigrationManager {
              ON brz_sync_incoming(user_id, revision)`,
         ],
       },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: [
+          `UPDATE brz_payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
+        ],
+      },
     ];
   }
 }

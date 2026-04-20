@@ -1,15 +1,13 @@
-mod api;
-mod auth;
+pub mod amm;
 mod cache;
 mod config;
 mod error;
-mod models;
-mod pool_selection;
-mod utils;
+pub mod orchestra;
 
-pub use api::{BTC_ASSET_ADDRESS, FlashnetClient};
+pub use amm::api::{BTC_ASSET_ADDRESS, FlashnetClient};
+pub use amm::models::*;
+pub use amm::pool_selection::select_best_pool;
 pub use cache::CacheStore;
 pub use config::*;
 pub use error::FlashnetError;
-pub use models::*;
-pub use pool_selection::select_best_pool;
+pub use orchestra::OrchestraClient;

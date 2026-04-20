@@ -6,9 +6,10 @@ use crate::{
     FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
-        ListPaymentsRequest, ListPaymentsResponse, Payment, PrepareSendPaymentRequest,
-        PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
-        SendPaymentRequest, SendPaymentResponse, conversion_steps_from_payments,
+        ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
+        PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
+        ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
+        conversion_steps_from_payments,
     },
     utils::payments::get_payment_with_conversion_details,
 };
@@ -43,6 +44,26 @@ impl BreezSdk {
         &self,
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        // Cross-chain has its own request type (no parse step required) — early-dispatch
+        // before falling through to the generic `Input` path.
+        if let PaymentRequest::CrossChain {
+            ref address,
+            ref route,
+        } = request.payment_request
+        {
+            let amount = request.amount.ok_or(SdkError::InvalidInput(
+                "Amount is required for cross-chain sends".to_string(),
+            ))?;
+            return prepare::cross_chain::prepare(
+                self,
+                address,
+                route,
+                amount,
+                request.token_identifier.clone(),
+                request.fee_policy.unwrap_or_default(),
+            )
+            .await;
+        }
         prepare::prepare(self, request).await
     }
 

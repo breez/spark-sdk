@@ -96,7 +96,9 @@ pub(super) async fn prepare(
 
     let prepare_response = sdk
         .prepare_send_payment(crate::PrepareSendPaymentRequest {
-            payment_request: success_data.pr,
+            payment_request: crate::PaymentRequest::Input {
+                input: success_data.pr,
+            },
             amount: Some(u128::from(amount_sats)),
             token_identifier: request.token_identifier.clone(),
             conversion_options: request.conversion_options.clone(),

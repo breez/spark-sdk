@@ -8,6 +8,8 @@ use crate::{
     network::BitcoinNetwork,
 };
 
+use super::cross_chain::CrossChainAddressFamily;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum Amount {
     Bitcoin {
@@ -148,6 +150,28 @@ pub enum InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+/// Cross-chain recipient details returned by `parse()` when the input is
+/// recognized as an EVM / Solana / Tron address or URI.
+///
+/// The UI passes these details to `get_cross_chain_routes()` to discover
+/// available routes, then selects one and calls `prepare_send_payment`
+/// with `PaymentRequest::CrossChain { address, route }`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CrossChainAddressDetails {
+    /// The raw recipient address (e.g. `0xabc...`).
+    pub address: String,
+    /// Which address family this belongs to (EVM / Solana / Tron).
+    pub address_family: CrossChainAddressFamily,
+    /// Token contract / mint address parsed from the URI.
+    /// Used to filter routes by matching against `CrossChainRoutePair.contract_address`.
+    pub contract_address: Option<String>,
+    /// EIP-681 chain ID parsed from `@<chain_id>` suffix.
+    pub chain_id: Option<u64>,
+    /// Optional amount parsed from the URI.
+    pub amount: Option<u128>,
 }
 
 impl TryFrom<LnurlRequestDetails> for InputType {

@@ -360,6 +360,13 @@ async fn execute_pre_send_conversion(
             .await?;
             Ok((response, purpose, uses_amount_in))
         }
+        SendPaymentMethod::CrossChainAddress { .. } => {
+            // Cross-chain sends bypass the AMM token converter entirely; they
+            // should never reach pre-send conversion.
+            Err(SdkError::InvalidInput(
+                "Cross-chain sends do not support AMM conversions".to_string(),
+            ))
+        }
     }
 }
 
