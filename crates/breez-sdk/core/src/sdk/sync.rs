@@ -692,6 +692,10 @@ mod jwt {
     }
 
     impl BreezSdk {
+        fn enable_jwt(&self) -> bool {
+            matches!(self.config.network, Network::Mainnet) && self.config.api_key.is_some()
+        }
+
         pub(super) async fn set_and_save_jwt(&self, token: String) {
             self.session_manager.set_token(token.clone()).await;
             if let Err(err) = self
@@ -722,6 +726,9 @@ mod jwt {
         }
 
         pub(super) async fn init_jwt(&self) {
+            if !self.enable_jwt() {
+                return;
+            }
             let token = match self
                 .storage
                 .get_cached_item(KEY_BREEZ_JWT.to_string())
@@ -737,10 +744,8 @@ mod jwt {
         }
 
         pub(super) async fn jwt_refresh_interval(&self) {
-            let should_refresh_jwt =
-                matches!(self.config.network, Network::Mainnet) && self.config.api_key.is_some();
-            if !should_refresh_jwt {
-                std::future::pending::<()>().await;
+            if !self.enable_jwt() {
+                return std::future::pending::<()>().await;
             }
             let token = self.session_manager.get_token().await;
             let duration = Duration::from_secs(match token {
