@@ -92,23 +92,22 @@ impl BreezSdk {
         };
 
         // Build a lookup for selected leaf metadata by leaf ID.
-        let selected_by_id: HashMap<String, &spark_wallet::SelectedLeaf> = exit_result
-            .selected_leaves
-            .iter()
-            .map(|s| (s.id.to_string(), s))
-            .collect();
+        let selected_by_id: HashMap<&spark_wallet::TreeNodeId, &spark_wallet::SelectedLeaf> =
+            exit_result
+                .selected_leaves
+                .iter()
+                .map(|s| (&s.id, s))
+                .collect();
 
         // Sign CPFP PSBTs and group per leaf.
         let mut leaves = Vec::with_capacity(leaf_tx_cpfp_psbts.len());
         for leaf_psbts in leaf_tx_cpfp_psbts {
-            let selected = selected_by_id
-                .get(&leaf_psbts.leaf_id.to_string())
-                .ok_or_else(|| {
-                    SdkError::Generic(format!(
-                        "Selected leaf metadata not found for {}",
-                        leaf_psbts.leaf_id
-                    ))
-                })?;
+            let selected = selected_by_id.get(&leaf_psbts.leaf_id).ok_or_else(|| {
+                SdkError::Generic(format!(
+                    "Selected leaf metadata not found for {}",
+                    leaf_psbts.leaf_id
+                ))
+            })?;
             let mut transactions = Vec::with_capacity(leaf_psbts.tx_cpfp_psbts.len());
             for tc in leaf_psbts.tx_cpfp_psbts {
                 let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
