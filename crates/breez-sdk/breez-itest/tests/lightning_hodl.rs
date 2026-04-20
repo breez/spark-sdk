@@ -69,25 +69,32 @@ async fn test_01_lightning_hodl_success(
         "Payment should be pending (HODL invoice not yet claimed)"
     );
 
-    // Bob syncs and verifies the pending HODL receive
-    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-
-    let bob_pending = bob
-        .sdk
-        .list_payments(ListPaymentsRequest {
-            status_filter: Some(vec![PaymentStatus::Pending]),
-            type_filter: Some(vec![PaymentType::Receive]),
-            payment_details_filter: Some(vec![PaymentDetailsFilter::Lightning {
-                htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-            }]),
-            ..Default::default()
-        })
-        .await?;
-
-    let bob_pending_payment = bob_pending
-        .payments
-        .first()
-        .ok_or(anyhow::anyhow!("No pending HODL payment found for Bob"))?;
+    // Bob syncs and verifies the pending HODL receive. The HTLC must propagate
+    // from Alice's SSP through the lightning network to Bob's SSP before Bob's
+    // list_transfers query can see it, so poll until it appears.
+    let bob_pending_payment = wait_for(
+        || async {
+            bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let bob_pending = bob
+                .sdk
+                .list_payments(ListPaymentsRequest {
+                    status_filter: Some(vec![PaymentStatus::Pending]),
+                    type_filter: Some(vec![PaymentType::Receive]),
+                    payment_details_filter: Some(vec![PaymentDetailsFilter::Lightning {
+                        htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    }]),
+                    ..Default::default()
+                })
+                .await?;
+            bob_pending
+                .payments
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No pending HODL payment found for Bob yet"))
+        },
+        60,
+    )
+    .await?;
 
     info!("Verifying Bob's pending HODL payment...");
     assert_eq!(bob_pending_payment.status, PaymentStatus::Pending);
