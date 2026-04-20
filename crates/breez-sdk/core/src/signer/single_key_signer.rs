@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bitcoin::{
     Witness,
     ecdsa::Signature,
@@ -10,6 +12,20 @@ use bitcoin::{
 use crate::error::SignerError;
 
 use super::cpfp::CpfpSigner;
+
+/// Constructs a [`SingleKeySigner`] and returns it as a [`CpfpSigner`] trait object.
+///
+/// This factory exists because some language bindings do not automatically
+/// treat the concrete [`SingleKeySigner`] type as an implementation of the
+/// [`CpfpSigner`] callback interface. The trait-object return is accepted by
+/// every binding without per-language shims.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn single_key_cpfp_signer(
+    secret_key_bytes: Vec<u8>,
+) -> Result<Arc<dyn CpfpSigner>, SignerError> {
+    Ok(Arc::new(SingleKeySigner::new(secret_key_bytes)?))
+}
 
 /// Default CPFP signer that handles P2WPKH and P2TR inputs using a single private key.
 ///

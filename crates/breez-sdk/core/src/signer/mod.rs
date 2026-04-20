@@ -139,7 +139,7 @@ pub use external_types::*;
 
 // Re-export CPFP signer trait and default implementation
 pub use cpfp::CpfpSigner;
-pub use single_key_signer::SingleKeySigner;
+pub use single_key_signer::{SingleKeySigner, single_key_cpfp_signer};
 
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalSignerAdapter;

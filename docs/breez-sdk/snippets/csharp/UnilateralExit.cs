@@ -9,7 +9,7 @@ namespace BreezSdkSnippets
             // ANCHOR: prepare-unilateral-exit
             // Create a signer from your UTXO private key (32-byte secret key)
             var secretKeyBytes = Convert.FromHexString("your-secret-key-hex");
-            var signer = new SingleKeySigner(secretKeyBytes);
+            var signer = BreezSdkSparkMethods.SingleKeyCpfpSigner(secretKeyBytes);
 
             var response = await sdk.PrepareUnilateralExit(
                 request: new PrepareUnilateralExitRequest(
