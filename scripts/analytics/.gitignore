@@ -1,0 +1,2 @@
+# Enrichment cache is refreshed on demand via enrich_prs.py.
+data/pr_enrichment.json
