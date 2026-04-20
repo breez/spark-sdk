@@ -293,13 +293,6 @@ impl LeafOptimizer {
                 Ok(())
             }
             Err(e) => {
-                info!(
-                    "Refreshing leaves on optimization failure (failure is likely caused by leaves having been spent by a concurrent instance)"
-                );
-                if let Err(e) = self.tree_service.refresh_leaves().await {
-                    error!("Failed to refresh leaves on optimization failure: {:?}", e);
-                }
-
                 self.emit_event(OptimizationEvent::Failed {
                     error: e.to_string(),
                 });
@@ -444,12 +437,14 @@ impl LeafOptimizer {
                     );
                 }
                 Err(e) => {
-                    if let Err(e) = self
+                    if let Err(cancel_err) = self
                         .tree_service
                         .cancel_reservation(swap_reservation.id)
                         .await
                     {
-                        error!("Failed to cancel reservation on optimization round failure: {e:?}");
+                        error!(
+                            "Failed to cancel reservation on optimization round failure: {cancel_err:?}"
+                        );
                     }
 
                     return Err(ServiceError::Generic(format!(
