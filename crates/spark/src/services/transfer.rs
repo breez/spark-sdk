@@ -672,7 +672,19 @@ impl TransferService {
         Ok(signable_message)
     }
 
-    /// Claims a transfer with retry logic and automatic leaf preparation
+    /// Claims a transfer with retry logic and automatic leaf preparation.
+    ///
+    /// Returns the claimed leaves on success.
+    ///
+    /// # Concurrent claims
+    ///
+    /// If the coordinator reports the transfer has already been claimed (another
+    /// instance of this wallet won the race), this method re-queries the transfer
+    /// from the coordinator. If it's now [`TransferStatus::Completed`], the finalized
+    /// leaves from that response are returned as if this call had performed the
+    /// claim — so the caller can update its local tree uniformly. Only if the transfer
+    /// can't be confirmed as completed does [`ServiceError::TransferAlreadyClaimed`]
+    /// propagate.
     pub async fn claim_transfer(
         &self,
         transfer: &Transfer,
@@ -727,8 +739,20 @@ impl TransferService {
             {
                 Ok(res) => res,
                 Err(ServiceError::TransferAlreadyClaimed) => {
-                    // Transfer was already claimed by another instance - don't retry.
-                    return Err(ServiceError::TransferAlreadyClaimed);
+                    // Another instance of this wallet claimed the transfer concurrently.
+                    // Re-query the transfer from the coordinator; if it's now completed,
+                    // return its finalized leaves so the caller can update its local tree
+                    // instead of surfacing the error.
+                    debug!(
+                        "Transfer {} already claimed by another instance; fetching finalized transfer",
+                        transfer.id
+                    );
+                    match self.query_transfer(&transfer.id).await? {
+                        Some(updated) if updated.status == TransferStatus::Completed => {
+                            return Ok(updated.leaves.into_iter().map(|l| l.leaf).collect());
+                        }
+                        _ => return Err(ServiceError::TransferAlreadyClaimed),
+                    }
                 }
                 Err(e) => {
                     error!("Failed to claim transfer with leaves: {}", e);
