@@ -185,6 +185,18 @@ async fn test_conversion_status_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_insert_boltz_conversion_info() {
+    let storage = create_test_storage("insert_boltz_conversion_info").await;
+    breez_sdk_spark::storage_tests::test_insert_boltz_conversion_info(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_update_boltz_status_to_completed() {
+    let storage = create_test_storage("update_boltz_status_to_completed").await;
+    breez_sdk_spark::storage_tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_migration_from_v17_to_v18() {
     let data_dir = "/tmp/breez-sdk-node-migration-v17-to-v18-test";
     let db_path = format!("{}/storage.sql", data_dir);
@@ -365,7 +377,7 @@ async fn test_migration_from_v17_to_v18() {
         status_filter: None,
         asset_filter: None,
         payment_details_filter: Some(vec![breez_sdk_spark::StoragePaymentDetailsFilter::Token {
-            conversion_refund_needed: None,
+            conversion_filter: None,
             tx_hash: None,
             tx_type: Some(breez_sdk_spark::TokenTransactionType::Transfer),
         }]),

@@ -42,6 +42,7 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub cross_chain_enabled: bool,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -228,6 +229,57 @@ pub enum _InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+#[frb(mirror(CrossChainAddressFamily))]
+pub enum _CrossChainAddressFamily {
+    Evm,
+    Solana,
+    Tron,
+}
+
+#[frb(mirror(CrossChainAddressDetails))]
+pub struct _CrossChainAddressDetails {
+    pub address: String,
+    pub address_family: CrossChainAddressFamily,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
+    pub amount: Option<u128>,
+}
+
+#[frb(mirror(CrossChainRoutePair))]
+pub struct _CrossChainRoutePair {
+    pub provider: CrossChainProvider,
+    pub chain: String,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+    pub exact_out_eligible: bool,
+}
+
+#[frb(mirror(CrossChainProviderContext))]
+pub enum _CrossChainProviderContext {
+    Orchestra {
+        quote_id: String,
+        deposit_address: String,
+    },
+    Boltz {
+        swap_id: String,
+        invoice: String,
+        ln_fee_sats: u64,
+        max_slippage_bps: u32,
+    },
+}
+
+#[frb(mirror(CrossChainRouteFilter))]
+pub enum _CrossChainRouteFilter {
+    Send {
+        address_details: CrossChainAddressDetails,
+    },
+    Receive {
+        contract_address: Option<String>,
+    },
 }
 
 #[frb(mirror(PaymentDetailsFilter))]
@@ -374,9 +426,24 @@ pub struct _PrepareLnurlPayResponse {
     pub fee_policy: FeePolicy,
 }
 
+#[frb(mirror(PaymentRequest))]
+pub enum _PaymentRequest {
+    Input { input: String },
+    CrossChain {
+        address: String,
+        route: CrossChainRoutePair,
+    },
+}
+
+#[frb(mirror(CrossChainProvider))]
+pub enum _CrossChainProvider {
+    Orchestra,
+    Boltz,
+}
+
 #[frb(mirror(PrepareSendPaymentRequest))]
 pub struct _PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
@@ -473,6 +540,16 @@ pub enum _SendPaymentMethod {
         spark_invoice_details: SparkInvoiceDetails,
         fee: u128,
         token_identifier: Option<String>,
+    },
+    CrossChainAddress {
+        route: CrossChainRoutePair,
+        recipient_address: String,
+        amount_in: u128,
+        estimated_out: u128,
+        fee_amount: u128,
+        fee_asset: Option<String>,
+        expires_at: String,
+        provider_context: CrossChainProviderContext,
     },
 }
 
@@ -635,6 +712,7 @@ pub enum _PaymentDetails {
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -1153,13 +1231,41 @@ pub enum _ConversionStatus {
 }
 
 #[frb(mirror(ConversionInfo))]
-pub struct _ConversionInfo {
-    pub pool_id: String,
-    pub conversion_id: String,
-    pub status: ConversionStatus,
-    pub fee: Option<u128>,
-    pub purpose: Option<ConversionPurpose>,
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
+pub enum _ConversionInfo {
+    Amm {
+        pool_id: String,
+        conversion_id: String,
+        status: ConversionStatus,
+        fee: Option<u128>,
+        purpose: Option<ConversionPurpose>,
+        amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    Boltz {
+        swap_id: String,
+        destination_chain: String,
+        destination_asset: String,
+        destination_address: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        estimated_out: u128,
+        delivered_amount: Option<u128>,
+        lz_guid: Option<String>,
+        status: ConversionStatus,
+        fee: Option<u128>,
+        max_slippage_bps: u32,
+        quote_degraded: bool,
+    },
+    Orchestra {
+        order_id: String,
+        quote_id: String,
+        destination_chain: String,
+        destination_asset: String,
+        destination_address: String,
+        estimated_out: u128,
+        status: ConversionStatus,
+        fee: Option<u128>,
+        read_token: Option<String>,
+    },
 }
 
 #[frb(mirror(ConversionOptions))]

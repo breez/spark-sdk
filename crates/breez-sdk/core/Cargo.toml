@@ -27,6 +27,7 @@ base64.workspace = true
 bip39.workspace = true
 bitcoin.workspace = true
 bitflags.workspace = true
+boltz-client.workspace = true
 breez-sdk-common.workspace = true
 platform-utils.workspace = true
 chrono.workspace = true

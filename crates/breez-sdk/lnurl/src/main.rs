@@ -428,7 +428,7 @@ where
 fn register_webhook(service_provider: Arc<ServiceProvider>, webhook_url: String, secret: String) {
     tokio::spawn(async move {
         let mut delay = std::time::Duration::from_secs(1);
-        let max_delay = std::time::Duration::from_secs(60);
+        let max_delay = std::time::Duration::from_mins(1);
         loop {
             info!("registering webhook with SSP at {}", webhook_url);
             match service_provider

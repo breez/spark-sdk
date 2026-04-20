@@ -19,6 +19,7 @@ use crate::{
 };
 
 /// Feb 1, 2026 00:00:00 UTC — transfers before this may lack HTLC data on the operator.
+#[allow(unknown_lints, clippy::duration_suboptimal_units)]
 const HTLC_DATA_REQUIRED_SINCE: Duration = Duration::from_secs(1_769_904_000);
 
 /// Derive HTLC details from SSP request fields when the operator lacks the
@@ -157,6 +158,7 @@ impl PaymentDetails {
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
+                    conversion_info: None,
                 }
             }
             SspUserRequest::LightningSendRequest(request) => {
@@ -186,6 +188,7 @@ impl PaymentDetails {
                     lnurl_pay_info: None,
                     lnurl_withdraw_info: None,
                     lnurl_receive_metadata: None,
+                    conversion_info: None,
                 }
             }
             SspUserRequest::CoopExitRequest(request) => PaymentDetails::Withdraw {
@@ -350,6 +353,7 @@ impl Payment {
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
+            conversion_info: None,
         };
 
         Ok(Payment {

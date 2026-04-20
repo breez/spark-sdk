@@ -21,6 +21,7 @@ extension ConfigCopyWith on Config {
     StableBalanceConfig? stableBalanceConfig,
     int? maxConcurrentClaims,
     SparkConfig? sparkConfig,
+    bool? crossChainEnabled,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -37,6 +38,7 @@ extension ConfigCopyWith on Config {
       stableBalanceConfig: stableBalanceConfig ?? this.stableBalanceConfig,
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
       sparkConfig: sparkConfig ?? this.sparkConfig,
+      crossChainEnabled: crossChainEnabled ?? this.crossChainEnabled,
     );
   }
 }

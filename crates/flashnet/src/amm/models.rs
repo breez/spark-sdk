@@ -7,8 +7,9 @@ use serde_with::serde_as;
 use spark::Network;
 use spark_wallet::{PublicKey, TransferId};
 
-use crate::utils::decode_token_identifier;
-use crate::{BTC_ASSET_ADDRESS, FlashnetError};
+use super::api::BTC_ASSET_ADDRESS;
+use super::utils::decode_token_identifier;
+use crate::error::FlashnetError;
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1024,7 +1025,7 @@ mod test {
         // amount_in_before_input_fees = 101_000 * 1000 = 101_000_000
         // input_fee_rate = (100 + 20) / 10_000 = 0.012
         // amount_in = 101_000_000 * 1.012 ≈ 102_212_000
-        println!("BTC/USD test - amount_in: {amount_in} (for {amount_out} sats out)",);
+        println!("BTC/USD test - amount_in: {amount_in} (for {amount_out} sats out)");
 
         // To get 100K sats at 1000 tokens/sat, need ~102M tokens (with fees)
         assert!(amount_in > 102_000_000 && amount_in < 103_000_000);
@@ -1066,7 +1067,7 @@ mod test {
         // amount_in_before_input_fees = 102,010 / 0.001 = 102,010,000
         // input_fee_rate = 20 / 10_000 = 0.002 (only LP fee for A→B)
         // amount_in = 102,010,000 * 1.002 ≈ 102,214,020
-        println!("Small price reversed - amount_in: {amount_in} (for {amount_out} sats out)",);
+        println!("Small price reversed - amount_in: {amount_in} (for {amount_out} sats out)");
 
         // To get 100K sats at 0.001 sats/token (1000 tokens/sat), need ~102M tokens
         assert!(amount_in > 102_000_000 && amount_in < 103_000_000);

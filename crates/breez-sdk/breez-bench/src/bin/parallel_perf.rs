@@ -17,8 +17,9 @@ use tracing_subscriber::EnvFilter;
 
 use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
+    BreezSdk, GetInfoRequest, Network, PaymentRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest,
+    default_config,
 };
 
 use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
@@ -409,7 +410,9 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType) -
         PaymentType::Transfer { address, amount } => {
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: address.clone(),
+                    payment_request: PaymentRequest::Input {
+                        input: address.clone(),
+                    },
                     amount: Some(*amount as u128),
                     token_identifier: None,
                     conversion_options: None,
@@ -430,7 +433,9 @@ async fn execute_single_payment(sender: &BreezSdk, payment_type: &PaymentType) -
         PaymentType::Lightning { invoice, .. } => {
             let prepare = sender
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: invoice.clone(),
+                    payment_request: PaymentRequest::Input {
+                        input: invoice.clone(),
+                    },
                     amount: None,
                     token_identifier: None,
                     conversion_options: None,

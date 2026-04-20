@@ -188,8 +188,14 @@ impl SyncedStorage {
                     description,
                     lnurl_pay_info,
                     lnurl_withdraw_info,
+                    conversion_info,
                     ..
-                } => (description, lnurl_pay_info, lnurl_withdraw_info, None),
+                } => (
+                    description,
+                    lnurl_pay_info,
+                    lnurl_withdraw_info,
+                    conversion_info,
+                ),
                 PaymentDetails::Spark {
                     conversion_info, ..
                 }
@@ -596,8 +602,7 @@ impl Storage for SyncedStorage {
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
         let now = platform_utils::time::SystemTime::now()
             .duration_since(platform_utils::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         let mut updated_fields = HashMap::new();
         updated_fields.insert(DELETED_AT_FIELD.to_string(), serde_json::json!(now));
         self.sync_service
@@ -741,6 +746,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         }

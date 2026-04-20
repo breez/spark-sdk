@@ -43,8 +43,7 @@ impl<T: Clone> ExpiringCell<T> {
     pub async fn set(&self, value: T, ttl_ms: u128) {
         let expiration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis().saturating_add(ttl_ms))
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis().saturating_add(ttl_ms));
         *self.inner.write().await = Some((value, expiration));
     }
 }

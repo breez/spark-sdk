@@ -1,15 +1,15 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+use breez_sdk_common::buy::cashapp::CashAppProvider;
 use std::str::FromStr;
 use tracing::info;
 
-use breez_sdk_common::buy::cashapp::CashAppProvider;
-
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
-    GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationProgress, RegisterWebhookRequest,
-    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest,
-    UpdateUserSettingsRequest, UserSettings, Webhook,
+    CrossChainRouteFilter, CrossChainRoutePair, GetTokensMetadataRequest,
+    GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse, ListFiatRatesResponse,
+    Network, OptimizationProgress, RegisterWebhookRequest, RegisterWebhookResponse,
+    SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest,
+    UserSettings, Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -71,6 +71,33 @@ impl BreezSdk {
 
     pub async fn parse(&self, input: &str) -> Result<InputType, SdkError> {
         parse_input(input, Some(self.external_input_parsers.clone())).await
+    }
+
+    /// Returns the available cross-chain routes.
+    ///
+    /// Use [`CrossChainRouteFilter::Send`] to get routes for sending from Spark
+    /// (filtered by the parsed recipient address), or
+    /// [`CrossChainRouteFilter::Receive`] to get routes for receiving into Spark
+    /// (optionally filtered by a source contract address).
+    pub async fn get_cross_chain_routes(
+        &self,
+        filter: &CrossChainRouteFilter,
+    ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
+        let mut all_routes = Vec::new();
+        for svc in self.cross_chain_providers.values() {
+            match svc.get_routes(filter).await {
+                Ok(routes) => all_routes.extend(routes),
+                Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),
+            }
+        }
+
+        all_routes.sort_by(|a, b| {
+            a.asset
+                .cmp(&b.asset)
+                .then_with(|| a.chain.cmp(&b.chain))
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
+        Ok(all_routes)
     }
 
     /// Returns the balance of the wallet in satoshis
