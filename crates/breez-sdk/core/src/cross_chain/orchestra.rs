@@ -386,7 +386,7 @@ impl CrossChainService for OrchestraService {
             .client
             .quote(request)
             .await
-            .map_err(|e| SdkError::Generic(format!("Orchestra quote failed: {e}")))?;
+            .map_err(|e| SdkError::Generic(format!("Orchestra: {e}")))?;
         debug!("Orchestra: quote response: {:?}", quote);
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
