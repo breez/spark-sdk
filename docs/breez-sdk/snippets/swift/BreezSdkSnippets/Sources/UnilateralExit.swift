@@ -5,7 +5,7 @@ func prepareExit(sdk: BreezSdk) async throws -> PrepareUnilateralExitResponse {
     // ANCHOR: prepare-unilateral-exit
     // Create a signer from your UTXO private key (32-byte secret key)
     let secretKeyBytes = Data(count: 32) // Replace with your actual secret key bytes
-    let signer = try SingleKeySigner(secretKeyBytes: secretKeyBytes)
+    let signer = try singleKeyCpfpSigner(secretKeyBytes: secretKeyBytes)
 
     let response = try await sdk.prepareUnilateralExit(
         request: PrepareUnilateralExitRequest(

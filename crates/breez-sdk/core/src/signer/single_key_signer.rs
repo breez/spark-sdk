@@ -13,12 +13,17 @@ use crate::error::SignerError;
 
 use super::cpfp::CpfpSigner;
 
-/// Constructs a [`SingleKeySigner`] and returns it as a [`CpfpSigner`] trait object.
+/// Constructs a default CPFP signer that handles P2WPKH and P2TR inputs using
+/// a single private key, returned as a [`CpfpSigner`] trait object.
 ///
-/// This factory exists because some language bindings do not automatically
-/// treat the concrete [`SingleKeySigner`] type as an implementation of the
-/// [`CpfpSigner`] callback interface. The trait-object return is accepted by
-/// every binding without per-language shims.
+/// The returned signer detects the input type from the `witness_utxo`
+/// scriptPubKey:
+/// - **P2WPKH** inputs are signed with ECDSA
+/// - **P2TR** inputs are signed with Schnorr as a key-path spend with no script
+///   tree (empty merkle root, BIP341 `tap_tweak` applied with `None`). Taproot
+///   outputs that commit to a script tree are not supported by this signer;
+///   callers with such outputs must implement `CpfpSigner` themselves.
+/// - **Ephemeral anchor** inputs (already finalized) are skipped
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn single_key_cpfp_signer(
@@ -27,25 +32,12 @@ pub fn single_key_cpfp_signer(
     Ok(Arc::new(SingleKeySigner::new(secret_key_bytes)?))
 }
 
-/// Default CPFP signer that handles P2WPKH and P2TR inputs using a single private key.
-///
-/// This signer detects the input type from the `witness_utxo` scriptPubKey:
-/// - **P2WPKH** inputs are signed with ECDSA
-/// - **P2TR** inputs are signed with Schnorr as a key-path spend with no script
-///   tree (empty merkle root, BIP341 `tap_tweak` applied with `None`). Taproot
-///   outputs that commit to a script tree are not supported by this signer;
-///   callers with such outputs must implement `CpfpSigner` themselves.
-/// - **Ephemeral anchor** inputs (already finalized) are skipped
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SingleKeySigner {
     secret_key: SecretKey,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl SingleKeySigner {
-    /// Create a new `SingleKeySigner` from a 32-byte secret key.
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    #[allow(clippy::needless_pass_by_value)] // UniFFI requires owned Vec<u8>
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(secret_key_bytes: Vec<u8>) -> Result<Self, SignerError> {
         let secret_key = SecretKey::from_slice(&secret_key_bytes)
             .map_err(|e| SignerError::InvalidInput(format!("Invalid secret key: {e}")))?;
@@ -53,7 +45,6 @@ impl SingleKeySigner {
     }
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[macros::async_trait]
 impl CpfpSigner for SingleKeySigner {
     async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, SignerError> {

@@ -1193,31 +1193,27 @@ impl breez_sdk_spark::signer::CpfpSigner for WasmCpfpSigner {
     }
 }
 
-/// A CPFP signer that signs P2WPKH and P2TR inputs using a single private key.
+/// A CPFP signer returned by `singleKeyCpfpSigner`.
+/// Matches the `CpfpSigner` TypeScript interface shape so it can be passed to
+/// `prepareUnilateralExit`.
 #[wasm_bindgen]
-pub struct SingleKeySigner {
-    inner: std::sync::Arc<breez_sdk_spark::signer::SingleKeySigner>,
+pub struct DefaultCpfpSigner {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>,
 }
 
-unsafe impl Send for SingleKeySigner {}
-unsafe impl Sync for SingleKeySigner {}
+unsafe impl Send for DefaultCpfpSigner {}
+unsafe impl Sync for DefaultCpfpSigner {}
+
+impl DefaultCpfpSigner {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>) -> Self {
+        Self { inner }
+    }
+}
 
 #[wasm_bindgen]
-impl SingleKeySigner {
-    #[wasm_bindgen(constructor)]
-    pub fn new(secret_key_bytes: Vec<u8>) -> SingleKeySigner {
-        let inner = match breez_sdk_spark::signer::SingleKeySigner::new(secret_key_bytes) {
-            Ok(signer) => signer,
-            Err(e) => wasm_bindgen::throw_str(&format!("{e:?}")),
-        };
-        Self {
-            inner: std::sync::Arc::new(inner),
-        }
-    }
-
+impl DefaultCpfpSigner {
     #[wasm_bindgen(js_name = "signPsbt")]
     pub async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
-        use breez_sdk_spark::signer::CpfpSigner;
         self.inner
             .sign_psbt(psbt_bytes)
             .await

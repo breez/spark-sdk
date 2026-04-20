@@ -3,7 +3,7 @@ import type {
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
-  SingleKeySigner,
+  singleKeyCpfpSigner,
   UnilateralExitCpfpInput
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -11,7 +11,7 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
   // ANCHOR: prepare-unilateral-exit
   // Create a signer from your UTXO private key (32-byte secret key)
   const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
-  const signer = new SingleKeySigner(secretKeyBytes.buffer)
+  const signer = singleKeyCpfpSigner(secretKeyBytes.buffer)
 
   const response = await sdk.prepareUnilateralExit({
     feeRateSatPerVbyte: BigInt(2),

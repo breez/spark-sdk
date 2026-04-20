@@ -85,6 +85,18 @@ pub fn default_external_signer(
     Ok(crate::signer::DefaultSigner::new(signer))
 }
 
+/// Creates a default CPFP signer that signs P2WPKH and P2TR inputs using a
+/// single private key. The returned signer satisfies the `CpfpSigner`
+/// interface and can be passed to `prepareUnilateralExit`.
+#[wasm_bindgen(js_name = "singleKeyCpfpSigner")]
+pub fn single_key_cpfp_signer(
+    secret_key_bytes: Vec<u8>,
+) -> Result<crate::signer::DefaultCpfpSigner, JsValue> {
+    let signer = breez_sdk_spark::signer::single_key_cpfp_signer(secret_key_bytes)
+        .map_err(|e| JsValue::from_str(&format!("{e:?}")))?;
+    Ok(crate::signer::DefaultCpfpSigner::new(signer))
+}
+
 #[wasm_bindgen]
 impl BreezSdk {
     #[wasm_bindgen(js_name = "addEventListener")]

@@ -2,8 +2,8 @@ import logging
 from breez_sdk_spark import (
     BreezSdk,
     PrepareUnilateralExitRequest,
-    SingleKeySigner,
     UnilateralExitCpfpInput,
+    single_key_cpfp_signer,
 )
 
 
@@ -12,7 +12,7 @@ async def prepare_exit(sdk: BreezSdk):
         # ANCHOR: prepare-unilateral-exit
         # Create a signer from your UTXO private key (32-byte secret key)
         secret_key_bytes = bytes.fromhex("your-secret-key-hex")
-        signer = SingleKeySigner(secret_key_bytes=secret_key_bytes)
+        signer = single_key_cpfp_signer(secret_key_bytes=secret_key_bytes)
 
         response = await sdk.prepare_unilateral_exit(
             request=PrepareUnilateralExitRequest(

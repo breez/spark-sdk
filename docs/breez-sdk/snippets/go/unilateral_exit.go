@@ -15,7 +15,7 @@ func PrepareExit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareUnilate
 	if err != nil {
 		return nil, err
 	}
-	signer, err := breez_sdk_spark.NewSingleKeySigner(secretKeyBytes)
+	signer, err := breez_sdk_spark.SingleKeyCpfpSigner(secretKeyBytes)
 	if err != nil {
 		return nil, err
 	}

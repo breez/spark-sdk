@@ -8,7 +8,7 @@ class UnilateralExit {
         // ANCHOR: prepare-unilateral-exit
         try {
             val secretKeyBytes = "your-secret-key-hex".hexToByteArray()
-            val signer = SingleKeySigner(secretKeyBytes)
+            val signer = singleKeyCpfpSigner(secretKeyBytes)
 
             val response = sdk.prepareUnilateralExit(
                 PrepareUnilateralExitRequest(

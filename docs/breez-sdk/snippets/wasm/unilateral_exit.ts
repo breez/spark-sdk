@@ -2,13 +2,13 @@ import type {
   BreezSdk,
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark'
-import { SingleKeySigner } from '@breeztech/breez-sdk-spark'
+import { singleKeyCpfpSigner } from '@breeztech/breez-sdk-spark'
 
 const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitResponse> => {
   // ANCHOR: prepare-unilateral-exit
   // Create a signer from your UTXO private key (32-byte secret key)
   const secretKeyBytes = Buffer.from('your-secret-key-hex', 'hex')
-  const signer = new SingleKeySigner(secretKeyBytes)
+  const signer = singleKeyCpfpSigner(secretKeyBytes)
 
   const response = await sdk.prepareUnilateralExit(
     {
