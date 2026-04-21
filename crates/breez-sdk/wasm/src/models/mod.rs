@@ -468,17 +468,36 @@ pub struct Payment {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionDetails)]
 pub struct ConversionDetails {
     pub status: ConversionStatus,
-    pub from: Option<ConversionStep>,
-    pub to: Option<ConversionStep>,
+    #[serde(default)]
+    pub conversions: Vec<Conversion>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStep)]
-pub struct ConversionStep {
-    pub payment_id: String,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionProvider)]
+pub enum ConversionProvider {
+    Amm,
+    Orchestra,
+    Boltz,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionSide)]
+pub struct ConversionSide {
+    pub chain: String,
+    pub asset: String,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
     pub fee: u128,
-    pub method: PaymentMethod,
-    pub token_metadata: Option<TokenMetadata>,
+    pub decimals: Option<u32>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Conversion)]
+pub struct Conversion {
+    pub provider: ConversionProvider,
+    pub status: ConversionStatus,
+    pub from: ConversionSide,
+    pub to: ConversionSide,
     #[serde(default)]
     pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
@@ -1430,6 +1449,8 @@ pub enum ConversionInfo {
         fee: Option<u128>,
         #[serde(default)]
         read_token: Option<String>,
+        #[serde(default)]
+        destination_decimals: Option<u32>,
     },
     Boltz {
         swap_id: String,
@@ -1453,6 +1474,8 @@ pub enum ConversionInfo {
         max_slippage_bps: u32,
         #[serde(default)]
         quote_degraded: bool,
+        #[serde(default)]
+        destination_decimals: Option<u32>,
     },
 }
 

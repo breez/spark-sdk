@@ -114,39 +114,39 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let btc_to_token_conversion_details = send_btc_to_token.payment.conversion_details.unwrap();
     assert_eq!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
-        PaymentMethod::Spark,
-        "From step should be a spark payment"
+        btc_to_token_conversion_details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
     );
-    assert!(
-        btc_to_token_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_none(),
-        "From step should have no token metadata"
-    );
-    let btc_to_token_to_step = btc_to_token_conversion_details
-        .to
-        .expect("Conversion should have a 'to' step");
+    let btc_to_token_conv = &btc_to_token_conversion_details.conversions[0];
     assert_eq!(
-        btc_to_token_to_step.method,
-        PaymentMethod::Token,
-        "To step should be a token payment"
+        btc_to_token_conv.from.chain, "spark",
+        "From chain should be spark"
     );
-    assert_eq!(btc_to_token_to_step.fee, 0, "To step should have no fee");
+    assert_eq!(
+        btc_to_token_conv.from.asset, "BTC",
+        "From asset should be BTC"
+    );
     assert!(
-        btc_to_token_to_step.token_metadata.is_some(),
-        "To step should have token metadata"
+        btc_to_token_conv.from.fee > 0,
+        "From side should have a fee"
+    );
+    assert!(
+        btc_to_token_conv.from.decimals.is_none(),
+        "From side (BTC) should have no decimals"
+    );
+    assert_eq!(
+        btc_to_token_conv.to.chain, "spark",
+        "To chain should be spark"
+    );
+    assert_ne!(
+        btc_to_token_conv.to.asset, "BTC",
+        "To asset should be a token"
+    );
+    assert_eq!(btc_to_token_conv.to.fee, 0, "To side should have no fee");
+    assert!(
+        btc_to_token_conv.to.decimals.is_some(),
+        "To side should have decimals"
     );
 
     // Wait for Bob to receive the token payment
@@ -283,39 +283,36 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let token_to_btc_conversion_details = send_token_to_btc.payment.conversion_details.unwrap();
     assert_eq!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
-        PaymentMethod::Token,
-        "From step should be a token payment"
+        token_to_btc_conversion_details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
     );
-    assert!(
-        token_to_btc_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_some(),
-        "From step should have token metadata"
-    );
-    let token_to_btc_to_step = token_to_btc_conversion_details
-        .to
-        .expect("Conversion should have a 'to' step");
+    let token_to_btc_conv = &token_to_btc_conversion_details.conversions[0];
     assert_eq!(
-        token_to_btc_to_step.method,
-        PaymentMethod::Spark,
-        "To step should be a spark payment"
+        token_to_btc_conv.from.chain, "spark",
+        "From chain should be spark"
     );
-    assert_eq!(token_to_btc_to_step.fee, 0, "To step should have no fee");
+    assert_ne!(
+        token_to_btc_conv.from.asset, "BTC",
+        "From asset should be a token"
+    );
     assert!(
-        token_to_btc_to_step.token_metadata.is_none(),
-        "To step should have no token metadata"
+        token_to_btc_conv.from.fee > 0,
+        "From side should have a fee"
+    );
+    assert!(
+        token_to_btc_conv.from.decimals.is_some(),
+        "From side should have decimals"
+    );
+    assert_eq!(
+        token_to_btc_conv.to.chain, "spark",
+        "To chain should be spark"
+    );
+    assert_eq!(token_to_btc_conv.to.asset, "BTC", "To asset should be BTC");
+    assert_eq!(token_to_btc_conv.to.fee, 0, "To side should have no fee");
+    assert!(
+        token_to_btc_conv.to.decimals.is_none(),
+        "To side (BTC) should have no decimals"
     );
 
     // Wait for Alice to receive the Bitcoin payment

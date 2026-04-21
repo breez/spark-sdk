@@ -639,8 +639,7 @@ impl EventMiddleware for StableBalance {
                     // Set conversion_details with Pending status so clients know conversion is coming
                     payment.conversion_details = Some(ConversionDetails {
                         status: ConversionStatus::Pending,
-                        from: None,
-                        to: None,
+                        conversions: vec![],
                     });
 
                     // Persist the pending status so it survives restarts

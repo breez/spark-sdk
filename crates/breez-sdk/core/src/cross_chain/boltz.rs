@@ -253,6 +253,7 @@ impl CrossChainService for BoltzService {
                 fee: Some(prepared.fee_amount),
                 max_slippage_bps: *max_slippage_bps,
                 quote_degraded: false,
+                destination_decimals: Some(u32::from(prepared.pair.decimals)),
             }),
             ..Default::default()
         };
