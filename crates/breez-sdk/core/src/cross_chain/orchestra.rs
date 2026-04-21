@@ -174,6 +174,7 @@ impl OrchestraService {
                 estimated_out,
                 fee,
                 read_token,
+                destination_decimals,
                 ..
             } = conversion_info.clone()
             else {
@@ -231,17 +232,23 @@ impl OrchestraService {
                 _ => ConversionStatus::Failed,
             };
 
-            // Use the real amount_out from Orchestra if available, otherwise
-            // keep the original estimate.
+            // Use the real amounts from Orchestra status if available,
+            // otherwise keep the original estimates.
             let final_out = status_response
                 .order
                 .amount_out
                 .as_deref()
                 .and_then(|s| s.parse::<u128>().ok())
                 .unwrap_or(estimated_out);
+            let final_fee = status_response
+                .order
+                .fee_amount
+                .parse::<u128>()
+                .ok()
+                .or(fee);
 
             debug!(
-                "Orchestra monitor: payment {} terminal → {new_status:?}, final_out={final_out} (estimated was {estimated_out})",
+                "Orchestra monitor: payment {} terminal → {new_status:?}, final_out={final_out} (estimated was {estimated_out}), fee={final_fee:?}",
                 payment.id
             );
 
@@ -254,8 +261,9 @@ impl OrchestraService {
                     destination_address,
                     estimated_out: final_out,
                     status: new_status.clone(),
-                    fee,
+                    fee: final_fee,
                     read_token,
+                    destination_decimals,
                 }),
                 ..Default::default()
             };
@@ -487,6 +495,7 @@ impl CrossChainService for OrchestraService {
                 status,
                 fee: Some(prepared.fee_amount),
                 read_token,
+                destination_decimals: Some(u32::from(prepared.pair.decimals)),
             }),
             ..Default::default()
         };

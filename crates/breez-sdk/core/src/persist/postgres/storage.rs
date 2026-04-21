@@ -1544,8 +1544,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse::<ConversionStatus>()
                         .map(|status| ConversionDetails {
                             status,
-                            from: None,
-                            to: None,
+                            conversions: vec![],
                         })
                         .map_err(StorageError::Serialization)
                 })

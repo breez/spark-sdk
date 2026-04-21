@@ -1526,8 +1526,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let conversion_status: Option<ConversionStatus> = row.get(30)?;
     let conversion_details = conversion_status.map(|status| ConversionDetails {
         status,
-        from: None,
-        to: None,
+        conversions: vec![],
     });
 
     Ok(Payment {
