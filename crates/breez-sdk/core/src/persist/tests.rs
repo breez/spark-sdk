@@ -2143,6 +2143,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Pending,
             fee: Some(500),
             read_token: Some("rt_test_token".to_string()),
+            destination_decimals: Some(6),
         }),
         ..Default::default()
     };
@@ -2179,6 +2180,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Completed,
             fee: Some(250),
             read_token: None,
+            destination_decimals: Some(6),
         }),
         ..Default::default()
     };
@@ -3311,9 +3313,15 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
             *status,
             "conversion_status mismatch for payment {id}"
         );
-        // from/to are not populated at storage layer
-        assert!(fetched.conversion_details.as_ref().unwrap().from.is_none());
-        assert!(fetched.conversion_details.as_ref().unwrap().to.is_none());
+        // Conversions are not populated at storage layer (rebuilt on retrieval)
+        assert!(
+            fetched
+                .conversion_details
+                .as_ref()
+                .unwrap()
+                .conversions
+                .is_empty()
+        );
     }
 
     // --- Test 2: Payment without conversion_status has no conversion_details ---
@@ -3414,6 +3422,7 @@ fn boltz_conversion_info(
         fee: Some(1_500),
         max_slippage_bps: 100,
         quote_degraded: false,
+        destination_decimals: Some(6),
     }
 }
 

@@ -9,7 +9,6 @@ use crate::{
         ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
         PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentRequest,
         ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
-        conversion_steps_from_payments,
     },
     utils::payments::get_payment_with_conversion_details,
 };
@@ -127,31 +126,52 @@ impl BreezSdk {
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
+        use crate::utils::payments::{build_conversions, extract_conversion_info};
+
         let mut payments = self.storage.list_payments(request.into()).await?;
 
-        // Only query child payments for payments that have conversion_details set
+        // Query child payments for payments that have conversion_details set (AMM)
         let parent_ids: Vec<String> = payments
             .iter()
             .filter(|p| p.conversion_details.is_some())
             .map(|p| p.id.clone())
             .collect();
 
-        if !parent_ids.is_empty() {
-            let related_payments_map = self.storage.get_payments_by_parent_ids(parent_ids).await?;
+        let related_payments_map = if parent_ids.is_empty() {
+            std::collections::HashMap::default()
+        } else {
+            self.storage.get_payments_by_parent_ids(parent_ids).await?
+        };
 
-            for payment in &mut payments {
-                if let Some(related_payments) = related_payments_map.get(&payment.id) {
-                    match conversion_steps_from_payments(related_payments) {
-                        Ok((from, to)) => {
-                            if let Some(ref mut cd) = payment.conversion_details {
-                                cd.from = from;
-                                cd.to = to;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to build conversion steps: {e}");
-                        }
-                    }
+        for payment in &mut payments {
+            let has_conversion_details = payment.conversion_details.is_some();
+            let has_crosschain_info = extract_conversion_info(payment.details.clone())
+                .is_some_and(|info| !matches!(info, crate::ConversionInfo::Amm { .. }));
+
+            if !has_conversion_details && !has_crosschain_info {
+                continue;
+            }
+
+            let child_payments = if has_conversion_details {
+                related_payments_map.get(&payment.id).map(Vec::as_slice)
+            } else {
+                None
+            };
+
+            let conversions = build_conversions(payment, child_payments);
+
+            if !conversions.is_empty() {
+                if let Some(ref mut cd) = payment.conversion_details {
+                    cd.conversions = conversions;
+                } else {
+                    let status = extract_conversion_info(payment.details.clone())
+                        .map_or(crate::ConversionStatus::Completed, |info| {
+                            info.status().clone()
+                        });
+                    payment.conversion_details = Some(crate::models::ConversionDetails {
+                        status,
+                        conversions,
+                    });
                 }
             }
         }

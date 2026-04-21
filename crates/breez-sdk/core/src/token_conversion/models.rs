@@ -131,8 +131,8 @@ impl FromStr for ConversionStatus {
 }
 
 /// Conversion metadata stored on a payment's metadata row. Discriminated by a
-/// `"type"` tag in JSON so old data (AMM-only, no tag) must be backfilled via a
-/// DB migration that sets `"type": "amm"` on all existing rows.
+/// `"type"` tag in JSON. Old data (AMM-only, no tag) is handled by the custom
+/// `Deserialize` impl which defaults to `"amm"` when the tag is absent.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -185,6 +185,9 @@ pub enum ConversionInfo {
         /// order status via the Orchestra `/status` endpoint.
         #[serde(default)]
         read_token: Option<String>,
+        /// Number of decimals for the destination asset (e.g. 6 for USDC).
+        #[serde(default)]
+        destination_decimals: Option<u32>,
     },
     /// Boltz reverse swap — BTC/sats on Spark → USDT on an external chain via
     /// Lightning hold invoice + on-chain claim.
@@ -238,6 +241,9 @@ pub enum ConversionInfo {
         /// quote has drifted beyond `max_slippage_bps`. Not user-facing.
         #[serde(default)]
         quote_degraded: bool,
+        /// Number of decimals for the destination asset (e.g. 6 for USDT).
+        #[serde(default)]
+        destination_decimals: Option<u32>,
     },
 }
 
@@ -305,6 +311,7 @@ mod tests {
             fee: Some(2_500),
             max_slippage_bps: 100,
             quote_degraded: false,
+            destination_decimals: Some(6),
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -338,6 +345,7 @@ mod tests {
             fee: None,
             max_slippage_bps: 100,
             quote_degraded: false,
+            destination_decimals: Some(6),
         };
         *info.status_mut() = ConversionStatus::Completed;
         assert_eq!(info.status(), &ConversionStatus::Completed);

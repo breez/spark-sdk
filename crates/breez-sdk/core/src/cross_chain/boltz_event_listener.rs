@@ -78,6 +78,7 @@ impl BoltzSdkEventListener {
             fee,
             max_slippage_bps,
             quote_degraded,
+            destination_decimals,
             ..
         } = conversion_info
         else {
@@ -106,6 +107,7 @@ impl BoltzSdkEventListener {
                 fee,
                 max_slippage_bps,
                 quote_degraded,
+                destination_decimals,
             }),
             ..Default::default()
         };
@@ -148,6 +150,7 @@ impl BoltzSdkEventListener {
             status,
             fee,
             max_slippage_bps,
+            destination_decimals,
             ..
         }) = extract_conversion_info(existing.details)
         else {
@@ -174,6 +177,7 @@ impl BoltzSdkEventListener {
                 fee,
                 max_slippage_bps,
                 quote_degraded: true,
+                destination_decimals,
             }),
             ..Default::default()
         };
