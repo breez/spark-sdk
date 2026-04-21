@@ -670,17 +670,31 @@ pub struct _Payment {
 #[frb(mirror(ConversionDetails))]
 pub struct _ConversionDetails {
     pub status: ConversionStatus,
-    pub from: Option<ConversionStep>,
-    pub to: Option<ConversionStep>,
+    pub conversions: Vec<Conversion>,
 }
 
-#[frb(mirror(ConversionStep))]
-pub struct _ConversionStep {
-    pub payment_id: String,
+#[frb(mirror(ConversionProvider))]
+pub enum _ConversionProvider {
+    Amm,
+    Orchestra,
+    Boltz,
+}
+
+#[frb(mirror(ConversionSide))]
+pub struct _ConversionSide {
+    pub chain: String,
+    pub asset: String,
     pub amount: u128,
     pub fee: u128,
-    pub method: PaymentMethod,
-    pub token_metadata: Option<TokenMetadata>,
+    pub decimals: Option<u32>,
+}
+
+#[frb(mirror(Conversion))]
+pub struct _Conversion {
+    pub provider: ConversionProvider,
+    pub status: ConversionStatus,
+    pub from: ConversionSide,
+    pub to: ConversionSide,
     pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
