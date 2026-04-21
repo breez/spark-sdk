@@ -77,6 +77,16 @@ enum SignRefundsOutcome {
     AlreadyClaimed(Box<Transfer>),
 }
 
+/// Outcome of calling `finalize_node_signatures`.
+///
+/// Same concurrent-claim fallback as [`SignRefundsOutcome`]: if the coordinator's
+/// finalize fails because another instance of this wallet already finalized the
+/// transfer, we return the completed transfer instead of an error.
+enum FinalizeOutcome {
+    Finalized(Vec<TreeNode>),
+    AlreadyClaimed(Box<Transfer>),
+}
+
 /// Configuration for claiming transfers
 pub struct ClaimTransferConfig {
     pub max_retries: u32,
@@ -826,13 +836,26 @@ impl TransferService {
         debug!("Claim transfer sign refunds successful.");
 
         // Finalize the node signatures with the coordinator
-        let finalized_nodes = self
-            .finalize_node_signatures(&node_signatures)
+        let finalized_nodes = match self
+            .finalize_node_signatures(&transfer.id, &node_signatures)
             .await
-            .map_err(|e| {
+        {
+            Ok(FinalizeOutcome::Finalized(nodes)) => nodes,
+            Ok(FinalizeOutcome::AlreadyClaimed(completed)) => {
+                // Another instance of this wallet finalized the transfer concurrently;
+                // return the coordinator's finalized leaves so the caller can update
+                // its local tree uniformly.
+                debug!(
+                    "Transfer {} already claimed by another instance at finalize step; using coordinator's finalized leaves",
+                    transfer.id
+                );
+                return Ok(completed.leaves.into_iter().map(|l| l.leaf).collect());
+            }
+            Err(e) => {
                 debug!("Failed to finalize node signatures: {}", e);
-                e
-            })?;
+                return Err(e);
+            }
+        };
         debug!("Finalize node signatures successful.");
         Ok(finalized_nodes)
     }
@@ -1143,12 +1166,19 @@ impl TransferService {
         Ok(SignRefundsOutcome::Signed(node_signatures))
     }
 
-    /// Finalizes node signatures with the coordinator
+    /// Finalizes node signatures with the coordinator.
+    ///
+    /// Returns [`FinalizeOutcome::Finalized`] with the new nodes on success. If the
+    /// coordinator rejects the request because another instance of this wallet has
+    /// already finalized the transfer, returns [`FinalizeOutcome::AlreadyClaimed`]
+    /// with the coordinator's completed transfer so the caller can uniformly update
+    /// its local tree.
     async fn finalize_node_signatures(
         &self,
+        transfer_id: &TransferId,
         node_signatures: &[operator_rpc::spark::NodeSignatures],
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let response = self
+    ) -> Result<FinalizeOutcome, ServiceError> {
+        let result = self
             .operator_pool
             .get_coordinator()
             .client
@@ -1156,7 +1186,23 @@ impl TransferService {
                 intent: operator_rpc::common::SignatureIntent::Transfer as i32,
                 node_signatures: node_signatures.to_vec(),
             })
-            .await?;
+            .await;
+
+        let response = match result {
+            Ok(resp) => resp,
+            Err(e) => {
+                if let OperatorRpcError::Connection(_) = e
+                    && let Some(coordinator_transfer) = self.query_transfer(transfer_id).await?
+                    && coordinator_transfer.status == TransferStatus::Completed
+                {
+                    return Ok(FinalizeOutcome::AlreadyClaimed(Box::new(
+                        coordinator_transfer,
+                    )));
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
 
         let nodes = response
             .nodes
@@ -1164,7 +1210,7 @@ impl TransferService {
             .map(|node| node.try_into())
             .collect::<Result<Vec<TreeNode>, _>>()?;
 
-        Ok(nodes)
+        Ok(FinalizeOutcome::Finalized(nodes))
     }
 
     pub async fn verify_pending_transfer(
