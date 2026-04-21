@@ -1813,17 +1813,10 @@ async fn claim_pending_transfers(
         .await;
 
     // Collect successful claims, log failures (best-effort).
-    // TransferAlreadyClaimed is treated as success - the leaves are already in the store.
     let mut successful_items = Vec::new();
 
     for (transfer, result) in claim_results {
-        let is_already_claimed = matches!(
-            &result,
-            Err(SparkWalletError::ServiceError(
-                ServiceError::TransferAlreadyClaimed
-            ))
-        );
-        if result.is_ok() || is_already_claimed {
+        if result.is_ok() {
             let mut completed = transfer;
             completed.status = TransferStatus::Completed;
             successful_items.push(completed);
@@ -2201,13 +2194,8 @@ impl BackgroundProcessor {
             ));
 
         trace!("Claiming transfer from event");
-        match claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await {
-            Ok(_) => trace!("Claimed transfer from event"),
-            Err(SparkWalletError::ServiceError(ServiceError::TransferAlreadyClaimed)) => {
-                trace!("Transfer already claimed by another instance");
-            }
-            Err(e) => return Err(e),
-        }
+        claim_transfer(&transfer, &self.transfer_service, &self.tree_service).await?;
+        trace!("Claimed transfer from event");
 
         // Update transfer status before notifying listeners
         let mut claimed_transfer = transfer;
