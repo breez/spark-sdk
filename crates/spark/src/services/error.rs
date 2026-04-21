@@ -68,8 +68,6 @@ pub enum ServiceError {
     ClaimTransferError(String),
     #[error("Signature verification failed: {0}")]
     SignatureVerificationFailed(String),
-    #[error("Transfer already claimed")]
-    TransferAlreadyClaimed,
 
     // Swap related errors
     #[error("invalid amount")]
