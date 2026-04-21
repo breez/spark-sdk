@@ -272,10 +272,44 @@ pub struct PaymentMetadata {
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl_description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Conversion info for this payment. Defaults `"type"` to `"amm"` when the
+    /// tag is missing (pre-migration sync records).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conversion_info_with_default_type",
+        default
+    )]
     pub conversion_info: Option<ConversionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_status: Option<ConversionStatus>,
+}
+
+/// Deserializes `ConversionInfo` leniently — ensures the `"type"` tag exists
+/// (defaulting to `"amm"` for pre-migration sync records), then deserializes.
+/// The `entry().or_insert_with()` is a no-op hash lookup when the tag already
+/// exists, so the happy path has minimal overhead beyond the `Value` intermediary.
+fn deserialize_conversion_info_with_default_type<'de, D>(
+    deserializer: D,
+) -> Result<Option<ConversionInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Deserialize;
+
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(mut v) => {
+            if let Some(obj) = v.as_object_mut() {
+                obj.entry("type")
+                    .or_insert_with(|| serde_json::Value::String("amm".to_string()));
+            }
+            match serde_json::from_value::<ConversionInfo>(v) {
+                Ok(info) => Ok(Some(info)),
+                Err(_) => Ok(None),
+            }
+        }
+    }
 }
 
 /// Trait for persistent storage
