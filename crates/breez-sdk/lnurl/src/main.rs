@@ -106,6 +106,10 @@ struct Args {
     #[arg(long)]
     pub ca_cert: Option<String>,
 
+    /// URL to fetch a comma-separated certificate revocation list from.
+    #[arg(long)]
+    pub crl_url: Option<String>,
+
     /// Domain for the webhook URL registered with the SSP.
     #[arg(long)]
     pub webhook_domain: Option<String>,
@@ -267,6 +271,20 @@ where
         })
         .transpose()?;
 
+    let crl: HashSet<String> = if let Some(url) = &args.crl_url {
+        let client = bitreq::Client::new(1);
+        let response = client
+            .send_async(bitreq::get(url))
+            .await
+            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?;
+        let body = response
+            .as_str()
+            .map_err(|e| anyhow!("failed to read crl response body: {e:?}"))?;
+        body.split(',').map(str::to_string).collect()
+    } else {
+        HashSet::new()
+    };
+
     let nostr_keys = args
         .nsec
         .map(|nsec| {
@@ -342,6 +360,8 @@ where
         domains,
         nostr_keys,
         ca_cert,
+        crl_url: args.crl_url,
+        crl,
         connection_manager,
         coordinator,
         signer,

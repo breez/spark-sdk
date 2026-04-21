@@ -57,6 +57,12 @@ where
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    let serial = cert.serial.to_string();
+    if state.crl.contains(&serial) {
+        debug!("Client certificate serial {} is revoked", serial);
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     Ok(next.run(req).await)
 }
 
