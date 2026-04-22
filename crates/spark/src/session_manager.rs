@@ -17,7 +17,8 @@ pub enum SessionManagerError {
 pub struct Session {
     pub token: String,
     pub expiration: u64,
-    pub headers: HashMap<String, String>,
+    pub so_headers: HashMap<String, String>,
+    pub ssp_headers: HashMap<String, String>,
 }
 
 impl Session {

@@ -723,7 +723,7 @@ impl TryFrom<Session> for OperatorSessionInterceptor {
 
     fn try_from(session: Session) -> std::result::Result<Self, Self::Error> {
         let mut headers = Vec::new();
-        for (key, value) in session.headers {
+        for (key, value) in session.so_headers {
             let metadata_key = key
                 .parse::<tonic::metadata::MetadataKey<Ascii>>()
                 .map_err(|_| OperatorRpcError::Generic(format!("Invalid metadata key: {key}")))?;
