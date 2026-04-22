@@ -156,94 +156,82 @@ pub enum ConversionInfo {
         #[serde(default)]
         amount_adjustment: Option<AmountAdjustmentReason>,
     },
-    /// Orchestra (cross-chain) send — BTC/USDB on Spark → stablecoin on
-    /// an external chain (Base, Solana, Tron, Ethereum, etc.).
+    /// Orchestra cross-chain conversion via the Flashnet orchestration API.
     #[serde(rename = "orchestra")]
     Orchestra {
         /// The Orchestra order id returned by `/v1/orchestration/submit`.
         order_id: String,
         /// The Orchestra quote id used to create this order.
         quote_id: String,
-        /// Destination chain (e.g. `"base"`, `"solana"`, `"tron"`).
-        destination_chain: String,
-        /// Destination asset (e.g. `"USDC"`, `"USDT"`).
-        #[serde(default)]
-        destination_asset: String,
-        /// Recipient address on the destination chain.
-        destination_address: String,
-        /// Estimated amount the recipient will receive, in the destination
-        /// asset's base units.
-        #[serde(with = "serde_u128_as_string")]
-        estimated_out: u128,
-        /// The status of the cross-chain order.
-        status: ConversionStatus,
-        /// The fee paid for the cross-chain send, in the source asset's base
-        /// units (sats for BTC, token base units for USDB).
-        #[serde(default, with = "serde_option_u128_as_string")]
-        fee: Option<u128>,
-        /// Opaque token from the `/submit` response, required when querying
-        /// order status via the Orchestra `/status` endpoint.
+        /// Opaque token required for querying order status.
         #[serde(default)]
         read_token: Option<String>,
-        /// Number of decimals for the destination asset (e.g. 6 for USDC).
+
+        /// Chain name (e.g. `"base"`, `"solana"`, `"tron"`).
+        chain: String,
+        /// Asset ticker (e.g. `"USDC"`, `"USDT"`).
         #[serde(default)]
-        destination_decimals: Option<u32>,
+        asset: String,
+        /// Recipient address on the target chain.
+        recipient_address: String,
+        /// Estimated amount in the asset's base units, frozen at prepare time.
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// Actual amount settled. `None` until the order reaches a terminal state.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        /// Current status of the cross-chain order.
+        status: ConversionStatus,
+        /// Fee in the asset's base units.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// Number of decimals for the asset (e.g. 6 for USDC).
+        #[serde(default)]
+        asset_decimals: Option<u32>,
     },
-    /// Boltz reverse swap — BTC/sats on Spark → USDT on an external chain via
-    /// Lightning hold invoice + on-chain claim.
+    /// Boltz reverse swap — cross-chain conversion via Lightning hold invoice.
     ///
     /// `instance_id` and `claim_key_index` are intentionally not stored on
     /// the payment row in v1: they would only be needed for cross-device
-    /// re-derivation of the preimage, which v1 does not support. v2
-    /// (submarine swaps) will introduce a `BoltzInstance` rtsync record
-    /// type and add these fields.
+    /// re-derivation of the preimage, which v1 does not support.
     #[serde(rename = "boltz")]
     Boltz {
         /// The Boltz swap id returned by `POST /swap/reverse`.
         swap_id: String,
-        /// Destination chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
-        destination_chain: String,
-        /// Destination asset ticker (`"USDT"` for canonical Tether, `"USDT0"`
-        /// for distinct `LayerZero` OFT deployments). Captured at prepare
-        /// time from the route so the payment row reflects what was labeled
-        /// when the user committed — not whatever the provider returns now.
-        #[serde(default)]
-        destination_asset: String,
-        /// Recipient address on the destination chain.
-        destination_address: String,
         /// The BOLT11 hold invoice paid on the Spark/Lightning side.
         invoice: String,
         /// Amount of the hold invoice in sats.
         invoice_amount_sats: u64,
-        /// Estimated USDT amount to be delivered on the destination chain,
-        /// in 6-decimal base units. Frozen at prepare time and never mutated.
-        #[serde(with = "serde_u128_as_string")]
-        estimated_out: u128,
-        /// Actual USDT amount delivered on the destination chain, in
-        /// 6-decimal base units. `None` until the claim receipt is processed
-        /// by the Boltz event listener.
-        #[serde(default, with = "serde_option_u128_as_string")]
-        delivered_amount: Option<u128>,
-        /// `LayerZero` message GUID (`0x`-prefixed hex) for bridged swaps.
-        /// `None` for Arbitrum-destination swaps (no bridge) and until the
-        /// claim receipt is processed.
+        /// `LayerZero` message GUID for bridged swaps.
         #[serde(default)]
         lz_guid: Option<String>,
-        /// The status of the reverse swap.
-        status: ConversionStatus,
-        /// Total fee in sats: the Boltz spread plus the Lightning routing
-        /// fee budget committed at prepare time.
-        #[serde(default, with = "serde_option_u128_as_string")]
-        fee: Option<u128>,
         /// DEX slippage tolerance (basis points) committed at prepare time.
         max_slippage_bps: u32,
-        /// Set by the event listener when Boltz reports the claim-time DEX
-        /// quote has drifted beyond `max_slippage_bps`. Not user-facing.
+        /// Whether the claim-time DEX quote drifted beyond `max_slippage_bps`.
         #[serde(default)]
         quote_degraded: bool,
-        /// Number of decimals for the destination asset (e.g. 6 for USDT).
+
+        /// Chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
+        chain: String,
+        /// Asset ticker (e.g. `"USDT"`, `"USDT0"`).
         #[serde(default)]
-        destination_decimals: Option<u32>,
+        asset: String,
+        /// Recipient address on the target chain.
+        recipient_address: String,
+        /// Estimated amount in the asset's base units, frozen at prepare time.
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        /// Actual amount delivered. `None` until the claim receipt is processed.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        /// Current status of the reverse swap.
+        status: ConversionStatus,
+        /// Fee in sats (source-side for sends): Boltz spread + LN routing budget.
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        /// Number of decimals for the asset (e.g. 6 for USDT).
+        #[serde(default)]
+        asset_decimals: Option<u32>,
     },
 }
 
@@ -299,9 +287,9 @@ mod tests {
     fn boltz_conversion_info_roundtrip() {
         let original = ConversionInfo::Boltz {
             swap_id: "boltz_swap_abc".to_string(),
-            destination_chain: "solana".to_string(),
-            destination_asset: "USDT0".to_string(),
-            destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            chain: "solana".to_string(),
+            asset: "USDT0".to_string(),
+            recipient_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             invoice: "lnbc1000n1pexample".to_string(),
             invoice_amount_sats: 150_000,
             estimated_out: 99_000_000,
@@ -311,7 +299,7 @@ mod tests {
             fee: Some(2_500),
             max_slippage_bps: 100,
             quote_degraded: false,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -333,9 +321,9 @@ mod tests {
     fn boltz_status_mut_updates_status_in_place() {
         let mut info = ConversionInfo::Boltz {
             swap_id: "s1".to_string(),
-            destination_chain: "arbitrum".to_string(),
-            destination_asset: "USDT".to_string(),
-            destination_address: "0xdest".to_string(),
+            chain: "arbitrum".to_string(),
+            asset: "USDT".to_string(),
+            recipient_address: "0xdest".to_string(),
             invoice: "lnbc".to_string(),
             invoice_amount_sats: 100,
             estimated_out: 1,
@@ -345,7 +333,7 @@ mod tests {
             fee: None,
             max_slippage_bps: 100,
             quote_degraded: false,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         };
         *info.status_mut() = ConversionStatus::Completed;
         assert_eq!(info.status(), &ConversionStatus::Completed);

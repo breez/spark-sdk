@@ -2118,14 +2118,15 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         conversion_info: Some(crate::ConversionInfo::Orchestra {
             order_id: "ord_123".to_string(),
             quote_id: "q_456".to_string(),
-            destination_chain: "base".to_string(),
-            destination_asset: "USDC".to_string(),
-            destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+            chain: "base".to_string(),
+            asset: "USDC".to_string(),
+            recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
             estimated_out: 99_500_000,
+            delivered_amount: None,
             status: crate::ConversionStatus::Pending,
             fee: Some(500),
             read_token: Some("rt_test_token".to_string()),
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }),
         ..Default::default()
     };
@@ -2155,14 +2156,15 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         conversion_info: Some(crate::ConversionInfo::Orchestra {
             order_id: "ord_789".to_string(),
             quote_id: "q_012".to_string(),
-            destination_chain: "solana".to_string(),
-            destination_asset: "USDC".to_string(),
-            destination_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            chain: "solana".to_string(),
+            asset: "USDC".to_string(),
+            recipient_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             estimated_out: 50_000_000,
+            delivered_amount: None,
             status: crate::ConversionStatus::Completed,
             fee: Some(250),
             read_token: None,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }),
         ..Default::default()
     };
@@ -3326,9 +3328,9 @@ fn boltz_conversion_info(
 ) -> crate::ConversionInfo {
     crate::ConversionInfo::Boltz {
         swap_id: swap_id.to_string(),
-        destination_chain: "arbitrum".to_string(),
-        destination_asset: "USDT".to_string(),
-        destination_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+        chain: "arbitrum".to_string(),
+        asset: "USDT".to_string(),
+        recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
         invoice: "lnbc1000n1pexample".to_string(),
         invoice_amount_sats: 100_000,
         estimated_out,
@@ -3338,7 +3340,7 @@ fn boltz_conversion_info(
         fee: Some(1_500),
         max_slippage_bps: 100,
         quote_degraded: false,
-        destination_decimals: Some(6),
+        asset_decimals: Some(6),
     }
 }
 
@@ -3396,9 +3398,9 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
         conversion_info:
             Some(crate::ConversionInfo::Boltz {
                 swap_id,
-                destination_chain,
-                destination_asset,
-                destination_address,
+                chain,
+                asset,
+                recipient_address,
                 invoice_amount_sats,
                 estimated_out,
                 delivered_amount,
@@ -3415,10 +3417,10 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
         panic!("expected Boltz ConversionInfo on Lightning details after insert");
     };
     assert_eq!(swap_id, "boltz_swap_pending");
-    assert_eq!(destination_chain, "arbitrum");
-    assert_eq!(destination_asset, "USDT");
+    assert_eq!(chain, "arbitrum");
+    assert_eq!(asset, "USDT");
     assert_eq!(
-        destination_address,
+        recipient_address,
         "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     );
     assert_eq!(invoice_amount_sats, 100_000);

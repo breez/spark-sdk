@@ -413,12 +413,13 @@ pub fn build_crosschain_conversion(
 
     match info {
         ConversionInfo::Orchestra {
-            destination_chain,
-            destination_asset,
+            chain,
+            asset,
             estimated_out,
+            delivered_amount,
             status,
             fee,
-            destination_decimals,
+            asset_decimals,
             ..
         } => Some(Conversion {
             provider: ConversionProvider::Orchestra,
@@ -431,23 +432,23 @@ pub fn build_crosschain_conversion(
                 decimals: from_decimals,
             },
             to: ConversionSide {
-                chain: destination_chain.clone(),
-                asset: destination_asset.clone(),
-                amount: *estimated_out,
+                chain: chain.clone(),
+                asset: asset.clone(),
+                amount: delivered_amount.unwrap_or(*estimated_out),
                 fee: fee.unwrap_or(0),
-                decimals: Some(destination_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
+                decimals: Some(asset_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
             },
             amount_adjustment: None,
         }),
         ConversionInfo::Boltz {
-            destination_chain,
-            destination_asset,
+            chain,
+            asset,
             invoice_amount_sats,
             estimated_out,
             delivered_amount,
             status,
             fee,
-            destination_decimals,
+            asset_decimals,
             ..
         } => Some(Conversion {
             provider: ConversionProvider::Boltz,
@@ -460,11 +461,11 @@ pub fn build_crosschain_conversion(
                 decimals: from_decimals,
             },
             to: ConversionSide {
-                chain: destination_chain.clone(),
-                asset: destination_asset.clone(),
+                chain: chain.clone(),
+                asset: asset.clone(),
                 amount: delivered_amount.unwrap_or(*estimated_out),
                 fee: 0,
-                decimals: Some(destination_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
+                decimals: Some(asset_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
             },
             amount_adjustment: None,
         }),
@@ -2146,23 +2147,24 @@ mod tests {
         ConversionInfo::Orchestra {
             order_id: "ord_1".to_string(),
             quote_id: "q_1".to_string(),
-            destination_chain: "base".to_string(),
-            destination_asset: "USDC".to_string(),
-            destination_address: "0x1234".to_string(),
+            chain: "base".to_string(),
+            asset: "USDC".to_string(),
+            recipient_address: "0x1234".to_string(),
             estimated_out: 99_500_000,
+            delivered_amount: None,
             status: ConversionStatus::Pending,
             fee: Some(500),
             read_token: None,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }
     }
 
     fn boltz_info(delivered: Option<u128>) -> ConversionInfo {
         ConversionInfo::Boltz {
             swap_id: "swap_1".to_string(),
-            destination_chain: "solana".to_string(),
-            destination_asset: "USDT".to_string(),
-            destination_address: "So1ana".to_string(),
+            chain: "solana".to_string(),
+            asset: "USDT".to_string(),
+            recipient_address: "So1ana".to_string(),
             invoice: "lnbc1000n1p".to_string(),
             invoice_amount_sats: 100_000,
             estimated_out: 1_450_000,
@@ -2172,7 +2174,7 @@ mod tests {
             fee: Some(1_500),
             max_slippage_bps: 100,
             quote_degraded: false,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }
     }
 

@@ -168,13 +168,13 @@ impl OrchestraService {
             let ConversionInfo::Orchestra {
                 order_id,
                 quote_id,
-                destination_chain,
-                destination_asset,
-                destination_address,
+                chain,
+                asset,
+                recipient_address,
                 estimated_out,
                 fee,
                 read_token,
-                destination_decimals,
+                asset_decimals,
                 ..
             } = conversion_info.clone()
             else {
@@ -191,7 +191,7 @@ impl OrchestraService {
                 &order_id
             };
             debug!(
-                "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={destination_chain}/{destination_asset})",
+                "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={chain}/{asset})",
                 payment.id
             );
 
@@ -232,23 +232,16 @@ impl OrchestraService {
                 _ => ConversionStatus::Failed,
             };
 
-            // Use the real amounts from Orchestra status if available,
-            // otherwise keep the original estimates.
-            let final_out = status_response
+            // Use the real amounts from Orchestra status if available.
+            // Keep estimated_out frozen; set delivered_amount with the actual.
+            let delivered_amount = status_response
                 .order
                 .amount_out
                 .as_deref()
-                .and_then(|s| s.parse::<u128>().ok())
-                .unwrap_or(estimated_out);
-            let final_fee = status_response
-                .order
-                .fee_amount
-                .parse::<u128>()
-                .ok()
-                .or(fee);
+                .and_then(|s| s.parse::<u128>().ok());
 
             debug!(
-                "Orchestra monitor: payment {} terminal → {new_status:?}, final_out={final_out} (estimated was {estimated_out}), fee={final_fee:?}",
+                "Orchestra monitor: payment {} terminal → {new_status:?}, delivered={delivered_amount:?} (estimated was {estimated_out})",
                 payment.id
             );
 
@@ -256,14 +249,15 @@ impl OrchestraService {
                 conversion_info: Some(ConversionInfo::Orchestra {
                     order_id,
                     quote_id,
-                    destination_chain,
-                    destination_asset,
-                    destination_address,
-                    estimated_out: final_out,
+                    chain,
+                    asset,
+                    recipient_address,
+                    estimated_out,
+                    delivered_amount,
                     status: new_status.clone(),
-                    fee: final_fee,
+                    fee,
                     read_token,
-                    destination_decimals,
+                    asset_decimals,
                 }),
                 ..Default::default()
             };
@@ -488,14 +482,15 @@ impl CrossChainService for OrchestraService {
             conversion_info: Some(ConversionInfo::Orchestra {
                 order_id: order_id.clone(),
                 quote_id: quote_id.clone(),
-                destination_chain: prepared.pair.chain.clone(),
-                destination_asset: prepared.pair.asset.clone(),
-                destination_address: prepared.recipient_address.clone(),
+                chain: prepared.pair.chain.clone(),
+                asset: prepared.pair.asset.clone(),
+                recipient_address: prepared.recipient_address.clone(),
                 estimated_out: prepared.estimated_out,
+                delivered_amount: None,
                 status,
                 fee: Some(prepared.fee_amount),
                 read_token,
-                destination_decimals: Some(u32::from(prepared.pair.decimals)),
+                asset_decimals: Some(u32::from(prepared.pair.decimals)),
             }),
             ..Default::default()
         };
