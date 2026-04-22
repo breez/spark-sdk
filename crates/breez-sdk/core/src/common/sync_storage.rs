@@ -16,7 +16,9 @@ impl SyncStorageWrapper {
 
 fn storage_to_sync_error(value: StorageError) -> breez_sdk_common::sync::storage::SyncStorageError {
     match value {
-        StorageError::Connection(msg) | StorageError::Implementation(msg) => {
+        StorageError::Connection(msg)
+        | StorageError::Implementation(msg)
+        | StorageError::MigrationError(msg) => {
             breez_sdk_common::sync::storage::SyncStorageError::Implementation(msg)
         }
         StorageError::InitializationError(msg) => {

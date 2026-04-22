@@ -1,7 +1,5 @@
-pub use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyError};
-pub use breez_sdk_spark::{
-    DepositClaimError, Fee, SdkError, SessionManagerError, StorageError,
-};
+pub use breez_sdk_spark::passkey::{PasskeyError, PasskeyPrfError};
+pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, SessionManagerError, StorageError};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]
@@ -29,7 +27,7 @@ pub enum _SdkError {
     InvalidUuid(String),
     InvalidInput(String),
     NetworkError(String),
-    StorageError(String),
+    StorageError { recoverable: bool, message: String },
     ChainServiceError(String),
     MaxDepositClaimFeeExceeded {
         tx: String,
@@ -52,6 +50,7 @@ pub enum _StorageError {
     Connection(String),
     Implementation(String),
     InitializationError(String),
+    MigrationError(String),
     Serialization(String),
 }
 

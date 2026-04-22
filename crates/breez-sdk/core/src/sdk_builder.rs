@@ -635,8 +635,7 @@ impl SdkBuilder {
                         pool.clone(),
                         identity,
                     )
-                    .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    .await?,
                 ));
             }
 
@@ -649,8 +648,7 @@ impl SdkBuilder {
             {
                 s = Some(Arc::new(
                     crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity)
-                        .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                        .await?,
                 ));
             }
 

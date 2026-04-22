@@ -34,8 +34,8 @@ pub enum SdkError {
     NetworkError(String),
 
     /// Storage error
-    #[error("Storage error: {0}")]
-    StorageError(String),
+    #[error("Storage error: {message}")]
+    StorageError { recoverable: bool, message: String },
 
     #[error("Chain service error: {0}")]
     ChainServiceError(String),
@@ -117,7 +117,10 @@ impl From<crate::token_conversion::ConversionError> for SdkError {
                 SdkError::Generic("Duplicate transfer: conversion already handled".to_string())
             }
             ConversionError::Sdk(e) => e,
-            ConversionError::Storage(e) => SdkError::StorageError(e.to_string()),
+            ConversionError::Storage(e) => SdkError::StorageError {
+                recoverable: true,
+                message: e.to_string(),
+            },
             ConversionError::Wallet(e) => SdkError::SparkError(e.to_string()),
         }
     }
@@ -127,7 +130,18 @@ impl From<persist::StorageError> for SdkError {
     fn from(e: persist::StorageError) -> Self {
         match e {
             persist::StorageError::NotFound => SdkError::InvalidInput("Not found".to_string()),
-            _ => SdkError::StorageError(e.to_string()),
+            // Migration failures indicate corrupted storage that cannot be recovered by retrying.
+            // The app must clear its local data (storage directory) and call `connect` again.
+            persist::StorageError::MigrationError(err) => SdkError::StorageError {
+                recoverable: false,
+                message: format!(
+                    "Unrecoverable storage error, delete the storage directory and try again: {err}"
+                ),
+            },
+            _ => SdkError::StorageError {
+                recoverable: true,
+                message: e.to_string(),
+            },
         }
     }
 }
