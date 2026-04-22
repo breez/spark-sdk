@@ -1435,47 +1435,52 @@ pub enum ConversionInfo {
         amount_adjustment: Option<AmountAdjustmentReason>,
     },
     Orchestra {
-        order_id: String,
-        quote_id: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_address: String,
-        #[tsify(type = "string")]
-        #[serde(with = "serde_u128_as_string")]
-        estimated_out: u128,
-        status: ConversionStatus,
-        #[tsify(type = "string")]
-        #[serde(default, with = "serde_option_u128_as_string")]
-        fee: Option<u128>,
+        chain: String,
         #[serde(default)]
-        read_token: Option<String>,
-        #[serde(default)]
-        destination_decimals: Option<u32>,
-    },
-    Boltz {
-        swap_id: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_address: String,
-        invoice: String,
-        invoice_amount_sats: u64,
+        asset: String,
+        recipient_address: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
         delivered_amount: Option<u128>,
-        #[serde(default)]
-        lz_guid: Option<String>,
         status: ConversionStatus,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
+        #[serde(default)]
+        asset_decimals: Option<u32>,
+        order_id: String,
+        quote_id: String,
+        #[serde(default)]
+        read_token: Option<String>,
+    },
+    Boltz {
+        chain: String,
+        #[serde(default)]
+        asset: String,
+        recipient_address: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        status: ConversionStatus,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        #[serde(default)]
+        asset_decimals: Option<u32>,
+        swap_id: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        #[serde(default)]
+        lz_guid: Option<String>,
         max_slippage_bps: u32,
         #[serde(default)]
         quote_degraded: bool,
-        #[serde(default)]
-        destination_decimals: Option<u32>,
     },
 }
 
