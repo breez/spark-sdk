@@ -710,6 +710,7 @@ pub(crate) async fn execute_command(
                 estimated_out,
                 fee_amount,
                 ref fee_asset,
+                source_transfer_fee_sats,
                 ..
             } = prepare_response.payment_method
             {
@@ -724,6 +725,7 @@ pub(crate) async fn execute_command(
                     route.asset, route.chain,
                 );
                 println!("Fee: {fee_amount} {fee_denom}");
+                println!("Source transfer fee: {source_transfer_fee_sats} sats");
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?
                     .to_lowercase();

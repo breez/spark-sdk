@@ -29,7 +29,8 @@ pub use chain::{
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
 pub use cross_chain::{
-    CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter, CrossChainRoutePair,
+    CrossChainFeeMode, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
+    CrossChainRoutePair, SourceAsset,
 };
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};

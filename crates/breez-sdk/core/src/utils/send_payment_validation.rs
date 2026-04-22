@@ -2,7 +2,10 @@ use bitcoin::address::NetworkUnchecked;
 
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, InputType,
-    SparkInvoiceDetails, error::SdkError, models::PrepareSendPaymentRequest,
+    SparkInvoiceDetails,
+    cross_chain::{CrossChainRoutePair, SourceAsset},
+    error::SdkError,
+    models::PrepareSendPaymentRequest,
 };
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -274,6 +277,74 @@ fn validate_bitcoin_address_request(request: &PrepareSendPaymentRequest) -> Resu
         return Err(SdkError::InvalidInput(
             "Conversion must be to Bitcoin for Bitcoin addresses".to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+/// Pre-decision-tree validation for cross-chain sends.
+///
+/// Runs at the top of `prepare_cross_chain_send` before route source
+/// resolution. Validates amount is positive and that `FromBitcoin` is not
+/// requested.
+pub(crate) fn validate_prepare_cross_chain_request_pre(
+    amount: u128,
+    conversion_options: Option<&ConversionOptions>,
+) -> Result<(), SdkError> {
+    if amount == 0 {
+        return Err(SdkError::InvalidInput(
+            "Amount must be greater than 0.".to_string(),
+        ));
+    }
+
+    if let Some(ConversionOptions {
+        conversion_type: ConversionType::FromBitcoin,
+        ..
+    }) = conversion_options
+    {
+        return Err(SdkError::InvalidInput(
+            "FromBitcoin conversion is not supported for cross-chain sends.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Post-decision-tree validation: the effective source asset must be in the
+/// route's `supported_sources`.
+pub(crate) fn validate_prepare_cross_chain_request_post(
+    route: &CrossChainRoutePair,
+    token_identifier: Option<&String>,
+    effective_conversion_options: Option<&ConversionOptions>,
+) -> Result<(), SdkError> {
+    let effective_source = if effective_conversion_options.is_some() {
+        // Conversion runs before the provider leg → source is always sats.
+        SourceAsset::Bitcoin
+    } else {
+        match token_identifier {
+            Some(tid) => SourceAsset::Token(tid.clone()),
+            None => SourceAsset::Bitcoin,
+        }
+    };
+
+    if !route.supported_sources.contains(&effective_source) {
+        let supported_list = route
+            .supported_sources
+            .iter()
+            .map(|s| match s {
+                SourceAsset::Bitcoin => "sats".to_string(),
+                SourceAsset::Token(t) => t.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(SdkError::InvalidInput(match token_identifier {
+            Some(tid) => format!(
+                "Route does not accept source asset {tid}. Supported: {supported_list}. Provide a token_identifier matching one of the supported sources, or pick another route."
+            ),
+            None => format!(
+                "Route does not accept sats. Provide a token_identifier matching one of: {supported_list}."
+            ),
+        }));
     }
 
     Ok(())
@@ -1274,6 +1345,125 @@ mod tests {
             result.is_ok(),
             "Should succeed for FeesIncluded with ToBitcoin conversion (send-all-with-conversion)"
         );
+    }
+
+    // CrossChain validation tests
+    fn make_route(supported_sources: Vec<SourceAsset>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: crate::CrossChainProvider::Orchestra,
+            chain: "tron".to_string(),
+            chain_id: None,
+            asset: "USDT".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources,
+        }
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_pre_zero_amount() {
+        let result = validate_prepare_cross_chain_request_pre(0, None);
+        assert!(result.is_err(), "Should fail for amount == 0");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("greater than 0"),
+                "Error message should mention requirement"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_pre_from_bitcoin_rejected() {
+        let options = ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        };
+        let result = validate_prepare_cross_chain_request_pre(1000, Some(&options));
+        assert!(result.is_err(), "Should fail for FromBitcoin");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("FromBitcoin"),
+                "Error message should mention FromBitcoin"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_pre_to_bitcoin_allowed() {
+        let options = ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "USDB".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        };
+        let result = validate_prepare_cross_chain_request_pre(1000, Some(&options));
+        assert!(result.is_ok(), "ToBitcoin should be allowed");
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_post_direct_sats_ok() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let result = validate_prepare_cross_chain_request_post(&route, None, None);
+        assert!(result.is_ok(), "Direct sats send should be accepted");
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_post_direct_token_ok() {
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let tid = "USDB".to_string();
+        let result = validate_prepare_cross_chain_request_post(&route, Some(&tid), None);
+        assert!(result.is_ok(), "Direct token send should be accepted");
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_post_token_mismatch_rejected() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let tid = "USDC".to_string();
+        // No auto-inject fired → effective source is Token(USDC), route only
+        // accepts sats → reject.
+        let result = validate_prepare_cross_chain_request_post(&route, Some(&tid), None);
+        assert!(result.is_err(), "Source mismatch should be rejected");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("USDC"),
+                "Error should mention the rejected token"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_post_sats_unsupported_rejected() {
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let result = validate_prepare_cross_chain_request_post(&route, None, None);
+        assert!(
+            result.is_err(),
+            "Route without sats support should reject sats send"
+        );
+    }
+
+    #[test_all]
+    fn test_validate_prepare_cross_chain_post_conversion_forces_bitcoin() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let tid = "USDB".to_string();
+        let options = ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: tid.clone(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        };
+        // Conversion is active → effective source is sats → route accepts sats.
+        let result = validate_prepare_cross_chain_request_post(&route, Some(&tid), Some(&options));
+        assert!(result.is_ok(), "Conversion path should pass");
     }
 
     // Dust limit tests

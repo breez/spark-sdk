@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use breez_sdk_common::input::CrossChainAddressFamily;
@@ -28,8 +28,9 @@ use crate::persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymen
 use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 
 use super::{
-    CrossChainPrepared, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
-    CrossChainRoutePair, CrossChainSendResult, CrossChainService,
+    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
+    CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendResult, CrossChainService,
+    SourceAsset,
 };
 
 /// The canonical Spark source chain string used by Orchestra.
@@ -319,9 +320,12 @@ impl CrossChainService for OrchestraService {
 
         // Multiple raw routes may exist for the same external chain (e.g.
         // BTC→USDT-on-tron and USDB→USDT-on-tron). Dedup by (chain, asset,
-        // contract_address) so the caller only sees one route per external endpoint.
-        let mut seen = HashSet::new();
-        let mut pairs: Vec<CrossChainRoutePair> = Vec::new();
+        // contract_address) so the caller only sees one route per external
+        // endpoint, but accumulate the Spark-side source variants into
+        // `supported_sources`.
+        type Key = (String, String, Option<String>);
+        let mut order: Vec<Key> = Vec::new();
+        let mut grouped: HashMap<Key, CrossChainRoutePair> = HashMap::new();
 
         for r in routes.iter().filter(|r| {
             let side = non_spark_side(r, is_send);
@@ -330,16 +334,41 @@ impl CrossChainService for OrchestraService {
                 && contract_filter.is_none_or(|filter_ca| ca.is_some_and(|c| c == filter_ca))
         }) {
             let side = non_spark_side(r, is_send);
-            let key = (
+            let key: Key = (
                 side.chain.clone(),
                 side.asset.clone(),
                 side.contract_address.clone(),
             );
-            if seen.insert(key) {
-                pairs.push(side_to_route_pair(side, r.exact_out_eligible));
+
+            // On send, the Spark side is `source`; on receive, it's `destination`.
+            let spark_side = if is_send { &r.source } else { &r.destination };
+            let source_variant = if spark_side.asset.eq_ignore_ascii_case("BTC") {
+                Some(SourceAsset::Bitcoin)
+            } else {
+                // Non-BTC Spark source without contract_address: defensive
+                // skip. Shouldn't happen per current Orchestra behavior.
+                spark_side
+                    .contract_address
+                    .as_ref()
+                    .map(|ca| SourceAsset::Token(ca.clone()))
+            };
+
+            let entry = grouped.entry(key.clone()).or_insert_with(|| {
+                order.push(key.clone());
+                side_to_route_pair(side, r.exact_out_eligible)
+            });
+
+            if let Some(variant) = source_variant
+                && !entry.supported_sources.contains(&variant)
+            {
+                entry.supported_sources.push(variant);
             }
         }
 
+        let pairs: Vec<CrossChainRoutePair> = order
+            .into_iter()
+            .filter_map(|k| grouped.remove(&k))
+            .collect();
         Ok(pairs)
     }
 
@@ -350,12 +379,38 @@ impl CrossChainService for OrchestraService {
         amount: u128,
         token_identifier: Option<String>,
         max_slippage_bps: Option<u32>,
+        fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
         let dest_chain = &route.chain;
         let dest_asset = &route.asset;
-        let source_asset = match token_identifier.as_deref() {
-            None => "BTC".to_string(),
-            Some(_) => "USDB".to_string(),
+        // Resolve the Orchestra-side source_asset string (e.g. "BTC", "USDB")
+        // from the cached spark_routes. Match the route with the correct
+        // destination triplet AND the desired source (contract_address when
+        // a token_identifier is requested, asset == "BTC" otherwise).
+        let raw_routes =
+            self.client.spark_routes(true).await.map_err(|e| {
+                SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
+            })?;
+        let matched = raw_routes.iter().find(|r| {
+            let dest_matches = r.destination.chain == *dest_chain
+                && r.destination.asset == *dest_asset
+                && r.destination.contract_address == route.contract_address;
+            let source_matches = match token_identifier.as_deref() {
+                None => r.source.asset.eq_ignore_ascii_case("BTC"),
+                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
+            };
+            dest_matches && source_matches
+        });
+        let source_asset = match matched {
+            Some(r) => r.source.asset.clone(),
+            None => {
+                return Err(SdkError::InvalidInput(format!(
+                    "Orchestra does not offer a route for source {} → {}/{}",
+                    token_identifier.as_deref().unwrap_or("BTC"),
+                    dest_chain,
+                    dest_asset
+                )));
+            }
         };
 
         let request = QuoteRequest {
@@ -406,6 +461,11 @@ impl CrossChainService for OrchestraService {
             } else {
                 Some(quote.fee_asset)
             },
+            // Spark transfer fee is 0 today; the field is wired for a future
+            // non-zero case. Both FeesIncluded/FeesExcluded pass through
+            // identically since `amount_in = amount`.
+            source_transfer_fee_sats: 0,
+            fee_mode,
             expires_at: quote.expires_at,
             pair: route.clone(),
             recipient_address: recipient_address.to_string(),
@@ -532,6 +592,7 @@ fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChain
         contract_address: side.contract_address.clone(),
         decimals: side.decimals,
         exact_out_eligible,
+        supported_sources: Vec::new(),
     }
 }
 

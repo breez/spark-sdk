@@ -18,7 +18,7 @@ use crate::{
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
-    cross_chain::{CrossChainPrepared, CrossChainRoutePair},
+    cross_chain::{CrossChainFeeMode, CrossChainPrepared, CrossChainRoutePair, SourceAsset},
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -160,7 +160,14 @@ impl BreezSdk {
             ))?;
 
             return self
-                .prepare_cross_chain_send(address, route, amount, token_identifier, fee_policy)
+                .prepare_cross_chain_send(
+                    address,
+                    route,
+                    amount,
+                    token_identifier,
+                    request.conversion_options.clone(),
+                    fee_policy,
+                )
                 .await;
         }
 
@@ -557,12 +564,14 @@ impl BreezSdk {
     }
 
     /// Prepare a cross-chain send using the given route.
+    #[allow(clippy::too_many_lines)]
     async fn prepare_cross_chain_send(
         &self,
         address: &str,
         route: &CrossChainRoutePair,
         amount: u128,
         token_identifier: Option<String>,
+        conversion_options: Option<ConversionOptions>,
         fee_policy: FeePolicy,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         // Validate address is a recognized cross-chain address.
@@ -572,10 +581,102 @@ impl BreezSdk {
             ));
         }
 
+        crate::utils::send_payment_validation::validate_prepare_cross_chain_request_pre(
+            amount,
+            conversion_options.as_ref(),
+        )?;
+
+        // --- Source-selection decision tree ---
+        let effective_conversion_options = self
+            .resolve_cross_chain_source(
+                route,
+                token_identifier.as_ref(),
+                conversion_options.as_ref(),
+                amount,
+            )
+            .await?;
+
+        // Validate the effective source matches what the route accepts.
+        crate::utils::send_payment_validation::validate_prepare_cross_chain_request_post(
+            route,
+            token_identifier.as_ref(),
+            effective_conversion_options.as_ref(),
+        )?;
+
+        let is_conversion = effective_conversion_options.is_some();
+
+        // Boltz conversion + AmountIn + FeesExcluded is unfundable in the
+        // typical stable-balance case: the AMM consumes the token balance, so
+        // there's no separate sats reserve to cover LN routing fees. Reject
+        // the combination rather than supporting a partial set of cases.
+        if is_conversion && fee_policy == FeePolicy::FeesExcluded {
+            return Err(SdkError::InvalidInput(
+                "Token-conversion CrossChain sends require FeesIncluded fee policy.".to_string(),
+            ));
+        }
+
+        let fee_mode = if is_conversion {
+            CrossChainFeeMode::FeesIncluded
+        } else {
+            match fee_policy {
+                FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
+                FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
+            }
+        };
+
+        // Compute conversion estimate + provider-leg amount.
+        let (provider_amount, conversion_estimate, response_token_identifier) = if is_conversion {
+            let (estimated_sats, estimate) = self
+                .estimate_sats_from_token_conversion(
+                    effective_conversion_options.as_ref(),
+                    token_identifier.as_ref(),
+                    amount,
+                    fee_policy,
+                )
+                .await?;
+            // Balance sufficiency: token balance must cover conversion input.
+            if let Some(ref ce) = estimate
+                && let ConversionType::ToBitcoin {
+                    from_token_identifier,
+                } = &ce.options.conversion_type
+            {
+                let balances = self.spark_wallet.get_token_balances().await?;
+                let have = balances
+                    .get(from_token_identifier)
+                    .map_or(0u128, |b| b.balance);
+                if have < ce.amount_in {
+                    return Err(SdkError::InvalidInput(format!(
+                        "Insufficient {from_token_identifier} balance for conversion: have {have}, need {}.",
+                        ce.amount_in
+                    )));
+                }
+            }
+            // Response token_identifier is None on ToBitcoin conversion — send
+            // leg is denominated in sats.
+            (estimated_sats, estimate, None)
+        } else {
+            // No conversion: token_identifier on response mirrors the route's
+            // matched source.
+            (amount, None, token_identifier.clone())
+        };
+
         let service = self.cross_chain_providers.get(route.provider)?;
+        // When conversion is active, the provider source is always BTC (sats).
+        let provider_token_identifier = if is_conversion {
+            None
+        } else {
+            token_identifier.clone()
+        };
 
         let prepared = service
-            .prepare(address, route, amount, token_identifier.clone(), None)
+            .prepare(
+                address,
+                route,
+                provider_amount,
+                provider_token_identifier,
+                None,
+                fee_mode,
+            )
             .await?;
 
         Ok(PrepareSendPaymentResponse {
@@ -586,14 +687,87 @@ impl BreezSdk {
                 estimated_out: prepared.estimated_out,
                 fee_amount: prepared.fee_amount,
                 fee_asset: prepared.fee_asset,
+                source_transfer_fee_sats: prepared.source_transfer_fee_sats,
+                fee_mode: prepared.fee_mode,
                 expires_at: prepared.expires_at,
                 provider_context: prepared.provider_context,
             },
-            amount,
-            token_identifier,
-            conversion_estimate: None,
+            amount: provider_amount,
+            token_identifier: response_token_identifier,
+            conversion_estimate,
             fee_policy,
         })
+    }
+
+    /// Resolves the effective `conversion_options` for a cross-chain send.
+    ///
+    /// Decision tree: explicit caller intent wins; then direct send if the
+    /// route accepts the user's `token_identifier`; then auto-inject
+    /// `ToBitcoin` if the token is the stable-balance active token and the
+    /// route accepts sats; then defer to the stable-balance sats-side
+    /// auto-inject when no `token_identifier` was supplied — the inner
+    /// `stable_balance.get_conversion_options` checks `balance_sats >= amount`
+    /// to decide whether a top-up conversion is needed.
+    async fn resolve_cross_chain_source(
+        &self,
+        route: &CrossChainRoutePair,
+        token_identifier: Option<&String>,
+        conversion_options: Option<&ConversionOptions>,
+        amount: u128,
+    ) -> Result<Option<ConversionOptions>, SdkError> {
+        // 1) Explicit caller intent wins.
+        if let Some(opts) = conversion_options {
+            return Ok(Some(opts.clone()));
+        }
+
+        match token_identifier {
+            // 2) Caller specified a token.
+            Some(token_id) => {
+                let route_accepts_token = route
+                    .supported_sources
+                    .iter()
+                    .any(|s| matches!(s, SourceAsset::Token(t) if t == token_id));
+                if route_accepts_token {
+                    // Direct token send — no conversion needed.
+                    return Ok(None);
+                }
+
+                let route_accepts_bitcoin = route.supported_sources.contains(&SourceAsset::Bitcoin);
+                if !route_accepts_bitcoin {
+                    // Neither direct nor auto-inject; caller must handle.
+                    return Ok(None);
+                }
+
+                // Auto-inject ToBitcoin if and only if `token_id` is the
+                // stable-balance active token.
+                if let Some(sb) = &self.stable_balance
+                    && sb.get_active_token_identifier().await.as_deref() == Some(token_id)
+                {
+                    return Ok(Some(ConversionOptions {
+                        conversion_type: ConversionType::ToBitcoin {
+                            from_token_identifier: token_id.clone(),
+                        },
+                        max_slippage_bps: sb.config.max_slippage_bps,
+                        completion_timeout_secs: None,
+                    }));
+                }
+                Ok(None)
+            }
+            // 3) No token specified.
+            None => {
+                if route.supported_sources.contains(&SourceAsset::Bitcoin) {
+                    // Defer to stable_balance auto-inject: fires when the
+                    // sats balance is insufficient to cover `amount`.
+                    self.get_conversion_options_for_payment(None, None, amount)
+                        .await
+                } else {
+                    // Route only accepts tokens but user didn't specify one.
+                    // FromBitcoin + CrossChain is out of scope; nothing to
+                    // auto-inject. Leave as None; post-validation will error.
+                    Ok(None)
+                }
+            }
+        }
     }
 
     pub(super) async fn maybe_convert_token_send_payment(
@@ -846,14 +1020,57 @@ impl BreezSdk {
                     .await?;
                 Ok((response, purpose, uses_amount_in))
             }
-            SendPaymentMethod::CrossChainAddress { .. } => {
-                // Cross-chain sends bypass the AMM token converter entirely;
-                // they should never reach pre-send conversion.
-                Err(SdkError::InvalidInput(
-                    "Cross-chain sends do not support AMM conversions".to_string(),
-                ))
+            SendPaymentMethod::CrossChainAddress {
+                recipient_address, ..
+            } => {
+                let purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: recipient_address.clone(),
+                };
+                let conversion_amount_override = match &conversion_amount {
+                    ConversionAmount::AmountIn(_) => Some(conversion_amount),
+                    ConversionAmount::MinAmountOut(_) => None,
+                };
+                let response = self
+                    .convert_token_for_crosschain(
+                        conversion_options,
+                        amount,
+                        &purpose,
+                        from_token_identifier.as_ref(),
+                        conversion_amount_override,
+                    )
+                    .await?;
+                Ok((response, purpose, uses_amount_in))
             }
         }
+    }
+
+    /// Runs the AMM token conversion for a cross-chain send.
+    ///
+    /// - **`AmountIn`**: converter's slippage floor is the prepare-time
+    ///   `estimate.amount_out`. Pass through.
+    /// - **`MinAmountOut`**: converter must deliver at least `response.amount`
+    ///   sats (the sats target the provider leg was sized for).
+    async fn convert_token_for_crosschain(
+        &self,
+        conversion_options: &ConversionOptions,
+        amount: u128,
+        conversion_purpose: &ConversionPurpose,
+        token_identifier: Option<&String>,
+        conversion_amount_override: Option<ConversionAmount>,
+    ) -> Result<TokenConversionResponse, SdkError> {
+        let conversion_amount =
+            conversion_amount_override.unwrap_or(ConversionAmount::MinAmountOut(amount));
+
+        self.token_converter
+            .convert(
+                conversion_options,
+                conversion_purpose,
+                token_identifier,
+                conversion_amount,
+                None,
+            )
+            .await
+            .map_err(Into::into)
     }
 
     /// Links conversion child payments to their parent to hide them from `list_payments`.
@@ -1086,6 +1303,8 @@ impl BreezSdk {
                 estimated_out,
                 fee_amount,
                 fee_asset,
+                source_transfer_fee_sats,
+                fee_mode,
                 expires_at,
                 provider_context,
             } => {
@@ -1096,6 +1315,8 @@ impl BreezSdk {
                     estimated_out: *estimated_out,
                     fee_amount: *fee_amount,
                     fee_asset: fee_asset.clone(),
+                    source_transfer_fee_sats: *source_transfer_fee_sats,
+                    fee_mode: *fee_mode,
                     expires_at: expires_at.clone(),
                     pair: route.clone(),
                     recipient_address: recipient_address.clone(),
@@ -1848,10 +2069,11 @@ impl BreezSdk {
 
         let input_str = match &request.payment_request {
             PaymentRequest::Input { input: s } => s.as_str(),
+            // `prepare_send_payment` intercepts `PaymentRequest::CrossChain`
+            // up front and dispatches to `prepare_cross_chain_send`, so the
+            // Bolt11 path is only ever entered with `PaymentRequest::Input`.
             PaymentRequest::CrossChain { .. } => {
-                return Err(SdkError::InvalidInput(
-                    "Token conversion is not supported for cross-chain sends".to_string(),
-                ));
+                unreachable!("CrossChain dispatched before bolt11 prepare path")
             }
         };
         let lightning_fee_sats = self

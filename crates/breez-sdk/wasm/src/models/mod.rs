@@ -863,6 +863,18 @@ pub enum CrossChainRouteFilter {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SourceAsset)]
+pub enum SourceAsset {
+    Bitcoin,
+    Token(String),
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainFeeMode)]
+pub enum CrossChainFeeMode {
+    FeesExcluded,
+    FeesIncluded,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRoutePair)]
 pub struct CrossChainRoutePair {
     pub provider: CrossChainProvider,
@@ -873,6 +885,7 @@ pub struct CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
+    pub supported_sources: Vec<SourceAsset>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
@@ -884,7 +897,6 @@ pub enum CrossChainProviderContext {
     Boltz {
         swap_id: String,
         invoice: String,
-        ln_fee_sats: u64,
         max_slippage_bps: u32,
     },
 }
@@ -938,6 +950,8 @@ pub enum SendPaymentMethod {
         #[serde(with = "serde_u128_as_string")]
         fee_amount: u128,
         fee_asset: Option<String>,
+        source_transfer_fee_sats: u64,
+        fee_mode: CrossChainFeeMode,
         expires_at: String,
         provider_context: CrossChainProviderContext,
     },

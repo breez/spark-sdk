@@ -23,7 +23,7 @@ use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
     SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
-    cross_chain::{CrossChainProviderContext, CrossChainRoutePair},
+    cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
     error::DepositClaimError,
 };
 
@@ -1142,7 +1142,16 @@ pub enum SendPaymentMethod {
         route: CrossChainRoutePair,
         /// Raw destination address (e.g. `0xabc...`).
         recipient_address: String,
-        /// Amount (in source base units) the user must transfer.
+        /// Amount routed to the provider (invoice target for Boltz, deposit
+        /// amount for Orchestra). Wallet total cost depends on `fee_mode`:
+        /// - `FeesExcluded`: `amount_in + source_transfer_fee_sats`
+        /// - `FeesIncluded`: the original `amount` on the request (exact
+        ///   when the send-time fee overpayment is not capped; slightly less
+        ///   otherwise).
+        ///
+        /// In `AmountIn` + conversion mode the user transfers tokens (per
+        /// `conversion_estimate.amount_in`) rather than sats on the wallet
+        /// side — `amount_in` still refers to the provider leg in sats.
         amount_in: u128,
         /// Estimated amount the recipient will receive in the destination
         /// asset's base units. Already nets out any destination-chain costs
@@ -1156,6 +1165,13 @@ pub enum SendPaymentMethod {
         fee_amount: u128,
         /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
         fee_asset: Option<String>,
+        /// Sats cost to the wallet of moving `amount_in` from the wallet to
+        /// the provider. Boltz: LN routing fee budget (a hard cap enforced
+        /// at send time). Orchestra: Spark transfer fee (0 today).
+        source_transfer_fee_sats: u64,
+        /// Fee mode that was used at prepare time, carried through so the
+        /// send stage applies consistent semantics.
+        fee_mode: CrossChainFeeMode,
         /// ISO8601 timestamp after which this quote is no longer valid.
         expires_at: String,
         /// Provider-internal state produced by `prepareSendPayment` and
