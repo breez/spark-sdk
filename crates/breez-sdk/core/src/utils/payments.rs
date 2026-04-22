@@ -12,9 +12,9 @@ use crate::{
     PaymentStatus, PaymentType, Storage,
     error::SdkError,
     events::SdkEvent,
-    models::{build_amm_conversion, build_crosschain_conversion},
     persist::{CachedAccountInfo, ObjectCacheRepository},
     sync::SparkSyncService,
+    utils::conversions::{build_amm_conversion, build_crosschain_conversion},
     utils::token::token_transaction_to_payments,
 };
 
@@ -571,9 +571,9 @@ mod tests {
     fn boltz_info() -> ConversionInfo {
         ConversionInfo::Boltz {
             swap_id: "swap_1".to_string(),
-            destination_chain: "solana".to_string(),
-            destination_asset: "USDT".to_string(),
-            destination_address: "So1ana".to_string(),
+            chain: "solana".to_string(),
+            asset: "USDT".to_string(),
+            recipient_address: "So1ana".to_string(),
             invoice: "lnbc1000n1p".to_string(),
             invoice_amount_sats: 100_000,
             estimated_out: 1_450_000,
@@ -583,7 +583,7 @@ mod tests {
             fee: Some(1_500),
             max_slippage_bps: 100,
             quote_degraded: false,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }
     }
 
@@ -591,14 +591,15 @@ mod tests {
         ConversionInfo::Orchestra {
             order_id: "ord_1".to_string(),
             quote_id: "q_1".to_string(),
-            destination_chain: "base".to_string(),
-            destination_asset: "USDC".to_string(),
-            destination_address: "0x1234".to_string(),
+            chain: "base".to_string(),
+            asset: "USDC".to_string(),
+            recipient_address: "0x1234".to_string(),
             estimated_out: 99_500_000,
+            delivered_amount: None,
             status: ConversionStatus::Pending,
             fee: Some(500),
             read_token: None,
-            destination_decimals: Some(6),
+            asset_decimals: Some(6),
         }
     }
 

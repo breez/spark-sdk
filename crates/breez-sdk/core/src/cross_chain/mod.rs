@@ -49,6 +49,10 @@ pub struct CrossChainRoutePair {
     pub provider: CrossChainProvider,
     /// Destination blockchain (e.g. `"base"`, `"solana"`, `"tron"`).
     pub chain: String,
+    /// Stable chain identifier (e.g. EVM `chainId` as a decimal string).
+    /// `None` for non-EVM chains that don't expose one, or when the
+    /// provider doesn't surface it.
+    pub chain_id: Option<String>,
     /// Destination asset symbol (e.g. `"USDC"`, `"USDT"`).
     pub asset: String,
     /// Token contract / mint address on the destination chain.

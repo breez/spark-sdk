@@ -14,9 +14,9 @@ use breez_sdk_itest::{
     drop_mysql_database, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent,
-    SendPaymentRequest, SyncWalletRequest, default_mysql_storage_config,
+    BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PaymentRequest,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkContext,
+    SdkContextConfig, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_mysql_storage_config,
     default_postgres_storage_config, default_server_config, new_shared_sdk_context,
 };
 
@@ -397,7 +397,9 @@ async fn execute_single_payment(
 ) -> Result<()> {
     let prepare = sender
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: receiver_address.to_string(),
+            payment_request: PaymentRequest::Input {
+                input: receiver_address.to_string(),
+            },
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,

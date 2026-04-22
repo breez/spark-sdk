@@ -261,6 +261,7 @@ pub struct _CrossChainAddressDetails {
 pub struct _CrossChainRoutePair {
     pub provider: CrossChainProvider,
     pub chain: String,
+    pub chain_id: Option<String>,
     pub asset: String,
     pub contract_address: Option<String>,
     pub decimals: u8,
@@ -702,13 +703,29 @@ pub enum _ConversionProvider {
     Boltz,
 }
 
+#[frb(mirror(ConversionChain))]
+pub enum _ConversionChain {
+    Spark,
+    Lightning,
+    External {
+        name: String,
+        chain_id: Option<String>,
+    },
+}
+
+#[frb(mirror(ConversionAsset))]
+pub struct _ConversionAsset {
+    pub ticker: String,
+    pub identifier: Option<String>,
+    pub decimals: u32,
+}
+
 #[frb(mirror(ConversionSide))]
 pub struct _ConversionSide {
-    pub chain: String,
-    pub asset: String,
+    pub chain: ConversionChain,
+    pub asset: ConversionAsset,
     pub amount: u128,
     pub fee: u128,
-    pub decimals: Option<u32>,
 }
 
 #[frb(mirror(Conversion))]
@@ -1292,29 +1309,36 @@ pub enum _ConversionInfo {
         amount_adjustment: Option<AmountAdjustmentReason>,
     },
     Boltz {
-        swap_id: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_address: String,
-        invoice: String,
-        invoice_amount_sats: u64,
+        chain: String,
+        chain_id: Option<String>,
+        asset: String,
+        asset_contract: Option<String>,
+        recipient_address: String,
         estimated_out: u128,
         delivered_amount: Option<u128>,
-        lz_guid: Option<String>,
         status: ConversionStatus,
         fee: Option<u128>,
+        asset_decimals: u32,
+        swap_id: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        lz_guid: Option<String>,
         max_slippage_bps: u32,
         quote_degraded: bool,
     },
     Orchestra {
-        order_id: String,
-        quote_id: String,
-        destination_chain: String,
-        destination_asset: String,
-        destination_address: String,
+        chain: String,
+        chain_id: Option<String>,
+        asset: String,
+        asset_contract: Option<String>,
+        recipient_address: String,
         estimated_out: u128,
+        delivered_amount: Option<u128>,
         status: ConversionStatus,
         fee: Option<u128>,
+        asset_decimals: u32,
+        order_id: String,
+        quote_id: String,
         read_token: Option<String>,
     },
 }

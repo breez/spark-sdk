@@ -178,13 +178,15 @@ impl OrchestraService {
             let ConversionInfo::Orchestra {
                 order_id,
                 quote_id,
-                destination_chain,
-                destination_asset,
-                destination_address,
+                chain,
+                chain_id,
+                asset,
+                recipient_address,
                 estimated_out,
                 fee,
                 read_token,
-                destination_decimals,
+                asset_decimals,
+                asset_contract,
                 ..
             } = conversion_info.clone()
             else {
@@ -201,7 +203,7 @@ impl OrchestraService {
                 &order_id
             };
             debug!(
-                "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={destination_chain}/{destination_asset})",
+                "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={chain}/{asset})",
                 payment.id
             );
 
@@ -242,23 +244,16 @@ impl OrchestraService {
                 _ => ConversionStatus::Failed,
             };
 
-            // Use the real amounts from Orchestra status if available,
-            // otherwise keep the original estimates.
-            let final_out = status_response
+            // Use the real amounts from Orchestra status if available.
+            // Keep estimated_out frozen; set delivered_amount with the actual.
+            let delivered_amount = status_response
                 .order
                 .amount_out
                 .as_deref()
-                .and_then(|s| s.parse::<u128>().ok())
-                .unwrap_or(estimated_out);
-            let final_fee = status_response
-                .order
-                .fee_amount
-                .parse::<u128>()
-                .ok()
-                .or(fee);
+                .and_then(|s| s.parse::<u128>().ok());
 
             debug!(
-                "Orchestra monitor: payment {} terminal → {new_status:?}, final_out={final_out} (estimated was {estimated_out}), fee={final_fee:?}",
+                "Orchestra monitor: payment {} terminal → {new_status:?}, delivered={delivered_amount:?} (estimated was {estimated_out})",
                 payment.id
             );
 
@@ -266,14 +261,17 @@ impl OrchestraService {
                 conversion_info: Some(ConversionInfo::Orchestra {
                     order_id,
                     quote_id,
-                    destination_chain,
-                    destination_asset,
-                    destination_address,
-                    estimated_out: final_out,
+                    chain,
+                    chain_id,
+                    asset,
+                    recipient_address,
+                    estimated_out,
+                    delivered_amount,
                     status: new_status.clone(),
-                    fee: final_fee,
+                    fee,
                     read_token,
-                    destination_decimals,
+                    asset_decimals,
+                    asset_contract,
                 }),
                 ..Default::default()
             };
@@ -348,14 +346,7 @@ impl CrossChainService for OrchestraService {
                 side.contract_address.clone(),
             );
             if seen.insert(key) {
-                pairs.push(CrossChainRoutePair {
-                    provider: CrossChainProvider::Orchestra,
-                    chain: side.chain.clone(),
-                    asset: side.asset.clone(),
-                    contract_address: side.contract_address.clone(),
-                    decimals: side.decimals,
-                    exact_out_eligible: r.exact_out_eligible,
-                });
+                pairs.push(side_to_route_pair(side, r.exact_out_eligible));
             }
         }
 
@@ -498,14 +489,17 @@ impl CrossChainService for OrchestraService {
             conversion_info: Some(ConversionInfo::Orchestra {
                 order_id: order_id.clone(),
                 quote_id: quote_id.clone(),
-                destination_chain: prepared.pair.chain.clone(),
-                destination_asset: prepared.pair.asset.clone(),
-                destination_address: prepared.recipient_address.clone(),
+                chain: prepared.pair.chain.clone(),
+                chain_id: prepared.pair.chain_id.clone(),
+                asset: prepared.pair.asset.clone(),
+                recipient_address: prepared.recipient_address.clone(),
                 estimated_out: prepared.estimated_out,
+                delivered_amount: None,
                 status,
                 fee: Some(prepared.fee_amount),
                 read_token,
-                destination_decimals: Some(u32::from(prepared.pair.decimals)),
+                asset_decimals: u32::from(prepared.pair.decimals),
+                asset_contract: prepared.pair.contract_address.clone(),
             }),
             ..Default::default()
         };
@@ -553,5 +547,70 @@ impl CrossChainService for OrchestraService {
                 "Cross-chain send submitted (order {order_id}), but payment row not yet synced: {e}"
             ))
         })
+    }
+}
+
+/// Build a [`CrossChainRoutePair`] from one side of an Orchestra [`Route`].
+///
+/// Chain/asset/identifier/decimals pass through verbatim from the route's
+/// non-Spark side — `chain_id` is surfaced so downstream consumers can
+/// disambiguate same-name chains.
+fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChainRoutePair {
+    CrossChainRoutePair {
+        provider: CrossChainProvider::Orchestra,
+        chain: side.chain.clone(),
+        chain_id: side.chain_id.clone(),
+        asset: side.asset.clone(),
+        contract_address: side.contract_address.clone(),
+        decimals: side.decimals,
+        exact_out_eligible,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_route_asset(chain: &str, chain_id: Option<&str>) -> RouteAsset {
+        RouteAsset {
+            chain: chain.to_string(),
+            asset: "USDC".to_string(),
+            contract_address: Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()),
+            decimals: 6,
+            chain_id: chain_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn side_to_pair_passes_through_chain_id() {
+        let side = test_route_asset("base", Some("8453"));
+        let pair = side_to_route_pair(&side, true);
+
+        assert_eq!(pair.provider, CrossChainProvider::Orchestra);
+        assert_eq!(pair.chain, "base");
+        assert_eq!(
+            pair.chain_id,
+            Some("8453".to_string()),
+            "chain_id on the route asset should propagate to the pair"
+        );
+        assert_eq!(pair.asset, "USDC");
+        assert_eq!(
+            pair.contract_address.as_deref(),
+            Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        );
+        assert_eq!(pair.decimals, 6);
+        assert!(pair.exact_out_eligible);
+    }
+
+    #[test]
+    fn side_to_pair_preserves_missing_chain_id() {
+        let side = test_route_asset("solana", None);
+        let pair = side_to_route_pair(&side, false);
+
+        assert_eq!(
+            pair.chain_id, None,
+            "chain_id stays None when the route asset doesn't expose one"
+        );
+        assert!(!pair.exact_out_eligible);
     }
 }
