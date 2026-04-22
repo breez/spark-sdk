@@ -241,9 +241,9 @@ impl CrossChainService for BoltzService {
         let metadata = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id: swap_id.clone(),
-                destination_chain: prepared.pair.chain.clone(),
-                destination_asset: prepared.pair.asset.clone(),
-                destination_address: prepared.recipient_address.clone(),
+                chain: prepared.pair.chain.clone(),
+                asset: prepared.pair.asset.clone(),
+                recipient_address: prepared.recipient_address.clone(),
                 invoice: invoice.clone(),
                 invoice_amount_sats,
                 estimated_out: prepared.estimated_out,
@@ -253,7 +253,7 @@ impl CrossChainService for BoltzService {
                 fee: Some(prepared.fee_amount),
                 max_slippage_bps: *max_slippage_bps,
                 quote_degraded: false,
-                destination_decimals: Some(u32::from(prepared.pair.decimals)),
+                asset_decimals: Some(u32::from(prepared.pair.decimals)),
             }),
             ..Default::default()
         };

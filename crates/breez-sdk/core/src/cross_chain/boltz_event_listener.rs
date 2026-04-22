@@ -69,16 +69,16 @@ impl BoltzSdkEventListener {
 
         let ConversionInfo::Boltz {
             swap_id,
-            destination_chain,
-            destination_asset,
-            destination_address,
+            chain,
+            asset,
+            recipient_address,
             invoice,
             invoice_amount_sats,
             estimated_out,
             fee,
             max_slippage_bps,
             quote_degraded,
-            destination_decimals,
+            asset_decimals,
             ..
         } = conversion_info
         else {
@@ -95,9 +95,9 @@ impl BoltzSdkEventListener {
         let updated = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
-                destination_chain,
-                destination_asset,
-                destination_address,
+                chain,
+                asset,
+                recipient_address,
                 invoice,
                 invoice_amount_sats,
                 estimated_out,
@@ -107,7 +107,7 @@ impl BoltzSdkEventListener {
                 fee,
                 max_slippage_bps,
                 quote_degraded,
-                destination_decimals,
+                asset_decimals,
             }),
             ..Default::default()
         };
@@ -139,9 +139,9 @@ impl BoltzSdkEventListener {
 
         let Some(ConversionInfo::Boltz {
             swap_id,
-            destination_chain,
-            destination_asset,
-            destination_address,
+            chain,
+            asset,
+            recipient_address,
             invoice,
             invoice_amount_sats,
             estimated_out,
@@ -150,7 +150,7 @@ impl BoltzSdkEventListener {
             status,
             fee,
             max_slippage_bps,
-            destination_decimals,
+            asset_decimals,
             ..
         }) = extract_conversion_info(existing.details)
         else {
@@ -165,9 +165,9 @@ impl BoltzSdkEventListener {
         let updated = PaymentMetadata {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
-                destination_chain,
-                destination_asset,
-                destination_address,
+                chain,
+                asset,
+                recipient_address,
                 invoice,
                 invoice_amount_sats,
                 estimated_out,
@@ -177,7 +177,7 @@ impl BoltzSdkEventListener {
                 fee,
                 max_slippage_bps,
                 quote_degraded: true,
-                destination_decimals,
+                asset_decimals,
             }),
             ..Default::default()
         };
