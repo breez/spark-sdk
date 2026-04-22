@@ -451,7 +451,8 @@ impl SdkBuilder {
                     .get_identity_public_key()
                     .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?;
-                default_storage(&storage_dir, self.config.network, &identity_pub_key)?
+                default_storage(&storage_dir, self.config.network, &identity_pub_key)
+                    .map_err(|e| SdkError::Unrecoverable(e.to_string()))?
             }
             #[cfg(all(target_family = "wasm", target_os = "unknown"))]
             {
@@ -469,7 +470,7 @@ impl SdkBuilder {
                 Arc::new(
                     crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
                         .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                        .map_err(|e| SdkError::Unrecoverable(e.to_string()))?,
                 )
             } else {
                 return Err(SdkError::Generic("No storage configured".to_string()));
@@ -529,8 +530,11 @@ impl SdkBuilder {
         if tree_store.is_none()
             && let Some(ref pool) = postgres_pool
         {
-            tree_store =
-                Some(crate::persist::postgres::create_postgres_tree_store(pool.clone()).await?);
+            tree_store = Some(
+                crate::persist::postgres::create_postgres_tree_store(pool.clone())
+                    .await
+                    .map_err(|e| SdkError::Unrecoverable(e.to_string()))?,
+            );
         }
 
         // Create token output store if configured
@@ -541,8 +545,11 @@ impl SdkBuilder {
         if token_output_store.is_none()
             && let Some(ref pool) = postgres_pool
         {
-            token_output_store =
-                Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
+            token_output_store = Some(
+                crate::persist::postgres::create_postgres_token_store(pool.clone())
+                    .await
+                    .map_err(|e| SdkError::Unrecoverable(e.to_string()))?,
+            );
         }
 
         let session_manager = Arc::new(BreezSessionManager::new(Arc::new(

@@ -62,6 +62,11 @@ pub enum SdkError {
 
     #[error("Error: {0}")]
     Generic(String),
+
+    /// Initialization failed with an error that cannot be recovered from by retrying.
+    /// The app must clear its local data (storage directory) and call `connect` again.
+    #[error("Unrecoverable error: {0}")]
+    Unrecoverable(String),
 }
 
 impl From<crate::chain::ChainServiceError> for SdkError {
