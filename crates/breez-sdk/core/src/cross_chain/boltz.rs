@@ -17,8 +17,9 @@ use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
 
 use super::{
-    CrossChainPrepared, CrossChainProvider, CrossChainProviderContext, CrossChainRouteFilter,
-    CrossChainRoutePair, CrossChainSendResult, CrossChainService,
+    CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
+    CrossChainRouteFilter, CrossChainRoutePair, CrossChainSendResult, CrossChainService,
+    SourceAsset,
 };
 use crate::{
     ConversionInfo, ConversionStatus, Network, PaymentMetadata, Storage, error::SdkError,
@@ -65,6 +66,196 @@ impl BoltzService {
             Network::Regtest => None,
         }
     }
+
+    /// One-shot prepare for `FeesExcluded`: `amount` is the provider invoice
+    /// target. The wallet pays `amount + ln_fee_sats` in total at send time.
+    async fn prepare_fees_excluded(
+        &self,
+        recipient_address: &str,
+        route: &CrossChainRoutePair,
+        chain: ChainId,
+        invoice_amount_sats: u64,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<CrossChainPrepared, SdkError> {
+        debug!(
+            "Boltz: preparing reverse swap (FeesExcluded) to {recipient_address} on {}, amount {invoice_amount_sats} sats",
+            route.chain
+        );
+
+        let (prepared, created) = self
+            .create_swap(
+                recipient_address,
+                chain,
+                invoice_amount_sats,
+                max_slippage_bps,
+            )
+            .await?;
+
+        let ln_fee_sats = self.fetch_ln_fee(&created.invoice).await?;
+
+        Ok(Self::build_prepared(
+            route,
+            recipient_address,
+            &prepared,
+            created,
+            ln_fee_sats,
+            max_slippage_bps,
+            CrossChainFeeMode::FeesExcluded,
+        ))
+    }
+
+    /// Two-phase prepare for `FeesIncluded`: size the real invoice to
+    /// `amount - ln_fee_probe_sats` so `invoice_sats + ln_fee_probe <= amount`.
+    ///
+    /// Mirrors LNURL pay's `FeesIncluded` pattern at `lnurl.rs`. A throwaway swap
+    /// is created to probe the LN fee; it times out server-side (~24h). The
+    /// probe value is stored on the prepare as `source_transfer_fee_sats`
+    /// and enforced as a hard cap at send time.
+    async fn prepare_fees_included(
+        &self,
+        recipient_address: &str,
+        route: &CrossChainRoutePair,
+        chain: ChainId,
+        total_sats: u64,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<CrossChainPrepared, SdkError> {
+        debug!(
+            "Boltz: preparing reverse swap (FeesIncluded) to {recipient_address} on {}, total {total_sats} sats",
+            route.chain
+        );
+
+        // Phase 1: throwaway invoice at `total_sats` to probe LN fee.
+        let (_throwaway_prepared, throwaway_created) = self
+            .create_swap(
+                recipient_address,
+                chain.clone(),
+                total_sats,
+                max_slippage_bps,
+            )
+            .await?;
+        let ln_fee_probe_sats = self.fetch_ln_fee(&throwaway_created.invoice).await?;
+
+        if total_sats <= ln_fee_probe_sats {
+            return Err(SdkError::InvalidInput(format!(
+                "Amount too small for cross-chain send: {total_sats} sats <= LN fee {ln_fee_probe_sats} sats."
+            )));
+        }
+
+        // Phase 2: real invoice sized to leave room for the probed fee.
+        let real_invoice_sats = total_sats.saturating_sub(ln_fee_probe_sats);
+        let (prepared, created) = self
+            .create_swap(
+                recipient_address,
+                chain,
+                real_invoice_sats,
+                max_slippage_bps,
+            )
+            .await?;
+        let ln_fee_final_sats = self.fetch_ln_fee(&created.invoice).await?;
+
+        // Mirrors LNURL's guard: if fee moved between queries, fail so caller retries.
+        if ln_fee_final_sats > ln_fee_probe_sats {
+            return Err(SdkError::Generic(
+                "Boltz LN fee increased between prepare queries. Please retry.".to_string(),
+            ));
+        }
+
+        // Store the probe (not the final) as the budget — matches LNURL's
+        // `fee_sats = first_fee` and keeps `invoice_sats + max_fee <= amount`.
+        Ok(Self::build_prepared(
+            route,
+            recipient_address,
+            &prepared,
+            created,
+            ln_fee_probe_sats,
+            max_slippage_bps,
+            CrossChainFeeMode::FeesIncluded,
+        ))
+    }
+
+    async fn create_swap(
+        &self,
+        recipient_address: &str,
+        chain: ChainId,
+        invoice_amount_sats: u64,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<(PreparedSwap, boltz_client::models::CreatedSwap), SdkError> {
+        let prepared: PreparedSwap = self
+            .client
+            .prepare_reverse_swap_from_sats(
+                recipient_address,
+                chain,
+                invoice_amount_sats,
+                max_slippage_bps,
+            )
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
+
+        // `create_reverse_swap` commits a HD key index, POSTs to Boltz to
+        // create the swap on the server, and writes a `BoltzSwap` row into
+        // the adapter cache KV. After this call Boltz is holding the swap
+        // state, so the only path back to a clean state is a timeout.
+        let created = self
+            .client
+            .create_reverse_swap(&prepared)
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
+
+        Ok((prepared, created))
+    }
+
+    async fn fetch_ln_fee(&self, invoice: &str) -> Result<u64, SdkError> {
+        self.spark_wallet
+            .fetch_lightning_send_fee_estimate(invoice, None)
+            .await
+            .map_err(|e| {
+                SdkError::Generic(format!(
+                    "Failed to fetch lightning send fee estimate for Boltz invoice: {e}"
+                ))
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_prepared(
+        route: &CrossChainRoutePair,
+        recipient_address: &str,
+        prepared: &PreparedSwap,
+        created: boltz_client::models::CreatedSwap,
+        ln_fee_sats: u64,
+        max_slippage_bps: Option<u32>,
+        fee_mode: CrossChainFeeMode,
+    ) -> CrossChainPrepared {
+        // `fee_amount` is the Boltz spread only (invoice sats - on-chain sats
+        // paid out). The LN routing budget is exposed separately as
+        // `source_transfer_fee_sats` — not double-counted here.
+        let boltz_spread_sats = created
+            .invoice_amount_sats
+            .saturating_sub(prepared.estimated_onchain_amount);
+        let fee_amount = u128::from(boltz_spread_sats);
+        let estimated_out = u128::from(prepared.usdt_amount);
+        let invoice_amount_sats = created.invoice_amount_sats;
+        let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
+
+        let provider_context = CrossChainProviderContext::Boltz {
+            swap_id: created.swap_id.clone(),
+            invoice: created.invoice,
+            max_slippage_bps: resolved_slippage,
+        };
+
+        CrossChainPrepared {
+            amount_in: u128::from(invoice_amount_sats),
+            estimated_out,
+            fee_amount,
+            fee_asset: None,
+            source_transfer_fee_sats: ln_fee_sats,
+            fee_mode,
+            expires_at: prepared.expires_at.to_string(),
+            pair: route.clone(),
+            recipient_address: recipient_address.to_string(),
+            token_identifier: None,
+            provider_context,
+        }
+    }
 }
 
 #[macros::async_trait]
@@ -102,6 +293,7 @@ impl CrossChainService for BoltzService {
         amount: u128,
         token_identifier: Option<String>,
         max_slippage_bps: Option<u32>,
+        fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
         // v1 Boltz is BTC-only. Tokens must be rejected before we commit any
         // state on Boltz's side.
@@ -111,7 +303,7 @@ impl CrossChainService for BoltzService {
             ));
         }
 
-        let invoice_amount_sats = u64::try_from(amount).map_err(|_| {
+        let total_sats = u64::try_from(amount).map_err(|_| {
             SdkError::InvalidInput(format!(
                 "Amount {amount} exceeds u64::MAX sats for Boltz reverse swap"
             ))
@@ -127,70 +319,28 @@ impl CrossChainService for BoltzService {
             )));
         }
 
-        debug!(
-            "Boltz: preparing reverse swap to {recipient_address} on {}, amount {invoice_amount_sats} sats",
-            route.chain
-        );
-
-        let prepared: PreparedSwap = self
-            .client
-            .prepare_reverse_swap_from_sats(
-                recipient_address,
-                chain,
-                invoice_amount_sats,
-                max_slippage_bps,
-            )
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
-
-        // `create_reverse_swap` commits a HD key index, POSTs to Boltz to
-        // create the swap on the server, and writes a `BoltzSwap` row into
-        // the adapter cache KV. After this call Boltz is holding the swap
-        // state, so the only path back to a clean state is a timeout.
-        let created = self
-            .client
-            .create_reverse_swap(&prepared)
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
-
-        let ln_fee_sats = self
-            .spark_wallet
-            .fetch_lightning_send_fee_estimate(&created.invoice, None)
-            .await
-            .map_err(|e| {
-                SdkError::Generic(format!(
-                    "Failed to fetch lightning send fee estimate for Boltz invoice: {e}"
-                ))
-            })?;
-
-        // Fee denominated in sats: Boltz spread (invoice sats - on-chain sats
-        // paid out) + lightning routing fee budget.
-        let boltz_spread_sats = created
-            .invoice_amount_sats
-            .saturating_sub(prepared.estimated_onchain_amount);
-        let fee_amount = u128::from(boltz_spread_sats).saturating_add(u128::from(ln_fee_sats));
-        let estimated_out = u128::from(prepared.usdt_amount);
-        let invoice_amount_sats = created.invoice_amount_sats;
-        let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
-
-        let provider_context = CrossChainProviderContext::Boltz {
-            swap_id: created.swap_id.clone(),
-            invoice: created.invoice,
-            ln_fee_sats,
-            max_slippage_bps: resolved_slippage,
-        };
-
-        Ok(CrossChainPrepared {
-            amount_in: u128::from(invoice_amount_sats),
-            estimated_out,
-            fee_amount,
-            fee_asset: None,
-            expires_at: prepared.expires_at.to_string(),
-            pair: route.clone(),
-            recipient_address: recipient_address.to_string(),
-            token_identifier: None,
-            provider_context,
-        })
+        match fee_mode {
+            CrossChainFeeMode::FeesExcluded => {
+                self.prepare_fees_excluded(
+                    recipient_address,
+                    route,
+                    chain,
+                    total_sats,
+                    max_slippage_bps,
+                )
+                .await
+            }
+            CrossChainFeeMode::FeesIncluded => {
+                self.prepare_fees_included(
+                    recipient_address,
+                    route,
+                    chain,
+                    total_sats,
+                    max_slippage_bps,
+                )
+                .await
+            }
+        }
     }
 
     #[allow(clippy::large_futures)]
@@ -198,7 +348,6 @@ impl CrossChainService for BoltzService {
         let CrossChainProviderContext::Boltz {
             swap_id,
             invoice,
-            ln_fee_sats,
             max_slippage_bps,
         } = &prepared.provider_context
         else {
@@ -210,6 +359,46 @@ impl CrossChainService for BoltzService {
         let invoice_amount_sats = u64::try_from(prepared.amount_in)
             .map_err(|e| SdkError::Generic(format!("Boltz invoice amount exceeds u64: {e}")))?;
 
+        let ln_fee_budget = prepared.source_transfer_fee_sats;
+
+        // Compute the LN payment amount based on fee_mode. For FeesIncluded,
+        // mirror LNURL's overpayment logic so the wallet actually consumes the
+        // user's budget when current_fee < ln_fee_probe.
+        let ln_amount_sats = match prepared.fee_mode {
+            CrossChainFeeMode::FeesExcluded => {
+                // Pay the invoice as-is; `max_fee_sat = ln_fee_budget` protects
+                // against fee drift (validated downstream).
+                None
+            }
+            CrossChainFeeMode::FeesIncluded => {
+                let current_fee = self
+                    .spark_wallet
+                    .fetch_lightning_send_fee_estimate(invoice, None)
+                    .await
+                    .map_err(|e| {
+                        SdkError::Generic(format!(
+                            "Failed to re-estimate Boltz LN fee at send: {e}"
+                        ))
+                    })?;
+
+                if current_fee > ln_fee_budget {
+                    return Err(SdkError::Generic(
+                        "Fee increased since prepare. Please retry.".to_string(),
+                    ));
+                }
+
+                let overpayment_uncapped = ln_fee_budget.saturating_sub(current_fee);
+                let max_allowed_overpayment = current_fee.max(1);
+                if overpayment_uncapped > max_allowed_overpayment {
+                    return Err(SdkError::Generic(format!(
+                        "Fee overpayment ({overpayment_uncapped} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
+                    )));
+                }
+
+                Some(invoice_amount_sats.saturating_add(overpayment_uncapped))
+            }
+        };
+
         // Delegate the LN leg to the shared helper. It pays the hold
         // invoice, builds the Payment row, persists it, and spawns SSP-side
         // polling — the same path `send_bolt11_invoice` takes. On failure
@@ -219,8 +408,8 @@ impl CrossChainService for BoltzService {
             .lightning_sender
             .pay_and_persist_lightning_invoice(
                 invoice,
-                None,
-                *ln_fee_sats,
+                ln_amount_sats,
+                ln_fee_budget,
                 false,
                 prepared.amount_in,
                 None,
@@ -289,6 +478,7 @@ fn spec_to_route_pair(spec: &boltz_client::models::ChainSpec) -> CrossChainRoute
         contract_address: spec.token_address.clone(),
         decimals: 6,
         exact_out_eligible: false,
+        supported_sources: vec![SourceAsset::Bitcoin],
     }
 }
 

@@ -25,6 +25,29 @@ pub enum CrossChainProvider {
     Boltz,
 }
 
+/// The source asset a cross-chain route accepts as input on the Spark side.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SourceAsset {
+    /// Native BTC (sats).
+    Bitcoin,
+    /// A Spark token, identified by its bech32m `token_identifier` (e.g. `btkn1...`).
+    Token(String),
+}
+
+/// How the caller wants fees handled against the request `amount`.
+///
+/// - `FeesExcluded`: `amount` is the provider invoice/deposit target; the
+///   wallet pays `amount + source_transfer_fee_sats` in total.
+/// - `FeesIncluded`: `amount` is the wallet's total sats budget; the provider
+///   leg is sized so `amount_in + source_transfer_fee_sats <= amount`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CrossChainFeeMode {
+    FeesExcluded,
+    FeesIncluded,
+}
+
 /// Filter for [`CrossChainService::get_routes`] and the public
 /// `get_cross_chain_routes()` API.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,6 +84,12 @@ pub struct CrossChainRoutePair {
     pub decimals: u8,
     /// Whether the route supports exact-out mode.
     pub exact_out_eligible: bool,
+    /// The source assets this route accepts on the Spark side.
+    ///
+    /// Boltz routes accept `[SourceAsset::Bitcoin]`. Orchestra routes accept
+    /// one or more of `Bitcoin` / `Token(...)` (a given destination endpoint
+    /// may be fronted by multiple source variants on Orchestra).
+    pub supported_sources: Vec<SourceAsset>,
 }
 
 /// Registry of cross-chain providers keyed by [`CrossChainProvider`].
@@ -109,9 +138,6 @@ pub enum CrossChainProviderContext {
         /// Hold invoice to pay. The invoice amount matches
         /// [`CrossChainPrepared::amount_in`].
         invoice: String,
-        /// Lightning routing fee budget in sats. Not recoverable from the
-        /// public `fee_amount`, which also folds in the Boltz spread.
-        ln_fee_sats: u64,
         /// Slippage tolerance applied to this swap, in basis points.
         max_slippage_bps: u32,
     },
@@ -131,6 +157,19 @@ pub(crate) struct CrossChainPrepared {
     pub fee_amount: u128,
     /// The asset the fee is denominated in. `None` means BTC (sats).
     pub fee_asset: Option<String>,
+    /// Sats cost to the wallet of moving `amount_in` from the wallet to the
+    /// provider. For Boltz: the Lightning routing fee budget for paying the
+    /// hold invoice (a budget, not a central estimate — enforced as a hard
+    /// cap at send time). For Orchestra: the Spark transfer fee (0 today;
+    /// non-zero in the future).
+    ///
+    /// Semantically distinct from `fee_amount` (provider's service fee /
+    /// spread) and from destination-chain costs (baked into `estimated_out`).
+    /// Denominated in sats — the field assumes a sats-denominated source leg.
+    pub source_transfer_fee_sats: u64,
+    /// Fee mode the prepare was called with. Needed at send time so the
+    /// provider knows whether to apply FeesIncluded-style overpayment.
+    pub fee_mode: CrossChainFeeMode,
     pub expires_at: String,
     pub pair: CrossChainRoutePair,
     pub recipient_address: String,
@@ -173,6 +212,7 @@ pub(crate) trait CrossChainService: Send + Sync {
         amount: u128,
         source_token_identifier: Option<String>,
         max_slippage_bps: Option<u32>,
+        fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError>;
 
     /// Execute the send: transfer funds to the deposit address, submit to
