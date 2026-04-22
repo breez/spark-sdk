@@ -134,6 +134,13 @@ impl BreezSdk {
         self.inner.get_payment(request).await
     }
 
+    pub async fn query_spark_invoices(
+        &self,
+        request: QuerySparkInvoicesRequest,
+    ) -> Result<QuerySparkInvoicesResponse, SdkError> {
+        self.inner.query_spark_invoices(request).await
+    }
+
     pub async fn claim_deposit(
         &self,
         request: ClaimDepositRequest,

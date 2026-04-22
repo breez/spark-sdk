@@ -193,6 +193,14 @@ impl BreezSdk {
         Ok(self.sdk.get_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "querySparkInvoices")]
+    pub async fn query_spark_invoices(
+        &self,
+        request: QuerySparkInvoicesRequest,
+    ) -> WasmResult<QuerySparkInvoicesResponse> {
+        Ok(self.sdk.query_spark_invoices(request.into()).await?.into())
+    }
+
     #[wasm_bindgen(js_name = "claimDeposit")]
     pub async fn claim_deposit(
         &self,

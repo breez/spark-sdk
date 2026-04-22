@@ -1279,6 +1279,37 @@ pub struct _UnregisterWebhookRequest {
     pub webhook_id: String,
 }
 
+#[frb(mirror(QuerySparkInvoicesRequest))]
+pub struct _QuerySparkInvoicesRequest {
+    pub invoices: Vec<String>,
+}
+
+#[frb(mirror(QuerySparkInvoicesResponse))]
+pub struct _QuerySparkInvoicesResponse {
+    pub results: Vec<QuerySparkInvoiceResult>,
+}
+
+#[frb(mirror(QuerySparkInvoiceResult))]
+pub struct _QuerySparkInvoiceResult {
+    pub invoice: String,
+    pub status: SparkInvoiceStatus,
+    pub transfer_type: Option<SparkInvoiceTransferType>,
+}
+
+#[frb(mirror(SparkInvoiceStatus))]
+pub enum _SparkInvoiceStatus {
+    NotFound,
+    Pending,
+    Finalized,
+    Returned,
+}
+
+#[frb(mirror(SparkInvoiceTransferType))]
+pub enum _SparkInvoiceTransferType {
+    Transfer { transfer_id: String },
+    TokenTransfer { final_token_tx_hash: String },
+}
+
 #[frb(mirror(NostrRelayConfig))]
 pub struct _NostrRelayConfig {
     pub breez_api_key: Option<String>,

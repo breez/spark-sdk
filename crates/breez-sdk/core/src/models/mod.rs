@@ -1841,3 +1841,93 @@ pub struct UnregisterWebhookRequest {
     /// The unique identifier of the webhook to unregister.
     pub webhook_id: String,
 }
+
+/// Request for querying the status of Spark invoices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct QuerySparkInvoicesRequest {
+    /// The list of Spark invoices to query.
+    pub invoices: Vec<String>,
+}
+
+/// Result of querying a single Spark invoice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct QuerySparkInvoiceResult {
+    /// The queried invoice string.
+    pub invoice: String,
+    /// The status of the invoice on the Spark operator.
+    pub status: SparkInvoiceStatus,
+    /// Details of the underlying transfer when the invoice has been finalized.
+    pub transfer_type: Option<SparkInvoiceTransferType>,
+}
+
+/// Status of a queried Spark invoice as reported by the Spark operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkInvoiceStatus {
+    /// The operator has no record of this invoice.
+    NotFound,
+    /// The invoice has been created but not yet fulfilled.
+    Pending,
+    /// The invoice has been fulfilled.
+    Finalized,
+    /// The invoice was returned (cancelled or refunded).
+    Returned,
+}
+
+/// Details of the transfer that fulfilled a finalized Spark invoice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum SparkInvoiceTransferType {
+    /// A sats transfer fulfilled the invoice. `transfer_id` is the Spark transfer identifier.
+    Transfer { transfer_id: String },
+    /// A token transfer fulfilled the invoice. `final_token_tx_hash` is the hex-encoded
+    /// final token transaction hash.
+    TokenTransfer { final_token_tx_hash: String },
+}
+
+/// Response from querying Spark invoices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct QuerySparkInvoicesResponse {
+    pub results: Vec<QuerySparkInvoiceResult>,
+}
+
+impl From<spark_wallet::QuerySparkInvoiceResult> for QuerySparkInvoiceResult {
+    fn from(value: spark_wallet::QuerySparkInvoiceResult) -> Self {
+        Self {
+            invoice: value.invoice,
+            status: value.status.into(),
+            transfer_type: value.transfer_type.map(Into::into),
+        }
+    }
+}
+
+impl From<spark_wallet::SparkInvoiceStatus> for SparkInvoiceStatus {
+    fn from(value: spark_wallet::SparkInvoiceStatus) -> Self {
+        match value {
+            spark_wallet::SparkInvoiceStatus::NotFound => SparkInvoiceStatus::NotFound,
+            spark_wallet::SparkInvoiceStatus::Pending => SparkInvoiceStatus::Pending,
+            spark_wallet::SparkInvoiceStatus::Finalized => SparkInvoiceStatus::Finalized,
+            spark_wallet::SparkInvoiceStatus::Returned => SparkInvoiceStatus::Returned,
+        }
+    }
+}
+
+impl From<spark_wallet::SparkInvoiceTransferType> for SparkInvoiceTransferType {
+    fn from(value: spark_wallet::SparkInvoiceTransferType) -> Self {
+        match value {
+            spark_wallet::SparkInvoiceTransferType::Transfer { transfer_id } => {
+                SparkInvoiceTransferType::Transfer {
+                    transfer_id: transfer_id.to_string(),
+                }
+            }
+            spark_wallet::SparkInvoiceTransferType::TokenTransfer {
+                final_token_tx_hash,
+            } => SparkInvoiceTransferType::TokenTransfer {
+                final_token_tx_hash,
+            },
+        }
+    }
+}

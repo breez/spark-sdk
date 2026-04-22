@@ -1439,3 +1439,34 @@ pub struct RegisterWebhookResponse {
 pub struct UnregisterWebhookRequest {
     pub webhook_id: String,
 }
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::QuerySparkInvoicesRequest)]
+pub struct QuerySparkInvoicesRequest {
+    pub invoices: Vec<String>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::QuerySparkInvoicesResponse)]
+pub struct QuerySparkInvoicesResponse {
+    pub results: Vec<QuerySparkInvoiceResult>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::QuerySparkInvoiceResult)]
+pub struct QuerySparkInvoiceResult {
+    pub invoice: String,
+    pub status: SparkInvoiceStatus,
+    pub transfer_type: Option<SparkInvoiceTransferType>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoiceStatus)]
+pub enum SparkInvoiceStatus {
+    NotFound,
+    Pending,
+    Finalized,
+    Returned,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SparkInvoiceTransferType)]
+pub enum SparkInvoiceTransferType {
+    Transfer { transfer_id: String },
+    TokenTransfer { final_token_tx_hash: String },
+}
