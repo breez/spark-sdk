@@ -1,7 +1,7 @@
 use breez_sdk_common::input;
 
 use crate::{
-    CrossChainRoutePair, FeePolicy, SendPaymentMethod,
+    CrossChainFeeMode, CrossChainRoutePair, FeePolicy, SendPaymentMethod,
     error::SdkError,
     models::PrepareSendPaymentResponse,
     sdk::BreezSdk,
@@ -30,8 +30,20 @@ pub(crate) async fn prepare(
 
     let service = sdk.cross_chain_providers.get(route.provider)?;
 
+    let fee_mode = match fee_policy {
+        FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
+        FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
+    };
+
     let prepared = service
-        .prepare(address, route, amount, token_identifier.clone(), None)
+        .prepare(
+            address,
+            route,
+            amount,
+            token_identifier.clone(),
+            None,
+            fee_mode,
+        )
         .await?;
 
     Ok(PrepareSendPaymentResponse {
@@ -42,6 +54,8 @@ pub(crate) async fn prepare(
             estimated_out: prepared.estimated_out,
             fee_amount: prepared.fee_amount,
             fee_asset: prepared.fee_asset,
+            source_transfer_fee_sats: prepared.source_transfer_fee_sats,
+            fee_mode: prepared.fee_mode,
             expires_at: prepared.expires_at,
             provider_context: prepared.provider_context,
         },

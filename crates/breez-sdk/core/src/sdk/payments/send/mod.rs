@@ -154,6 +154,8 @@ pub(super) async fn send_internal(
             estimated_out,
             fee_amount,
             fee_asset,
+            source_transfer_fee_sats,
+            fee_mode,
             expires_at,
             provider_context,
         } => {
@@ -165,6 +167,8 @@ pub(super) async fn send_internal(
                 *estimated_out,
                 *fee_amount,
                 fee_asset.clone(),
+                *source_transfer_fee_sats,
+                *fee_mode,
                 expires_at,
                 provider_context,
                 token_identifier,

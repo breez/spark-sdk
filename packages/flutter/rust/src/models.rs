@@ -257,6 +257,18 @@ pub struct _CrossChainAddressDetails {
     pub amount: Option<u128>,
 }
 
+#[frb(mirror(SourceAsset))]
+pub enum _SourceAsset {
+    Bitcoin,
+    Token(String),
+}
+
+#[frb(mirror(CrossChainFeeMode))]
+pub enum _CrossChainFeeMode {
+    FeesExcluded,
+    FeesIncluded,
+}
+
 #[frb(mirror(CrossChainRoutePair))]
 pub struct _CrossChainRoutePair {
     pub provider: CrossChainProvider,
@@ -266,6 +278,7 @@ pub struct _CrossChainRoutePair {
     pub contract_address: Option<String>,
     pub decimals: u8,
     pub exact_out_eligible: bool,
+    pub supported_sources: Vec<SourceAsset>,
 }
 
 #[frb(mirror(CrossChainProviderContext))]
@@ -277,7 +290,6 @@ pub enum _CrossChainProviderContext {
     Boltz {
         swap_id: String,
         invoice: String,
-        ln_fee_sats: u64,
         max_slippage_bps: u32,
     },
 }
@@ -558,6 +570,8 @@ pub enum _SendPaymentMethod {
         estimated_out: u128,
         fee_amount: u128,
         fee_asset: Option<String>,
+        source_transfer_fee_sats: u64,
+        fee_mode: CrossChainFeeMode,
         expires_at: String,
         provider_context: CrossChainProviderContext,
     },
