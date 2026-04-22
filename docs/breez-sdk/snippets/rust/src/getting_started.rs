@@ -147,3 +147,34 @@ pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
 }
 // ANCHOR_END: disconnect
 
+// ANCHOR: unrecoverable-error
+pub(crate) async fn connect_with_recovery() -> Result<BreezSdk> {
+    let storage_dir = "./.data".to_string();
+
+    let make_request = || {
+        let mut config = default_config(Network::Mainnet);
+        config.api_key = Some("<breez api key>".to_string());
+        ConnectRequest {
+            config,
+            seed: Seed::Mnemonic {
+                mnemonic: "<mnemonic words>".to_string(),
+                passphrase: None,
+            },
+            storage_dir: storage_dir.clone(),
+        }
+    };
+
+    let sdk = match connect(make_request()).await {
+        Ok(sdk) => sdk,
+        Err(SdkError::Unrecoverable(_)) => {
+            // The SDK storage is corrupted and cannot be recovered by retrying.
+            // Clear the storage directory and reconnect with fresh storage.
+            std::fs::remove_dir_all(&storage_dir).ok();
+            connect(make_request()).await?
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok(sdk)
+}
+// ANCHOR_END: unrecoverable-error
+

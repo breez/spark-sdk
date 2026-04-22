@@ -159,5 +159,36 @@ namespace BreezSdkSnippets
             await sdk.Disconnect();
         }
         // ANCHOR_END: disconnect
+
+        // ANCHOR: unrecoverable-error
+        async Task<BreezSdk> ConnectWithRecovery()
+        {
+            var storageDir = "./.data";
+
+            ConnectRequest MakeRequest()
+            {
+                var config = BreezSdkMethods.DefaultConfig(Network.Mainnet);
+                config.ApiKey = "<breez api key>";
+                return new ConnectRequest(
+                    config: config,
+                    seed: new Seed.Mnemonic(mnemonic: "<mnemonic words>", passphrase: null),
+                    storageDir: storageDir
+                );
+            }
+
+            try
+            {
+                return await BreezSdkMethods.Connect(MakeRequest());
+            }
+            catch (SdkException.Unrecoverable)
+            {
+                // The SDK storage is corrupted and cannot be recovered by retrying.
+                // Clear the storage directory and reconnect with fresh storage.
+                if (Directory.Exists(storageDir))
+                    Directory.Delete(storageDir, recursive: true);
+                return await BreezSdkMethods.Connect(MakeRequest());
+            }
+        }
+        // ANCHOR_END: unrecoverable-error
     }
 }

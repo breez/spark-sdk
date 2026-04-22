@@ -1,5 +1,6 @@
-import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
+import 'dart:io';
 import 'dart:async';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> initSdk() async {
   // ANCHOR: init-sdk
@@ -169,4 +170,30 @@ class BreezSdkSpark {
     await sdk.disconnect();
   }
   // ANCHOR_END: disconnect
+
+  // ANCHOR: unrecoverable-error
+  Future<BreezSdk> connectWithRecovery() async {
+    final storageDir = './.data';
+
+    ConnectRequest makeRequest() {
+      final config = defaultConfig(Network.mainnet);
+      config.apiKey = '<breez api key>';
+      return ConnectRequest(
+        config: config,
+        seed: Seed_Mnemonic(mnemonic: '<mnemonic words>', passphrase: null),
+        storageDir: storageDir,
+      );
+    }
+
+    try {
+      return await connect(req: makeRequest());
+    } on SdkError_Unrecoverable {
+      // The SDK storage is corrupted and cannot be recovered by retrying.
+      // Clear the storage directory and reconnect with fresh storage.
+      final dir = Directory(storageDir);
+      if (await dir.exists()) await dir.delete(recursive: true);
+      return await connect(req: makeRequest());
+    }
+  }
+  // ANCHOR_END: unrecoverable-error
 }

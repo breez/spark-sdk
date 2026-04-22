@@ -125,3 +125,28 @@ func disconnect(sdk: BreezSdk) async throws {
     try await sdk.disconnect()
 }
 // ANCHOR_END: disconnect
+
+// ANCHOR: unrecoverable-error
+func connectWithRecovery() async throws -> BreezSdk {
+    let storageDir = "./.data"
+
+    let makeRequest = {
+        var config = defaultConfig(network: Network.mainnet)
+        config.apiKey = "<breez api key>"
+        return ConnectRequest(
+            config: config,
+            seed: .mnemonic(mnemonic: "<mnemonic words>", passphrase: nil),
+            storageDir: storageDir
+        )
+    }
+
+    do {
+        return try await connect(request: makeRequest())
+    } catch SdkError.Unrecoverable {
+        // The SDK storage is corrupted and cannot be recovered by retrying.
+        // Clear the storage directory and reconnect with fresh storage.
+        try? FileManager.default.removeItem(atPath: storageDir)
+        return try await connect(request: makeRequest())
+    }
+}
+// ANCHOR_END: unrecoverable-error
