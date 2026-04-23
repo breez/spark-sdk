@@ -47,3 +47,22 @@ impl From<OperatorRpcError> for TreeServiceError {
         TreeServiceError::RpcError(Box::new(error))
     }
 }
+
+impl From<TreeServiceError> for crate::services::ServiceError {
+    fn from(error: TreeServiceError) -> Self {
+        use crate::services::ServiceError;
+        let display = error.to_string();
+        match error {
+            TreeServiceError::InsufficientFunds => ServiceError::InsufficientFunds,
+            TreeServiceError::RpcError(e) => ServiceError::ServiceConnectionError(e),
+            TreeServiceError::UnselectableAmount
+            | TreeServiceError::NonReservableLeaves
+            | TreeServiceError::ProcessorShutdown
+            | TreeServiceError::ResourceBusy { .. } => ServiceError::Generic(display),
+            TreeServiceError::InvalidAmount => ServiceError::InvalidAmount,
+            TreeServiceError::SignerError(e) => ServiceError::SignerError(e),
+            TreeServiceError::ServiceError(e) => e,
+            TreeServiceError::Generic(msg) => ServiceError::Generic(msg),
+        }
+    }
+}

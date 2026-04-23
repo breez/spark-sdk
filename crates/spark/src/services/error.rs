@@ -112,10 +112,6 @@ pub enum ServiceError {
     SignerError(#[from] crate::signer::SignerError),
     #[error("service connection error: {0}")]
     ServiceConnectionError(Box<OperatorRpcError>),
-    #[error("tree service error: {0}")]
-    TreeServiceError(Box<crate::tree::TreeServiceError>),
-    #[error("token output service error: {0}")]
-    TokenOutputServiceError(Box<crate::token::TokenOutputServiceError>),
     #[error("transfer observer error: {0}")]
     TransferObserverError(#[from] crate::services::TransferObserverError),
     #[error("generic error: {0}")]
@@ -137,17 +133,5 @@ impl From<Status> for ServiceError {
 impl From<OperatorRpcError> for ServiceError {
     fn from(error: OperatorRpcError) -> Self {
         ServiceError::ServiceConnectionError(Box::new(error))
-    }
-}
-
-impl From<crate::tree::TreeServiceError> for ServiceError {
-    fn from(error: crate::tree::TreeServiceError) -> Self {
-        ServiceError::TreeServiceError(Box::new(error))
-    }
-}
-
-impl From<crate::token::TokenOutputServiceError> for ServiceError {
-    fn from(error: crate::token::TokenOutputServiceError) -> Self {
-        ServiceError::TokenOutputServiceError(Box::new(error))
     }
 }

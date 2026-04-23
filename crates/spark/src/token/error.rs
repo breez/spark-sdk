@@ -25,3 +25,16 @@ impl From<OperatorRpcError> for TokenOutputServiceError {
         TokenOutputServiceError::RpcError(Box::new(error))
     }
 }
+
+impl From<TokenOutputServiceError> for crate::services::ServiceError {
+    fn from(error: TokenOutputServiceError) -> Self {
+        use crate::services::ServiceError;
+        match error {
+            TokenOutputServiceError::InsufficientFunds => ServiceError::InsufficientFunds,
+            TokenOutputServiceError::RpcError(e) => ServiceError::ServiceConnectionError(e),
+            TokenOutputServiceError::SignerError(e) => ServiceError::SignerError(e),
+            TokenOutputServiceError::ServiceError(e) => e,
+            TokenOutputServiceError::Generic(msg) => ServiceError::Generic(msg),
+        }
+    }
+}

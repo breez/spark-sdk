@@ -1,6 +1,7 @@
 mod error;
 mod service;
 mod store;
+mod token_service;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod tests;
@@ -10,6 +11,7 @@ use std::collections::HashSet;
 pub use error::TokenOutputServiceError;
 pub use service::SynchronousTokenOutputService;
 pub use store::InMemoryTokenOutputStore;
+pub use token_service::*;
 
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::time::SystemTime;

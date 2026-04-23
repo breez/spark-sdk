@@ -8,8 +8,8 @@ use crate::{
         SparkInvoiceFields as ProtoSparkInvoiceFields, TokensPayment as ProtoTokensPayment,
         spark_invoice_fields::PaymentType as ProtoPaymentType,
     },
-    services::{bech32m_decode_token_id, bech32m_encode_token_id},
     signer::Signer,
+    token::{bech32m_decode_token_id, bech32m_encode_token_id},
     utils::byte_padding::BytePadding,
 };
 use bitcoin::{

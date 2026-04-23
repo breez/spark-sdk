@@ -1,4 +1,5 @@
 mod error;
+mod leaf_optimizer;
 mod select_helper;
 mod service;
 mod store;
@@ -7,6 +8,7 @@ mod store;
 pub mod tests;
 
 pub use error::TreeServiceError;
+pub use leaf_optimizer::*;
 use platform_utils::tokio::sync::watch;
 pub use select_helper::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts, with_reserved_leaves,
