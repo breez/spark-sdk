@@ -479,17 +479,35 @@ pub enum ConversionProvider {
     Boltz,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionChain)]
+pub enum ConversionChain {
+    Spark,
+    Lightning,
+    External {
+        name: String,
+        #[serde(default)]
+        chain_id: Option<String>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionAsset)]
+pub struct ConversionAsset {
+    pub ticker: String,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    pub decimals: u32,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionSide)]
 pub struct ConversionSide {
-    pub chain: String,
-    pub asset: String,
+    pub chain: ConversionChain,
+    pub asset: ConversionAsset,
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
     #[tsify(type = "string")]
     #[serde(with = "serde_u128_as_string")]
     pub fee: u128,
-    pub decimals: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Conversion)]
@@ -849,6 +867,8 @@ pub enum CrossChainRouteFilter {
 pub struct CrossChainRoutePair {
     pub provider: CrossChainProvider,
     pub chain: String,
+    #[serde(default)]
+    pub chain_id: Option<String>,
     pub asset: String,
     pub contract_address: Option<String>,
     pub decimals: u8,
@@ -1437,7 +1457,11 @@ pub enum ConversionInfo {
     Orchestra {
         chain: String,
         #[serde(default)]
+        chain_id: Option<String>,
+        #[serde(default)]
         asset: String,
+        #[serde(default)]
+        asset_contract: Option<String>,
         recipient_address: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
@@ -1449,8 +1473,7 @@ pub enum ConversionInfo {
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
-        #[serde(default)]
-        asset_decimals: Option<u32>,
+        asset_decimals: u32,
         order_id: String,
         quote_id: String,
         #[serde(default)]
@@ -1459,7 +1482,11 @@ pub enum ConversionInfo {
     Boltz {
         chain: String,
         #[serde(default)]
+        chain_id: Option<String>,
+        #[serde(default)]
         asset: String,
+        #[serde(default)]
+        asset_contract: Option<String>,
         recipient_address: String,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
@@ -1471,8 +1498,7 @@ pub enum ConversionInfo {
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
-        #[serde(default)]
-        asset_decimals: Option<u32>,
+        asset_decimals: u32,
         swap_id: String,
         invoice: String,
         invoice_amount_sats: u64,

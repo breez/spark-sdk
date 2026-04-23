@@ -2119,6 +2119,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             order_id: "ord_123".to_string(),
             quote_id: "q_456".to_string(),
             chain: "base".to_string(),
+            chain_id: None,
             asset: "USDC".to_string(),
             recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
             estimated_out: 99_500_000,
@@ -2126,7 +2127,8 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Pending,
             fee: Some(500),
             read_token: Some("rt_test_token".to_string()),
-            asset_decimals: Some(6),
+            asset_decimals: 6,
+            asset_contract: None,
         }),
         ..Default::default()
     };
@@ -2157,6 +2159,7 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             order_id: "ord_789".to_string(),
             quote_id: "q_012".to_string(),
             chain: "solana".to_string(),
+            chain_id: None,
             asset: "USDC".to_string(),
             recipient_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             estimated_out: 50_000_000,
@@ -2164,7 +2167,8 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
             status: crate::ConversionStatus::Completed,
             fee: Some(250),
             read_token: None,
-            asset_decimals: Some(6),
+            asset_decimals: 6,
+            asset_contract: None,
         }),
         ..Default::default()
     };
@@ -3329,6 +3333,7 @@ fn boltz_conversion_info(
     crate::ConversionInfo::Boltz {
         swap_id: swap_id.to_string(),
         chain: "arbitrum".to_string(),
+        chain_id: None,
         asset: "USDT".to_string(),
         recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
         invoice: "lnbc1000n1pexample".to_string(),
@@ -3340,7 +3345,8 @@ fn boltz_conversion_info(
         fee: Some(1_500),
         max_slippage_bps: 100,
         quote_degraded: false,
-        asset_decimals: Some(6),
+        asset_decimals: 6,
+        asset_contract: None,
     }
 }
 

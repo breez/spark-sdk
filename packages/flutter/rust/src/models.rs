@@ -252,6 +252,7 @@ pub struct _CrossChainAddressDetails {
 pub struct _CrossChainRoutePair {
     pub provider: CrossChainProvider,
     pub chain: String,
+    pub chain_id: Option<String>,
     pub asset: String,
     pub contract_address: Option<String>,
     pub decimals: u8,
@@ -680,13 +681,29 @@ pub enum _ConversionProvider {
     Boltz,
 }
 
+#[frb(mirror(ConversionChain))]
+pub enum _ConversionChain {
+    Spark,
+    Lightning,
+    External {
+        name: String,
+        chain_id: Option<String>,
+    },
+}
+
+#[frb(mirror(ConversionAsset))]
+pub struct _ConversionAsset {
+    pub ticker: String,
+    pub identifier: Option<String>,
+    pub decimals: u32,
+}
+
 #[frb(mirror(ConversionSide))]
 pub struct _ConversionSide {
-    pub chain: String,
-    pub asset: String,
+    pub chain: ConversionChain,
+    pub asset: ConversionAsset,
     pub amount: u128,
     pub fee: u128,
-    pub decimals: Option<u32>,
 }
 
 #[frb(mirror(Conversion))]
@@ -1256,13 +1273,15 @@ pub enum _ConversionInfo {
     },
     Boltz {
         chain: String,
+        chain_id: Option<String>,
         asset: String,
+        asset_contract: Option<String>,
         recipient_address: String,
         estimated_out: u128,
         delivered_amount: Option<u128>,
         status: ConversionStatus,
         fee: Option<u128>,
-        asset_decimals: Option<u32>,
+        asset_decimals: u32,
         swap_id: String,
         invoice: String,
         invoice_amount_sats: u64,
@@ -1272,13 +1291,15 @@ pub enum _ConversionInfo {
     },
     Orchestra {
         chain: String,
+        chain_id: Option<String>,
         asset: String,
+        asset_contract: Option<String>,
         recipient_address: String,
         estimated_out: u128,
         delivered_amount: Option<u128>,
         status: ConversionStatus,
         fee: Option<u128>,
-        asset_decimals: Option<u32>,
+        asset_decimals: u32,
         order_id: String,
         quote_id: String,
         read_token: Option<String>,

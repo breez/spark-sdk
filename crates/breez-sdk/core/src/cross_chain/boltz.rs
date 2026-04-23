@@ -90,14 +90,7 @@ impl CrossChainService for BoltzService {
             .client
             .chains_accepting(&address_details.address)
             .into_iter()
-            .map(|spec| CrossChainRoutePair {
-                provider: CrossChainProvider::Boltz,
-                chain: spec.id.as_str().to_string(),
-                asset: spec.asset_symbol().to_string(),
-                contract_address: spec.token_address.clone(),
-                decimals: 6,
-                exact_out_eligible: false,
-            })
+            .map(spec_to_route_pair)
             .collect();
         Ok(routes)
     }
@@ -242,6 +235,7 @@ impl CrossChainService for BoltzService {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id: swap_id.clone(),
                 chain: prepared.pair.chain.clone(),
+                chain_id: prepared.pair.chain_id.clone(),
                 asset: prepared.pair.asset.clone(),
                 recipient_address: prepared.recipient_address.clone(),
                 invoice: invoice.clone(),
@@ -253,7 +247,8 @@ impl CrossChainService for BoltzService {
                 fee: Some(prepared.fee_amount),
                 max_slippage_bps: *max_slippage_bps,
                 quote_degraded: false,
-                asset_decimals: Some(u32::from(prepared.pair.decimals)),
+                asset_decimals: u32::from(prepared.pair.decimals),
+                asset_contract: prepared.pair.contract_address.clone(),
             }),
             ..Default::default()
         };
@@ -280,4 +275,68 @@ impl CrossChainService for BoltzService {
 
 fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
     SdkError::Generic(format!("Boltz: {err}"))
+}
+
+/// Build a [`CrossChainRoutePair`] from a Boltz [`ChainSpec`]. Surfaces
+/// `chain_id` for EVM chains as a decimal string; non-EVM transports
+/// (Solana, Tron) get `None`, matching the USDT0 deployments feed.
+fn spec_to_route_pair(spec: &boltz_client::models::ChainSpec) -> CrossChainRoutePair {
+    CrossChainRoutePair {
+        provider: CrossChainProvider::Boltz,
+        chain: spec.id.as_str().to_string(),
+        chain_id: spec.evm_chain_id.map(|id| id.to_string()),
+        asset: spec.asset_symbol().to_string(),
+        contract_address: spec.token_address.clone(),
+        decimals: 6,
+        exact_out_eligible: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boltz_client::models::{ChainSpec, NetworkTransport, Usdt0Kind};
+
+    fn test_spec(evm_chain_id: Option<u64>, transport: NetworkTransport) -> ChainSpec {
+        ChainSpec {
+            id: ChainId::new("arbitrum one"),
+            is_source: false,
+            display_name: "Arbitrum One".to_string(),
+            transport,
+            evm_chain_id,
+            lz_eid: 30110,
+            oft_address: "0xoft".to_string(),
+            token_address: Some("0xtoken".to_string()),
+            mesh: Usdt0Kind::Native,
+        }
+    }
+
+    #[test]
+    fn spec_to_pair_maps_evm_chain_id_to_decimal_string() {
+        let spec = test_spec(Some(42161), NetworkTransport::Evm);
+        let pair = spec_to_route_pair(&spec);
+
+        assert_eq!(pair.provider, CrossChainProvider::Boltz);
+        assert_eq!(
+            pair.chain_id,
+            Some("42161".to_string()),
+            "EVM chain id should render as a decimal string"
+        );
+        assert_eq!(pair.chain, "arbitrum one");
+        assert_eq!(pair.asset, "USDT0");
+        assert_eq!(pair.contract_address.as_deref(), Some("0xtoken"));
+        assert_eq!(pair.decimals, 6);
+        assert!(!pair.exact_out_eligible);
+    }
+
+    #[test]
+    fn spec_to_pair_preserves_none_for_non_evm_transports() {
+        let spec = test_spec(None, NetworkTransport::Solana);
+        let pair = spec_to_route_pair(&spec);
+
+        assert_eq!(
+            pair.chain_id, None,
+            "Non-EVM transports (Solana, Tron) expose no chain_id"
+        );
+    }
 }
