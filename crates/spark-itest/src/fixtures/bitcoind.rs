@@ -274,6 +274,16 @@ impl BitcoindFixture {
         }
     }
 
+    /// Public JSON-RPC accessor for tests and helpers that need to reach
+    /// bitcoind methods not already wrapped here.
+    pub async fn rpc<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: &[Value],
+    ) -> Result<T> {
+        self.rpc_call(method, params).await
+    }
+
     async fn rpc_call<T: for<'de> Deserialize<'de>>(
         &self,
         method: &str,
