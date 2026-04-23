@@ -44,9 +44,9 @@ const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 // Retry parameters for looking up the transfer created by a static deposit
 // claim. The SSP creates the transfer synchronously, but it can take a brief
 // window before it becomes visible to the receiver via the operator pool.
-const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 5;
+const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
 const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
-const CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS: u64 = 5_000;
+const CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS: u64 = 2_000;
 
 // Conservative minimum fee threshold for refund transactions
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
