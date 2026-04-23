@@ -739,6 +739,11 @@ pub struct SparkSigningOperator {
     pub address: String,
     /// Hex-encoded compressed public key of the operator.
     pub identity_public_key: String,
+    /// Optional PEM-encoded CA certificate used to verify the operator's TLS
+    /// certificate. Required when the operator presents a certificate signed
+    /// by a private CA (e.g. local test fixtures).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub ca_cert: Option<Vec<u8>>,
 }
 
 /// Configuration for the Spark Service Provider (SSP).

@@ -60,6 +60,7 @@ pub struct _SparkSigningOperator {
     pub identifier: String,
     pub address: String,
     pub identity_public_key: String,
+    pub ca_cert: Option<Vec<u8>>,
 }
 
 #[frb(mirror(SparkSspConfig))]
