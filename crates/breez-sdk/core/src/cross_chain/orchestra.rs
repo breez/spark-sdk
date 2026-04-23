@@ -169,12 +169,14 @@ impl OrchestraService {
                 order_id,
                 quote_id,
                 chain,
+                chain_id,
                 asset,
                 recipient_address,
                 estimated_out,
                 fee,
                 read_token,
                 asset_decimals,
+                asset_contract,
                 ..
             } = conversion_info.clone()
             else {
@@ -250,6 +252,7 @@ impl OrchestraService {
                     order_id,
                     quote_id,
                     chain,
+                    chain_id,
                     asset,
                     recipient_address,
                     estimated_out,
@@ -258,6 +261,7 @@ impl OrchestraService {
                     fee,
                     read_token,
                     asset_decimals,
+                    asset_contract,
                 }),
                 ..Default::default()
             };
@@ -332,14 +336,7 @@ impl CrossChainService for OrchestraService {
                 side.contract_address.clone(),
             );
             if seen.insert(key) {
-                pairs.push(CrossChainRoutePair {
-                    provider: CrossChainProvider::Orchestra,
-                    chain: side.chain.clone(),
-                    asset: side.asset.clone(),
-                    contract_address: side.contract_address.clone(),
-                    decimals: side.decimals,
-                    exact_out_eligible: r.exact_out_eligible,
-                });
+                pairs.push(side_to_route_pair(side, r.exact_out_eligible));
             }
         }
 
@@ -483,6 +480,7 @@ impl CrossChainService for OrchestraService {
                 order_id: order_id.clone(),
                 quote_id: quote_id.clone(),
                 chain: prepared.pair.chain.clone(),
+                chain_id: prepared.pair.chain_id.clone(),
                 asset: prepared.pair.asset.clone(),
                 recipient_address: prepared.recipient_address.clone(),
                 estimated_out: prepared.estimated_out,
@@ -490,7 +488,8 @@ impl CrossChainService for OrchestraService {
                 status,
                 fee: Some(prepared.fee_amount),
                 read_token,
-                asset_decimals: Some(u32::from(prepared.pair.decimals)),
+                asset_decimals: u32::from(prepared.pair.decimals),
+                asset_contract: prepared.pair.contract_address.clone(),
             }),
             ..Default::default()
         };
@@ -516,5 +515,70 @@ impl CrossChainService for OrchestraService {
                 payment_id: payment_id.clone(),
             })
             .map_err(|e| SdkError::Generic(format!("Orchestra submit failed: {e}")))
+    }
+}
+
+/// Build a [`CrossChainRoutePair`] from one side of an Orchestra [`Route`].
+///
+/// Chain/asset/identifier/decimals pass through verbatim from the route's
+/// non-Spark side — `chain_id` is surfaced so downstream consumers can
+/// disambiguate same-name chains.
+fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChainRoutePair {
+    CrossChainRoutePair {
+        provider: CrossChainProvider::Orchestra,
+        chain: side.chain.clone(),
+        chain_id: side.chain_id.clone(),
+        asset: side.asset.clone(),
+        contract_address: side.contract_address.clone(),
+        decimals: side.decimals,
+        exact_out_eligible,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_route_asset(chain: &str, chain_id: Option<&str>) -> RouteAsset {
+        RouteAsset {
+            chain: chain.to_string(),
+            asset: "USDC".to_string(),
+            contract_address: Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()),
+            decimals: 6,
+            chain_id: chain_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn side_to_pair_passes_through_chain_id() {
+        let side = test_route_asset("base", Some("8453"));
+        let pair = side_to_route_pair(&side, true);
+
+        assert_eq!(pair.provider, CrossChainProvider::Orchestra);
+        assert_eq!(pair.chain, "base");
+        assert_eq!(
+            pair.chain_id,
+            Some("8453".to_string()),
+            "chain_id on the route asset should propagate to the pair"
+        );
+        assert_eq!(pair.asset, "USDC");
+        assert_eq!(
+            pair.contract_address.as_deref(),
+            Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+        );
+        assert_eq!(pair.decimals, 6);
+        assert!(pair.exact_out_eligible);
+    }
+
+    #[test]
+    fn side_to_pair_preserves_missing_chain_id() {
+        let side = test_route_asset("solana", None);
+        let pair = side_to_route_pair(&side, false);
+
+        assert_eq!(
+            pair.chain_id, None,
+            "chain_id stays None when the route asset doesn't expose one"
+        );
+        assert!(!pair.exact_out_eligible);
     }
 }

@@ -13,8 +13,8 @@ use tracing::info;
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionInfo, ConversionOptions, ConversionPurpose, ConversionType,
-    FeePolicy, FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
+    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
+    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
@@ -31,7 +31,7 @@ use crate::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{build_conversions, get_payment_with_conversion_details},
+        conversions::{enrich_payment, get_payment_with_conversion_details},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
@@ -476,11 +476,11 @@ impl BreezSdk {
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        use crate::utils::payments::extract_conversion_info;
-
         let mut payments = self.storage.list_payments(request.into()).await?;
 
-        // Query child payments for payments that have conversion_details set (AMM)
+        // Prefetch child payments in one query for all parents that have
+        // conversion_details set (AMM legs). Cross-chain payments don't have
+        // children.
         let parent_ids: Vec<String> = payments
             .iter()
             .filter(|p| p.conversion_details.is_some())
@@ -494,34 +494,12 @@ impl BreezSdk {
         };
 
         for payment in &mut payments {
-            let has_conversion_details = payment.conversion_details.is_some();
-            let has_crosschain_info = extract_conversion_info(payment.details.clone())
-                .is_some_and(|info| !matches!(info, ConversionInfo::Amm { .. }));
-
-            if !has_conversion_details && !has_crosschain_info {
-                continue;
-            }
-
-            let child_payments = if has_conversion_details {
+            let child_payments = if payment.conversion_details.is_some() {
                 related_payments_map.get(&payment.id).map(Vec::as_slice)
             } else {
                 None
             };
-
-            let conversions = build_conversions(payment, child_payments);
-
-            if !conversions.is_empty() {
-                if let Some(ref mut cd) = payment.conversion_details {
-                    cd.conversions = conversions;
-                } else {
-                    let status = extract_conversion_info(payment.details.clone())
-                        .map_or(ConversionStatus::Completed, |info| info.status().clone());
-                    payment.conversion_details = Some(crate::models::ConversionDetails {
-                        status,
-                        conversions,
-                    });
-                }
-            }
+            enrich_payment(payment, child_payments);
         }
 
         Ok(ListPaymentsResponse { payments })

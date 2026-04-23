@@ -120,33 +120,35 @@ async fn test_token_conversion_success(
     );
     let btc_to_token_conv = &btc_to_token_conversion_details.conversions[0];
     assert_eq!(
-        btc_to_token_conv.from.chain, "spark",
+        btc_to_token_conv.from.chain,
+        ConversionChain::Spark,
         "From chain should be spark"
     );
     assert_eq!(
-        btc_to_token_conv.from.asset, "BTC",
+        btc_to_token_conv.from.asset.ticker, "BTC",
         "From asset should be BTC"
     );
     assert!(
         btc_to_token_conv.from.fee > 0,
         "From side should have a fee"
     );
-    assert!(
-        btc_to_token_conv.from.decimals.is_none(),
-        "From side (BTC) should have no decimals"
+    assert_eq!(
+        btc_to_token_conv.from.asset.decimals, 0,
+        "From side (BTC/sats) should report decimals=0"
     );
     assert_eq!(
-        btc_to_token_conv.to.chain, "spark",
+        btc_to_token_conv.to.chain,
+        ConversionChain::Spark,
         "To chain should be spark"
     );
     assert_ne!(
-        btc_to_token_conv.to.asset, "BTC",
+        btc_to_token_conv.to.asset.ticker, "BTC",
         "To asset should be a token"
     );
     assert_eq!(btc_to_token_conv.to.fee, 0, "To side should have no fee");
     assert!(
-        btc_to_token_conv.to.decimals.is_some(),
-        "To side should have decimals"
+        btc_to_token_conv.to.asset.decimals > 0,
+        "To side (token) should have decimals > 0"
     );
 
     // Wait for Bob to receive the token payment
@@ -289,11 +291,12 @@ async fn test_token_conversion_success(
     );
     let token_to_btc_conv = &token_to_btc_conversion_details.conversions[0];
     assert_eq!(
-        token_to_btc_conv.from.chain, "spark",
+        token_to_btc_conv.from.chain,
+        ConversionChain::Spark,
         "From chain should be spark"
     );
     assert_ne!(
-        token_to_btc_conv.from.asset, "BTC",
+        token_to_btc_conv.from.asset.ticker, "BTC",
         "From asset should be a token"
     );
     assert!(
@@ -301,18 +304,22 @@ async fn test_token_conversion_success(
         "From side should have a fee"
     );
     assert!(
-        token_to_btc_conv.from.decimals.is_some(),
-        "From side should have decimals"
+        token_to_btc_conv.from.asset.decimals > 0,
+        "From side (token) should have decimals > 0"
     );
     assert_eq!(
-        token_to_btc_conv.to.chain, "spark",
+        token_to_btc_conv.to.chain,
+        ConversionChain::Spark,
         "To chain should be spark"
     );
-    assert_eq!(token_to_btc_conv.to.asset, "BTC", "To asset should be BTC");
+    assert_eq!(
+        token_to_btc_conv.to.asset.ticker, "BTC",
+        "To asset should be BTC"
+    );
     assert_eq!(token_to_btc_conv.to.fee, 0, "To side should have no fee");
-    assert!(
-        token_to_btc_conv.to.decimals.is_none(),
-        "To side (BTC) should have no decimals"
+    assert_eq!(
+        token_to_btc_conv.to.asset.decimals, 0,
+        "To side (BTC/sats) should report decimals=0"
     );
 
     // Wait for Alice to receive the Bitcoin payment

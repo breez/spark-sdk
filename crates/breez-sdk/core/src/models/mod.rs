@@ -282,21 +282,56 @@ pub enum ConversionProvider {
     Boltz,
 }
 
+/// The chain or network that a [`ConversionSide`] lives on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionChain {
+    /// Spark layer-2 network.
+    Spark,
+    /// Bitcoin Lightning Network.
+    Lightning,
+    /// An external chain reached via a cross-chain provider.
+    External {
+        /// Human-readable chain name (e.g. `"base"`, `"solana"`, `"arbitrum"`).
+        name: String,
+        /// Stable chain identifier (e.g. EVM `chainId` as a decimal string,
+        /// or a chain-native identifier). `None` when the provider does not
+        /// expose one for this route.
+        chain_id: Option<String>,
+    },
+}
+
+/// The asset on a [`ConversionSide`] — groups the ticker, stable identifier,
+/// and decimals that always travel together.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConversionAsset {
+    /// Ticker (e.g. `"BTC"`, `"USDB"`, `"USDC"`, `"USDT"`). Tickers alone
+    /// are ambiguous across chains — pair with [`Self::identifier`] for a
+    /// hard match.
+    pub ticker: String,
+    /// Stable identifier: a Spark token identifier for Spark tokens, or a
+    /// contract/mint address for cross-chain assets. `None` for BTC/sats.
+    pub identifier: Option<String>,
+    /// Number of decimals for the asset.
+    /// `0` for BTC/sats sides (amount is already in the smallest unit,
+    /// so no scaling is needed); non-zero for token assets (e.g. `6` for
+    /// USDC/USDT/USDB).
+    pub decimals: u32,
+}
+
 /// One side (source or destination) of a conversion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionSide {
-    /// The chain or network (e.g. "spark", "lightning", "solana", "base")
-    pub chain: String,
-    /// The asset ticker (e.g. "BTC", "USDB", "USDC", "USDT")
-    pub asset: String,
+    /// The chain or network for this side.
+    pub chain: ConversionChain,
+    /// The asset being converted on this side.
+    pub asset: ConversionAsset,
     /// Amount in base units (satoshis or token base units)
     pub amount: u128,
     /// Fee in the same base units
     pub fee: u128,
-    /// Number of decimals for the asset (e.g. 6 for USDC/USDT/USDB).
-    /// None for BTC sides where sats formatting is used.
-    pub decimals: Option<u32>,
 }
 
 /// A single conversion in a payment's conversion chain.
@@ -314,163 +349,6 @@ pub struct Conversion {
     /// Reason the conversion amount was adjusted, if applicable (AMM only)
     #[serde(default)]
     pub amount_adjustment: Option<AmountAdjustmentReason>,
-}
-
-/// Components extracted from a payment's details for building a conversion side:
-/// (chain, asset, decimals, `conversion_info`)
-type SideInfo<'a> = (String, String, Option<u32>, Option<&'a ConversionInfo>);
-
-/// Extracts chain, asset, decimals, and conversion info from a payment's details.
-fn extract_side_info(payment: &Payment) -> Result<SideInfo<'_>, SdkError> {
-    match &payment.details {
-        Some(PaymentDetails::Token {
-            metadata,
-            conversion_info,
-            ..
-        }) => Ok((
-            "spark".to_string(),
-            metadata.ticker.clone(),
-            Some(metadata.decimals),
-            conversion_info.as_ref(),
-        )),
-        Some(PaymentDetails::Spark {
-            conversion_info, ..
-        }) => Ok((
-            "spark".to_string(),
-            "BTC".to_string(),
-            None,
-            conversion_info.as_ref(),
-        )),
-        Some(PaymentDetails::Lightning {
-            conversion_info, ..
-        }) => Ok((
-            "lightning".to_string(),
-            "BTC".to_string(),
-            None,
-            conversion_info.as_ref(),
-        )),
-        _ => Err(SdkError::Generic(format!(
-            "Unsupported payment details for conversion side on payment {}",
-            payment.id
-        ))),
-    }
-}
-
-/// Builds an AMM conversion from a send/receive child payment pair.
-pub fn build_amm_conversion(send: &Payment, recv: &Payment) -> Result<Conversion, SdkError> {
-    let (from_chain, from_asset, from_decimals, from_info) = extract_side_info(send)?;
-    let (to_chain, to_asset, to_decimals, to_info) = extract_side_info(recv)?;
-
-    // Each side gets its own conversion fee from its own ConversionInfo
-    let from_conv_fee = from_info.and_then(ConversionInfo::fee).unwrap_or(0);
-    let to_conv_fee = to_info.and_then(ConversionInfo::fee).unwrap_or(0);
-
-    // Status and amount_adjustment from whichever side has AMM info
-    let amm_info = from_info
-        .filter(|i| i.is_amm())
-        .or_else(|| to_info.filter(|i| i.is_amm()));
-    let (status, amount_adjustment) = match amm_info {
-        Some(ConversionInfo::Amm {
-            status,
-            amount_adjustment,
-            ..
-        }) => (status.clone(), amount_adjustment.clone()),
-        _ => (ConversionStatus::Completed, None),
-    };
-
-    Ok(Conversion {
-        provider: ConversionProvider::Amm,
-        status,
-        from: ConversionSide {
-            chain: from_chain,
-            asset: from_asset,
-            amount: send.amount,
-            fee: send.fees.saturating_add(from_conv_fee),
-            decimals: from_decimals,
-        },
-        to: ConversionSide {
-            chain: to_chain,
-            asset: to_asset,
-            amount: recv.amount,
-            fee: recv.fees.saturating_add(to_conv_fee),
-            decimals: to_decimals,
-        },
-        amount_adjustment,
-    })
-}
-
-/// Builds a cross-chain conversion from an Orchestra or Boltz `ConversionInfo`.
-/// Returns None for AMM conversion info (handled separately via child payments).
-pub fn build_crosschain_conversion(
-    info: &ConversionInfo,
-    source_payment: &Payment,
-) -> Option<Conversion> {
-    /// Default decimals for cross-chain destination assets when not stored
-    /// (pre-migration records). All current cross-chain assets (USDC, USDT) use 6 decimals.
-    const DEFAULT_CROSS_CHAIN_DECIMALS: u32 = 6;
-
-    let (from_chain, from_asset, from_decimals, _) = extract_side_info(source_payment).ok()?;
-
-    match info {
-        ConversionInfo::Orchestra {
-            chain,
-            asset,
-            estimated_out,
-            delivered_amount,
-            status,
-            fee,
-            asset_decimals,
-            ..
-        } => Some(Conversion {
-            provider: ConversionProvider::Orchestra,
-            status: status.clone(),
-            from: ConversionSide {
-                chain: from_chain,
-                asset: from_asset,
-                amount: source_payment.amount,
-                fee: 0,
-                decimals: from_decimals,
-            },
-            to: ConversionSide {
-                chain: chain.clone(),
-                asset: asset.clone(),
-                amount: delivered_amount.unwrap_or(*estimated_out),
-                fee: fee.unwrap_or(0),
-                decimals: Some(asset_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
-            },
-            amount_adjustment: None,
-        }),
-        ConversionInfo::Boltz {
-            chain,
-            asset,
-            invoice_amount_sats,
-            estimated_out,
-            delivered_amount,
-            status,
-            fee,
-            asset_decimals,
-            ..
-        } => Some(Conversion {
-            provider: ConversionProvider::Boltz,
-            status: status.clone(),
-            from: ConversionSide {
-                chain: from_chain,
-                asset: from_asset,
-                amount: u128::from(*invoice_amount_sats),
-                fee: fee.unwrap_or(0),
-                decimals: from_decimals,
-            },
-            to: ConversionSide {
-                chain: chain.clone(),
-                asset: asset.clone(),
-                amount: delivered_amount.unwrap_or(*estimated_out),
-                fee: 0,
-                decimals: Some(asset_decimals.unwrap_or(DEFAULT_CROSS_CHAIN_DECIMALS)),
-            },
-            amount_adjustment: None,
-        }),
-        ConversionInfo::Amm { .. } => None,
-    }
 }
 
 #[cfg(feature = "uniffi")]
@@ -2020,330 +1898,4 @@ pub struct RegisterWebhookResponse {
 pub struct UnregisterWebhookRequest {
     /// The unique identifier of the webhook to unregister.
     pub webhook_id: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{SparkHtlcDetails, SparkHtlcStatus};
-
-    fn test_token_metadata() -> TokenMetadata {
-        TokenMetadata {
-            identifier: "token123".to_string(),
-            issuer_public_key: "02abcdef".to_string(),
-            name: "USD Balance".to_string(),
-            ticker: "USDB".to_string(),
-            decimals: 6,
-            max_supply: 21_000_000,
-            is_freezable: false,
-        }
-    }
-
-    fn amm_info(status: ConversionStatus, fee: u128) -> ConversionInfo {
-        ConversionInfo::Amm {
-            pool_id: "pool_1".to_string(),
-            conversion_id: "conv_1".to_string(),
-            status,
-            fee: Some(fee),
-            purpose: None,
-            amount_adjustment: None,
-        }
-    }
-
-    fn amm_info_with_adjustment(adjustment: AmountAdjustmentReason) -> ConversionInfo {
-        ConversionInfo::Amm {
-            pool_id: "pool_1".to_string(),
-            conversion_id: "conv_1".to_string(),
-            status: ConversionStatus::Completed,
-            fee: Some(10),
-            purpose: None,
-            amount_adjustment: Some(adjustment),
-        }
-    }
-
-    fn test_htlc_details() -> SparkHtlcDetails {
-        SparkHtlcDetails {
-            payment_hash: "hash123".to_string(),
-            preimage: None,
-            expiry_time: 0,
-            status: SparkHtlcStatus::PreimageShared,
-        }
-    }
-
-    fn token_payment(
-        id: &str,
-        ptype: PaymentType,
-        amount: u128,
-        fees: u128,
-        info: ConversionInfo,
-    ) -> Payment {
-        Payment {
-            id: id.to_string(),
-            payment_type: ptype,
-            status: PaymentStatus::Completed,
-            amount,
-            fees,
-            timestamp: 1000,
-            method: PaymentMethod::Token,
-            details: Some(PaymentDetails::Token {
-                metadata: test_token_metadata(),
-                tx_hash: "tx_1".to_string(),
-                tx_type: TokenTransactionType::Transfer,
-                invoice_details: None,
-                conversion_info: Some(info),
-            }),
-            conversion_details: None,
-        }
-    }
-
-    fn spark_payment(
-        id: &str,
-        ptype: PaymentType,
-        amount: u128,
-        fees: u128,
-        info: ConversionInfo,
-    ) -> Payment {
-        Payment {
-            id: id.to_string(),
-            payment_type: ptype,
-            status: PaymentStatus::Completed,
-            amount,
-            fees,
-            timestamp: 1000,
-            method: PaymentMethod::Spark,
-            details: Some(PaymentDetails::Spark {
-                invoice_details: None,
-                htlc_details: None,
-                conversion_info: Some(info),
-            }),
-            conversion_details: None,
-        }
-    }
-
-    fn lightning_payment_with_info(
-        id: &str,
-        amount: u128,
-        fees: u128,
-        info: ConversionInfo,
-    ) -> Payment {
-        Payment {
-            id: id.to_string(),
-            payment_type: PaymentType::Send,
-            status: PaymentStatus::Completed,
-            amount,
-            fees,
-            timestamp: 1000,
-            method: PaymentMethod::Lightning,
-            details: Some(PaymentDetails::Lightning {
-                description: None,
-                invoice: "lnbc1000n1p".to_string(),
-                destination_pubkey: "02abc".to_string(),
-                htlc_details: test_htlc_details(),
-                lnurl_pay_info: None,
-                lnurl_withdraw_info: None,
-                lnurl_receive_metadata: None,
-                conversion_info: Some(info),
-            }),
-            conversion_details: None,
-        }
-    }
-
-    fn orchestra_info() -> ConversionInfo {
-        ConversionInfo::Orchestra {
-            order_id: "ord_1".to_string(),
-            quote_id: "q_1".to_string(),
-            chain: "base".to_string(),
-            asset: "USDC".to_string(),
-            recipient_address: "0x1234".to_string(),
-            estimated_out: 99_500_000,
-            delivered_amount: None,
-            status: ConversionStatus::Pending,
-            fee: Some(500),
-            read_token: None,
-            asset_decimals: Some(6),
-        }
-    }
-
-    fn boltz_info(delivered: Option<u128>) -> ConversionInfo {
-        ConversionInfo::Boltz {
-            swap_id: "swap_1".to_string(),
-            chain: "solana".to_string(),
-            asset: "USDT".to_string(),
-            recipient_address: "So1ana".to_string(),
-            invoice: "lnbc1000n1p".to_string(),
-            invoice_amount_sats: 100_000,
-            estimated_out: 1_450_000,
-            delivered_amount: delivered,
-            lz_guid: None,
-            status: ConversionStatus::Completed,
-            fee: Some(1_500),
-            max_slippage_bps: 100,
-            quote_degraded: false,
-            asset_decimals: Some(6),
-        }
-    }
-
-    // --- build_amm_conversion tests ---
-
-    #[test]
-    fn amm_token_to_btc() {
-        let send = token_payment(
-            "s1",
-            PaymentType::Send,
-            1_500_000,
-            10,
-            amm_info(ConversionStatus::Completed, 21),
-        );
-        let recv = spark_payment(
-            "r1",
-            PaymentType::Receive,
-            1_500,
-            0,
-            amm_info(ConversionStatus::Completed, 0),
-        );
-
-        let conv = build_amm_conversion(&send, &recv).unwrap();
-        assert_eq!(conv.provider, ConversionProvider::Amm);
-        assert_eq!(conv.from.chain, "spark");
-        assert_eq!(conv.from.asset, "USDB");
-        assert_eq!(conv.from.amount, 1_500_000);
-        assert_eq!(conv.from.fee, 31); // 10 (payment) + 21 (conversion)
-        assert!(conv.from.decimals.is_some());
-        assert_eq!(conv.to.chain, "spark");
-        assert_eq!(conv.to.asset, "BTC");
-        assert_eq!(conv.to.amount, 1_500);
-        assert_eq!(conv.to.fee, 0);
-        assert!(conv.to.decimals.is_none());
-        assert!(conv.amount_adjustment.is_none());
-    }
-
-    #[test]
-    fn amm_btc_to_token() {
-        let send = spark_payment(
-            "s1",
-            PaymentType::Send,
-            1_500,
-            5,
-            amm_info(ConversionStatus::Completed, 0),
-        );
-        let recv = token_payment(
-            "r1",
-            PaymentType::Receive,
-            1_500_000,
-            0,
-            amm_info(ConversionStatus::Completed, 21),
-        );
-
-        let conv = build_amm_conversion(&send, &recv).unwrap();
-        assert_eq!(conv.from.chain, "spark");
-        assert_eq!(conv.from.asset, "BTC");
-        assert_eq!(conv.from.amount, 1_500);
-        assert_eq!(conv.from.fee, 5);
-        assert!(conv.from.decimals.is_none());
-        assert_eq!(conv.to.chain, "spark");
-        assert_eq!(conv.to.asset, "USDB");
-        assert_eq!(conv.to.amount, 1_500_000);
-        assert!(conv.to.decimals.is_some());
-    }
-
-    #[test]
-    fn amm_with_amount_adjustment() {
-        let send = token_payment(
-            "s1",
-            PaymentType::Send,
-            1_500_000,
-            0,
-            amm_info_with_adjustment(AmountAdjustmentReason::FlooredToMinLimit),
-        );
-        let recv = spark_payment(
-            "r1",
-            PaymentType::Receive,
-            1_500,
-            0,
-            amm_info(ConversionStatus::Completed, 0),
-        );
-
-        let conv = build_amm_conversion(&send, &recv).unwrap();
-        assert_eq!(
-            conv.amount_adjustment,
-            Some(AmountAdjustmentReason::FlooredToMinLimit)
-        );
-    }
-
-    #[test]
-    fn amm_fees_combined() {
-        let send = token_payment(
-            "s1",
-            PaymentType::Send,
-            1_000_000,
-            10,
-            amm_info(ConversionStatus::Completed, 21),
-        );
-        let recv = spark_payment(
-            "r1",
-            PaymentType::Receive,
-            1_000,
-            5,
-            amm_info(ConversionStatus::Completed, 0),
-        );
-
-        let conv = build_amm_conversion(&send, &recv).unwrap();
-        assert_eq!(conv.from.fee, 31); // 10 + 21
-        assert_eq!(conv.to.fee, 5);
-    }
-
-    // --- build_crosschain_conversion tests ---
-
-    #[test]
-    fn orchestra_from_spark() {
-        let info = orchestra_info();
-        let payment = spark_payment("p1", PaymentType::Send, 100_000, 0, info.clone());
-
-        let conv = build_crosschain_conversion(&info, &payment).unwrap();
-        assert_eq!(conv.provider, ConversionProvider::Orchestra);
-        assert_eq!(conv.status, ConversionStatus::Pending);
-        assert_eq!(conv.from.chain, "spark");
-        assert_eq!(conv.from.asset, "BTC");
-        assert_eq!(conv.from.amount, 100_000);
-        assert_eq!(conv.from.fee, 0);
-        assert_eq!(conv.to.chain, "base");
-        assert_eq!(conv.to.asset, "USDC");
-        assert_eq!(conv.to.amount, 99_500_000);
-        assert_eq!(conv.to.fee, 500);
-        assert_eq!(conv.to.decimals, Some(6));
-    }
-
-    #[test]
-    fn boltz_from_lightning() {
-        let info = boltz_info(None);
-        let payment = lightning_payment_with_info("p1", 100_000, 3, info.clone());
-
-        let conv = build_crosschain_conversion(&info, &payment).unwrap();
-        assert_eq!(conv.provider, ConversionProvider::Boltz);
-        assert_eq!(conv.status, ConversionStatus::Completed);
-        assert_eq!(conv.from.chain, "lightning");
-        assert_eq!(conv.from.asset, "BTC");
-        assert_eq!(conv.from.amount, 100_000); // invoice_amount_sats
-        assert_eq!(conv.from.fee, 1_500);
-        assert_eq!(conv.to.chain, "solana");
-        assert_eq!(conv.to.asset, "USDT");
-        assert_eq!(conv.to.amount, 1_450_000); // estimated_out (no delivered)
-    }
-
-    #[test]
-    fn boltz_with_delivered_amount() {
-        let info = boltz_info(Some(1_440_000));
-        let payment = lightning_payment_with_info("p1", 100_000, 3, info.clone());
-
-        let conv = build_crosschain_conversion(&info, &payment).unwrap();
-        assert_eq!(conv.to.amount, 1_440_000); // uses delivered_amount
-    }
-
-    #[test]
-    fn amm_info_returns_none() {
-        let info = amm_info(ConversionStatus::Completed, 0);
-        let payment = spark_payment("p1", PaymentType::Send, 1_000, 0, info.clone());
-
-        assert!(build_crosschain_conversion(&info, &payment).is_none());
-    }
 }
