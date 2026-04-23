@@ -125,7 +125,7 @@ impl UnilateralExitService {
         leaf_ids: Vec<TreeNodeId>,
         mut inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<TreeNode>>,
-        confirmed_node_ids: &HashSet<TreeNodeId>,
+        confirmed_txids: &HashSet<bitcoin::Txid>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, ServiceError> {
         if leaf_ids.is_empty() {
             return Err(ServiceError::ValidationError(
@@ -185,41 +185,41 @@ impl UnilateralExitService {
                 node = parent;
             }
 
-            // For each node, check it hasn't already been processed and create a
-            // child PSBT for its node tx. If the node is a leaf node, create a
-            // child PSBT also for its refund tx. Nodes whose ID appears in
-            // `confirmed_node_ids` are already confirmed on-chain and don't need
-            // CPFP fee-bumping, so they are skipped.
+            // For each node, create a child PSBT for its node tx (unless it
+            // was already processed through a shared ancestor, or already
+            // confirmed on-chain). If the node is a leaf, additionally create
+            // a child PSBT for its refund tx. Confirmations are checked per
+            // `Txid` because the leaf's node_tx and refund_tx are different
+            // transactions even though they share the same `TreeNodeId`.
             for node in nodes {
-                let txid = node.node_tx.compute_txid();
-                if checked_txs.contains(&txid) {
+                let node_txid = node.node_tx.compute_txid();
+                if !checked_txs.insert(node_txid) {
                     continue;
                 }
 
-                checked_txs.insert(txid);
-
-                if confirmed_node_ids.contains(&node.id) {
-                    continue;
-                }
-
-                // Create the PSBT to fee bump the node tx
-                let child_psbt = create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?;
-
-                tx_cpfp_psbts.push(TxCpfpPsbt {
-                    node_id: node.id.clone(),
-                    parent_tx: node.node_tx.clone(),
-                    child_psbt,
-                });
-
-                if node.id == leaf_id {
-                    // Create the PSBT to fee bump the leaf refund tx
-                    let child_psbt = create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?;
+                if !confirmed_txids.contains(&node_txid) {
+                    // Create the PSBT to fee bump the node tx
+                    let child_psbt = create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?;
 
                     tx_cpfp_psbts.push(TxCpfpPsbt {
                         node_id: node.id.clone(),
-                        parent_tx: refund_tx.clone(),
+                        parent_tx: node.node_tx.clone(),
                         child_psbt,
                     });
+                }
+
+                if node.id == leaf_id {
+                    let refund_txid = refund_tx.compute_txid();
+                    if !confirmed_txids.contains(&refund_txid) {
+                        // Create the PSBT to fee bump the leaf refund tx
+                        let child_psbt = create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?;
+
+                        tx_cpfp_psbts.push(TxCpfpPsbt {
+                            node_id: node.id.clone(),
+                            parent_tx: refund_tx.clone(),
+                            child_psbt,
+                        });
+                    }
                 }
             }
 

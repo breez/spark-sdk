@@ -62,17 +62,20 @@ impl BreezSdk {
             )
             .await?;
 
-        // Check the chain service for already-confirmed ancestors.
-        let (confirmed_node_ids, unverified_node_ids) = check_ancestor_confirmations(
+        // Check the chain service for already-confirmed transactions. Each
+        // leaf has two CPFP entries that share the same `TreeNodeId` (one for
+        // the leaf's node_tx, one for its refund_tx), so we must key the
+        // confirmed set by `Txid` to distinguish them.
+        let (confirmed_txids, unverified_node_ids) = check_ancestor_confirmations(
             &exit_result.leaf_tx_cpfp_psbts,
             self.chain_service.as_ref(),
         )
         .await;
 
-        // Pass 2: if any ancestors are confirmed, rebuild the CPFP chain
-        // skipping those nodes so the CPFP inputs are threaded correctly.
-        // Reuse the prefetched nodes to ensure consistency between passes.
-        let leaf_tx_cpfp_psbts = if confirmed_node_ids.is_empty() {
+        // Pass 2: if any transactions are confirmed, rebuild the CPFP chain
+        // skipping those so the CPFP inputs are threaded correctly. Reuse the
+        // prefetched nodes to ensure consistency between passes.
+        let leaf_tx_cpfp_psbts = if confirmed_txids.is_empty() {
             exit_result.leaf_tx_cpfp_psbts
         } else {
             let selected_ids = exit_result
@@ -86,7 +89,7 @@ impl BreezSdk {
                     selected_ids,
                     inputs,
                     Some(exit_result.prefetched_nodes),
-                    &confirmed_node_ids,
+                    &confirmed_txids,
                 )
                 .await?
         };
@@ -260,37 +263,37 @@ fn convert_cpfp_input(
 async fn check_ancestor_confirmations(
     leaves: &[spark_wallet::LeafTxCpfpPsbts],
     chain_service: &dyn crate::chain::BitcoinChainService,
-) -> (HashSet<spark_wallet::TreeNodeId>, Vec<String>) {
-    let mut confirmed_node_ids: HashSet<spark_wallet::TreeNodeId> = HashSet::new();
-    let mut known_unconfirmed: HashSet<spark_wallet::TreeNodeId> = HashSet::new();
+) -> (HashSet<bitcoin::Txid>, Vec<String>) {
+    let mut confirmed_txids: HashSet<bitcoin::Txid> = HashSet::new();
+    let mut known_unconfirmed: HashSet<bitcoin::Txid> = HashSet::new();
     let mut unverified_node_ids: Vec<String> = Vec::new();
 
     for leaf_psbts in leaves {
         for tc in &leaf_psbts.tx_cpfp_psbts {
-            if confirmed_node_ids.contains(&tc.node_id) {
+            let txid = tc.parent_tx.compute_txid();
+            if confirmed_txids.contains(&txid) {
                 continue;
             }
-            if known_unconfirmed.contains(&tc.node_id) {
+            if known_unconfirmed.contains(&txid) {
                 // Ancestor already seen unconfirmed in a prior leaf; no
                 // descendant in this leaf can be confirmed without it.
                 break;
             }
-            let txid = tc.parent_tx.compute_txid().to_string();
-            match chain_service.get_transaction_status(txid).await {
+            match chain_service.get_transaction_status(txid.to_string()).await {
                 Ok(status) if status.confirmed => {
-                    confirmed_node_ids.insert(tc.node_id.clone());
+                    confirmed_txids.insert(txid);
                 }
                 Ok(_) => {
                     // Unconfirmed (possibly in mempool) — stop checking
                     // deeper nodes for this leaf since they can't be
                     // confirmed without their parent.
-                    known_unconfirmed.insert(tc.node_id.clone());
+                    known_unconfirmed.insert(txid);
                     break;
                 }
                 Err(_) => {
                     // Chain service error — assume unconfirmed but record
                     // that we couldn't verify.
-                    known_unconfirmed.insert(tc.node_id.clone());
+                    known_unconfirmed.insert(txid);
                     unverified_node_ids.push(tc.node_id.to_string());
                     break;
                 }
@@ -298,7 +301,7 @@ async fn check_ancestor_confirmations(
         }
     }
 
-    (confirmed_node_ids, unverified_node_ids)
+    (confirmed_txids, unverified_node_ids)
 }
 
 #[cfg(test)]
@@ -442,17 +445,46 @@ mod ancestor_confirmation_tests {
     async fn test_confirmed_ancestor_is_recorded() {
         let root_tx = dummy_tx(1);
         let leaf_tx = dummy_tx(2);
-        let root_txid = root_tx.compute_txid().to_string();
+        let root_txid = root_tx.compute_txid();
         let leaves = vec![leaf(
             "leaf",
             vec![tx_cpfp("root", root_tx), tx_cpfp("leaf-node", leaf_tx)],
         )];
-        let chain = MockChainService::new().confirmed(&root_txid);
+        let chain = MockChainService::new().confirmed(&root_txid.to_string());
 
         let (confirmed, unverified) = check_ancestor_confirmations(&leaves, &chain).await;
 
         assert_eq!(confirmed.len(), 1);
-        assert!(confirmed.contains(&TreeNodeId::from_str("root").unwrap()));
+        assert!(confirmed.contains(&root_txid));
+        assert!(unverified.is_empty());
+    }
+
+    /// A leaf's `node_tx` and `refund_tx` share the same `TreeNodeId` but have
+    /// distinct txids. When only the `node_tx` is confirmed, the `refund_tx`
+    /// must still be reported as unconfirmed so the caller rebuilds its CPFP
+    /// PSBT.
+    #[async_test_all]
+    async fn test_leaf_node_tx_confirmed_refund_not() {
+        let node_tx = dummy_tx(1);
+        let refund_tx = dummy_tx(2);
+        let node_txid = node_tx.compute_txid();
+        let refund_txid = refund_tx.compute_txid();
+        // Both CPFP entries carry the same `TreeNodeId` (the leaf's id).
+        let leaves = vec![leaf(
+            "leaf",
+            vec![tx_cpfp("leaf", node_tx), tx_cpfp("leaf", refund_tx)],
+        )];
+        let chain = MockChainService::new().confirmed(&node_txid.to_string());
+
+        let (confirmed, unverified) = check_ancestor_confirmations(&leaves, &chain).await;
+
+        assert_eq!(
+            confirmed.len(),
+            1,
+            "only the node_tx should be reported confirmed"
+        );
+        assert!(confirmed.contains(&node_txid));
+        assert!(!confirmed.contains(&refund_txid));
         assert!(unverified.is_empty());
     }
 

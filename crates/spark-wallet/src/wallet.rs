@@ -1341,7 +1341,7 @@ impl SparkWallet {
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<spark::tree::TreeNode>>,
-        confirmed_node_ids: &HashSet<TreeNodeId>,
+        confirmed_txids: &HashSet<bitcoin::Txid>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
         Ok(self
             .unilateral_exit_service
@@ -1350,7 +1350,7 @@ impl SparkWallet {
                 leaf_ids,
                 inputs,
                 prefetched_nodes,
-                confirmed_node_ids,
+                confirmed_txids,
             )
             .await?)
     }
