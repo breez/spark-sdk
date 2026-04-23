@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::{
     Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
@@ -8,6 +8,7 @@ use bitcoin::{
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa::Signature, schnorr},
 };
+use platform_utils::tokio;
 use serde::Serialize;
 use tracing::{error, trace};
 
@@ -39,6 +40,13 @@ use crate::{
 use super::ServiceError;
 
 const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
+
+// Retry parameters for looking up the transfer created by a static deposit
+// claim. The SSP creates the transfer synchronously, but it can take a brief
+// window before it becomes visible to the receiver via the operator pool.
+const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 5;
+const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
+const CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS: u64 = 5_000;
 
 // Conservative minimum fee threshold for refund transactions
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
@@ -312,31 +320,67 @@ impl DepositService {
             })
             .await?;
 
-        // Fetch the transfer from the operator pool coordinator
-        let transfers: operator_rpc::spark::QueryTransfersResponse = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_all_transfers(TransferFilter {
-                participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer
-                        .get_identity_public_key()
-                        .await?
-                        .serialize()
-                        .to_vec(),
-                )),
-                transfer_ids: vec![resp.transfer_id],
-                network: self.network.to_proto_network() as i32,
-                ..Default::default()
-            })
+        // Fetch the transfer from the operator pool coordinator, retrying
+        // while the receiver side has not yet indexed it.
+        let transfer = self
+            .query_claim_transfer_with_retry(resp.transfer_id)
             .await?;
-        let transfer = transfers
-            .transfers
-            .into_iter()
-            .nth(0)
-            .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
 
         transfer.try_into()
+    }
+
+    /// Look up the transfer created by a static deposit claim, retrying
+    /// while the operator pool has not yet indexed it for the receiver.
+    ///
+    /// The SSP creates the transfer synchronously, but it can take a brief
+    /// window before it becomes visible to the receiver, during which
+    /// `query_all_transfers` returns an empty list. Other errors (network,
+    /// gRPC) are not retried.
+    async fn query_claim_transfer_with_retry(
+        &self,
+        transfer_id: String,
+    ) -> Result<operator_rpc::spark::Transfer, ServiceError> {
+        let identity_public_key = self
+            .signer
+            .get_identity_public_key()
+            .await?
+            .serialize()
+            .to_vec();
+
+        for attempt in 0..CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS {
+            if attempt > 0 {
+                let delay_ms = (CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS * 2u64.pow(attempt - 1))
+                    .min(CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                trace!(
+                    "Retrying claim transfer lookup (attempt {}/{}) for transfer {transfer_id}",
+                    attempt + 1,
+                    CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS
+                );
+            }
+
+            let transfers = self
+                .operator_pool
+                .get_coordinator()
+                .client
+                .query_all_transfers(TransferFilter {
+                    participant: Some(Participant::ReceiverIdentityPublicKey(
+                        identity_public_key.clone(),
+                    )),
+                    transfer_ids: vec![transfer_id.clone()],
+                    network: self.network.to_proto_network() as i32,
+                    ..Default::default()
+                })
+                .await?;
+
+            if let Some(transfer) = transfers.transfers.into_iter().next() {
+                return Ok(transfer);
+            }
+        }
+
+        Err(ServiceError::Generic(
+            "transfer not found after claim".to_string(),
+        ))
     }
 
     pub async fn refund_static_deposit(
