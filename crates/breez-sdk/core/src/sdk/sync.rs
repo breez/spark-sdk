@@ -284,6 +284,10 @@ impl BreezSdk {
             && now.saturating_sub(last) < sync_interval_secs
         {
             debug!("sync_wallet_internal: Synced recently, skipping");
+            // When another instance shares our storage and keeps winning the sync
+            // race, we would otherwise never emit a Synced event. Emit it here so
+            // consumers are still notified that storage is up to date.
+            self.event_emitter.emit(&SdkEvent::Synced).await;
             return Ok(());
         }
 

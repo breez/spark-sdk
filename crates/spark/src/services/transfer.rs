@@ -31,7 +31,7 @@ use k256::Scalar;
 use platform_utils::time::SystemTime;
 use platform_utils::tokio;
 use prost::Message as ProstMessage;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     signer::Signer,
@@ -672,7 +672,11 @@ impl TransferService {
         Ok(signable_message)
     }
 
-    /// Claims a transfer with retry logic and automatic leaf preparation
+    /// Claims a transfer with retry logic and automatic leaf preparation.
+    ///
+    /// Returns the claimed leaves on success. If a concurrent instance of this
+    /// wallet wins the race and finalizes the transfer, the coordinator's finalized
+    /// leaves are returned uniformly — callers do not need to distinguish this case.
     pub async fn claim_transfer(
         &self,
         transfer: &Transfer,
@@ -693,52 +697,59 @@ impl TransferService {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
 
-            // Verify the pending transfer and get leaf key map
-            let leaf_key_map = match self.verify_pending_transfer(transfer).await {
-                Ok(map) => map,
-                Err(e) => {
-                    error!("Failed to verify pending transfer: {}", e);
-                    retry_count += 1;
-                    continue;
-                }
-            };
-
-            // Prepare leaves to claim
-            let leaves_to_claim = match self
-                .prepare_leaves_for_claiming(transfer, &leaf_key_map)
-                .await
-            {
-                Ok(leaves) => leaves,
+            match self.try_claim_transfer(transfer).await {
+                Ok(nodes) => return Ok(nodes),
                 Err(ServiceError::NoLeavesToClaim) => {
                     debug!("There are no leaves to claim for this transfer");
                     return Ok(Vec::new());
                 }
                 Err(e) => {
-                    error!("Failed to prepare leaves for claiming: {}", e);
+                    error!("Failed to claim transfer: {}", e);
+                    // A concurrent instance of this wallet may have finalized the
+                    // transfer — if so, use its leaves instead of retrying.
+                    if let Some(leaves) =
+                        self.finalized_leaves_if_already_claimed(&transfer.id).await
+                    {
+                        return Ok(leaves);
+                    }
                     retry_count += 1;
-                    continue;
                 }
-            };
-
-            // Actually claim the transfer
-            let result = match self
-                .claim_transfer_with_leaves(transfer, leaves_to_claim)
-                .await
-            {
-                Ok(res) => res,
-                Err(ServiceError::TransferAlreadyClaimed) => {
-                    // Transfer was already claimed by another instance - don't retry.
-                    return Err(ServiceError::TransferAlreadyClaimed);
-                }
-                Err(e) => {
-                    error!("Failed to claim transfer with leaves: {}", e);
-                    retry_count += 1;
-                    continue;
-                }
-            };
-
-            return Ok(result);
+            }
         }
+    }
+
+    /// Single claim attempt: verify, prepare leaves, and run the 3-step claim flow.
+    async fn try_claim_transfer(&self, transfer: &Transfer) -> Result<Vec<TreeNode>, ServiceError> {
+        let leaf_key_map = self.verify_pending_transfer(transfer).await?;
+        let leaves_to_claim = self
+            .prepare_leaves_for_claiming(transfer, &leaf_key_map)
+            .await?;
+        self.claim_transfer_with_leaves(transfer, leaves_to_claim)
+            .await
+    }
+
+    /// If the transfer is `Completed` on the coordinator, returns its finalized
+    /// leaves. Used after a failed claim attempt to detect that another instance
+    /// of this wallet already finalized the claim concurrently.
+    ///
+    /// A failed coordinator query is non-fatal here — it's logged and treated as
+    /// "not completed" so the caller falls through to its normal error handling.
+    async fn finalized_leaves_if_already_claimed(
+        &self,
+        transfer_id: &TransferId,
+    ) -> Option<Vec<TreeNode>> {
+        let completed = match self.query_transfer(transfer_id).await {
+            Ok(Some(t)) if t.status == TransferStatus::Completed => t,
+            Ok(_) => return None,
+            Err(e) => {
+                warn!("Failed to check if transfer {transfer_id} was claimed concurrently: {e:?}");
+                return None;
+            }
+        };
+        debug!(
+            "Transfer {transfer_id} already claimed by another instance; using coordinator's finalized leaves"
+        );
+        Some(completed.leaves.into_iter().map(|l| l.leaf).collect())
     }
 
     /// Prepares leaves for claiming by creating LeafKeyTweak structs
@@ -790,25 +801,11 @@ impl TransferService {
         };
 
         debug!("Claim transfer tweak keys successful.");
-        // Sign refunds and get node signatures
-        let node_signatures_result = self
+        let node_signatures = self
             .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
-            .await;
-
-        let node_signatures = node_signatures_result.map_err(|e| {
-            debug!("Failed to claim transfer sign refunds: {}", e);
-            e
-        })?;
+            .await?;
         debug!("Claim transfer sign refunds successful.");
-
-        // Finalize the node signatures with the coordinator
-        let finalized_nodes = self
-            .finalize_node_signatures(&node_signatures)
-            .await
-            .map_err(|e| {
-                debug!("Failed to finalize node signatures: {}", e);
-                e
-            })?;
+        let finalized_nodes = self.finalize_node_signatures(&node_signatures).await?;
         debug!("Finalize node signatures successful.");
         Ok(finalized_nodes)
     }
@@ -1026,7 +1023,7 @@ impl TransferService {
         Ok((leaf_tweaks_map, *proof))
     }
 
-    /// Claims transfer by signing refunds with the coordinator
+    /// Claims transfer by signing refunds with the coordinator.
     async fn claim_transfer_sign_refunds(
         &self,
         transfer: &Transfer,
@@ -1073,7 +1070,7 @@ impl TransferService {
             prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map, true)?;
 
         // Call the coordinator to get signing results
-        let result = self
+        let response = self
             .operator_pool
             .get_coordinator()
             .client
@@ -1087,21 +1084,7 @@ impl TransferService {
                     .to_vec(),
                 signing_jobs,
             })
-            .await;
-
-        let response = match result {
-            Ok(resp) => resp,
-            Err(e) => {
-                if let OperatorRpcError::Connection(_) = e
-                    && let Some(coordinator_transfer) = self.query_transfer(&transfer.id).await?
-                    && coordinator_transfer.status == TransferStatus::Completed
-                {
-                    return Err(ServiceError::TransferAlreadyClaimed);
-                } else {
-                    return Err(e.into());
-                }
-            }
-        };
+            .await?;
 
         // Sign the refunds using FROST
         let node_signatures = sign_aggregate_refunds(
@@ -1117,7 +1100,7 @@ impl TransferService {
         Ok(node_signatures)
     }
 
-    /// Finalizes node signatures with the coordinator
+    /// Finalizes node signatures with the coordinator.
     async fn finalize_node_signatures(
         &self,
         node_signatures: &[operator_rpc::spark::NodeSignatures],
