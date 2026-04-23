@@ -169,6 +169,12 @@ fn test_cmd(
     doc: bool,
     rest: Vec<String>,
 ) -> Result<()> {
+    // Integration-test packages spin up docker containers from locally-built
+    // images; make sure those exist before the test run.
+    if matches!(package.as_deref(), Some("spark-itest" | "breez-sdk-itest")) {
+        build_itest_docker_images()?;
+    }
+
     let mut c = Command::new("cargo");
     c.arg("test");
     c.arg("--no-fail-fast");
@@ -684,6 +690,21 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 }
 
 fn itest_cmd() -> Result<()> {
+    build_itest_docker_images()?;
+
+    // Run the integration tests with limited parallelism to avoid
+    // overwhelming Docker with too many concurrent container startups.
+    // Each test spins up its own bitcoind + operator containers.
+    let sh = Shell::new()?;
+    cmd!(
+        sh,
+        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
+    )
+    .run()?;
+    Ok(())
+}
+
+fn build_itest_docker_images() -> Result<()> {
     let sh = Shell::new()?;
 
     // Verify Docker is available
@@ -740,14 +761,6 @@ fn itest_cmd() -> Result<()> {
     )
     .run()?;
 
-    // Run the integration tests with limited parallelism to avoid
-    // overwhelming Docker with too many concurrent container startups.
-    // Each test spins up its own bitcoind + operator containers.
-    cmd!(
-        sh,
-        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
-    )
-    .run()?;
     Ok(())
 }
 

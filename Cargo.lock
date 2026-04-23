@@ -718,6 +718,8 @@ dependencies = [
  "rstest_reuse",
  "serde",
  "serde_json",
+ "spark-itest",
+ "spark-wallet",
  "tempdir",
  "test-log",
  "testcontainers",
