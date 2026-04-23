@@ -1,4 +1,5 @@
 pub(crate) mod contacts_validation;
+pub(crate) mod conversions;
 pub(crate) mod deposit_chain_syncer;
 pub(crate) mod expiring_cell;
 pub(crate) mod payments;

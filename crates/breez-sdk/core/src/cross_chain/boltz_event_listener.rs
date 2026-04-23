@@ -19,7 +19,7 @@ use tracing::{debug, error};
 
 use crate::{
     ConversionInfo, ConversionStatus, PaymentMetadata, Storage,
-    utils::payments::extract_conversion_info,
+    utils::conversions::extract_conversion_info,
 };
 
 pub(crate) struct BoltzSdkEventListener {
@@ -70,6 +70,7 @@ impl BoltzSdkEventListener {
         let ConversionInfo::Boltz {
             swap_id,
             chain,
+            chain_id,
             asset,
             recipient_address,
             invoice,
@@ -79,6 +80,7 @@ impl BoltzSdkEventListener {
             max_slippage_bps,
             quote_degraded,
             asset_decimals,
+            asset_contract,
             ..
         } = conversion_info
         else {
@@ -96,6 +98,7 @@ impl BoltzSdkEventListener {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
                 chain,
+                chain_id,
                 asset,
                 recipient_address,
                 invoice,
@@ -108,6 +111,7 @@ impl BoltzSdkEventListener {
                 max_slippage_bps,
                 quote_degraded,
                 asset_decimals,
+                asset_contract,
             }),
             ..Default::default()
         };
@@ -140,6 +144,7 @@ impl BoltzSdkEventListener {
         let Some(ConversionInfo::Boltz {
             swap_id,
             chain,
+            chain_id,
             asset,
             recipient_address,
             invoice,
@@ -151,6 +156,7 @@ impl BoltzSdkEventListener {
             fee,
             max_slippage_bps,
             asset_decimals,
+            asset_contract,
             ..
         }) = extract_conversion_info(existing.details)
         else {
@@ -166,6 +172,7 @@ impl BoltzSdkEventListener {
             conversion_info: Some(ConversionInfo::Boltz {
                 swap_id,
                 chain,
+                chain_id,
                 asset,
                 recipient_address,
                 invoice,
@@ -178,6 +185,7 @@ impl BoltzSdkEventListener {
                 max_slippage_bps,
                 quote_degraded: true,
                 asset_decimals,
+                asset_contract,
             }),
             ..Default::default()
         };

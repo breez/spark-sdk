@@ -169,6 +169,11 @@ pub enum ConversionInfo {
 
         /// Chain name (e.g. `"base"`, `"solana"`, `"tron"`).
         chain: String,
+        /// Stable chain identifier (e.g. EVM `chainId` decimal string `"8453"`
+        /// for Base, SLIP-44 or similar for other chains). `None` if the
+        /// provider doesn't expose one for this route.
+        #[serde(default)]
+        chain_id: Option<String>,
         /// Asset ticker (e.g. `"USDC"`, `"USDT"`).
         #[serde(default)]
         asset: String,
@@ -186,8 +191,11 @@ pub enum ConversionInfo {
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
         /// Number of decimals for the asset (e.g. 6 for USDC).
+        asset_decimals: u32,
+        /// Token contract / mint address on the destination chain.
+        /// `None` for native-asset destinations.
         #[serde(default)]
-        asset_decimals: Option<u32>,
+        asset_contract: Option<String>,
     },
     /// Boltz reverse swap — cross-chain conversion via Lightning hold invoice.
     ///
@@ -213,6 +221,11 @@ pub enum ConversionInfo {
 
         /// Chain name (e.g. `"arbitrum"`, `"solana"`, `"tron"`).
         chain: String,
+        /// Stable chain identifier (e.g. EVM `chainId` decimal string `"42161"`
+        /// for Arbitrum). `None` if the provider doesn't expose one for this
+        /// route.
+        #[serde(default)]
+        chain_id: Option<String>,
         /// Asset ticker (e.g. `"USDT"`, `"USDT0"`).
         #[serde(default)]
         asset: String,
@@ -230,8 +243,11 @@ pub enum ConversionInfo {
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
         /// Number of decimals for the asset (e.g. 6 for USDT).
+        asset_decimals: u32,
+        /// Token contract / mint address on the destination chain.
+        /// `None` for native-asset destinations.
         #[serde(default)]
-        asset_decimals: Option<u32>,
+        asset_contract: Option<String>,
     },
 }
 
@@ -288,6 +304,7 @@ mod tests {
         let original = ConversionInfo::Boltz {
             swap_id: "boltz_swap_abc".to_string(),
             chain: "solana".to_string(),
+            chain_id: None,
             asset: "USDT0".to_string(),
             recipient_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
             invoice: "lnbc1000n1pexample".to_string(),
@@ -299,7 +316,8 @@ mod tests {
             fee: Some(2_500),
             max_slippage_bps: 100,
             quote_degraded: false,
-            asset_decimals: Some(6),
+            asset_decimals: 6,
+            asset_contract: Some("0xdAC17F958D2ee523a2206206994597C13D831ec7".to_string()),
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -322,6 +340,7 @@ mod tests {
         let mut info = ConversionInfo::Boltz {
             swap_id: "s1".to_string(),
             chain: "arbitrum".to_string(),
+            chain_id: Some("42161".to_string()),
             asset: "USDT".to_string(),
             recipient_address: "0xdest".to_string(),
             invoice: "lnbc".to_string(),
@@ -333,7 +352,8 @@ mod tests {
             fee: None,
             max_slippage_bps: 100,
             quote_degraded: false,
-            asset_decimals: Some(6),
+            asset_decimals: 6,
+            asset_contract: None,
         };
         *info.status_mut() = ConversionStatus::Completed;
         assert_eq!(info.status(), &ConversionStatus::Completed);
