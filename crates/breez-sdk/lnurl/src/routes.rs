@@ -15,7 +15,8 @@ use lnurl_models::{
     CheckUsernameAvailableResponse, InvoicePaidRequest, InvoicesPaidRequest, ListMetadataRequest,
     ListMetadataResponse, PublishZapReceiptRequest, PublishZapReceiptResponse,
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest, sanitize_username,
+    RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
+    UnregisterLnurlPayRequest, sanitize_username,
 };
 use nostr::{Alphabet, Event, EventBuilder, JsonUtil, Kind, TagStandard, key::Keys};
 use regex::Regex;
@@ -150,12 +151,7 @@ where
             &state,
         )
         .await?;
-        if payload.description.chars().take(256).count() > 255 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("description too long".into())),
-            ));
-        }
+        validate_description(&payload.description)?;
 
         let user = User {
             domain: sanitize_domain(&state, &host).await?,
@@ -185,6 +181,91 @@ where
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
+        }))
+    }
+
+    pub async fn transfer(
+        Host(host): Host,
+        Path(to_pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<TransferLnurlPayRequest>,
+    ) -> Result<Json<TransferLnurlPayResponse>, (StatusCode, Json<Value>)> {
+        let username = sanitize_username(&payload.username);
+        validate_username(&username)?;
+        validate_description(&payload.description)?;
+
+        let to_pk = validate(
+            &to_pubkey,
+            &payload.signature,
+            &username,
+            payload.timestamp,
+            &state,
+        )
+        .await?;
+
+        let from_pk = validate_transfer_intent(
+            &payload.transfer.pubkey,
+            &to_pubkey,
+            &username,
+            &payload.transfer.signature,
+            &state,
+        )
+        .await?;
+
+        if from_pk == to_pk {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String(
+                    "transfer source and target are the same pubkey".into(),
+                )),
+            ));
+        }
+
+        let domain = sanitize_domain(&state, &host).await?;
+
+        if let Err(e) = state
+            .db
+            .transfer_username(
+                &domain,
+                &from_pk.to_string(),
+                &to_pk.to_string(),
+                &username,
+                &payload.description,
+            )
+            .await
+        {
+            return Err(match e {
+                LnurlRepositoryError::SourceNotOwner => {
+                    trace!("transfer source pubkey does not own username '{username}'");
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(Value::String(
+                            "source pubkey does not own this username".into(),
+                        )),
+                    )
+                }
+                LnurlRepositoryError::NameTaken => {
+                    trace!("name already taken during transfer: {username}");
+                    (
+                        StatusCode::CONFLICT,
+                        Json(Value::String("name already taken".into())),
+                    )
+                }
+                LnurlRepositoryError::General(err) => {
+                    error!("failed to execute transfer query: {err}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(Value::String("internal server error".into())),
+                    )
+                }
+            });
+        }
+
+        debug!("transferred '{username}' from {from_pk} to {to_pk}");
+        let lnurl = format!("lnurlp://{domain}/lnurlp/{username}");
+        Ok(Json(TransferLnurlPayResponse {
+            lnurl,
+            lightning_address: format!("{username}@{domain}"),
         }))
     }
 
@@ -1247,6 +1328,16 @@ fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
     Ok(())
 }
 
+fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if description.chars().take(256).count() > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("description too long".into())),
+        ));
+    }
+    Ok(())
+}
+
 async fn validate<DB>(
     pubkey: &str,
     signature: &str,
@@ -1296,6 +1387,51 @@ async fn validate<DB>(
         })?;
 
     Ok(pubkey)
+}
+
+/// Verify A's transfer-intent signature over
+/// `"transfer:{from_pubkey}-{username}-{to_pubkey}"`. The message has no
+/// timestamp — A's signature acts as a persistent capability authorizing
+/// this specific A -> B -> username triple. The `"transfer:"` prefix
+/// domain-separates from `validate()`'s `"{message}-{timestamp}"` format so a
+/// captured register signature cannot be replayed as a transfer.
+async fn validate_transfer_intent<DB>(
+    from_pubkey: &str,
+    to_pubkey: &str,
+    username: &str,
+    signature: &str,
+    state: &State<DB>,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    let from_pk = parse_pubkey(from_pubkey)?;
+    let signature = hex::decode(signature).map_err(|e| {
+        trace!("invalid transfer signature, could not decode: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+    let signature = Signature::from_der(&signature).map_err(|e| {
+        trace!("invalid transfer signature, could not parse: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+
+    let message = format!("transfer:{from_pubkey}-{username}-{to_pubkey}");
+    state
+        .wallet
+        .verify_message(&message, &signature, &from_pk)
+        .await
+        .map_err(|e| {
+            trace!("invalid transfer signature, could not verify: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
+
+    Ok(from_pk)
 }
 
 fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
@@ -1410,6 +1546,16 @@ mod tests {
             Ok(None)
         }
         async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn transfer_username(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
         async fn upsert_zap(&self, _: &Zap) -> Result<(), LnurlRepositoryError> {

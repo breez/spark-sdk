@@ -40,6 +40,30 @@ pub struct RegisterLnurlPayResponse {
     pub lightning_address: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LightningAddressTransfer {
+    /// Hex-encoded secp256k1 compressed public key of the current owner (A).
+    pub pubkey: String,
+    /// Hex-encoded DER ECDSA signature by pubkey A over
+    /// `"transfer:{pubkey_a}-{username}-{pubkey_b}"` (sanitized username).
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransferLnurlPayRequest {
+    pub username: String,
+    pub transfer: LightningAddressTransfer,
+    pub signature: String,
+    pub timestamp: u64,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TransferLnurlPayResponse {
+    pub lnurl: String,
+    pub lightning_address: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListMetadataRequest {
     pub signature: String,

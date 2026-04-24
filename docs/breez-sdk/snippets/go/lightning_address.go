@@ -91,6 +91,59 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
+// Run on the *current owner's* wallet. Produces the authorization that the
+// new owner needs to take over the username in a single atomic call.
+func SignLightningAddressTransfer(
+	currentOwnerSdk *breez_sdk_spark.BreezSdk,
+	currentOwnerPubkey string,
+	newOwnerPubkey string,
+) (*breez_sdk_spark.LightningAddressTransfer, error) {
+	username := "myusername"
+
+	// ANCHOR: sign-lightning-address-transfer
+	// `username` must be lowercased and trimmed.
+	// pubkeys are hex-encoded secp256k1 compressed (via GetInfo().IdentityPubkey).
+	message := "transfer:" + currentOwnerPubkey + "-" + username + "-" + newOwnerPubkey
+	signed, err := currentOwnerSdk.SignMessage(breez_sdk_spark.SignMessageRequest{
+		Message: message,
+		Compact: false,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	transfer := breez_sdk_spark.LightningAddressTransfer{
+		Pubkey:    signed.Pubkey,
+		Signature: signed.Signature,
+	}
+	// ANCHOR_END: sign-lightning-address-transfer
+	return &transfer, nil
+}
+
+// Run on the *new owner's* wallet with the authorization received
+// out-of-band from the current owner.
+func RegisterLightningAddressViaTransfer(
+	newOwnerSdk *breez_sdk_spark.BreezSdk,
+	transfer breez_sdk_spark.LightningAddressTransfer,
+) (*breez_sdk_spark.LightningAddressInfo, error) {
+	username := "myusername"
+	description := "My Lightning Address"
+
+	// ANCHOR: register-lightning-address-transfer
+	request := breez_sdk_spark.RegisterLightningAddressRequest{
+		Username:    username,
+		Description: &description,
+		Transfer:    &transfer,
+	}
+
+	addressInfo, err := newOwnerSdk.RegisterLightningAddress(request)
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: register-lightning-address-transfer
+	return &addressInfo, nil
+}
+
 func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: delete-lightning-address
 	err := sdk.DeleteLightningAddress()

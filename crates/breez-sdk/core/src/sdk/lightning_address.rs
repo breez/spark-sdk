@@ -55,6 +55,12 @@ impl BreezSdk {
         let params = crate::lnurl::RegisterLightningAddressRequest {
             username: username.clone(),
             description: description.clone(),
+            transfer: request
+                .transfer
+                .map(|t| lnurl_models::LightningAddressTransfer {
+                    pubkey: t.pubkey,
+                    signature: t.signature,
+                }),
         };
 
         let response = client.register_lightning_address(&params).await?;

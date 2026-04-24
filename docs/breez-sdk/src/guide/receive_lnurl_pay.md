@@ -65,6 +65,26 @@ You can retrieve information about the currently registered Lightning address.
 
 {{#tabs lightning_address:get-lightning-address}}
 
+### Transferring a Lightning address
+
+A user who already owns a registered Lightning address can hand it over to a different owner (pubkey) in a single atomic server operation — ownership is removed from the old pubkey and the new pubkey takes it in one step, without exposing a window during which the username could be snatched by a third party.
+
+The flow has two steps, run on two different SDKs:
+
+**Step 1 — current owner (pubkey A):** produce a transfer authorization by signing a fixed message of the form `transfer:{pubkey_a}-{username}-{pubkey_b}`. Use {{#name sign_message}} on the SDK that currently owns the username. `pubkey_b` is the {{#name identity_pubkey}} of the receiving pubkey (available via {{#name get_info}}). The `username` must be the sanitized (lowercased and trimmed) form.
+
+> **Note:** There is no timestamp in this message — A's authorization is a persistent capability for this specific A → B → username triple. Anyone holding it can submit the transfer, but it can only ever move the name to B.
+
+{{#tabs lightning_address:sign-lightning-address-transfer}}
+
+The pair `{pubkey, signature}` is then sent out-of-band to the new owner (e.g. via QR code, deep link, or a secure message).
+
+**Step 2 — new owner (pubkey B):** call {{#name register_lightning_address}} with the `transfer` field populated. The SDK detects the field and routes the request to the server's atomic transfer endpoint instead of the regular register endpoint. In one transaction the server verifies B's request signature, verifies A's authorization, and swaps ownership.
+
+{{#tabs lightning_address:register-lightning-address-transfer}}
+
+If pubkey B had a different username registered, it is replaced by the transferred one. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
+
 ### Deleting a Lightning address
 
 When a user no longer wants to use the Lightning address, you can delete it.

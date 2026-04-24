@@ -7,6 +7,8 @@ use crate::zap::Zap;
 pub enum LnurlRepositoryError {
     #[error("name taken")]
     NameTaken,
+    #[error("source user does not own this username")]
+    SourceNotOwner,
     #[error("database error: {0}")]
     General(anyhow::Error),
 }
@@ -55,6 +57,19 @@ pub trait LnurlRepository {
         pubkey: &str,
     ) -> Result<Option<User>, LnurlRepositoryError>;
     async fn upsert_user(&self, user: &User) -> Result<(), LnurlRepositoryError>;
+
+    /// Atomically transfer ownership of `username` in `domain` from `from_pubkey`
+    /// to `to_pubkey`, replacing any existing row for `to_pubkey`.
+    /// Returns [`LnurlRepositoryError::SourceNotOwner`] if `from_pubkey` does not
+    /// currently own `username` in `domain`.
+    async fn transfer_username(
+        &self,
+        domain: &str,
+        from_pubkey: &str,
+        to_pubkey: &str,
+        username: &str,
+        description: &str,
+    ) -> Result<(), LnurlRepositoryError>;
 
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError>;
     async fn get_zap_by_payment_hash(

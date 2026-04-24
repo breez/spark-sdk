@@ -2,7 +2,7 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    TransferLnurlPayRequest, UnregisterLnurlPayRequest,
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
@@ -41,6 +41,7 @@ impl std::fmt::Display for LnurlServerError {
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: String,
+    pub transfer: Option<lnurl_models::LightningAddressTransfer>,
 }
 
 #[derive(Debug, Clone)]
@@ -224,16 +225,30 @@ impl LnurlServerClient for DefaultLnurlServerClient {
 
         let (signature, timestamp) = self.sign_message(&request.username).await?;
 
-        let api_request = RegisterLnurlPayRequest {
-            username: request.username.clone(),
-            description: request.description.clone(),
-            signature,
-            timestamp,
+        let (url, body) = if let Some(transfer) = &request.transfer {
+            let api_request = TransferLnurlPayRequest {
+                username: request.username.clone(),
+                description: request.description.clone(),
+                transfer: transfer.clone(),
+                signature,
+                timestamp,
+            };
+            let url = format!("{}/lnurlpay/{}/transfer", self.base_url(), pubkey);
+            let body = serde_json::to_string(&api_request)
+                .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+            (url, body)
+        } else {
+            let api_request = RegisterLnurlPayRequest {
+                username: request.username.clone(),
+                description: request.description.clone(),
+                signature,
+                timestamp,
+            };
+            let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
+            let body = serde_json::to_string(&api_request)
+                .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+            (url, body)
         };
-
-        let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
-        let body = serde_json::to_string(&api_request)
-            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 
         let response = self
             .http_client

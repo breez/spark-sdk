@@ -105,6 +105,59 @@ impl crate::repository::LnurlRepository for LnurlRepository {
         Ok(())
     }
 
+    async fn transfer_username(
+        &self,
+        domain: &str,
+        from_pubkey: &str,
+        to_pubkey: &str,
+        username: &str,
+        description: &str,
+    ) -> Result<(), LnurlRepositoryError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+
+        let source_name: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM users WHERE domain = $1 AND pubkey = $2 FOR UPDATE")
+                .bind(domain)
+                .bind(from_pubkey)
+                .fetch_optional(&mut *tx)
+                .await?;
+        match source_name {
+            Some((name,)) if name == username => {}
+            _ => return Err(LnurlRepositoryError::SourceNotOwner),
+        }
+
+        sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2")
+            .bind(domain)
+            .bind(from_pubkey)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO users (domain, pubkey, name, description, updated_at)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(domain, pubkey) DO UPDATE
+             SET name = excluded.name
+             ,   description = excluded.description
+             ,   updated_at = excluded.updated_at",
+        )
+        .bind(domain)
+        .bind(to_pubkey)
+        .bind(username)
+        .bind(description)
+        .bind(now())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| LnurlRepositoryError::General(e.into()))?;
+        Ok(())
+    }
+
     async fn upsert_zap(&self, zap: &Zap) -> Result<(), LnurlRepositoryError> {
         sqlx::query(
             "INSERT INTO zaps (payment_hash, zap_request, zap_event
