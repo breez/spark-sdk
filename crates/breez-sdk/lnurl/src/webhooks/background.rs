@@ -27,7 +27,7 @@ const MAX_ERROR_BODY_LEN: usize = 512;
 const WEBHOOK_TIMEOUT_SECS: u64 = 30;
 
 /// How often to run the webhook delivery cleanup (1 hour).
-const CLEANUP_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(60 * 60);
+const CLEANUP_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_hours(1);
 
 /// Per-domain concurrency limiter for webhook delivery.
 pub(crate) type DomainSemaphores = Arc<Mutex<HashMap<String, Arc<Semaphore>>>>;
@@ -82,7 +82,7 @@ async fn webhook_delivery_processor<DB>(
                     return;
                 }
             }
-            () = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
+            () = tokio::time::sleep(tokio::time::Duration::from_mins(1)) => {}
         }
 
         process_pending_webhook_deliveries(&db, &http_client, &domain_semaphores, &config_cache)

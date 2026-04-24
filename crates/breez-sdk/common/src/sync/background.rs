@@ -518,7 +518,7 @@ impl SyncProcessor {
             since_revision,
             records.len()
         );
-        records.sort_by(|a, b| a.revision.cmp(&b.revision));
+        records.sort_by_key(|a| a.revision);
         let db_records = records
             .iter()
             .map(crate::sync::storage::Record::try_from)
