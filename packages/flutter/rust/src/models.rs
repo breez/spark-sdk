@@ -914,6 +914,11 @@ pub struct _LightningAddressTransfer {
     pub signature: String,
 }
 
+#[frb(mirror(AcceptLightningAddressTransferRequest))]
+pub struct _AcceptLightningAddressTransferRequest {
+    pub transferee_pubkey: String,
+}
+
 #[frb(mirror(LnurlInfo))]
 pub struct _LnurlInfo {
     pub url: String,

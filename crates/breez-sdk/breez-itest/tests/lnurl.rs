@@ -1206,18 +1206,15 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .identity_pubkey;
     assert_ne!(alice_pubkey, bob_pubkey);
 
-    // 2. Alice signs the transfer intent via the real public sign_message API.
-    let transfer_message = format!("transfer:{alice_pubkey}-{username}-{bob_pubkey}");
-    let signed = alice
+    // 2. Alice produces the transfer authorization by calling
+    //    accept_lightning_address_transfer with Bob's pubkey.
+    let transfer_auth = alice
         .sdk
-        .sign_message(SignMessageRequest {
-            message: transfer_message,
-            compact: false,
+        .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+            transferee_pubkey: bob_pubkey.clone(),
         })
         .await?;
-    assert_eq!(signed.pubkey, alice_pubkey);
-
-    let alice_transfer_sig = signed.signature;
+    assert_eq!(transfer_auth.pubkey, alice_pubkey);
 
     // 3. Bob submits the transfer by calling register_lightning_address with
     //    the transfer authorization populated.
@@ -1226,10 +1223,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some("Bob's address now".to_string()),
-            transfer: Some(LightningAddressTransfer {
-                pubkey: alice_pubkey.clone(),
-                signature: alice_transfer_sig.clone(),
-            }),
+            transfer: Some(transfer_auth.clone()),
         })
         .await?;
     info!(
@@ -1260,10 +1254,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some("Replay".to_string()),
-            transfer: Some(LightningAddressTransfer {
-                pubkey: alice_pubkey,
-                signature: alice_transfer_sig,
-            }),
+            transfer: Some(transfer_auth),
         })
         .await;
     assert!(

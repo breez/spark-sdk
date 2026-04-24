@@ -5,16 +5,16 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
-    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
-    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    AcceptLightningAddressTransferRequest, AssetFilter, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions,
+    ConversionType, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    TokenTransactionType, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -312,10 +312,20 @@ pub enum Command {
 
         /// Hex-encoded DER ECDSA signature by the current owner over
         /// `transfer:{transfer_pubkey}-{username}-{self_pubkey}`. Obtain via
-        /// the current owner's sign-message on that exact string.
+        /// `accept-lightning-address-transfer` on the current owner's CLI.
         /// Must be paired with --transfer-pubkey.
         #[arg(long)]
         transfer_signature: Option<String>,
+    },
+    /// Produce a transfer authorization for the lightning address username
+    /// currently registered on this wallet, granting the right to take it
+    /// over to `transferee_pubkey`. Run on the current owner's wallet; share
+    /// the returned pubkey + signature with the new owner who passes them
+    /// via `--transfer-pubkey` / `--transfer-signature` to
+    /// `register-lightning-address`.
+    AcceptLightningAddressTransfer {
+        /// Hex-encoded secp256k1 compressed public key of the new owner.
+        transferee_pubkey: String,
     },
     DeleteLightningAddress,
     /// List fiat currencies
@@ -898,6 +908,15 @@ pub(crate) async fn execute_command(
                     username,
                     description,
                     transfer,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::AcceptLightningAddressTransfer { transferee_pubkey } => {
+            let res = sdk
+                .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+                    transferee_pubkey,
                 })
                 .await?;
             print_value(&res)?;

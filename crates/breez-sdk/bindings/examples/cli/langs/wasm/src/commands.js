@@ -650,6 +650,19 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       printValue(res)
     })
 
+  // --- accept-lightning-address-transfer ---
+  program
+    .command('accept-lightning-address-transfer')
+    .description('Produce a transfer authorization for the current username, granting it to a transferee pubkey')
+    .argument('<transferee_pubkey>', 'Hex-encoded secp256k1 compressed pubkey of the new owner')
+    .action(async (transfereePubkey) => {
+      const sdk = getSdk()
+      const res = await sdk.acceptLightningAddressTransfer({
+        transfereePubkey,
+      })
+      printValue(res)
+    })
+
   // --- delete-lightning-address ---
   program
     .command('delete-lightning-address')

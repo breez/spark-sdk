@@ -55,22 +55,13 @@ func getLightningAddress(sdk: BreezSdk) async throws {
 // new owner needs to take over the username in a single atomic call.
 func signLightningAddressTransfer(
     currentOwnerSdk: BreezSdk,
-    currentOwnerPubkey: String,
-    newOwnerPubkey: String
+    transfereePubkey: String
 ) async throws -> LightningAddressTransfer {
-    let username = "myusername"
-
     // ANCHOR: sign-lightning-address-transfer
-    // `username` must be lowercased and trimmed.
-    // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
-    let message = "transfer:\(currentOwnerPubkey)-\(username)-\(newOwnerPubkey)"
-    let signed = try await currentOwnerSdk.signMessage(
-        request: SignMessageRequest(message: message, compact: false)
-    )
-
-    let transfer = LightningAddressTransfer(
-        pubkey: signed.pubkey,
-        signature: signed.signature
+    let transfer = try await currentOwnerSdk.acceptLightningAddressTransfer(
+        request: AcceptLightningAddressTransferRequest(
+            transfereePubkey: transfereePubkey
+        )
     )
     // ANCHOR_END: sign-lightning-address-transfer
     return transfer

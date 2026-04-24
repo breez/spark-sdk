@@ -80,6 +80,7 @@ let commandNames: [String] = [
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "accept-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -113,6 +114,7 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "check-lightning-address-available": CommandEntry(name: "check-lightning-address-available", description: "Check if a lightning address username is available", run: handleCheckLightningAddress),
         "get-lightning-address":             CommandEntry(name: "get-lightning-address", description: "Get registered lightning address", run: handleGetLightningAddress),
         "register-lightning-address":        CommandEntry(name: "register-lightning-address", description: "Register a lightning address", run: handleRegisterLightningAddress),
+        "accept-lightning-address-transfer": CommandEntry(name: "accept-lightning-address-transfer", description: "Produce a transfer authorization for the current username, granting it to a transferee pubkey", run: handleAcceptLightningAddressTransfer),
         "delete-lightning-address":          CommandEntry(name: "delete-lightning-address", description: "Delete lightning address", run: handleDeleteLightningAddress),
         "list-fiat-currencies":              CommandEntry(name: "list-fiat-currencies", description: "List fiat currencies", run: handleListFiatCurrencies),
         "list-fiat-rates":                   CommandEntry(name: "list-fiat-rates", description: "List available fiat rates", run: handleListFiatRates),
@@ -807,6 +809,22 @@ func handleRegisterLightningAddress(_ sdk: BreezSdk, _ args: [String]) async thr
         description: description,
         transfer: transfer
     ))
+    printValue(result)
+}
+
+// --- accept-lightning-address-transfer ---
+
+func handleAcceptLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard fp.positional.count >= 1 else {
+        print("Usage: accept-lightning-address-transfer <transferee_pubkey>")
+        return
+    }
+    let result = try await sdk.acceptLightningAddressTransfer(
+        request: AcceptLightningAddressTransferRequest(
+            transfereePubkey: fp.positional[0]
+        )
+    )
     printValue(result)
 }
 

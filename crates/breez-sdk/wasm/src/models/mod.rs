@@ -1075,6 +1075,11 @@ pub struct LightningAddressTransfer {
     pub signature: String,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AcceptLightningAddressTransferRequest)]
+pub struct AcceptLightningAddressTransferRequest {
+    pub transferee_pubkey: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlInfo)]
 pub struct LnurlInfo {
     pub url: String,

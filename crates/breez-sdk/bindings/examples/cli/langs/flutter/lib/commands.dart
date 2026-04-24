@@ -28,6 +28,7 @@ const commandNames = [
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
+  'accept-lightning-address-transfer',
   'delete-lightning-address',
   'list-fiat-currencies',
   'list-fiat-rates',
@@ -73,6 +74,10 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'register-lightning-address': CommandEntry(
       'Register a lightning address',
       _handleRegisterLightningAddress,
+    ),
+    'accept-lightning-address-transfer': CommandEntry(
+      'Produce a transfer authorization for the current username, granting it to a transferee pubkey',
+      _handleAcceptLightningAddressTransfer,
     ),
     'delete-lightning-address': CommandEntry('Delete lightning address', _handleDeleteLightningAddress),
     'list-fiat-currencies': CommandEntry('List fiat currencies', _handleListFiatCurrencies),
@@ -773,7 +778,9 @@ Future<void> _handleGetLightningAddress(BreezSdk sdk, TokenIssuer tokenIssuer, L
 
 Future<void> _handleRegisterLightningAddress(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
-    print('Usage: register-lightning-address <username> [description] [--transfer-pubkey <pk> --transfer-signature <sig>]');
+    print(
+      'Usage: register-lightning-address <username> [description] [--transfer-pubkey <pk> --transfer-signature <sig>]',
+    );
     return;
   }
   final positional = args.where((a) => !a.startsWith('-')).toList();
@@ -791,9 +798,10 @@ Future<void> _handleRegisterLightningAddress(BreezSdk sdk, TokenIssuer tokenIssu
     print('Error: --transfer-pubkey and --transfer-signature must be provided together');
     return;
   }
-  final transfer = transferPubkey == null
-      ? null
-      : LightningAddressTransfer(pubkey: transferPubkey, signature: transferSignature!);
+  final transfer =
+      transferPubkey == null
+          ? null
+          : LightningAddressTransfer(pubkey: transferPubkey, signature: transferSignature!);
 
   final result = await sdk.registerLightningAddress(
     request: RegisterLightningAddressRequest(
@@ -801,6 +809,24 @@ Future<void> _handleRegisterLightningAddress(BreezSdk sdk, TokenIssuer tokenIssu
       description: description,
       transfer: transfer,
     ),
+  );
+  printValue(result);
+}
+
+// --- accept-lightning-address-transfer ---
+
+Future<void> _handleAcceptLightningAddressTransfer(
+  BreezSdk sdk,
+  TokenIssuer tokenIssuer,
+  List<String> args,
+) async {
+  final positional = args.where((a) => !a.startsWith('-')).toList();
+  if (positional.isEmpty) {
+    print('Usage: accept-lightning-address-transfer <transferee_pubkey>');
+    return;
+  }
+  final result = await sdk.acceptLightningAddressTransfer(
+    request: AcceptLightningAddressTransferRequest(transfereePubkey: positional[0]),
   );
   printValue(result);
 }

@@ -1518,28 +1518,39 @@ pub struct RegisterLightningAddressRequest {
     /// When set, take over the `username` from the pubkey in `transfer.pubkey`
     /// in a single atomic server operation. The current owner must produce
     /// the signature out-of-band (see [`LightningAddressTransfer`]) and hand
-    /// it to the new owner, who submits it here. Leave `None` for a regular
+    /// it to the transferee, who submits it here. Leave `None` for a regular
     /// first-time registration.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub transfer: Option<LightningAddressTransfer>,
 }
 
 /// Off-band authorization from the current owner of a username that lets a
-/// new owner take it over via [`BreezSdk::register_lightning_address`].
+/// transferee take it over via [`BreezSdk::register_lightning_address`].
 ///
-/// The current owner produces this by calling [`BreezSdk::sign_message`] on
-/// the string `"transfer:{current_owner_pubkey}-{username}-{new_owner_pubkey}"`
-/// (username must be lowercase, trimmed) and shares `pubkey` + `signature`
-/// with the new owner. The new owner then passes it as the `transfer` field
-/// when registering.
+/// The current owner produces this by calling
+/// [`BreezSdk::accept_lightning_address_transfer`] with the transferee's
+/// pubkey, then shares the resulting `pubkey` + `signature` with the new
+/// owner. The transferee passes it as the `transfer` field when registering.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightningAddressTransfer {
     /// Hex-encoded secp256k1 compressed public key of the current owner.
     pub pubkey: String,
-    /// Hex-encoded DER ECDSA signature produced by the current owner's
-    /// [`BreezSdk::sign_message`] over the transfer message described above.
+    /// Hex-encoded DER ECDSA signature by the current owner over
+    /// `"transfer:{our_pubkey}-{username}-{transferee_pubkey}"`.
     pub signature: String,
+}
+
+/// Request for [`BreezSdk::accept_lightning_address_transfer`]. Run on the
+/// *current owner's* SDK; produces a [`LightningAddressTransfer`] that the
+/// transferee will pass into [`RegisterLightningAddressRequest::transfer`].
+/// The username being transferred is the one currently registered on this
+/// SDK (read from its local cache).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptLightningAddressTransferRequest {
+    /// Hex-encoded secp256k1 compressed public key of the transferee.
+    pub transferee_pubkey: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]

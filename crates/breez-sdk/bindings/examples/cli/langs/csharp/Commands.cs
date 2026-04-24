@@ -39,6 +39,7 @@ public static class CommandNames
         "check-lightning-address-available",
         "get-lightning-address",
         "register-lightning-address",
+        "accept-lightning-address-transfer",
         "delete-lightning-address",
         "list-fiat-currencies",
         "list-fiat-rates",
@@ -170,6 +171,12 @@ public static class Commands
                 Name = "register-lightning-address",
                 Description = "Register a lightning address",
                 Run = HandleRegisterLightningAddress
+            },
+            ["accept-lightning-address-transfer"] = new()
+            {
+                Name = "accept-lightning-address-transfer",
+                Description = "Produce a transfer authorization for the current username, granting it to a transferee pubkey",
+                Run = HandleAcceptLightningAddressTransfer
             },
             ["delete-lightning-address"] = new()
             {
@@ -1017,6 +1024,22 @@ public static class Commands
             username: positional[0],
             description: description,
             transfer: transfer
+        ));
+        Serialization.PrintValue(result);
+    }
+
+    // --- accept-lightning-address-transfer ---
+
+    private static async Task HandleAcceptLightningAddressTransfer(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var positional = GetPositionalArgs(args);
+        if (positional.Length < 1)
+        {
+            Console.WriteLine("Usage: accept-lightning-address-transfer <transferee_pubkey>");
+            return;
+        }
+        var result = await sdk.AcceptLightningAddressTransfer(new AcceptLightningAddressTransferRequest(
+            transfereePubkey: positional[0]
         ));
         Serialization.PrintValue(result);
     }
