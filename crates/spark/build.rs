@@ -11,6 +11,7 @@ fn main() {
         .compile_protos(
             &[
                 "protos/spark/common.proto",
+                "protos/spark/multisig.proto",
                 "protos/spark/spark.proto",
                 "protos/spark/spark_authn.proto",
                 "protos/spark/spark_token.proto",

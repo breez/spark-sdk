@@ -417,8 +417,8 @@ impl SparkRpcClient {
 
     pub async fn freeze_tokens(
         &self,
-        req: spark_token::FreezeIssuerTokenRequest,
-    ) -> Result<spark_token::FreezeIssuerTokenResponse> {
+        req: spark_token::FreezeTokensRequest,
+    ) -> Result<spark_token::FreezeTokensResponse> {
         debug!("Calling freeze_tokens with request: {:?}", req);
         Ok(self
             .spark_token_service_client()

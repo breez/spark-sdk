@@ -27,3 +27,8 @@ pub mod spark_token {
     #![allow(clippy::all)]
     tonic::include_proto!("spark_token");
 }
+
+pub mod multisig {
+    #![allow(clippy::all)]
+    tonic::include_proto!("multisig");
+}

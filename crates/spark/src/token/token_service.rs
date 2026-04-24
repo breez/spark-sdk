@@ -409,9 +409,9 @@ impl TokenService {
 
         let mut requests = Vec::new();
         for operator in self.operator_pool.get_all_operators() {
-            let freeze_tokens_payload = rpc::spark_token::FreezeIssuerTokenPayload {
+            let freeze_tokens_payload = rpc::spark_token::FreezeTokensPayload {
                 version: 1,
-                owner_public_key: owner_public_key.clone(),
+                owner_public_key: Some(owner_public_key.clone()),
                 token_identifier: Some(token_identifier.clone()),
                 should_unfreeze,
                 issuer_provided_timestamp,
@@ -426,13 +426,12 @@ impl TokenService {
                 .serialize()
                 .to_vec();
 
-            let request =
-                operator
-                    .client
-                    .freeze_tokens(rpc::spark_token::FreezeIssuerTokenRequest {
-                        freeze_tokens_payload: Some(freeze_tokens_payload),
-                        issuer_signature,
-                    });
+            let request = operator
+                .client
+                .freeze_tokens(rpc::spark_token::FreezeTokensRequest {
+                    freeze_tokens_payload: Some(freeze_tokens_payload),
+                    issuer_signature,
+                });
             requests.push(request);
         }
         let responses = futures::future::try_join_all(requests).await?;
@@ -840,6 +839,8 @@ impl TokenService {
             ),
             token_inputs: Some(token_inputs),
             invoice_attachments,
+            validity_duration_seconds: None,
+            execute_before: None,
         })
     }
 
@@ -871,16 +872,18 @@ impl TokenService {
                 | rpc::spark_token::token_transaction::TokenInputs::MintInput(_),
             ) => {
                 owner_signatures.push(SignatureWithIndex {
-                    signature,
+                    signature: Some(signature),
                     input_index: 0,
+                    authority_signatures: None,
                 });
             }
             Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) => {
                 // One signature per input
                 for i in 0..input.outputs_to_spend.len() {
                     owner_signatures.push(SignatureWithIndex {
-                        signature: signature.clone(),
+                        signature: Some(signature.clone()),
                         input_index: i as u32,
+                        authority_signatures: None,
                     });
                 }
             }
@@ -1170,16 +1173,18 @@ impl TokenService {
                     | rpc::spark_token::token_transaction::TokenInputs::MintInput(_),
                 ) => {
                     signatures.push(rpc::spark_token::SignatureWithIndex {
-                        signature,
+                        signature: Some(signature),
                         input_index: 0,
+                        authority_signatures: None,
                     });
                 }
                 Some(rpc::spark_token::token_transaction::TokenInputs::TransferInput(input)) => {
                     // One signature per input
                     for i in 0..input.outputs_to_spend.len() {
                         signatures.push(rpc::spark_token::SignatureWithIndex {
-                            signature: signature.clone(),
+                            signature: Some(signature.clone()),
                             input_index: i as u32,
+                            authority_signatures: None,
                         });
                     }
                 }
@@ -1605,7 +1610,7 @@ fn validate_create_token_params(
 }
 
 fn hash_freeze_tokens_payload(
-    payload: &rpc::spark_token::FreezeIssuerTokenPayload,
+    payload: &rpc::spark_token::FreezeTokensPayload,
 ) -> Result<Vec<u8>, ServiceError> {
     let mut all_hashes = Vec::new();
     let empty_bytes = vec![];
@@ -1615,7 +1620,8 @@ fn hash_freeze_tokens_payload(
         .to_vec();
     all_hashes.push(version_hash);
 
-    let owner_public_key_hash = sha256::Hash::hash(&payload.owner_public_key)
+    let owner_public_key = payload.owner_public_key.as_ref().unwrap_or(&empty_bytes);
+    let owner_public_key_hash = sha256::Hash::hash(owner_public_key)
         .to_byte_array()
         .to_vec();
     all_hashes.push(owner_public_key_hash);
@@ -1698,6 +1704,8 @@ mod tests {
                     .unwrap(),
             ),
             token_amount: 50_u128.to_be_bytes().to_vec(),
+            se_withdrawal_signature: None,
+            status: None,
         }, TokenOutput {
             id: Some("660e8400-e29b-41d4-a716-446655440002".to_string()),
             owner_public_key: hex::decode(
@@ -1723,6 +1731,8 @@ mod tests {
                     .unwrap(),
             ),
             token_amount: 100_u128.to_be_bytes().to_vec(),
+            se_withdrawal_signature: None,
+            status: None,
         }],
             spark_operator_identity_public_keys: vec![
                 hex::decode(
@@ -1766,6 +1776,8 @@ mod tests {
             }, rpc::spark_token::InvoiceAttachment {
                 spark_invoice: "sparkrt1pgss8cf4gru7ece2ryn8ym3vm3yz8leeend2589m7svq2mgv0xncfyx8zg7qsqgjzqqe5p0arydhhu5utuc4zzm732h35fs2yzsc3gs6v8hzpgnaaax0kgcn7r7gq53lnxq0gqnuscptu60nvu02yyszq05p5syke4wzv7gn76gt3r30c90qt8u5nfec4vl60nrxphjgzqm4hgze4xrxejmu2vqlj8sxp4mzux2dlq7fpq9akl0tufcpqd25tcpljc407uexx26".to_string(),
             }],
+            validity_duration_seconds: None,
+            execute_before: None,
         }
     }
 

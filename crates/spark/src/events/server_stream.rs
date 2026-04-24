@@ -147,6 +147,14 @@ pub async fn subscribe_server_events(
                     debug!("Received connected event");
                     SparkEvent::Connected
                 }
+                Event::Heartbeat(_) => {
+                    trace!("Received heartbeat event");
+                    continue;
+                }
+                Event::TokenTransaction(_) => {
+                    trace!("Received token transaction event");
+                    continue;
+                }
             };
 
             debug!("Emitting spark event: {spark_event}");
