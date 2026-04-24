@@ -5,7 +5,7 @@ use std::{
 
 use bitcoin::{
     Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxIn, TxOut, Txid,
-    absolute::LockTime, psbt, secp256k1::PublicKey, transaction::Version,
+    absolute::LockTime, key::Secp256k1, psbt, secp256k1::PublicKey, transaction::Version,
 };
 use tracing::trace;
 
@@ -26,11 +26,18 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpfpUtxoType {
+    P2wpkh,
+    P2tr,
+}
+
 pub struct CpfpUtxo {
     pub txid: Txid,
     pub vout: u32,
     pub value: u64,
     pub pubkey: PublicKey,
+    pub utxo_type: CpfpUtxoType,
 }
 
 pub struct TxCpfpPsbt {
@@ -256,9 +263,10 @@ fn create_tx_cpfp_psbt(
     // Calculate total available value from all UTXOs
     let total_utxo_value: u64 = utxos.iter().map(|utxo| utxo.value).sum();
 
-    // Use the first UTXO's pubkey for the output
+    // Use the first UTXO's pubkey and type for the change output
     let first_pubkey = utxos[0].pubkey;
-    let output_script_pubkey = Address::p2wpkh(&CompressedPublicKey(first_pubkey), network).into();
+    let first_utxo_type = utxos[0].utxo_type;
+    let output_script_pubkey = script_pubkey_for_utxo_type(first_pubkey, first_utxo_type, network);
 
     // Create inputs for all UTXOs plus the ephemeral anchor
     let mut inputs = Vec::with_capacity(utxos.len() + 1);
@@ -285,13 +293,24 @@ fn create_tx_cpfp_psbt(
     });
 
     // Calculate the approximate transaction size in vbytes
-    // P2WPKH inputs: ~68 vbytes each (outpoint + script + witnesses)
-    // Anchor input: ~41 vbytes (smaller because no signature needed for ephemeral anchor)
+    // P2WPKH inputs: ~68 vbytes each (41 non-witness + 108 witness / 4)
+    // P2TR inputs: ~58 vbytes each (41 non-witness + 66 witness / 4)
+    // Anchor input: ~41 vbytes (no signature needed for ephemeral anchor)
     // P2WPKH output: ~31 vbytes
+    // P2TR output: ~43 vbytes
     // Transaction overhead: ~10 vbytes
-    // TODO: calculate a better estimate of tx size. p2tr inputs have a different size.
-    //       For most input types we can calculate exact sizes.
-    let tx_size_vbytes = (utxos.len() as u64 * 68) + 41 + 31 + 10;
+    let input_vbytes: u64 = utxos
+        .iter()
+        .map(|utxo| match utxo.utxo_type {
+            CpfpUtxoType::P2wpkh => 68,
+            CpfpUtxoType::P2tr => 58,
+        })
+        .sum();
+    let output_vbytes: u64 = match first_utxo_type {
+        CpfpUtxoType::P2wpkh => 31,
+        CpfpUtxoType::P2tr => 43,
+    };
+    let tx_size_vbytes = input_vbytes + 41 + output_vbytes + 10;
     trace!("Estimated transaction size: {} vbytes", tx_size_vbytes);
 
     // Calculate fee based on fee rate (fee_rate is in sat/vbyte)
@@ -331,9 +350,7 @@ fn create_tx_cpfp_psbt(
         let input = PsbtInput {
             witness_utxo: Some(TxOut {
                 value: Amount::from_sat(utxo.value),
-                // TODO: Support p2tr inputs
-                script_pubkey: Address::p2wpkh(&CompressedPublicKey(utxo.pubkey), network)
-                    .script_pubkey(),
+                script_pubkey: script_pubkey_for_utxo_type(utxo.pubkey, utxo.utxo_type, network),
             }),
             ..Default::default()
         };
@@ -359,9 +376,27 @@ fn create_tx_cpfp_psbt(
         vout: 0,
         value: adjusted_output_value,
         pubkey: first_pubkey,
+        utxo_type: first_utxo_type,
     }];
 
     Ok(psbt)
+}
+
+fn script_pubkey_for_utxo_type(
+    pubkey: PublicKey,
+    utxo_type: CpfpUtxoType,
+    network: bitcoin::Network,
+) -> bitcoin::ScriptBuf {
+    match utxo_type {
+        CpfpUtxoType::P2wpkh => {
+            Address::p2wpkh(&CompressedPublicKey(pubkey), network).script_pubkey()
+        }
+        CpfpUtxoType::P2tr => {
+            let secp = Secp256k1::new();
+            let (xonly, _) = pubkey.x_only_public_key();
+            Address::p2tr(&secp, xonly, None, network).script_pubkey()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +429,10 @@ mod tests {
 
     /// Creates a test UTXO with a random txid and the given pubkey.
     fn create_test_utxo(pubkey: PublicKey, value: u64) -> CpfpUtxo {
-        // Create a random txid
+        create_test_utxo_typed(pubkey, value, CpfpUtxoType::P2wpkh)
+    }
+
+    fn create_test_utxo_typed(pubkey: PublicKey, value: u64, utxo_type: CpfpUtxoType) -> CpfpUtxo {
         let random_bytes = (0..32).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
         let txid = bitcoin::Txid::from_slice(&random_bytes).unwrap();
 
@@ -403,6 +441,7 @@ mod tests {
             vout: 0,
             value,
             pubkey,
+            utxo_type,
         }
     }
 
@@ -572,6 +611,76 @@ mod tests {
         } else {
             panic!("Expected ValidationError");
         }
+    }
+
+    #[test_all]
+    fn test_create_tx_cpfp_psbt_p2tr_utxo() {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
+        let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
+
+        let tx = create_test_transaction_with_anchor();
+        let mut utxos = vec![create_test_utxo_typed(pubkey, 10_000, CpfpUtxoType::P2tr)];
+
+        let fee_rate = 10;
+        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
+        assert!(result.is_ok());
+
+        let psbt = result.unwrap();
+        assert_eq!(psbt.inputs.len(), 2);
+        assert_eq!(psbt.outputs.len(), 1);
+
+        // P2TR: 58 (input) + 41 (anchor) + 43 (output) + 10 (overhead) = 152
+        let estimated_size = 58 + 41 + 43 + 10;
+        let expected_fee = fee_rate * estimated_size;
+        let expected_output_value = 10_000 - expected_fee;
+        assert_eq!(
+            psbt.unsigned_tx.output[0].value.to_sat(),
+            expected_output_value
+        );
+
+        // Verify the output is a P2TR script (OP_1 + 32-byte push)
+        let script = &psbt.unsigned_tx.output[0].script_pubkey;
+        assert!(script.is_p2tr());
+
+        // Verify the change UTXO preserves P2TR type
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].utxo_type, CpfpUtxoType::P2tr);
+        assert_eq!(utxos[0].value, expected_output_value);
+    }
+
+    #[test_all]
+    fn test_create_tx_cpfp_psbt_mixed_utxo_types() {
+        let secp = Secp256k1::new();
+        let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
+        let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
+
+        let tx = create_test_transaction_with_anchor();
+        let mut utxos = vec![
+            create_test_utxo_typed(pubkey, 5_000, CpfpUtxoType::P2wpkh),
+            create_test_utxo_typed(pubkey, 3_000, CpfpUtxoType::P2tr),
+        ];
+
+        let fee_rate = 10;
+        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
+        assert!(result.is_ok());
+
+        let psbt = result.unwrap();
+        assert_eq!(psbt.inputs.len(), 3); // 2 UTXOs + anchor
+
+        // Input sizes: 68 (p2wpkh) + 58 (p2tr) + 41 (anchor) + 31 (p2wpkh output) + 10 = 208
+        let estimated_size = 68 + 58 + 41 + 31 + 10;
+        let expected_fee = fee_rate * estimated_size;
+        let expected_output_value = 8_000 - expected_fee;
+        assert_eq!(
+            psbt.unsigned_tx.output[0].value.to_sat(),
+            expected_output_value
+        );
+
+        // Change output uses the first UTXO's type (P2WPKH)
+        let script = &psbt.unsigned_tx.output[0].script_pubkey;
+        assert!(script.is_p2wpkh());
+        assert_eq!(utxos[0].utxo_type, CpfpUtxoType::P2wpkh);
     }
 
     #[test_all]

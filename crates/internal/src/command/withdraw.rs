@@ -1,18 +1,18 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, Address, PrivateKey, Psbt, Txid, Witness,
+    self, Address, PrivateKey, Psbt, TxOut, Txid, Witness,
     bip32::{DerivationPath, Xpriv},
     consensus::encode::serialize_hex,
     ecdsa::Signature,
     hashes::{Hash, sha256},
     key::Secp256k1,
     secp256k1::{PublicKey, SecretKey},
-    sighash::SighashCache,
+    sighash::{self, SighashCache},
 };
 use clap::Subcommand;
 use spark_wallet::{
-    Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+    CpfpUtxoType, Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -39,8 +39,11 @@ impl std::str::FromStr for CpfpUtxo {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
-            return Err("Invalid format, expected txid:vout:value:pubkey".into());
+        if parts.len() != 4 && parts.len() != 5 {
+            return Err(
+                "Invalid format, expected txid:vout:value:pubkey[:type] where type is p2wpkh or p2tr"
+                    .into(),
+            );
         }
 
         let txid = Txid::from_str(parts[0])?;
@@ -49,11 +52,26 @@ impl std::str::FromStr for CpfpUtxo {
         let pubkey_bytes = hex::decode(parts[3])?;
         let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
 
+        let utxo_type = if parts.len() == 5 {
+            match parts[4] {
+                "p2wpkh" => CpfpUtxoType::P2wpkh,
+                "p2tr" => CpfpUtxoType::P2tr,
+                other => {
+                    return Err(
+                        format!("Unknown UTXO type '{other}', expected p2wpkh or p2tr").into(),
+                    );
+                }
+            }
+        } else {
+            CpfpUtxoType::P2wpkh
+        };
+
         Ok(CpfpUtxo(spark_wallet::CpfpUtxo {
             txid,
             vout,
             value,
             pubkey,
+            utxo_type,
         }))
     }
 }
@@ -300,16 +318,27 @@ fn verify_refund_derivation_path(
 }
 
 fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalletError> {
-    let mut cache = SighashCache::new(&psbt.unsigned_tx);
-    let mut signatures = vec![];
-    let mut anchor_index = None;
     let secp = Secp256k1::new();
     let pubkey = signing_key.public_key(&secp);
-    // Sign inputs where the witness utxo is a non anchor output
+
+    // Collect all prevouts for taproot sighash computation
+    let prevouts: Vec<TxOut> = psbt
+        .inputs
+        .iter()
+        .map(|input| input.witness_utxo.clone().unwrap_or(TxOut::NULL))
+        .collect();
+
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let mut ecdsa_signatures = vec![];
+    let mut taproot_indices = vec![];
+    let mut anchor_index = None;
+
     for (i, input) in psbt.inputs.iter().enumerate() {
         if let Some(tx_out) = &input.witness_utxo {
             if is_ephemeral_anchor_output(tx_out) {
                 anchor_index = Some(i);
+            } else if tx_out.script_pubkey.is_p2tr() {
+                taproot_indices.push(i);
             } else {
                 let (msg, ecdsa_type) = psbt
                     .sighash_ecdsa(i, &mut cache)
@@ -319,17 +348,41 @@ fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalle
                     signature: sig,
                     sighash_type: ecdsa_type,
                 };
-                signatures.push((i, pubkey, signature));
+                ecdsa_signatures.push((i, pubkey, signature));
             }
         }
     }
-    // Update the inputs partial sigs with the signatures
-    for (i, pubkey, signature) in signatures.into_iter() {
+
+    // Apply ECDSA signatures
+    for (i, pubkey, signature) in ecdsa_signatures {
         psbt.inputs[i].partial_sigs.insert(pubkey, signature);
     }
+
+    // Sign taproot inputs with Schnorr key-path spend
+    if !taproot_indices.is_empty() {
+        let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner);
+        let prevouts_ref = sighash::Prevouts::All(&prevouts);
+        for i in taproot_indices {
+            let sighash = cache
+                .taproot_key_spend_signature_hash(
+                    i,
+                    &prevouts_ref,
+                    sighash::TapSighashType::Default,
+                )
+                .map_err(|e| SparkWalletError::Generic(e.to_string()))?;
+            let msg = bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array());
+            let schnorr_sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
+            let tap_sig = bitcoin::taproot::Signature {
+                signature: schnorr_sig,
+                sighash_type: sighash::TapSighashType::Default,
+            };
+            psbt.inputs[i].tap_key_sig = Some(tap_sig);
+        }
+    }
+
     // Set an empty witness for the anchor input
     if let Some(anchor_index) = anchor_index {
-        psbt.inputs[anchor_index].final_script_witness = Some(Witness::new())
+        psbt.inputs[anchor_index].final_script_witness = Some(Witness::new());
     }
     Ok(())
 }
