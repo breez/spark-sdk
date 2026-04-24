@@ -153,10 +153,9 @@ hkdf = "0.12"
 sha2 = "0.10"
 figment = "0.10.19"
 flashnet = { path = "crates/flashnet", default-features = false }
-# frost-core = "2.1.0"
-frost-core = { package = "frost-core-unofficial", version = "2.2.0" }
-# frost-secp256k1-tr = "2.1.0"
-frost-secp256k1-tr = { package = "frost-secp256k1-tr-unofficial", version = "2.2.0" }
+# nested-signing branch
+frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180" }
+frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180" }
 futures = { version = "0.3", default-features = false }
 glob = "0.3.1"
 graphql_client = { version = "0.14.0" }
