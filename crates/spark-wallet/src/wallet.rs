@@ -1869,19 +1869,23 @@ async fn create_transfers(
         .filter_map(|t| t.spark_id.clone().map(|spark_id| (spark_id, t.clone())))
         .collect();
 
-    let htlc_requests = htlc_service
-        .query_htlc(
-            QueryHtlcFilter {
-                transfer_ids: preimage_swap_transfer_ids,
-                match_role: PreimageRequestRole::ReceiverAndSender,
-                identity_public_key: our_public_key,
-                status: None,
-                payment_hashes: Vec::new(),
-            },
-            None,
-        )
-        .await?
-        .items;
+    let htlc_requests = if preimage_swap_transfer_ids.is_empty() {
+        Vec::new()
+    } else {
+        htlc_service
+            .query_htlc(
+                QueryHtlcFilter {
+                    transfer_ids: preimage_swap_transfer_ids,
+                    match_role: PreimageRequestRole::ReceiverAndSender,
+                    identity_public_key: our_public_key,
+                    status: None,
+                    payment_hashes: Vec::new(),
+                },
+                None,
+            )
+            .await?
+            .items
+    };
 
     let htlc_requests_map: HashMap<String, PreimageRequestWithTransfer> = htlc_requests
         .into_iter()
