@@ -1161,14 +1161,16 @@ pub struct FreezeIssuerTokenResponse {
     pub impacted_token_amount: u128,
 }
 
-impl TryFrom<operator_rpc::spark_token::FreezeIssuerTokenResponse> for FreezeIssuerTokenResponse {
+impl TryFrom<operator_rpc::spark_token::FreezeTokensResponse> for FreezeIssuerTokenResponse {
     type Error = ServiceError;
 
     fn try_from(
-        response: operator_rpc::spark_token::FreezeIssuerTokenResponse,
+        response: operator_rpc::spark_token::FreezeTokensResponse,
     ) -> Result<Self, Self::Error> {
+        #[allow(deprecated)]
+        let impacted_output_ids = response.impacted_output_ids;
         Ok(FreezeIssuerTokenResponse {
-            impacted_output_ids: response.impacted_output_ids,
+            impacted_output_ids,
             impacted_token_amount: u128::from_unpadded_be_bytes(
                 response.impacted_token_amount.as_slice(),
             )
@@ -1364,6 +1366,7 @@ mod tests {
                 updated_time: None,
             }),
             status: "AVAILABLE".to_string(),
+            treenode_status: 0,
             network: 0,
             created_time: None,
             updated_time: None,
@@ -1449,6 +1452,8 @@ mod tests {
                         bech32m_decode_token_id(token_identifier, Some(Network::Regtest)).unwrap(),
                     ),
                     token_amount: token_amount.to_be_bytes().to_vec(),
+                    se_withdrawal_signature: None,
+                    status: None,
                 }),
                 previous_transaction_hash: previous_transaction_hash.clone(),
                 previous_transaction_vout,
