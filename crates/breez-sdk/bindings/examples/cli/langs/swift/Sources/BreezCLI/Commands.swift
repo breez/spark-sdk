@@ -786,15 +786,26 @@ func handleGetLightningAddress(_ sdk: BreezSdk, _ args: [String]) async throws {
 func handleRegisterLightningAddress(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard let username = fp.positional.first else {
-        print("Usage: register-lightning-address <username> [-d <description>]")
+        print("Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]")
         return
     }
 
     let description = fp.get("d", "description")
+    let transferPubkey = fp.get("transfer-pubkey")
+    let transferSignature = fp.get("transfer-signature")
+
+    if (transferPubkey == nil) != (transferSignature == nil) {
+        print("Error: --transfer-pubkey and --transfer-signature must be provided together")
+        return
+    }
+    let transfer: LightningAddressTransfer? = transferPubkey.map {
+        LightningAddressTransfer(pubkey: $0, signature: transferSignature!)
+    }
 
     let result = try await sdk.registerLightningAddress(request: RegisterLightningAddressRequest(
         username: username,
-        description: description
+        description: description,
+        transfer: transfer
     ))
     printValue(result)
 }

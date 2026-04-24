@@ -964,15 +964,25 @@ async function handleGetLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: T
 async function handleRegisterLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 1) {
-    return 'Usage: register-lightning-address <username> [-d <description>]'
+    return 'Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]'
   }
 
   const username = positional[0]
   const description = parseFlag(args, '--description', '-d')
+  const transferPubkey = parseFlag(args, '--transfer-pubkey')
+  const transferSignature = parseFlag(args, '--transfer-signature')
+
+  if (Boolean(transferPubkey) !== Boolean(transferSignature)) {
+    return 'Error: --transfer-pubkey and --transfer-signature must be provided together'
+  }
+  const transfer = transferPubkey
+    ? { pubkey: transferPubkey, signature: transferSignature! }
+    : undefined
 
   const result = await sdk.registerLightningAddress({
     username,
     description,
+    transfer,
   })
   return formatValue(result)
 }

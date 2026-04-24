@@ -304,6 +304,18 @@ pub enum Command {
 
         /// Description in the lnurl response and the invoice.
         description: Option<String>,
+
+        /// Hex-encoded pubkey of the current owner transferring the username.
+        /// Must be paired with --transfer-signature.
+        #[arg(long)]
+        transfer_pubkey: Option<String>,
+
+        /// Hex-encoded DER ECDSA signature by the current owner over
+        /// `transfer:{transfer_pubkey}-{username}-{self_pubkey}`. Obtain via
+        /// the current owner's sign-message on that exact string.
+        /// Must be paired with --transfer-pubkey.
+        #[arg(long)]
+        transfer_signature: Option<String>,
     },
     DeleteLightningAddress,
     /// List fiat currencies
@@ -867,11 +879,25 @@ pub(crate) async fn execute_command(
         Command::RegisterLightningAddress {
             username,
             description,
+            transfer_pubkey,
+            transfer_signature,
         } => {
+            let transfer = match (transfer_pubkey, transfer_signature) {
+                (Some(pubkey), Some(signature)) => {
+                    Some(breez_sdk_spark::LightningAddressTransfer { pubkey, signature })
+                }
+                (None, None) => None,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "--transfer-pubkey and --transfer-signature must be provided together"
+                    ));
+                }
+            };
             let res = sdk
                 .register_lightning_address(RegisterLightningAddressRequest {
                     username,
                     description,
+                    transfer,
                 })
                 .await?;
             print_value(&res)?;

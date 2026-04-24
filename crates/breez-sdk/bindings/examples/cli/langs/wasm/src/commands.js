@@ -632,11 +632,20 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .description('Register a lightning address')
     .argument('<username>', 'The lightning address username')
     .argument('[description]', 'Description in the lnurl response and the invoice')
-    .action(async (username, description) => {
+    .option('--transfer-pubkey <pubkey>', 'Pubkey of the current owner when taking over a username')
+    .option('--transfer-signature <signature>', "Signature by the current owner over 'transfer:{owner}-{username}-{self}'")
+    .action(async (username, description, opts) => {
       const sdk = getSdk()
+      if (Boolean(opts.transferPubkey) !== Boolean(opts.transferSignature)) {
+        throw new Error('--transfer-pubkey and --transfer-signature must be provided together')
+      }
+      const transfer = opts.transferPubkey
+        ? { pubkey: opts.transferPubkey, signature: opts.transferSignature }
+        : undefined
       const res = await sdk.registerLightningAddress({
         username,
-        description
+        description,
+        transfer
       })
       printValue(res)
     })

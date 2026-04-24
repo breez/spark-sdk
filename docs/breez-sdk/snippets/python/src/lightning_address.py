@@ -2,9 +2,11 @@ from breez_sdk_spark import (
     BreezSdk,
     CheckLightningAddressRequest,
     GetPaymentRequest,
+    LightningAddressTransfer,
     Network,
     PaymentDetails,
     RegisterLightningAddressRequest,
+    SignMessageRequest,
     default_config
 )
 
@@ -55,6 +57,52 @@ async def get_lightning_address(sdk: BreezSdk):
         lnurl_url = address_info_opt.lnurl.url
         lnurl_bech32 = address_info_opt.lnurl.bech32
     # ANCHOR_END: get-lightning-address
+
+
+# Run on the *current owner's* wallet. Produces the authorization that the
+# new owner needs to take over the username in a single atomic call.
+async def sign_lightning_address_transfer(
+    current_owner_sdk: BreezSdk,
+    current_owner_pubkey: str,
+    new_owner_pubkey: str,
+) -> LightningAddressTransfer:
+    username = "myusername"
+
+    # ANCHOR: sign-lightning-address-transfer
+    # `username` must be lowercased and trimmed.
+    # pubkeys are hex-encoded secp256k1 compressed (via get_info().identity_pubkey).
+    message = f"transfer:{current_owner_pubkey}-{username}-{new_owner_pubkey}"
+    signed = await current_owner_sdk.sign_message(
+        SignMessageRequest(message=message, compact=False)
+    )
+
+    transfer = LightningAddressTransfer(
+        pubkey=signed.pubkey,
+        signature=signed.signature,
+    )
+    # ANCHOR_END: sign-lightning-address-transfer
+    return transfer
+
+
+# Run on the *new owner's* wallet with the authorization received
+# out-of-band from the current owner.
+async def register_lightning_address_via_transfer(
+    new_owner_sdk: BreezSdk,
+    transfer: LightningAddressTransfer,
+):
+    username = "myusername"
+    description = "My Lightning Address"
+
+    # ANCHOR: register-lightning-address-transfer
+    request = RegisterLightningAddressRequest(
+        username=username,
+        description=description,
+        transfer=transfer,
+    )
+
+    address_info = await new_owner_sdk.register_lightning_address(request)
+    # ANCHOR_END: register-lightning-address-transfer
+    return address_info
 
 
 async def delete_lightning_address(sdk: BreezSdk):

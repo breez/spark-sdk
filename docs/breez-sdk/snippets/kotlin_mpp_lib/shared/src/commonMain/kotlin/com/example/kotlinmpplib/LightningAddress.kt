@@ -55,6 +55,51 @@ class LightningAddress {
         // ANCHOR_END: get-lightning-address
     }
 
+    // Run on the *current owner's* wallet. Produces the authorization that the
+    // new owner needs to take over the username in a single atomic call.
+    suspend fun signLightningAddressTransfer(
+        currentOwnerSdk: BreezSdk,
+        currentOwnerPubkey: String,
+        newOwnerPubkey: String,
+    ): LightningAddressTransfer {
+        val username = "myusername"
+
+        // ANCHOR: sign-lightning-address-transfer
+        // `username` must be lowercased and trimmed.
+        // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
+        val message = "transfer:$currentOwnerPubkey-$username-$newOwnerPubkey"
+        val signed = currentOwnerSdk.signMessage(
+            SignMessageRequest(message = message, compact = false)
+        )
+
+        val transfer = LightningAddressTransfer(
+            pubkey = signed.pubkey,
+            signature = signed.signature,
+        )
+        // ANCHOR_END: sign-lightning-address-transfer
+        return transfer
+    }
+
+    // Run on the *new owner's* wallet with the authorization received
+    // out-of-band from the current owner.
+    suspend fun registerLightningAddressViaTransfer(
+        newOwnerSdk: BreezSdk,
+        transfer: LightningAddressTransfer,
+    ) {
+        val username = "myusername"
+        val description = "My Lightning Address"
+
+        // ANCHOR: register-lightning-address-transfer
+        val request = RegisterLightningAddressRequest(
+            username = username,
+            description = description,
+            transfer = transfer,
+        )
+
+        val addressInfo = newOwnerSdk.registerLightningAddress(request)
+        // ANCHOR_END: register-lightning-address-transfer
+    }
+
     suspend fun deleteLightningAddress(sdk: BreezSdk) {
         // ANCHOR: delete-lightning-address
         sdk.deleteLightningAddress()

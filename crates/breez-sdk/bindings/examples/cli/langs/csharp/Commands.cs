@@ -994,17 +994,29 @@ public static class Commands
     private static async Task HandleRegisterLightningAddress(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
         var description = GetFlag(args, "-d", "--description");
+        var transferPubkey = GetFlag(args, "--transfer-pubkey");
+        var transferSignature = GetFlag(args, "--transfer-signature");
         var positional = GetPositionalArgs(args);
 
         if (positional.Length < 1)
         {
-            Console.WriteLine("Usage: register-lightning-address <username> [-d <description>]");
+            Console.WriteLine("Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]");
             return;
         }
 
+        if ((transferPubkey == null) != (transferSignature == null))
+        {
+            Console.WriteLine("Error: --transfer-pubkey and --transfer-signature must be provided together");
+            return;
+        }
+        LightningAddressTransfer? transfer = transferPubkey == null
+            ? null
+            : new LightningAddressTransfer(pubkey: transferPubkey, signature: transferSignature!);
+
         var result = await sdk.RegisterLightningAddress(new RegisterLightningAddressRequest(
             username: positional[0],
-            description: description
+            description: description,
+            transfer: transfer
         ));
         Serialization.PrintValue(result);
     }

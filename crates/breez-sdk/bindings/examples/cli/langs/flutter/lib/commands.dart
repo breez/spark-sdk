@@ -773,13 +773,34 @@ Future<void> _handleGetLightningAddress(BreezSdk sdk, TokenIssuer tokenIssuer, L
 
 Future<void> _handleRegisterLightningAddress(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args) async {
   if (args.isEmpty || args.first == 'help' || args.first == '--help') {
-    print('Usage: register-lightning-address <username> [description]');
+    print('Usage: register-lightning-address <username> [description] [--transfer-pubkey <pk> --transfer-signature <sig>]');
     return;
   }
-  final username = args[0];
-  final description = args.length > 1 ? args[1] : null;
+  final positional = args.where((a) => !a.startsWith('-')).toList();
+  final username = positional[0];
+  final description = positional.length > 1 ? positional[1] : null;
+
+  String? flagValue(String name) {
+    final i = args.indexOf(name);
+    return (i >= 0 && i + 1 < args.length) ? args[i + 1] : null;
+  }
+
+  final transferPubkey = flagValue('--transfer-pubkey');
+  final transferSignature = flagValue('--transfer-signature');
+  if ((transferPubkey == null) != (transferSignature == null)) {
+    print('Error: --transfer-pubkey and --transfer-signature must be provided together');
+    return;
+  }
+  final transfer = transferPubkey == null
+      ? null
+      : LightningAddressTransfer(pubkey: transferPubkey, signature: transferSignature!);
+
   final result = await sdk.registerLightningAddress(
-    request: RegisterLightningAddressRequest(username: username, description: description),
+    request: RegisterLightningAddressRequest(
+      username: username,
+      description: description,
+      transfer: transfer,
+    ),
   );
   printValue(result);
 }

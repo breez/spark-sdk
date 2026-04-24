@@ -931,13 +931,15 @@ func handleRegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk, _ *readline.I
 	fs := flag.NewFlagSet("register-lightning-address", flag.ContinueOnError)
 	description := fs.String("d", "", "Optional description")
 	fs.StringVar(description, "description", "", "Optional description")
+	transferPubkey := fs.String("transfer-pubkey", "", "Pubkey of the current owner when taking over a username")
+	transferSignature := fs.String("transfer-signature", "", "Signature by the current owner over 'transfer:{owner}-{username}-{self}'")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	positional := fs.Args()
 	if len(positional) < 1 {
-		fmt.Println("Usage: register-lightning-address <username> [-d <description>]")
+		fmt.Println("Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]")
 		return nil
 	}
 
@@ -946,6 +948,15 @@ func handleRegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk, _ *readline.I
 	}
 	if *description != "" {
 		req.Description = description
+	}
+	if (*transferPubkey != "") != (*transferSignature != "") {
+		return fmt.Errorf("--transfer-pubkey and --transfer-signature must be provided together")
+	}
+	if *transferPubkey != "" {
+		req.Transfer = &breez_sdk_spark.LightningAddressTransfer{
+			Pubkey:    *transferPubkey,
+			Signature: *transferSignature,
+		}
 	}
 
 	result, err := sdk.RegisterLightningAddress(req)

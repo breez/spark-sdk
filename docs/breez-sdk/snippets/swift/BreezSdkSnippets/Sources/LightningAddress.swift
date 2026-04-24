@@ -51,6 +51,51 @@ func getLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: get-lightning-address
 }
 
+// Run on the *current owner's* wallet. Produces the authorization that the
+// new owner needs to take over the username in a single atomic call.
+func signLightningAddressTransfer(
+    currentOwnerSdk: BreezSdk,
+    currentOwnerPubkey: String,
+    newOwnerPubkey: String
+) async throws -> LightningAddressTransfer {
+    let username = "myusername"
+
+    // ANCHOR: sign-lightning-address-transfer
+    // `username` must be lowercased and trimmed.
+    // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
+    let message = "transfer:\(currentOwnerPubkey)-\(username)-\(newOwnerPubkey)"
+    let signed = try await currentOwnerSdk.signMessage(
+        request: SignMessageRequest(message: message, compact: false)
+    )
+
+    let transfer = LightningAddressTransfer(
+        pubkey: signed.pubkey,
+        signature: signed.signature
+    )
+    // ANCHOR_END: sign-lightning-address-transfer
+    return transfer
+}
+
+// Run on the *new owner's* wallet with the authorization received
+// out-of-band from the current owner.
+func registerLightningAddressViaTransfer(
+    newOwnerSdk: BreezSdk,
+    transfer: LightningAddressTransfer
+) async throws {
+    let username = "myusername"
+    let description = "My Lightning Address"
+
+    // ANCHOR: register-lightning-address-transfer
+    let request = RegisterLightningAddressRequest(
+        username: username,
+        description: description,
+        transfer: transfer
+    )
+
+    let addressInfo = try await newOwnerSdk.registerLightningAddress(request: request)
+    // ANCHOR_END: register-lightning-address-transfer
+}
+
 func deleteLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR: delete-lightning-address
     try await sdk.deleteLightningAddress()

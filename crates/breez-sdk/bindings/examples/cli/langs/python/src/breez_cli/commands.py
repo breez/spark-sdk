@@ -20,6 +20,7 @@ from breez_sdk_spark import (
     GetPaymentRequest,
     GetTokensMetadataRequest,
     InputType,
+    LightningAddressTransfer,
     ListPaymentsRequest,
     ListUnclaimedDepositsRequest,
     LnurlPayRequest,
@@ -651,13 +652,24 @@ def _build_register_lightning_address_parser():
     p = _parser("register-lightning-address", "Register a lightning address")
     p.add_argument("username", help="The lightning address username")
     p.add_argument("description", nargs="?", default=None, help="Description for the lnurl response")
+    p.add_argument("--transfer-pubkey", default=None, help="Pubkey of the current owner when taking over a username")
+    p.add_argument("--transfer-signature", default=None, help="Signature by the current owner over 'transfer:{owner}-{username}-{self}'")
     return p
 
 async def _handle_register_lightning_address(sdk, _token_issuer, _session, args):
+    if bool(args.transfer_pubkey) != bool(args.transfer_signature):
+        raise ValueError("--transfer-pubkey and --transfer-signature must be provided together")
+    transfer = None
+    if args.transfer_pubkey:
+        transfer = LightningAddressTransfer(
+            pubkey=args.transfer_pubkey,
+            signature=args.transfer_signature,
+        )
     result = await sdk.register_lightning_address(
         request=RegisterLightningAddressRequest(
             username=args.username,
             description=args.description,
+            transfer=transfer,
         )
     )
     print_value(result)

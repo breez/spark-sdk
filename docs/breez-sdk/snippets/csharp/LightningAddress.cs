@@ -61,6 +61,49 @@ namespace BreezSdkSnippets
             // ANCHOR_END: get-lightning-address
         }
 
+        // Run on the *current owner's* wallet. Produces the authorization that the
+        // new owner needs to take over the username in a single atomic call.
+        async Task<LightningAddressTransfer> SignLightningAddressTransfer(
+            BreezSdk currentOwnerSdk,
+            string currentOwnerPubkey,
+            string newOwnerPubkey)
+        {
+            var username = "myusername";
+
+            // ANCHOR: sign-lightning-address-transfer
+            // `username` must be lowercased and trimmed.
+            // pubkeys are hex-encoded secp256k1 compressed (via GetInfo().identityPubkey).
+            var message = $"transfer:{currentOwnerPubkey}-{username}-{newOwnerPubkey}";
+            var signed = await currentOwnerSdk.SignMessage(
+                new SignMessageRequest(message: message, compact: false));
+
+            var transfer = new LightningAddressTransfer(
+                pubkey: signed.pubkey,
+                signature: signed.signature);
+            // ANCHOR_END: sign-lightning-address-transfer
+            return transfer;
+        }
+
+        // Run on the *new owner's* wallet with the authorization received
+        // out-of-band from the current owner.
+        async Task RegisterLightningAddressViaTransfer(
+            BreezSdk newOwnerSdk,
+            LightningAddressTransfer transfer)
+        {
+            var username = "myusername";
+            var description = "My Lightning Address";
+
+            // ANCHOR: register-lightning-address-transfer
+            var request = new RegisterLightningAddressRequest(
+                username: username,
+                description: description,
+                transfer: transfer
+            );
+
+            var addressInfo = await newOwnerSdk.RegisterLightningAddress(request);
+            // ANCHOR_END: register-lightning-address-transfer
+        }
+
         async Task DeleteLightningAddress(BreezSdk sdk)
         {
             // ANCHOR: delete-lightning-address
