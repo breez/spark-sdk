@@ -379,11 +379,21 @@ impl SparkAddress {
                     all_hashes.push(sha256::Hash::hash(&[0; 32]).to_byte_array().to_vec());
                 }
 
-                all_hashes.push(
-                    sha256::Hash::hash(&u128::to_unpadded_be_bytes(&payment.amount.unwrap_or(0)))
-                        .to_byte_array()
-                        .to_vec(),
-                );
+                // Match JS/Go/spark-token-primitives: None/empty amount hashes empty bytes,
+                // not `[0]`. A present amount hashes its canonical unpadded big-endian
+                // representation (the convention all senders use).
+                match payment.amount {
+                    Some(amount) => {
+                        all_hashes.push(
+                            sha256::Hash::hash(&u128::to_unpadded_be_bytes(&amount))
+                                .to_byte_array()
+                                .to_vec(),
+                        );
+                    }
+                    None => {
+                        all_hashes.push(sha256::Hash::hash(&[]).to_byte_array().to_vec());
+                    }
+                }
             }
             Some(SparkAddressPaymentType::SatsPayment(payment)) => {
                 all_hashes.push(sha256::Hash::hash(&[2]).to_byte_array().to_vec());
@@ -951,5 +961,147 @@ mod tests {
         // Parsing should work but then fail when converting the proto payment intent
         let result = SparkAddress::from_str(&address);
         assert!(result.is_err());
+    }
+
+    /// Cross-language signing-hash fixtures. JS is the source of truth; these vectors are
+    /// shared with Go and spark-token-primitives. If this test fails, Breez's hash has drifted
+    /// from the rest of the ecosystem and signatures produced elsewhere will not verify.
+    mod invoice_hash_fixtures {
+        use super::super::*;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use macros::test_all;
+        use platform_utils::time::{Duration, UNIX_EPOCH};
+        use serde::Deserialize;
+
+        const FIXTURE_JSON: &str =
+            include_str!("../../testdata/token_invoice_signing_hash_cases.json");
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureFile {
+            test_cases: Vec<FixtureCase>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureCase {
+            name: String,
+            network: String,
+            receiver_public_key: String,
+            expected_hash: String,
+            spark_invoice_fields: FixtureFields,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureFields {
+            version: u32,
+            id: String,
+            #[serde(default)]
+            memo: Option<String>,
+            #[serde(default)]
+            sender_public_key: Option<String>,
+            #[serde(default)]
+            expiry_time: Option<String>,
+            #[serde(default)]
+            tokens_payment: Option<FixtureTokens>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureTokens {
+            #[serde(default)]
+            token_identifier: Option<String>,
+            #[serde(default)]
+            amount: Option<String>,
+        }
+
+        fn b64(s: &str) -> Vec<u8> {
+            STANDARD.decode(s).unwrap()
+        }
+
+        fn parse_network(s: &str) -> Network {
+            match s {
+                "MAINNET" => Network::Mainnet,
+                "REGTEST" => Network::Regtest,
+                "TESTNET" => Network::Testnet,
+                "SIGNET" => Network::Signet,
+                other => panic!("unknown network {other}"),
+            }
+        }
+
+        // Hand-parse the single RFC3339 timestamp used by the fixtures. Keeps tests free of
+        // a time-parsing dependency; update the match arms if new fixture cases are added.
+        fn fixture_expiry_seconds(s: &str) -> u64 {
+            match s {
+                "2025-08-16T22:12:17.791Z" => 1_755_382_337,
+                other => panic!("unhandled fixture expiry time: {other}"),
+            }
+        }
+
+        fn hash_for_case(tc: &FixtureCase) -> Vec<u8> {
+            let network = parse_network(&tc.network);
+            let receiver_pk = PublicKey::from_slice(&b64(&tc.receiver_public_key)).unwrap();
+
+            let id_bytes: [u8; 16] = b64(&tc.spark_invoice_fields.id).try_into().unwrap();
+            let id = uuid::Uuid::from_bytes(id_bytes);
+
+            let sender_public_key = tc
+                .spark_invoice_fields
+                .sender_public_key
+                .as_deref()
+                .map(|s| PublicKey::from_slice(&b64(s)).unwrap());
+
+            let expiry_time = tc
+                .spark_invoice_fields
+                .expiry_time
+                .as_deref()
+                .map(|s| UNIX_EPOCH + Duration::from_secs(fixture_expiry_seconds(s)));
+
+            let payment_type = tc.spark_invoice_fields.tokens_payment.as_ref().map(|tp| {
+                let token_identifier = tp.token_identifier.as_deref().map(|s| {
+                    let raw = b64(s);
+                    assert_eq!(raw.len(), 32, "fixture token id must be 32 bytes");
+                    bech32m_encode_token_id(&raw, network).unwrap()
+                });
+                let amount = tp
+                    .amount
+                    .as_deref()
+                    .map(|s| u128::from_unpadded_be_bytes(&b64(s)).unwrap());
+                SparkAddressPaymentType::TokensPayment(TokensPayment {
+                    token_identifier,
+                    amount,
+                })
+            });
+
+            let fields = SparkInvoiceFields {
+                id,
+                version: tc.spark_invoice_fields.version,
+                memo: tc.spark_invoice_fields.memo.clone(),
+                sender_public_key,
+                expiry_time,
+                payment_type,
+            };
+
+            SparkAddress::new(receiver_pk, network, Some(fields))
+                .compute_invoice_hash()
+                .unwrap()
+        }
+
+        #[test_all]
+        fn compute_invoice_hash_matches_cross_language_fixtures() {
+            let fixture: FixtureFile = serde_json::from_str(FIXTURE_JSON).unwrap();
+            assert!(!fixture.test_cases.is_empty(), "no fixture cases loaded");
+
+            for tc in &fixture.test_cases {
+                let hash = hash_for_case(tc);
+                assert_eq!(
+                    hex::encode(&hash),
+                    tc.expected_hash,
+                    "fixture case `{}` hash mismatch",
+                    tc.name
+                );
+            }
+        }
     }
 }
