@@ -71,14 +71,13 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 
-/// Fixture: Alice's SDK with external signer  
+/// Fixture: Alice's SDK with external signer
 #[fixture]
 pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
     let alice_dir = TempDir::new("breez-sdk-alice-ext-signer")?;
     let path = alice_dir.path().to_string_lossy().to_string();
 
-    // Use deterministic test mnemonic for Alice
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string();
+    let mnemonic = random_mnemonic()?;
 
     info!("Initializing Alice's SDK with external signer at: {}", path);
     build_sdk_with_external_signer(path, mnemonic, Some(alice_dir)).await
@@ -90,11 +89,16 @@ pub async fn bob_external_signer_sdk() -> Result<SdkInstance> {
     let bob_dir = TempDir::new("breez-sdk-bob-ext-signer")?;
     let path = bob_dir.path().to_string_lossy().to_string();
 
-    // Use different deterministic test mnemonic for Bob
-    let mnemonic = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong".to_string();
+    let mnemonic = random_mnemonic()?;
 
     info!("Initializing Bob's SDK with external signer at: {}", path);
     build_sdk_with_external_signer(path, mnemonic, Some(bob_dir)).await
+}
+
+fn random_mnemonic() -> Result<String> {
+    let mut entropy = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut entropy);
+    Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
 }
 
 /// Fixture: Alice's SDK with stable balance config
