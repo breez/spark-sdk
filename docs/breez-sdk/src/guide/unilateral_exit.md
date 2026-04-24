@@ -20,11 +20,10 @@ The diagram above shows the structure for a single leaf. The node transactions f
 ## Overview of the process
 
 1. **List your leaves** to decide which ones to exit
-2. **Prepare the unilateral exit** — the SDK builds all transactions and CPFP PSBTs
-3. **Sign the CPFP PSBTs** with your external UTXO's private key
-4. **Broadcast the packages** sequentially — each parent+child pair, waiting for confirmation between each
-5. **Wait for timelocks** on the leaf and refund transactions
-6. **Broadcast the sweep transaction** to collect your funds
+2. **Prepare the unilateral exit** — the SDK builds all transactions, signs the CPFP fee-bump transactions using your provided signer, and returns signed transactions ready to broadcast
+3. **Broadcast the packages** sequentially — each parent+child pair, waiting for confirmation between each
+4. **Wait for timelocks** on the leaf and refund transactions
+5. **Broadcast the sweep transaction** to collect your funds
 
 ## Step 1: List your leaves
 
@@ -47,97 +46,27 @@ Each leaf requires broadcasting several transactions with fees. A leaf with a sm
 
 Call {{#name prepare_unilateral_exit}} with:
 - The **leaf IDs** you want to exit
-- One or more **external UTXOs** to fund the CPFP fee-bump transactions
+- One or more **CPFP inputs** (external UTXOs) to fund the CPFP fee-bump transactions
 - A **fee rate** in sats/vbyte
 - A **destination address** where your funds will be swept to
+- A **signer** that can sign the CPFP transactions
 
-The external UTXO must be a UTXO you control (P2WPKH or P2TR) with enough value to cover all CPFP fees. You will need the private key for this UTXO to sign the CPFP transactions.
+The CPFP inputs must be UTXOs you control. The SDK provides a default `SingleKeySigner` that handles P2WPKH and P2TR inputs from a single private key. For custom signing needs (e.g., multisig), you can implement the `CpfpSigner` trait yourself.
+
+Change from CPFP fee-bumping always goes back to the first input's address.
 
 {{#tabs unilateral_exit:prepare-unilateral-exit}}
 
 The response contains:
-- **{{#name leaves}}**: For each leaf, an ordered list of transaction/PSBT pairs to broadcast
+- **{{#name leaves}}**: For each leaf, an ordered list of signed transaction pairs to broadcast
 - **{{#name sweep_tx_hex}}**: A fully signed transaction that sweeps all refund outputs to your destination
 
 Each transaction pair contains:
 - **{{#name parent_tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
-- **{{#name child_psbt_hex}}**: An unsigned PSBT for the CPFP fee-bump transaction — **you must sign this**
+- **{{#name child_tx_hex}}**: The signed CPFP fee-bump transaction (ready to broadcast)
 - **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the previous transaction confirms before this transaction can be included in a block
 
-## Step 3: Sign the CPFP PSBTs
-
-Each {{#name child_psbt_hex}} is an unsigned PSBT that spends from your external UTXO (and the parent transaction's ephemeral anchor output). You need to sign it with the private key of your external UTXO.
-
-The PSBT contains two inputs:
-1. **Your UTXO input** — requires your signature (P2WPKH or P2TR key-path spend)
-2. **The ephemeral anchor input** — requires an empty witness (no signature needed)
-
-Use any Bitcoin PSBT signing library to sign the PSBT. Here is an example using the `bitcoin` crate in Rust:
-
-```rust
-use bitcoin::{Psbt, PrivateKey, Witness, ecdsa::Signature, key::Secp256k1, sighash::SighashCache};
-
-fn sign_cpfp_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) {
-    let secp = Secp256k1::new();
-    let pubkey = signing_key.public_key(&secp);
-
-    // Collect prevouts for sighash computation
-    let prevouts: Vec<_> = psbt.inputs.iter()
-        .map(|input| input.witness_utxo.clone().unwrap())
-        .collect();
-
-    let mut cache = SighashCache::new(&psbt.unsigned_tx);
-
-    for (i, input) in psbt.inputs.iter_mut().enumerate() {
-        let tx_out = input.witness_utxo.as_ref().unwrap();
-
-        if tx_out.value.to_sat() == 0 {
-            // Ephemeral anchor input — empty witness
-            input.final_script_witness = Some(Witness::new());
-        } else if tx_out.script_pubkey.is_p2wpkh() {
-            // P2WPKH input — ECDSA signature
-            let (msg, sighash_type) = psbt.sighash_ecdsa(i, &mut cache).unwrap();
-            let sig = secp.sign_ecdsa(&msg, &signing_key.inner);
-            let signature = Signature { signature: sig, sighash_type };
-            let mut witness = Witness::new();
-            witness.push(signature.to_vec());
-            witness.push(pubkey.to_bytes());
-            input.final_script_witness = Some(witness);
-        } else if tx_out.script_pubkey.is_p2tr() {
-            // P2TR input — Schnorr key-path spend
-            let prevouts_ref = bitcoin::sighash::Prevouts::All(&prevouts);
-            let sighash = cache.taproot_key_spend_signature_hash(
-                i, &prevouts_ref, bitcoin::sighash::TapSighashType::Default,
-            ).unwrap();
-            let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner);
-            let msg = bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array());
-            let schnorr_sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
-            let tap_sig = bitcoin::taproot::Signature {
-                signature: schnorr_sig,
-                sighash_type: bitcoin::sighash::TapSighashType::Default,
-            };
-            let mut witness = Witness::new();
-            witness.push(tap_sig.to_vec());
-            input.final_script_witness = Some(witness);
-        }
-    }
-}
-
-// Sign each CPFP PSBT
-for leaf in &response.leaves {
-    for pair in &leaf.tx_cpfp_psbts {
-        let mut psbt = Psbt::deserialize(&hex::decode(&pair.child_psbt_hex)?)?;
-        sign_cpfp_psbt(&mut psbt, &your_private_key);
-        let signed_tx = psbt.extract_tx()?;
-        let signed_tx_hex = bitcoin::consensus::encode::serialize_hex(&signed_tx);
-        // Store signed_tx_hex for broadcasting
-    }
-}
-```
-
-After signing, you can extract the final transaction from the PSBT using `extract_tx()`. You now have a pair of hex-encoded transactions for each step: the **parent transaction** and the **signed CPFP child transaction**.
-
-## Step 4: Broadcast the packages
+## Step 3: Broadcast the packages
 
 Bitcoin Core enforces a **1-parent-1-child (1p1c)** package relay policy. This means you must broadcast each parent+child pair as a **package** and wait for it to confirm before broadcasting the next one.
 
@@ -157,7 +86,7 @@ For each leaf, the transaction pairs are returned in the order they must be broa
 Submit the parent transaction and the signed CPFP child transaction together as a package. If your Bitcoin node supports `submitpackage` (Bitcoin Core 28.0+), use it:
 
 ```
-bitcoin-cli submitpackage '["<parent_tx_hex>", "<signed_cpfp_child_tx_hex>"]'
+bitcoin-cli submitpackage '["<parent_tx_hex>", "<child_tx_hex>"]'
 ```
 
 Many block explorers also support package submission by accepting a comma-separated pair of raw transactions.
@@ -175,17 +104,17 @@ The timelock is a <b>relative</b> lock (BIP68 CSV). It counts blocks from the co
 
 ```
 For each leaf in the response:
-    For each (parent_tx, signed_cpfp_child_tx) pair:
+    For each (parent_tx, child_tx) pair:
         1. If csv_timelock_blocks is set:
              Wait until the previous transaction has at least
              csv_timelock_blocks confirmations.
-        2. Submit the package: [parent_tx_hex, signed_cpfp_child_tx_hex]
+        2. Submit the package: [parent_tx_hex, child_tx_hex]
         3. Wait for the package to confirm (at least 1 confirmation).
 ```
 
 If you are exiting multiple leaves, some node transactions may be shared between leaves (they share the same path from the root). The SDK deduplicates these automatically — each unique node transaction appears only once in the first leaf that uses it. Subsequent leaves start from where the shared path diverges.
 
-## Step 5: Broadcast the sweep transaction
+## Step 4: Broadcast the sweep transaction
 
 After **all** refund transactions for all leaves have confirmed, broadcast the sweep transaction ({{#name sweep_tx_hex}}). This is a standard Bitcoin transaction (not a package) that spends from all refund outputs and sends the total value (minus fees) to your destination address.
 
@@ -217,7 +146,7 @@ Ensure the external UTXO has enough value to cover all CPFP fees for all leaves 
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | "min relay fee not met" | CPFP fee too low for the package | Increase the {{#name fee_rate}} parameter |
-| "mandatory-script-verify-flag-failed" | PSBT not signed correctly | Ensure you are finalizing the PSBT inputs (setting `final_script_witness`) before extracting |
+| "mandatory-script-verify-flag-failed" | CPFP transaction not signed correctly | Ensure your `CpfpSigner` implementation signs all inputs correctly |
 | "non-BIP68-final" | Timelock has not expired | Wait for the required number of confirmations on the previous transaction |
 | Transaction not relayed | Parent+child not submitted as package | Use `submitpackage` or a block explorer's package submission |
 | Sweep transaction rejected | Not all refund TXs confirmed yet | Wait for all refund transactions to confirm before broadcasting the sweep |

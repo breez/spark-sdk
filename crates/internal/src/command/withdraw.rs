@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, Address, PrivateKey, Psbt, TxOut, Txid, Witness,
+    self, Address, Amount, OutPoint, PrivateKey, Psbt, TxOut, Txid, Witness,
     bip32::{DerivationPath, Xpriv},
     consensus::encode::serialize_hex,
     ecdsa::Signature,
@@ -12,7 +12,7 @@ use bitcoin::{
 };
 use clap::Subcommand;
 use spark_wallet::{
-    CpfpUtxoType, Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+    CpfpInput, Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -32,9 +32,9 @@ impl From<ExitSpeed> for spark_wallet::ExitSpeed {
     }
 }
 
-struct CpfpUtxo(spark_wallet::CpfpUtxo);
+struct ParsedCpfpInput(CpfpInput);
 
-impl std::str::FromStr for CpfpUtxo {
+impl std::str::FromStr for ParsedCpfpInput {
     type Err = Box<dyn std::error::Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -52,26 +52,36 @@ impl std::str::FromStr for CpfpUtxo {
         let pubkey_bytes = hex::decode(parts[3])?;
         let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
 
-        let utxo_type = if parts.len() == 5 {
-            match parts[4] {
-                "p2wpkh" => CpfpUtxoType::P2wpkh,
-                "p2tr" => CpfpUtxoType::P2tr,
-                other => {
-                    return Err(
-                        format!("Unknown UTXO type '{other}', expected p2wpkh or p2tr").into(),
-                    );
-                }
+        let utxo_type = if parts.len() == 5 { parts[4] } else { "p2wpkh" };
+
+        let (script_pubkey, signed_input_weight) = match utxo_type {
+            "p2wpkh" => {
+                let script = bitcoin::Address::p2wpkh(
+                    &bitcoin::CompressedPublicKey(pubkey),
+                    bitcoin::Network::Bitcoin,
+                )
+                .script_pubkey();
+                (script, 272)
             }
-        } else {
-            CpfpUtxoType::P2wpkh
+            "p2tr" => {
+                let secp = bitcoin::key::Secp256k1::new();
+                let (xonly, _) = pubkey.x_only_public_key();
+                let script = bitcoin::Address::p2tr(&secp, xonly, None, bitcoin::Network::Bitcoin)
+                    .script_pubkey();
+                (script, 230)
+            }
+            other => {
+                return Err(format!("Unknown UTXO type '{other}', expected p2wpkh or p2tr").into());
+            }
         };
 
-        Ok(CpfpUtxo(spark_wallet::CpfpUtxo {
-            txid,
-            vout,
-            value,
-            pubkey,
-            utxo_type,
+        Ok(ParsedCpfpInput(CpfpInput {
+            outpoint: OutPoint { txid, vout },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey,
+            },
+            signed_input_weight,
         }))
     }
 }
@@ -152,11 +162,11 @@ pub async fn handle_command(
                 .transpose()?
                 .map(|pk| PrivateKey::new(pk, network));
 
-            let utxos = utxos
+            let inputs = utxos
                 .into_iter()
-                .map(|s| CpfpUtxo::from_str(&s).map(|wrapper| wrapper.0))
+                .map(|s| ParsedCpfpInput::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
+            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, inputs).await?;
 
             for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
                 println!();

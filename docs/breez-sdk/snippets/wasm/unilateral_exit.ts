@@ -1,5 +1,6 @@
 import type {
   BreezSdk,
+  CpfpSigner,
   Leaf,
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark'
@@ -20,30 +21,35 @@ const exampleListLeavesForExit = async (sdk: BreezSdk): Promise<Leaf[]> => {
 const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitResponse> => {
   // ANCHOR: prepare-unilateral-exit
   const leafIds = ['leaf-id-1', 'leaf-id-2']
+  const signer: CpfpSigner = {
+    signPsbt: async (_psbtBytes: Uint8Array): Promise<Uint8Array> => {
+      // Sign the PSBT with your UTXO key and return the signed bytes
+      throw new Error('not implemented')
+    }
+  }
+  const response = await sdk.prepareUnilateralExit(
+    {
+      feeRate: 2,
+      leafIds,
+      inputs: [{
+        type: 'p2wpkh',
+        txid: 'your-utxo-txid',
+        vout: 0,
+        value: BigInt(50_000),
+        pubkey: 'your-compressed-pubkey-hex'
+      }],
+      destination: 'bc1q...your-destination-address'
+    },
+    signer
+  )
 
-  const response = await sdk.prepareUnilateralExit({
-    feeRate: 2,
-    leafIds,
-    utxos: [{
-      txid: 'your-utxo-txid',
-      vout: 0,
-      value: 50_000,
-      pubkey: 'your-compressed-pubkey-hex',
-      utxoType: 'p2wpkh'
-    }],
-    destination: 'bc1q...your-destination-address'
-  })
-
-  // The response contains:
-  // - response.leaves: transaction/PSBT pairs to sign and broadcast
-  // - response.sweepTxHex: signed sweep transaction for the final step
   for (const leaf of response.leaves) {
-    for (const pair of leaf.txCpfpPsbts) {
+    for (const pair of leaf.txCpfpPairs) {
       if (pair.csvTimelockBlocks != null) {
         console.log(`Timelock: wait ${pair.csvTimelockBlocks} blocks`)
       }
       // pair.parentTxHex: pre-signed Spark transaction
-      // pair.childPsbtHex: unsigned CPFP PSBT — sign with your UTXO key
+      // pair.childTxHex: signed CPFP transaction — broadcast alongside parent
     }
   }
   // ANCHOR_END: prepare-unilateral-exit

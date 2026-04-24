@@ -27,7 +27,7 @@ use spark::{
         },
     },
     services::{
-        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
+        CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
         LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
         PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
@@ -1267,16 +1267,16 @@ impl SparkWallet {
     /// # Arguments
     /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
     /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
-    /// * `utxos` - The UTXOs to use as inputs for the PSBTs. Supports p2wpkh and p2tr addresses
+    /// * `inputs` - The CPFP inputs to use for fee-bumping
     pub async fn unilateral_exit(
         &self,
         fee_rate: u64,
         leaf_ids: Vec<TreeNodeId>,
-        utxos: Vec<CpfpUtxo>,
+        inputs: Vec<CpfpInput>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
         Ok(self
             .unilateral_exit_service
-            .unilateral_exit(fee_rate, leaf_ids, utxos)
+            .unilateral_exit(fee_rate, leaf_ids, inputs)
             .await?)
     }
 

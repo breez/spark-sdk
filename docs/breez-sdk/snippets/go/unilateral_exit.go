@@ -1,6 +1,7 @@
 package example
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log"
 
@@ -28,34 +29,44 @@ func PrepareExit(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.PrepareUnilate
 	// ANCHOR: prepare-unilateral-exit
 	leafIds := []string{"leaf-id-1", "leaf-id-2"}
 
-	response, err := sdk.PrepareUnilateralExit(breez_sdk_spark.PrepareUnilateralExitRequest{
-		FeeRate: 2,
-		LeafIds: leafIds,
-		Utxos: []breez_sdk_spark.UnilateralExitCpfpUtxo{
-			{
-				Txid:     "your-utxo-txid",
-				Vout:     0,
-				Value:    50_000,
-				Pubkey:   "your-compressed-pubkey-hex",
-				UtxoType: breez_sdk_spark.UnilateralExitCpfpUtxoTypeP2wpkh,
-			},
-		},
-		Destination: "bc1q...your-destination-address",
-	})
+	// Create a signer from your UTXO private key (32-byte secret key)
+	secretKeyBytes, err := hex.DecodeString("your-secret-key-hex")
+	if err != nil {
+		return nil, err
+	}
+	signer, err := breez_sdk_spark.NewSingleKeySigner(secretKeyBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	// The response contains:
-	// - response.Leaves: transaction/PSBT pairs to sign and broadcast
+	response, err := sdk.PrepareUnilateralExit(breez_sdk_spark.PrepareUnilateralExitRequest{
+		FeeRate: 2,
+		LeafIds: leafIds,
+		Inputs: []breez_sdk_spark.UnilateralExitCpfpInput{
+			breez_sdk_spark.UnilateralExitCpfpInputP2wpkh{
+				Txid:   "your-utxo-txid",
+				Vout:   0,
+				Value:  50_000,
+				Pubkey: "your-compressed-pubkey-hex",
+			},
+		},
+		Destination: "bc1q...your-destination-address",
+	}, signer)
+	if err != nil {
+		return nil, err
+	}
+
+	// The response contains signed transactions ready to broadcast:
+	// - response.Leaves: parent/child transaction pairs
 	// - response.SweepTxHex: signed sweep transaction for the final step
+	// Change from CPFP fee-bumping always goes back to the first input's address.
 	for _, leaf := range response.Leaves {
-		for _, pair := range leaf.TxCpfpPsbts {
+		for _, pair := range leaf.TxCpfpPairs {
 			if pair.CsvTimelockBlocks != nil {
 				fmt.Printf("Timelock: wait %d blocks\n", *pair.CsvTimelockBlocks)
 			}
 			// pair.ParentTxHex: pre-signed Spark transaction
-			// pair.ChildPsbtHex: unsigned CPFP PSBT — sign with your UTXO key
+			// pair.ChildTxHex: signed CPFP transaction — broadcast alongside parent
 		}
 	}
 	// ANCHOR_END: prepare-unilateral-exit

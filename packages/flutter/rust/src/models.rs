@@ -189,45 +189,53 @@ pub struct _Leaf {
     pub value: u64,
 }
 
-#[frb(mirror(UnilateralExitCpfpUtxoType))]
-pub enum _UnilateralExitCpfpUtxoType {
-    P2wpkh,
-    P2tr,
-}
-
-#[frb(mirror(UnilateralExitCpfpUtxo))]
-pub struct _UnilateralExitCpfpUtxo {
-    pub txid: String,
-    pub vout: u32,
-    pub value: u64,
-    pub pubkey: String,
-    pub utxo_type: UnilateralExitCpfpUtxoType,
+#[frb(mirror(UnilateralExitCpfpInput))]
+pub enum _UnilateralExitCpfpInput {
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
 }
 
 #[frb(mirror(PrepareUnilateralExitRequest))]
 pub struct _PrepareUnilateralExitRequest {
     pub fee_rate: u64,
     pub leaf_ids: Vec<String>,
-    pub utxos: Vec<UnilateralExitCpfpUtxo>,
+    pub inputs: Vec<UnilateralExitCpfpInput>,
     pub destination: String,
 }
 
-#[frb(mirror(UnilateralExitTxCpfpPsbt))]
-pub struct _UnilateralExitTxCpfpPsbt {
+#[frb(mirror(UnilateralExitTxCpfpPair))]
+pub struct _UnilateralExitTxCpfpPair {
     pub parent_tx_hex: String,
-    pub child_psbt_hex: String,
+    pub child_tx_hex: String,
     pub csv_timelock_blocks: Option<u32>,
 }
 
-#[frb(mirror(UnilateralExitLeafTxCpfpPsbts))]
-pub struct _UnilateralExitLeafTxCpfpPsbts {
+#[frb(mirror(UnilateralExitLeafTxCpfpPairs))]
+pub struct _UnilateralExitLeafTxCpfpPairs {
     pub leaf_id: String,
-    pub tx_cpfp_psbts: Vec<UnilateralExitTxCpfpPsbt>,
+    pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
 }
 
 #[frb(mirror(PrepareUnilateralExitResponse))]
 pub struct _PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+    pub leaves: Vec<UnilateralExitLeafTxCpfpPairs>,
     pub sweep_tx_hex: String,
 }
 

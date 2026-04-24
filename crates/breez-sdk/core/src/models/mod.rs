@@ -1027,28 +1027,40 @@ pub struct Leaf {
     pub value: u64,
 }
 
-/// The type of a CPFP UTXO used to pay fees for a unilateral exit
+/// An input used to pay fees for a unilateral exit via CPFP.
+///
+/// P2WPKH and P2TR variants auto-compute the scriptPubKey and signed input weight from
+/// the provided public key. The Custom variant allows arbitrary script types by providing
+/// these values directly.
+///
+/// Change always goes back to the first input's address.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum UnilateralExitCpfpUtxoType {
-    P2wpkh,
-    P2tr,
-}
-
-/// A UTXO used to pay fees for a unilateral exit via CPFP
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitCpfpUtxo {
-    /// The transaction ID as a hex string
-    pub txid: String,
-    /// The output index
-    pub vout: u32,
-    /// The value in satoshis
-    pub value: u64,
-    /// The public key as a hex string
-    pub pubkey: String,
-    /// The UTXO type
-    pub utxo_type: UnilateralExitCpfpUtxoType,
+pub enum UnilateralExitCpfpInput {
+    /// A P2WPKH input (signed input weight: 272 WU)
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// A P2TR key-path input (signed input weight: 230 WU)
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// A custom input with caller-provided scriptPubKey and weight
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        /// Hex-encoded scriptPubKey of the output being spent
+        script_pubkey_hex: String,
+        /// Expected weight of this input when signed, in weight units (WU)
+        signed_input_weight: u64,
+    },
 }
 
 /// Request to prepare a unilateral exit
@@ -1059,41 +1071,41 @@ pub struct PrepareUnilateralExitRequest {
     pub fee_rate: u64,
     /// The leaf IDs to exit
     pub leaf_ids: Vec<String>,
-    /// UTXOs used to pay fees for the unilateral exit via CPFP
-    pub utxos: Vec<UnilateralExitCpfpUtxo>,
+    /// CPFP inputs used to pay fees for the unilateral exit
+    pub inputs: Vec<UnilateralExitCpfpInput>,
     /// Destination address for the sweep transaction that spends refund outputs
     pub destination: String,
 }
 
-/// A transaction and its CPFP fee-bumping PSBT
+/// A parent transaction and its signed CPFP fee-bumping child transaction
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitTxCpfpPsbt {
-    /// The hex-encoded parent transaction
+pub struct UnilateralExitTxCpfpPair {
+    /// The hex-encoded parent transaction (pre-signed by Spark)
     pub parent_tx_hex: String,
-    /// The hex-encoded CPFP child PSBT
-    pub child_psbt_hex: String,
+    /// The hex-encoded signed CPFP child transaction (ready to broadcast)
+    pub child_tx_hex: String,
     /// If this transaction has a relative timelock (CSV), the number of blocks that
     /// the previous transaction's output must be confirmed before this transaction
     /// can be included in a block. `None` if there is no timelock.
     pub csv_timelock_blocks: Option<u32>,
 }
 
-/// The transactions and PSBTs for a single leaf's unilateral exit
+/// The signed transactions for a single leaf's unilateral exit
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct UnilateralExitLeafTxCpfpPsbts {
+pub struct UnilateralExitLeafTxCpfpPairs {
     /// The leaf ID
     pub leaf_id: String,
-    /// The transaction/PSBT pairs (node TXs, leaf TX, refund TX)
-    pub tx_cpfp_psbts: Vec<UnilateralExitTxCpfpPsbt>,
+    /// The parent/child transaction pairs (node TXs, leaf TX, refund TX)
+    pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
 }
 
 /// Response containing the prepared unilateral exit transactions
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeafTxCpfpPsbts>,
+    pub leaves: Vec<UnilateralExitLeafTxCpfpPairs>,
     /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address
     pub sweep_tx_hex: String,
 }

@@ -4,8 +4,8 @@ use std::{
 };
 
 use bitcoin::{
-    Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxIn, TxOut, Txid,
-    absolute::LockTime, key::Secp256k1, psbt, secp256k1::PublicKey, transaction::Version,
+    Amount, OutPoint, Psbt, Transaction, TxIn, TxOut, absolute::LockTime, psbt,
+    transaction::Version,
 };
 use tracing::trace;
 
@@ -26,18 +26,14 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CpfpUtxoType {
-    P2wpkh,
-    P2tr,
-}
-
-pub struct CpfpUtxo {
-    pub txid: Txid,
-    pub vout: u32,
-    pub value: u64,
-    pub pubkey: PublicKey,
-    pub utxo_type: CpfpUtxoType,
+/// A UTXO input for CPFP fee-bumping.
+///
+/// The caller provides the full `witness_utxo` (value + scriptPubKey) and the expected
+/// signed input weight. Change outputs reuse `witness_utxo.script_pubkey`.
+pub struct CpfpInput {
+    pub outpoint: OutPoint,
+    pub witness_utxo: TxOut,
+    pub signed_input_weight: u64,
 }
 
 pub struct TxCpfpPsbt {
@@ -67,16 +63,16 @@ impl UnilateralExitService {
         &self,
         fee_rate: u64,
         leaf_ids: Vec<TreeNodeId>,
-        mut utxos: Vec<CpfpUtxo>,
+        mut inputs: Vec<CpfpInput>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, ServiceError> {
         if leaf_ids.is_empty() {
             return Err(ServiceError::ValidationError(
                 "At least one leaf ID is required".to_string(),
             ));
         }
-        if utxos.is_empty() {
+        if inputs.is_empty() {
             return Err(ServiceError::ValidationError(
-                "At least one UTXO is required".to_string(),
+                "At least one CPFP input is required".to_string(),
             ));
         }
 
@@ -137,8 +133,7 @@ impl UnilateralExitService {
                 checked_txs.insert(txid);
 
                 // Create the PSBT to fee bump the node tx
-                let child_psbt =
-                    create_tx_cpfp_psbt(&node.node_tx, &mut utxos, fee_rate, self.network.into())?;
+                let child_psbt = create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?;
 
                 tx_cpfp_psbts.push(TxCpfpPsbt {
                     parent_tx: node.node_tx.clone(),
@@ -147,8 +142,7 @@ impl UnilateralExitService {
 
                 if node.id == leaf_id {
                     // Create the PSBT to fee bump the leaf refund tx
-                    let child_psbt =
-                        create_tx_cpfp_psbt(refund_tx, &mut utxos, fee_rate, self.network.into())?;
+                    let child_psbt = create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?;
 
                     tx_cpfp_psbts.push(TxCpfpPsbt {
                         parent_tx: refund_tx.clone(),
@@ -223,23 +217,21 @@ impl UnilateralExitService {
 
 /// Creates a Partially Signed Bitcoin Transaction (PSBT) to CPFP a parent transaction.
 ///
-/// This function creates a PSBT that spends from both input UTXOs and the ephemeral anchor output
+/// This function creates a PSBT that spends from both CPFP inputs and the ephemeral anchor output
 /// of the parent transaction. The resulting PSBT can be signed and broadcast to CPFP the parent
 /// transaction with a fee.
 ///
 /// # Arguments
 /// * `tx` - The parent transaction to be CPFP'd
-/// * `utxos` - A mutable vector of UTXOs that can be used to pay fees, will be updated with the change UTXO
+/// * `inputs` - A mutable vector of CPFP inputs for fee payment, will be updated with the change output
 /// * `fee_rate` - The desired fee rate in satoshis per vbyte
-/// * `network` - The Bitcoin network (mainnet, testnet, etc.)
 ///
 /// # Returns
 /// A Result containing the PSBT or an error
 fn create_tx_cpfp_psbt(
     tx: &Transaction,
-    utxos: &mut Vec<CpfpUtxo>,
+    inputs: &mut Vec<CpfpInput>,
     fee_rate: u64,
-    network: bitcoin::Network,
 ) -> Result<psbt::Psbt, ServiceError> {
     use bitcoin::psbt::{Input as PsbtInput, Output as PsbtOutput, Psbt};
 
@@ -253,38 +245,34 @@ fn create_tx_cpfp_psbt(
             "Ephemeral anchor output not found".to_string(),
         ))?;
 
-    // We need at least one UTXO for fee payment
-    if utxos.is_empty() {
+    // We need at least one input for fee payment
+    if inputs.is_empty() {
         return Err(ServiceError::ValidationError(
-            "At least one UTXO is required for fee bumping".to_string(),
+            "At least one CPFP input is required for fee bumping".to_string(),
         ));
     }
 
-    // Calculate total available value from all UTXOs
-    let total_utxo_value: u64 = utxos.iter().map(|utxo| utxo.value).sum();
+    // Calculate total available value from all inputs
+    let total_input_value: u64 = inputs.iter().map(|i| i.witness_utxo.value.to_sat()).sum();
 
-    // Use the first UTXO's pubkey and type for the change output
-    let first_pubkey = utxos[0].pubkey;
-    let first_utxo_type = utxos[0].utxo_type;
-    let output_script_pubkey = script_pubkey_for_utxo_type(first_pubkey, first_utxo_type, network);
+    // Change output reuses the first input's scriptPubKey
+    let change_script_pubkey = inputs[0].witness_utxo.script_pubkey.clone();
+    let first_signed_input_weight = inputs[0].signed_input_weight;
 
-    // Create inputs for all UTXOs plus the ephemeral anchor
-    let mut inputs = Vec::with_capacity(utxos.len() + 1);
+    // Create transaction inputs for all CPFP inputs plus the ephemeral anchor
+    let mut tx_inputs = Vec::with_capacity(inputs.len() + 1);
 
-    // Add all UTXO inputs
+    // Add all CPFP inputs
     // TODO: Improve UTXO selection for fees
-    for utxo in utxos.iter() {
-        inputs.push(TxIn {
-            previous_output: OutPoint {
-                txid: utxo.txid,
-                vout: utxo.vout,
-            },
+    for cpfp_input in inputs.iter() {
+        tx_inputs.push(TxIn {
+            previous_output: cpfp_input.outpoint,
             ..Default::default()
         });
     }
 
     // Add the ephemeral anchor input
-    inputs.push(TxIn {
+    tx_inputs.push(TxIn {
         previous_output: OutPoint {
             txid: tx.compute_txid(),
             vout: vout as u32,
@@ -296,35 +284,14 @@ fn create_tx_cpfp_psbt(
     // Computing in WU avoids rounding errors from per-component vbyte estimates.
     //
     // Non-witness bytes cost 4 WU each, witness bytes cost 1 WU each.
-    //
-    // Per-input non-witness: txid(32) + vout(4) + scriptSig_len(1) + sequence(4) = 41 bytes
-    // P2WPKH witness: count(1) + sig_len(1) + sig(max 72) + pk_len(1) + pk(33) = 108 bytes
-    // P2TR witness:   count(1) + sig_len(1) + sig(64) = 66 bytes
     // Anchor witness: count(1) = 1 byte (empty witness)
-    //
-    // Outputs (non-witness only):
-    // P2WPKH: value(8) + scriptPubKey_len(1) + scriptPubKey(22) = 31 bytes
-    // P2TR:   value(8) + scriptPubKey_len(1) + scriptPubKey(34) = 43 bytes
-    //
     // Overhead non-witness: version(4) + input_count(1) + output_count(1) + locktime(4) = 10 bytes
     // Overhead witness: marker(1) + flag(1) = 2 bytes
-    let input_weight: u64 = utxos
-        .iter()
-        .map(|utxo| match utxo.utxo_type {
-            // 41 * 4 + 108 = 272 WU
-            CpfpUtxoType::P2wpkh => 272,
-            // 41 * 4 + 66 = 230 WU
-            CpfpUtxoType::P2tr => 230,
-        })
-        .sum();
+    let input_weight: u64 = inputs.iter().map(|i| i.signed_input_weight).sum();
     // Anchor input: 41 * 4 + 1 = 165 WU
     let anchor_weight: u64 = 165;
-    let output_weight: u64 = match first_utxo_type {
-        // 31 * 4 = 124 WU
-        CpfpUtxoType::P2wpkh => 124,
-        // 43 * 4 = 172 WU
-        CpfpUtxoType::P2tr => 172,
-    };
+    // Output weight: (value(8) + scriptPubKey_len(1) + scriptPubKey(N)) * 4
+    let output_weight: u64 = (9 + change_script_pubkey.len() as u64) * 4;
     // 10 * 4 + 2 = 42 WU
     let overhead_weight: u64 = 42;
     let child_weight = input_weight + anchor_weight + output_weight + overhead_weight;
@@ -351,13 +318,13 @@ fn create_tx_cpfp_psbt(
     trace!("Calculated fee: {} sats", fee_amount);
 
     // Adjust output value to account for fees
-    let adjusted_output_value = total_utxo_value.saturating_sub(fee_amount);
-    trace!("Remaining UTXO value: {} sats", adjusted_output_value);
+    let adjusted_output_value = total_input_value.saturating_sub(fee_amount);
+    trace!("Remaining value: {} sats", adjusted_output_value);
 
     // Make sure there's enough value to pay the fee
     if adjusted_output_value == 0 {
         return Err(ServiceError::ValidationError(
-            "UTXOs value is too low to cover the fee".to_string(),
+            "CPFP input value is too low to cover the fee".to_string(),
         ));
     }
 
@@ -365,10 +332,10 @@ fn create_tx_cpfp_psbt(
     let fee_bump_tx = Transaction {
         version: Version::non_standard(3),
         lock_time: LockTime::ZERO,
-        input: inputs,
+        input: tx_inputs,
         output: vec![TxOut {
             value: Amount::from_sat(adjusted_output_value),
-            script_pubkey: output_script_pubkey,
+            script_pubkey: change_script_pubkey.clone(),
         }],
     };
 
@@ -377,78 +344,61 @@ fn create_tx_cpfp_psbt(
         .map_err(|e| ServiceError::ValidationError(format!("Failed to create PSBT: {e}")))?;
 
     // Add PSBT input information for all inputs
-    for (i, utxo) in utxos.iter().enumerate() {
-        // Add witness UTXO information required for signing
-        // This provides information about the output being spent
-        let input = PsbtInput {
-            witness_utxo: Some(TxOut {
-                value: Amount::from_sat(utxo.value),
-                script_pubkey: script_pubkey_for_utxo_type(utxo.pubkey, utxo.utxo_type, network),
-            }),
+    for (i, cpfp_input) in inputs.iter().enumerate() {
+        psbt.inputs[i] = PsbtInput {
+            witness_utxo: Some(cpfp_input.witness_utxo.clone()),
             ..Default::default()
         };
-
-        psbt.inputs[i] = input;
     }
 
     // Add information for the last input (the anchor input)
     // Although no signing is needed for the anchor since it uses OP_TRUE,
     // we still provide the witness UTXO information for completeness
-    let anchor_input = PsbtInput {
+    psbt.inputs[inputs.len()] = PsbtInput {
         witness_utxo: Some(anchor_tx_out.clone()),
         ..Default::default()
     };
-    psbt.inputs[utxos.len()] = anchor_input;
 
     // Add details for the output
     psbt.outputs[0] = PsbtOutput::default();
 
-    // Replace all consumed UTXOs with just the change output
-    *utxos = vec![CpfpUtxo {
-        txid: fee_bump_tx.compute_txid(),
-        vout: 0,
-        value: adjusted_output_value,
-        pubkey: first_pubkey,
-        utxo_type: first_utxo_type,
+    // Replace all consumed inputs with just the change output
+    *inputs = vec![CpfpInput {
+        outpoint: OutPoint {
+            txid: fee_bump_tx.compute_txid(),
+            vout: 0,
+        },
+        witness_utxo: TxOut {
+            value: Amount::from_sat(adjusted_output_value),
+            script_pubkey: change_script_pubkey,
+        },
+        signed_input_weight: first_signed_input_weight,
     }];
 
     Ok(psbt)
-}
-
-fn script_pubkey_for_utxo_type(
-    pubkey: PublicKey,
-    utxo_type: CpfpUtxoType,
-    network: bitcoin::Network,
-) -> bitcoin::ScriptBuf {
-    match utxo_type {
-        CpfpUtxoType::P2wpkh => {
-            Address::p2wpkh(&CompressedPublicKey(pubkey), network).script_pubkey()
-        }
-        CpfpUtxoType::P2tr => {
-            let secp = Secp256k1::new();
-            let (xonly, _) = pubkey.x_only_public_key();
-            Address::p2tr(&secp, xonly, None, network).script_pubkey()
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bitcoin::{
-        ScriptBuf,
+        Address, CompressedPublicKey, ScriptBuf,
         hashes::Hash,
         key::Secp256k1,
-        secp256k1::{SecretKey, rand},
+        secp256k1::{PublicKey, SecretKey, rand},
     };
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    /// P2WPKH signed input weight: 41 * 4 + 108 = 272 WU
+    const P2WPKH_INPUT_WEIGHT: u64 = 272;
+    /// P2TR signed input weight: 41 * 4 + 66 = 230 WU
+    const P2TR_INPUT_WEIGHT: u64 = 230;
+
     /// Creates a transaction with an ephemeral anchor output for testing.
     fn create_test_transaction_with_anchor() -> Transaction {
-        // Create a simple transaction with an ephemeral anchor output
         Transaction {
             version: Version::non_standard(3),
             lock_time: LockTime::ZERO,
@@ -460,55 +410,63 @@ mod tests {
         }
     }
 
-    /// Creates a test UTXO with a random txid and the given pubkey.
-    fn create_test_utxo(pubkey: PublicKey, value: u64) -> CpfpUtxo {
-        create_test_utxo_typed(pubkey, value, CpfpUtxoType::P2wpkh)
+    fn p2wpkh_script(pubkey: PublicKey) -> ScriptBuf {
+        Address::p2wpkh(&CompressedPublicKey(pubkey), bitcoin::Network::Testnet).script_pubkey()
     }
 
-    fn create_test_utxo_typed(pubkey: PublicKey, value: u64, utxo_type: CpfpUtxoType) -> CpfpUtxo {
+    fn p2tr_script(pubkey: PublicKey) -> ScriptBuf {
+        let secp = Secp256k1::new();
+        let (xonly, _) = pubkey.x_only_public_key();
+        Address::p2tr(&secp, xonly, None, bitcoin::Network::Testnet).script_pubkey()
+    }
+
+    fn create_test_input_p2wpkh(pubkey: PublicKey, value: u64) -> CpfpInput {
         let random_bytes = (0..32).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
         let txid = bitcoin::Txid::from_slice(&random_bytes).unwrap();
+        CpfpInput {
+            outpoint: OutPoint { txid, vout: 0 },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: p2wpkh_script(pubkey),
+            },
+            signed_input_weight: P2WPKH_INPUT_WEIGHT,
+        }
+    }
 
-        CpfpUtxo {
-            txid,
-            vout: 0,
-            value,
-            pubkey,
-            utxo_type,
+    fn create_test_input_p2tr(pubkey: PublicKey, value: u64) -> CpfpInput {
+        let random_bytes = (0..32).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
+        let txid = bitcoin::Txid::from_slice(&random_bytes).unwrap();
+        CpfpInput {
+            outpoint: OutPoint { txid, vout: 0 },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey: p2tr_script(pubkey),
+            },
+            signed_input_weight: P2TR_INPUT_WEIGHT,
         }
     }
 
     #[test_all]
     fn test_create_tx_cpfp_psbt_success() {
-        // Create a key pair for testing
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
-        // Create a transaction with an ephemeral anchor output
         let tx = create_test_transaction_with_anchor();
+        let mut inputs = vec![create_test_input_p2wpkh(pubkey, 10_000)];
 
-        // Create a test UTXO with sufficient value
-        let mut utxos = vec![create_test_utxo(pubkey, 10_000)];
-
-        // Set a reasonable fee rate (10 sats/vbyte)
         let fee_rate = 10;
-
-        // Call the function
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
-
-        // Verify the result
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate);
         assert!(result.is_ok());
 
         let psbt = result.unwrap();
-
-        // Validate the PSBT
-        assert_eq!(psbt.inputs.len(), 2); // One for our UTXO, one for the anchor
+        assert_eq!(psbt.inputs.len(), 2); // One for our input, one for the anchor
         assert_eq!(psbt.outputs.len(), 1); // Change output
 
         // Verify the output value accounts for fees (package = parent + child in WU)
         let parent_wu = tx.weight().to_wu();
-        let child_wu: u64 = 272 + 165 + 124 + 42; // p2wpkh input + anchor + p2wpkh output + overhead
+        // P2WPKH scriptPubKey is 22 bytes → output weight = (9 + 22) * 4 = 124
+        let child_wu: u64 = 272 + 165 + 124 + 42;
         let package_weight = parent_wu + child_wu;
         let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 10_000 - expected_fee;
@@ -518,50 +476,36 @@ mod tests {
             expected_output_value
         );
 
-        // Verify our UTXOs array has been updated with the change output
-        assert_eq!(utxos.len(), 1);
-        assert_eq!(utxos[0].value, expected_output_value);
-        assert_eq!(utxos[0].vout, 0);
+        // Verify inputs array has been updated with the change output
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].witness_utxo.value.to_sat(), expected_output_value);
+        assert_eq!(inputs[0].outpoint.vout, 0);
     }
 
     #[test_all]
-    fn test_create_tx_cpfp_psbt_multiple_utxos() {
-        // Create a key pair for testing
+    fn test_create_tx_cpfp_psbt_multiple_inputs() {
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
-        // Create a transaction with an ephemeral anchor output
         let tx = create_test_transaction_with_anchor();
-
-        // Create multiple test UTXOs
-        let mut utxos = vec![
-            create_test_utxo(pubkey, 5_000),
-            create_test_utxo(pubkey, 3_000),
-            create_test_utxo(pubkey, 2_000),
+        let mut inputs = vec![
+            create_test_input_p2wpkh(pubkey, 5_000),
+            create_test_input_p2wpkh(pubkey, 3_000),
+            create_test_input_p2wpkh(pubkey, 2_000),
         ];
 
-        // Set a reasonable fee rate
         let fee_rate = 10;
-
-        // Call the function
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
-
-        // Verify the result
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate);
         assert!(result.is_ok());
 
         let psbt = result.unwrap();
+        assert_eq!(psbt.inputs.len(), 4); // Three inputs + anchor
+        assert_eq!(psbt.outputs.len(), 1);
 
-        // Validate the PSBT
-        assert_eq!(psbt.inputs.len(), 4); // Three UTXOs + anchor
-        assert_eq!(psbt.outputs.len(), 1); // Change output
-
-        // Verify the total input value (excluding anchor which is 0)
         let total_input_value = 5_000 + 3_000 + 2_000;
-
-        // Verify the output value accounts for fees (package = parent + child in WU)
         let parent_wu = tx.weight().to_wu();
-        let child_wu: u64 = (3 * 272) + 165 + 124 + 42; // 3 p2wpkh inputs + anchor + p2wpkh output + overhead
+        let child_wu: u64 = (3 * 272) + 165 + 124 + 42;
         let package_weight = parent_wu + child_wu;
         let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = total_input_value - expected_fee;
@@ -571,77 +515,49 @@ mod tests {
             expected_output_value
         );
 
-        // Verify our UTXOs array has been updated with the change output
-        assert_eq!(utxos.len(), 1);
-        assert_eq!(utxos[0].value, expected_output_value);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].witness_utxo.value.to_sat(), expected_output_value);
     }
 
     #[test_all]
-    fn test_create_tx_cpfp_psbt_no_utxos() {
-        // Create a transaction with an ephemeral anchor output
+    fn test_create_tx_cpfp_psbt_no_inputs() {
         let tx = create_test_transaction_with_anchor();
-
-        // Empty UTXOs vector
-        let mut utxos = Vec::new();
-
-        // Call the function
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, 10, bitcoin::Network::Testnet);
-
-        // Verify the PSBT creation fails
+        let mut inputs = Vec::new();
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, 10);
         assert!(result.is_err());
     }
 
     #[test_all]
     fn test_create_tx_cpfp_psbt_insufficient_value() {
-        // Create a key pair for testing
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
-        // Create a transaction with an ephemeral anchor output
         let tx = create_test_transaction_with_anchor();
-
-        // Create a test UTXO with very low value
-        let mut utxos = vec![create_test_utxo(pubkey, 10)];
-
-        // Set a high fee rate to ensure the fee exceeds the UTXO value
+        let mut inputs = vec![create_test_input_p2wpkh(pubkey, 10)];
         let fee_rate = 100;
-
-        // Call the function
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
-
-        // Verify the PSBT creation fails
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate);
         assert!(result.is_err());
     }
 
     #[test_all]
     fn test_create_tx_cpfp_psbt_no_anchor_output() {
-        // Create a key pair for testing
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
-        // Create a transaction WITHOUT an anchor output (just a regular output)
         let tx = Transaction {
             version: Version::non_standard(3),
             lock_time: LockTime::ZERO,
             input: Vec::new(),
             output: vec![TxOut {
                 value: Amount::from_sat(1000),
-                script_pubkey: Address::p2wpkh(
-                    &CompressedPublicKey(pubkey),
-                    bitcoin::Network::Testnet,
-                )
-                .script_pubkey(),
+                script_pubkey: p2wpkh_script(pubkey),
             }],
         };
 
-        let mut utxos = vec![create_test_utxo(pubkey, 10_000)];
-
-        // Call the function
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, 10, bitcoin::Network::Testnet);
-
-        // Should fail because no anchor output was found
+        let mut inputs = vec![create_test_input_p2wpkh(pubkey, 10_000)];
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, 10);
         assert!(result.is_err());
         if let Err(ServiceError::ValidationError(msg)) = result {
             assert!(msg.contains("Ephemeral anchor output not found"));
@@ -651,25 +567,25 @@ mod tests {
     }
 
     #[test_all]
-    fn test_create_tx_cpfp_psbt_p2tr_utxo() {
+    fn test_create_tx_cpfp_psbt_p2tr_input() {
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
         let tx = create_test_transaction_with_anchor();
-        let mut utxos = vec![create_test_utxo_typed(pubkey, 10_000, CpfpUtxoType::P2tr)];
+        let mut inputs = vec![create_test_input_p2tr(pubkey, 10_000)];
 
         let fee_rate = 10;
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate);
         assert!(result.is_ok());
 
         let psbt = result.unwrap();
         assert_eq!(psbt.inputs.len(), 2);
         assert_eq!(psbt.outputs.len(), 1);
 
-        // P2TR: 230 (input) + 165 (anchor) + 172 (output) + 42 (overhead) = 609 WU child + parent
+        // P2TR scriptPubKey is 34 bytes → output weight = (9 + 34) * 4 = 172
         let parent_wu = tx.weight().to_wu();
-        let child_wu: u64 = 230 + 165 + 172 + 42; // p2tr input + anchor + p2tr output + overhead
+        let child_wu: u64 = 230 + 165 + 172 + 42;
         let package_weight = parent_wu + child_wu;
         let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 10_000 - expected_fee;
@@ -678,38 +594,39 @@ mod tests {
             expected_output_value
         );
 
-        // Verify the output is a P2TR script (OP_1 + 32-byte push)
+        // Verify the output is a P2TR script
         let script = &psbt.unsigned_tx.output[0].script_pubkey;
         assert!(script.is_p2tr());
 
-        // Verify the change UTXO preserves P2TR type
-        assert_eq!(utxos.len(), 1);
-        assert_eq!(utxos[0].utxo_type, CpfpUtxoType::P2tr);
-        assert_eq!(utxos[0].value, expected_output_value);
+        // Verify the change preserves P2TR scriptPubKey and weight
+        assert_eq!(inputs.len(), 1);
+        assert!(inputs[0].witness_utxo.script_pubkey.is_p2tr());
+        assert_eq!(inputs[0].signed_input_weight, P2TR_INPUT_WEIGHT);
+        assert_eq!(inputs[0].witness_utxo.value.to_sat(), expected_output_value);
     }
 
     #[test_all]
-    fn test_create_tx_cpfp_psbt_mixed_utxo_types() {
+    fn test_create_tx_cpfp_psbt_mixed_input_types() {
         let secp = Secp256k1::new();
         let secret_key = SecretKey::from_slice(&[0x01; 32]).unwrap();
         let pubkey = PublicKey::from_secret_key(&secp, &secret_key);
 
         let tx = create_test_transaction_with_anchor();
-        let mut utxos = vec![
-            create_test_utxo_typed(pubkey, 5_000, CpfpUtxoType::P2wpkh),
-            create_test_utxo_typed(pubkey, 3_000, CpfpUtxoType::P2tr),
+        let mut inputs = vec![
+            create_test_input_p2wpkh(pubkey, 5_000),
+            create_test_input_p2tr(pubkey, 3_000),
         ];
 
         let fee_rate = 10;
-        let result = create_tx_cpfp_psbt(&tx, &mut utxos, fee_rate, bitcoin::Network::Testnet);
+        let result = create_tx_cpfp_psbt(&tx, &mut inputs, fee_rate);
         assert!(result.is_ok());
 
         let psbt = result.unwrap();
-        assert_eq!(psbt.inputs.len(), 3); // 2 UTXOs + anchor
+        assert_eq!(psbt.inputs.len(), 3); // 2 inputs + anchor
 
-        // Mixed: 272 (p2wpkh) + 230 (p2tr) + 165 (anchor) + 124 (p2wpkh output) + 42 (overhead) WU child + parent
+        // Mixed: 272 (p2wpkh) + 230 (p2tr) + 165 (anchor) + 124 (p2wpkh output) + 42 (overhead)
         let parent_wu = tx.weight().to_wu();
-        let child_wu: u64 = 272 + 230 + 165 + 124 + 42; // p2wpkh + p2tr + anchor + p2wpkh output + overhead
+        let child_wu: u64 = 272 + 230 + 165 + 124 + 42;
         let package_weight = parent_wu + child_wu;
         let expected_fee = (fee_rate * package_weight).div_ceil(4);
         let expected_output_value = 8_000 - expected_fee;
@@ -718,29 +635,27 @@ mod tests {
             expected_output_value
         );
 
-        // Change output uses the first UTXO's type (P2WPKH)
+        // Change output uses the first input's scriptPubKey (P2WPKH)
         let script = &psbt.unsigned_tx.output[0].script_pubkey;
         assert!(script.is_p2wpkh());
-        assert_eq!(utxos[0].utxo_type, CpfpUtxoType::P2wpkh);
+        // Change carries forward first input's weight
+        assert_eq!(inputs[0].signed_input_weight, P2WPKH_INPUT_WEIGHT);
     }
 
     #[test_all]
     fn test_is_ephemeral_anchor_output() {
-        // Test case 1: Valid ephemeral anchor output
         let valid_anchor = TxOut {
             value: Amount::from_sat(0),
             script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
         };
         assert!(is_ephemeral_anchor_output(&valid_anchor));
 
-        // Test case 2: Non-zero value
         let non_zero_value = TxOut {
             value: Amount::from_sat(1),
             script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
         };
         assert!(!is_ephemeral_anchor_output(&non_zero_value));
 
-        // Test case 3: Different script
         let different_script = TxOut {
             value: Amount::from_sat(0),
             script_pubkey: ScriptBuf::from(vec![0x51]),

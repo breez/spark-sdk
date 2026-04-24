@@ -22,38 +22,36 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: prepare-unilateral-exit
             var leafIds = new string[] { "leaf-id-1", "leaf-id-2" };
+            var signer = new SingleKeySigner(secretKeyBytes: Convert.FromHexString("your-secret-key-hex"));
 
             var response = await sdk.PrepareUnilateralExit(
                 request: new PrepareUnilateralExitRequest(
                     feeRate: 2,
                     leafIds: leafIds,
-                    utxos: new UnilateralExitCpfpUtxo[]
+                    inputs: new UnilateralExitCpfpInput[]
                     {
-                        new UnilateralExitCpfpUtxo(
+                        new UnilateralExitCpfpInput.P2wpkh(
                             txid: "your-utxo-txid",
                             vout: 0,
                             value: 50_000,
-                            pubkey: "your-compressed-pubkey-hex",
-                            utxoType: UnilateralExitCpfpUtxoType.P2wpkh
+                            pubkey: "your-compressed-pubkey-hex"
                         )
                     },
                     destination: "bc1q...your-destination-address"
-                )
+                ),
+                signer: signer
             );
 
-            // The response contains:
-            // - response.leaves: transaction/PSBT pairs to sign and broadcast
-            // - response.sweepTxHex: signed sweep transaction for the final step
             foreach (var leaf in response.leaves)
             {
-                foreach (var pair in leaf.txCpfpPsbts)
+                foreach (var pair in leaf.TxCpfpPairs)
                 {
-                    if (pair.csvTimelockBlocks != null)
+                    if (pair.CsvTimelockBlocks != null)
                     {
-                        Console.WriteLine($"Timelock: wait {pair.csvTimelockBlocks} blocks");
+                        Console.WriteLine($"Timelock: wait {pair.CsvTimelockBlocks} blocks");
                     }
-                    // pair.parentTxHex: pre-signed Spark transaction
-                    // pair.childPsbtHex: unsigned CPFP PSBT — sign with your UTXO key
+                    // pair.ParentTxHex: pre-signed Spark transaction
+                    // pair.ChildTxHex: signed CPFP transaction — broadcast alongside parent
                 }
             }
             // ANCHOR_END: prepare-unilateral-exit

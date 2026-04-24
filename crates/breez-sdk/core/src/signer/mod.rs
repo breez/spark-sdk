@@ -129,9 +129,17 @@ mod default_external;
 pub mod external;
 pub mod external_types;
 
+// CPFP signer for unilateral exit
+pub mod cpfp;
+pub mod single_key_signer;
+
 // Re-export only the external signer trait and types
 pub use external::ExternalSigner;
 pub use external_types::*;
+
+// Re-export CPFP signer trait and default implementation
+pub use cpfp::CpfpSigner;
+pub use single_key_signer::SingleKeySigner;
 
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalSignerAdapter;

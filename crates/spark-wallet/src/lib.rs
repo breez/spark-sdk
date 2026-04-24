@@ -15,7 +15,7 @@ pub use spark::{
     address::{SparkAddress, SparkAddressPaymentType},
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, CpfpUtxoType, ExitSpeed, Fee,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpInput, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningSendPayment,
         LightningSendStatus, Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError,
         SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenTransaction,

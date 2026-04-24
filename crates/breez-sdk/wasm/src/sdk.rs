@@ -123,10 +123,12 @@ impl BreezSdk {
     pub async fn prepare_unilateral_exit(
         &self,
         request: PrepareUnilateralExitRequest,
+        signer: crate::signer::JsCpfpSigner,
     ) -> WasmResult<PrepareUnilateralExitResponse> {
+        let signer = std::sync::Arc::new(crate::signer::WasmCpfpSigner::new(signer));
         Ok(self
             .sdk
-            .prepare_unilateral_exit(request.into())
+            .prepare_unilateral_exit(request.into(), signer)
             .await?
             .into())
     }

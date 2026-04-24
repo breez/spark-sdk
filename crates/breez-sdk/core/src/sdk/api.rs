@@ -116,10 +116,14 @@ impl BreezSdk {
         Ok(crate::models::ListLeavesResponse { leaves })
     }
 
-    /// Prepares a unilateral exit by building the necessary transactions and PSBTs
+    /// Prepares a unilateral exit by building and signing the necessary transactions.
+    ///
+    /// The provided `signer` is used to sign the CPFP child transactions' external inputs.
+    /// Returns signed transactions ready to broadcast.
     pub async fn prepare_unilateral_exit(
         &self,
         request: crate::models::PrepareUnilateralExitRequest,
+        signer: std::sync::Arc<dyn crate::signer::CpfpSigner>,
     ) -> Result<crate::models::PrepareUnilateralExitResponse, SdkError> {
         use bitcoin::consensus::encode::serialize_hex;
         use std::str::FromStr;
@@ -139,37 +143,15 @@ impl BreezSdk {
             .require_network(btc_network)
             .map_err(|e| SdkError::Generic(format!("Address network mismatch: {e}")))?;
 
-        let utxos = request
-            .utxos
+        let inputs = request
+            .inputs
             .into_iter()
-            .map(|u| {
-                let txid = bitcoin::Txid::from_str(&u.txid)
-                    .map_err(|e| SdkError::Generic(format!("Invalid txid: {e}")))?;
-                let pubkey_bytes = hex::decode(&u.pubkey)
-                    .map_err(|e| SdkError::Generic(format!("Invalid pubkey hex: {e}")))?;
-                let pubkey = bitcoin::secp256k1::PublicKey::from_slice(&pubkey_bytes)
-                    .map_err(|e| SdkError::Generic(format!("Invalid pubkey: {e}")))?;
-                let utxo_type = match u.utxo_type {
-                    crate::models::UnilateralExitCpfpUtxoType::P2wpkh => {
-                        spark_wallet::CpfpUtxoType::P2wpkh
-                    }
-                    crate::models::UnilateralExitCpfpUtxoType::P2tr => {
-                        spark_wallet::CpfpUtxoType::P2tr
-                    }
-                };
-                Ok(spark_wallet::CpfpUtxo {
-                    txid,
-                    vout: u.vout,
-                    value: u.value,
-                    pubkey,
-                    utxo_type,
-                })
-            })
+            .map(|input| convert_cpfp_input(input, btc_network))
             .collect::<Result<Vec<_>, SdkError>>()?;
 
         let result = self
             .spark_wallet
-            .unilateral_exit(request.fee_rate, leaf_ids, utxos)
+            .unilateral_exit(request.fee_rate, leaf_ids, inputs)
             .await?;
 
         // Extract refund outputs from the result. The last tx_cpfp_psbts entry
@@ -198,34 +180,57 @@ impl BreezSdk {
             .create_refund_sweep_transaction(refund_outputs, destination, request.fee_rate)
             .await?;
 
-        let leaves = result
-            .into_iter()
-            .map(|leaf| crate::models::UnilateralExitLeafTxCpfpPsbts {
+        let mut leaves = Vec::with_capacity(result.len());
+        for leaf in result {
+            let mut tx_cpfp_pairs = Vec::with_capacity(leaf.tx_cpfp_psbts.len());
+            for tc in leaf.tx_cpfp_psbts {
+                let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
+                    let seq = input.sequence.to_consensus_u32();
+                    // BIP68: bit 31 (disable flag) must be unset for relative lock
+                    // Bit 22 unset means block-based (not time-based)
+                    if seq & 0x8000_0000 == 0 && seq & 0x0040_0000 == 0 {
+                        let blocks = seq & 0xFFFF;
+                        if blocks > 0 { Some(blocks) } else { None }
+                    } else {
+                        None
+                    }
+                });
+
+                // Finalize the ephemeral anchor input before passing to the signer
+                let mut psbt = tc.child_psbt;
+                for input in &mut psbt.inputs {
+                    if let Some(ref tx_out) = input.witness_utxo
+                        && tx_out.value.to_sat() == 0
+                        && tx_out.script_pubkey.as_bytes() == [0x51, 0x02, 0x4e, 0x73]
+                    {
+                        input.final_script_witness = Some(bitcoin::Witness::new());
+                    }
+                }
+
+                // Sign the PSBT via the external signer
+                let psbt_bytes = psbt.serialize();
+                let signed_psbt_bytes = signer
+                    .sign_psbt(psbt_bytes)
+                    .await
+                    .map_err(|e| SdkError::Generic(format!("CPFP signer error: {e}")))?;
+                let signed_psbt = bitcoin::Psbt::deserialize(&signed_psbt_bytes).map_err(|e| {
+                    SdkError::Generic(format!("Failed to deserialize signed PSBT: {e}"))
+                })?;
+
+                // Extract the final signed transaction
+                let signed_tx = signed_psbt.extract_tx_unchecked_fee_rate();
+
+                tx_cpfp_pairs.push(crate::models::UnilateralExitTxCpfpPair {
+                    parent_tx_hex: serialize_hex(&tc.parent_tx),
+                    child_tx_hex: serialize_hex(&signed_tx),
+                    csv_timelock_blocks,
+                });
+            }
+            leaves.push(crate::models::UnilateralExitLeafTxCpfpPairs {
                 leaf_id: leaf.leaf_id.to_string(),
-                tx_cpfp_psbts: leaf
-                    .tx_cpfp_psbts
-                    .into_iter()
-                    .map(|tc| {
-                        let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
-                            let seq = input.sequence.to_consensus_u32();
-                            // BIP68: bit 31 (disable flag) must be unset for relative lock
-                            // Bit 22 unset means block-based (not time-based)
-                            if seq & 0x8000_0000 == 0 && seq & 0x0040_0000 == 0 {
-                                let blocks = seq & 0xFFFF;
-                                if blocks > 0 { Some(blocks) } else { None }
-                            } else {
-                                None
-                            }
-                        });
-                        crate::models::UnilateralExitTxCpfpPsbt {
-                            parent_tx_hex: serialize_hex(&tc.parent_tx),
-                            child_psbt_hex: tc.child_psbt.serialize_hex(),
-                            csv_timelock_blocks,
-                        }
-                    })
-                    .collect(),
-            })
-            .collect();
+                tx_cpfp_pairs,
+            });
+        }
 
         Ok(crate::models::PrepareUnilateralExitResponse {
             leaves,
@@ -519,5 +524,85 @@ impl BreezSdk {
         };
 
         Ok(BuyBitcoinResponse { url })
+    }
+}
+
+/// Converts a public-API [`UnilateralExitCpfpInput`] to the internal [`spark_wallet::CpfpInput`].
+fn convert_cpfp_input(
+    input: crate::models::UnilateralExitCpfpInput,
+    network: bitcoin::Network,
+) -> Result<spark_wallet::CpfpInput, SdkError> {
+    use std::str::FromStr;
+
+    match input {
+        crate::models::UnilateralExitCpfpInput::P2wpkh {
+            txid,
+            vout,
+            value,
+            pubkey,
+        } => {
+            let txid = bitcoin::Txid::from_str(&txid)
+                .map_err(|e| SdkError::Generic(format!("Invalid txid: {e}")))?;
+            let pubkey_bytes = hex::decode(&pubkey)
+                .map_err(|e| SdkError::Generic(format!("Invalid pubkey hex: {e}")))?;
+            let pubkey = bitcoin::secp256k1::PublicKey::from_slice(&pubkey_bytes)
+                .map_err(|e| SdkError::Generic(format!("Invalid pubkey: {e}")))?;
+            let script_pubkey =
+                bitcoin::Address::p2wpkh(&bitcoin::CompressedPublicKey(pubkey), network)
+                    .script_pubkey();
+            Ok(spark_wallet::CpfpInput {
+                outpoint: bitcoin::OutPoint { txid, vout },
+                witness_utxo: bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(value),
+                    script_pubkey,
+                },
+                signed_input_weight: 272,
+            })
+        }
+        crate::models::UnilateralExitCpfpInput::P2tr {
+            txid,
+            vout,
+            value,
+            pubkey,
+        } => {
+            let txid = bitcoin::Txid::from_str(&txid)
+                .map_err(|e| SdkError::Generic(format!("Invalid txid: {e}")))?;
+            let pubkey_bytes = hex::decode(&pubkey)
+                .map_err(|e| SdkError::Generic(format!("Invalid pubkey hex: {e}")))?;
+            let pubkey = bitcoin::secp256k1::PublicKey::from_slice(&pubkey_bytes)
+                .map_err(|e| SdkError::Generic(format!("Invalid pubkey: {e}")))?;
+            let secp = bitcoin::key::Secp256k1::new();
+            let (xonly, _) = pubkey.x_only_public_key();
+            let script_pubkey = bitcoin::Address::p2tr(&secp, xonly, None, network).script_pubkey();
+            Ok(spark_wallet::CpfpInput {
+                outpoint: bitcoin::OutPoint { txid, vout },
+                witness_utxo: bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(value),
+                    script_pubkey,
+                },
+                signed_input_weight: 230,
+            })
+        }
+        crate::models::UnilateralExitCpfpInput::Custom {
+            txid,
+            vout,
+            value,
+            script_pubkey_hex,
+            signed_input_weight,
+        } => {
+            let txid = bitcoin::Txid::from_str(&txid)
+                .map_err(|e| SdkError::Generic(format!("Invalid txid: {e}")))?;
+            let script_bytes = hex::decode(&script_pubkey_hex)
+                .map_err(|e| SdkError::Generic(format!("Invalid scriptPubKey hex: {e}")))?;
+            let script_pubkey = bitcoin::ScriptBuf::from(script_bytes);
+            Ok(spark_wallet::CpfpInput {
+                outpoint: bitcoin::OutPoint { txid, vout },
+                witness_utxo: bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(value),
+                    script_pubkey,
+                },
+                signed_input_weight,
+            })
+        }
     }
 }

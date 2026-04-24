@@ -2,6 +2,7 @@ package com.example.kotlinmpplib
 
 import breez_sdk_spark.*
 
+@OptIn(kotlin.ExperimentalStdlibApi::class)
 class UnilateralExit {
     suspend fun listLeavesForExit(sdk: BreezSdk) {
         // ANCHOR: list-leaves
@@ -23,34 +24,33 @@ class UnilateralExit {
         // ANCHOR: prepare-unilateral-exit
         try {
             val leafIds = listOf("leaf-id-1", "leaf-id-2")
+            val secretKeyBytes = "your-secret-key-hex".hexToByteArray()
+            val signer = SingleKeySigner(secretKeyBytes)
 
             val response = sdk.prepareUnilateralExit(
                 PrepareUnilateralExitRequest(
                     feeRate = 2u,
                     leafIds = leafIds,
-                    utxos = listOf(
-                        UnilateralExitCpfpUtxo(
+                    inputs = listOf(
+                        UnilateralExitCpfpInput.P2wpkh(
                             txid = "your-utxo-txid",
                             vout = 0u,
                             value = 50_000u,
-                            pubkey = "your-compressed-pubkey-hex",
-                            utxoType = UnilateralExitCpfpUtxoType.P2WPKH
+                            pubkey = "your-compressed-pubkey-hex"
                         )
                     ),
                     destination = "bc1q...your-destination-address"
-                )
+                ),
+                signer
             )
 
-            // The response contains:
-            // - response.leaves: transaction/PSBT pairs to sign and broadcast
-            // - response.sweepTxHex: signed sweep transaction for the final step
             for (leaf in response.leaves) {
-                for (pair in leaf.txCpfpPsbts) {
+                for (pair in leaf.txCpfpPairs) {
                     pair.csvTimelockBlocks?.let { blocks ->
                         println("Timelock: wait $blocks blocks")
                     }
                     // pair.parentTxHex: pre-signed Spark transaction
-                    // pair.childPsbtHex: unsigned CPFP PSBT — sign with your UTXO key
+                    // pair.childTxHex: signed CPFP transaction — broadcast alongside parent
                 }
             }
         } catch (e: Exception) {
