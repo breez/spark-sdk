@@ -8,14 +8,13 @@ use breez_sdk_spark::{
     AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
     ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, ListLeavesRequest, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
-    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, PrepareUnilateralExitRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UnilateralExitCpfpInput, UpdateUserSettingsRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    PrepareUnilateralExitRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    TokenTransactionType, UnilateralExitCpfpInput, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -279,21 +278,12 @@ pub enum Command {
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
     },
-    /// List wallet leaves
-    ListLeaves {
-        /// Only return leaves with a value greater than or equal to this amount in satoshis
-        #[arg(long)]
-        min_value_sats: Option<u64>,
-    },
-    /// Prepare a unilateral exit package
+    /// Prepare a unilateral exit package (auto-selects profitable leaves)
     PrepareUnilateralExit {
         /// Fee rate in sats/vbyte
         fee_rate: u64,
         /// Destination address for the sweep transaction
         destination: String,
-        /// The leaf IDs to exit. If empty, exits all leaves.
-        #[arg(short, long = "leaf")]
-        leaf_ids: Vec<String>,
         /// CPFP inputs "txid:vout:value:pubkey[:type]" used to pay fees.
         /// Type is "p2wpkh" (default) or "p2tr".
         #[arg(short = 'u', long = "utxo")]
@@ -469,17 +459,9 @@ pub(crate) async fn execute_command(
             print_value(&value)?;
             Ok(true)
         }
-        Command::ListLeaves { min_value_sats } => {
-            let value = sdk
-                .list_leaves(ListLeavesRequest { min_value_sats })
-                .await?;
-            print_value(&value)?;
-            Ok(true)
-        }
         Command::PrepareUnilateralExit {
             fee_rate,
             destination,
-            leaf_ids,
             utxos,
             signing_key,
         } => {
@@ -498,7 +480,6 @@ pub(crate) async fn execute_command(
                 .prepare_unilateral_exit(
                     PrepareUnilateralExitRequest {
                         fee_rate,
-                        leaf_ids,
                         inputs,
                         destination,
                     },
@@ -506,7 +487,15 @@ pub(crate) async fn execute_command(
                 )
                 .await?;
 
-            for leaf in &response.leaves {
+            println!("Selected leaves:");
+            for sl in &response.selected_leaves {
+                println!(
+                    "  {} — {} sats (estimated cost: {} sats)",
+                    sl.id, sl.value, sl.estimated_cost
+                );
+            }
+
+            for leaf in &response.transactions {
                 println!();
                 println!("Leaf ID: {}", leaf.leaf_id);
                 println!();

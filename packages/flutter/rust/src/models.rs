@@ -173,22 +173,6 @@ pub enum _Fee {
     Rate { sat_per_vbyte: u64 },
 }
 
-#[frb(mirror(ListLeavesRequest))]
-pub struct _ListLeavesRequest {
-    pub min_value_sats: Option<u64>,
-}
-
-#[frb(mirror(ListLeavesResponse))]
-pub struct _ListLeavesResponse {
-    pub leaves: Vec<Leaf>,
-}
-
-#[frb(mirror(Leaf))]
-pub struct _Leaf {
-    pub id: String,
-    pub value: u64,
-}
-
 #[frb(mirror(UnilateralExitCpfpInput))]
 pub enum _UnilateralExitCpfpInput {
     P2wpkh {
@@ -215,7 +199,6 @@ pub enum _UnilateralExitCpfpInput {
 #[frb(mirror(PrepareUnilateralExitRequest))]
 pub struct _PrepareUnilateralExitRequest {
     pub fee_rate: u64,
-    pub leaf_ids: Vec<String>,
     pub inputs: Vec<UnilateralExitCpfpInput>,
     pub destination: String,
 }
@@ -233,9 +216,17 @@ pub struct _UnilateralExitLeafTxCpfpPairs {
     pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
 }
 
+#[frb(mirror(UnilateralExitLeafSummary))]
+pub struct _UnilateralExitLeafSummary {
+    pub id: String,
+    pub value: u64,
+    pub estimated_cost: u64,
+}
+
 #[frb(mirror(PrepareUnilateralExitResponse))]
 pub struct _PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeafTxCpfpPairs>,
+    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
+    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
     pub sweep_tx_hex: String,
 }
 

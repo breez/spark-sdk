@@ -4,30 +4,14 @@ namespace BreezSdkSnippets
 {
     class UnilateralExit
     {
-        async Task ListLeavesForExit(BreezSdk sdk)
-        {
-            // ANCHOR: list-leaves
-            var response = await sdk.ListLeaves(
-                request: new ListLeavesRequest(minValueSats: 10_000)
-            );
-
-            foreach (var leaf in response.leaves)
-            {
-                Console.WriteLine($"Leaf {leaf.id}: {leaf.value} sats");
-            }
-            // ANCHOR_END: list-leaves
-        }
-
         async Task PrepareExit(BreezSdk sdk)
         {
             // ANCHOR: prepare-unilateral-exit
-            var leafIds = new string[] { "leaf-id-1", "leaf-id-2" };
             var signer = new SingleKeySigner(secretKeyBytes: Convert.FromHexString("your-secret-key-hex"));
 
             var response = await sdk.PrepareUnilateralExit(
                 request: new PrepareUnilateralExitRequest(
                     feeRate: 2,
-                    leafIds: leafIds,
                     inputs: new UnilateralExitCpfpInput[]
                     {
                         new UnilateralExitCpfpInput.P2wpkh(
@@ -42,7 +26,13 @@ namespace BreezSdkSnippets
                 signer: signer
             );
 
-            foreach (var leaf in response.leaves)
+            // The SDK automatically selects which leaves are profitable to exit.
+            foreach (var leaf in response.SelectedLeaves)
+            {
+                Console.WriteLine($"Leaf {leaf.Id}: {leaf.Value} sats (exit cost: ~{leaf.EstimatedCost} sats)");
+            }
+
+            foreach (var leaf in response.Transactions)
             {
                 foreach (var pair in leaf.TxCpfpPairs)
                 {

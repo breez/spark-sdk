@@ -97,51 +97,30 @@ impl BreezSdk {
         })
     }
 
-    /// Lists the leaves of the wallet, optionally filtered by minimum value
-    pub async fn list_leaves(
-        &self,
-        request: crate::models::ListLeavesRequest,
-    ) -> Result<crate::models::ListLeavesResponse, SdkError> {
-        let wallet_leaves = self.spark_wallet.list_leaves().await?;
-        let min_value = request.min_value_sats.unwrap_or(0);
-        let leaves = wallet_leaves
-            .available
-            .into_iter()
-            .filter(|leaf| leaf.value >= min_value)
-            .map(|leaf| crate::models::Leaf {
-                id: leaf.id.to_string(),
-                value: leaf.value,
-            })
-            .collect();
-        Ok(crate::models::ListLeavesResponse { leaves })
-    }
-
-    /// Prepares a unilateral exit by building and signing the necessary transactions.
+    /// Prepares a unilateral exit by automatically selecting profitable leaves,
+    /// building all necessary transactions, and signing the CPFP fee-bump
+    /// transactions using the provided signer.
     ///
-    /// The provided `signer` is used to sign the CPFP child transactions' external inputs.
-    /// Returns signed transactions ready to broadcast.
+    /// Returns signed transactions ready to broadcast and a summary of which
+    /// leaves were selected.
     pub async fn prepare_unilateral_exit(
         &self,
         request: crate::models::PrepareUnilateralExitRequest,
         signer: std::sync::Arc<dyn crate::signer::CpfpSigner>,
     ) -> Result<crate::models::PrepareUnilateralExitResponse, SdkError> {
         use bitcoin::consensus::encode::serialize_hex;
-        use std::str::FromStr;
-
-        let leaf_ids = request
-            .leaf_ids
-            .into_iter()
-            .map(|id| {
-                spark_wallet::TreeNodeId::from_str(&id)
-                    .map_err(|e| SdkError::Generic(format!("Invalid leaf ID: {e}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
         let btc_network: bitcoin::Network = self.config.network.into();
-        let destination = bitcoin::Address::from_str(&request.destination)
-            .map_err(|e| SdkError::Generic(format!("Invalid destination address: {e}")))?
-            .require_network(btc_network)
-            .map_err(|e| SdkError::Generic(format!("Address network mismatch: {e}")))?;
+        let destination = std::str::FromStr::from_str(&request.destination)
+            .map_err(|e: bitcoin::address::ParseError| {
+                SdkError::Generic(format!("Invalid destination address: {e}"))
+            })
+            .and_then(
+                |addr: bitcoin::Address<bitcoin::address::NetworkUnchecked>| {
+                    addr.require_network(btc_network)
+                        .map_err(|e| SdkError::Generic(format!("Address network mismatch: {e}")))
+                },
+            )?;
 
         let inputs = request
             .inputs
@@ -149,39 +128,25 @@ impl BreezSdk {
             .map(|input| convert_cpfp_input(input, btc_network))
             .collect::<Result<Vec<_>, SdkError>>()?;
 
-        let result = self
+        let exit_result = self
             .spark_wallet
-            .unilateral_exit(request.fee_rate, leaf_ids, inputs)
+            .unilateral_exit_autoselect(request.fee_rate, inputs, destination)
             .await?;
 
-        // Extract refund outputs from the result. The last tx_cpfp_psbts entry
-        // for each leaf is the refund TX; its output[0] is the P2TR refund output.
-        let refund_outputs: Vec<spark_wallet::RefundOutput> = result
+        // Map selected leaves to the public summary type
+        let selected_leaves: Vec<crate::models::UnilateralExitLeafSummary> = exit_result
+            .selected_leaves
             .iter()
-            .map(|leaf| {
-                let refund_tx = &leaf
-                    .tx_cpfp_psbts
-                    .last()
-                    .ok_or_else(|| SdkError::Generic("No transactions for leaf".to_string()))?
-                    .parent_tx;
-                Ok(spark_wallet::RefundOutput {
-                    outpoint: bitcoin::OutPoint {
-                        txid: refund_tx.compute_txid(),
-                        vout: 0,
-                    },
-                    leaf_id: leaf.leaf_id.clone(),
-                    value: refund_tx.output[0].value.to_sat(),
-                })
+            .map(|sl| crate::models::UnilateralExitLeafSummary {
+                id: sl.id.to_string(),
+                value: sl.value,
+                estimated_cost: sl.estimated_cost,
             })
-            .collect::<Result<Vec<_>, SdkError>>()?;
+            .collect();
 
-        let sweep_tx = self
-            .spark_wallet
-            .create_refund_sweep_transaction(refund_outputs, destination, request.fee_rate)
-            .await?;
-
-        let mut leaves = Vec::with_capacity(result.len());
-        for leaf in result {
+        // Sign CPFPs and build the response
+        let mut transactions = Vec::with_capacity(exit_result.leaf_tx_cpfp_psbts.len());
+        for leaf in exit_result.leaf_tx_cpfp_psbts {
             let mut tx_cpfp_pairs = Vec::with_capacity(leaf.tx_cpfp_psbts.len());
             for tc in leaf.tx_cpfp_psbts {
                 let csv_timelock_blocks = tc.parent_tx.input.first().and_then(|input| {
@@ -226,15 +191,16 @@ impl BreezSdk {
                     csv_timelock_blocks,
                 });
             }
-            leaves.push(crate::models::UnilateralExitLeafTxCpfpPairs {
+            transactions.push(crate::models::UnilateralExitLeafTxCpfpPairs {
                 leaf_id: leaf.leaf_id.to_string(),
                 tx_cpfp_pairs,
             });
         }
 
         Ok(crate::models::PrepareUnilateralExitResponse {
-            leaves,
-            sweep_tx_hex: serialize_hex(&sweep_tx),
+            selected_leaves,
+            transactions,
+            sweep_tx_hex: serialize_hex(&exit_result.sweep_tx),
         })
     }
 

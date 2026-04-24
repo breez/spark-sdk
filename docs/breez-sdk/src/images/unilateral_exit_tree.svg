@@ -22,7 +22,7 @@
   <rect width="720" height="620" rx="12" fill="url(#bgGrad)" stroke="#e2e8f0" stroke-width="1"/>
 
   <!-- Title -->
-  <text x="360" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#1e293b">Unilateral Exit — Transaction Tree</text>
+  <text x="360" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#1e293b">Unilateral Exit — Transaction Tree (per leaf)</text>
 
   <!-- Legend -->
   <g transform="translate(20, 50)">

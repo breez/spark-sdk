@@ -166,7 +166,9 @@ pub async fn handle_command(
                 .into_iter()
                 .map(|s| ParsedCpfpInput::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, inputs).await?;
+            let all_leaf_tx_cpfp_psbts = wallet
+                .unilateral_exit(fee_rate, leaf_ids, inputs, None)
+                .await?;
 
             for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
                 println!();

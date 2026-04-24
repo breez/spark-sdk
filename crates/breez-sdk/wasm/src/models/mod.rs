@@ -712,22 +712,6 @@ pub struct Credentials {
     pub password: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ListLeavesRequest)]
-pub struct ListLeavesRequest {
-    pub min_value_sats: Option<u64>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ListLeavesResponse)]
-pub struct ListLeavesResponse {
-    pub leaves: Vec<Leaf>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::Leaf)]
-pub struct Leaf {
-    pub id: String,
-    pub value: u64,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitCpfpInput)]
 pub enum UnilateralExitCpfpInput {
     P2wpkh {
@@ -754,7 +738,6 @@ pub enum UnilateralExitCpfpInput {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitRequest)]
 pub struct PrepareUnilateralExitRequest {
     pub fee_rate: u64,
-    pub leaf_ids: Vec<String>,
     pub inputs: Vec<UnilateralExitCpfpInput>,
     pub destination: String,
 }
@@ -772,9 +755,17 @@ pub struct UnilateralExitLeafTxCpfpPairs {
     pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::UnilateralExitLeafSummary)]
+pub struct UnilateralExitLeafSummary {
+    pub id: String,
+    pub value: u64,
+    pub estimated_cost: u64,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareUnilateralExitResponse)]
 pub struct PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeafTxCpfpPairs>,
+    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
+    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
     pub sweep_tx_hex: String,
 }
 

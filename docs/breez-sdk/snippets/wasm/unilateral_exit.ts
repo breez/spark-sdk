@@ -1,26 +1,11 @@
 import type {
   BreezSdk,
   CpfpSigner,
-  Leaf,
   PrepareUnilateralExitResponse
 } from '@breeztech/breez-sdk-spark'
 
-const exampleListLeavesForExit = async (sdk: BreezSdk): Promise<Leaf[]> => {
-  // ANCHOR: list-leaves
-  const response = await sdk.listLeaves({
-    minValueSats: 10_000
-  })
-
-  for (const leaf of response.leaves) {
-    console.log(`Leaf ${leaf.id}: ${leaf.value} sats`)
-  }
-  // ANCHOR_END: list-leaves
-  return response.leaves
-}
-
 const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitResponse> => {
   // ANCHOR: prepare-unilateral-exit
-  const leafIds = ['leaf-id-1', 'leaf-id-2']
   const signer: CpfpSigner = {
     signPsbt: async (_psbtBytes: Uint8Array): Promise<Uint8Array> => {
       // Sign the PSBT with your UTXO key and return the signed bytes
@@ -30,7 +15,6 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
   const response = await sdk.prepareUnilateralExit(
     {
       feeRate: 2,
-      leafIds,
       inputs: [{
         type: 'p2wpkh',
         txid: 'your-utxo-txid',
@@ -43,7 +27,12 @@ const examplePrepareExit = async (sdk: BreezSdk): Promise<PrepareUnilateralExitR
     signer
   )
 
-  for (const leaf of response.leaves) {
+  // The SDK automatically selects which leaves are profitable to exit.
+  for (const leaf of response.selectedLeaves) {
+    console.log(`Leaf ${leaf.id}: ${leaf.value} sats (exit cost: ~${leaf.estimatedCost} sats)`)
+  }
+
+  for (const leaf of response.transactions) {
     for (const pair of leaf.txCpfpPairs) {
       if (pair.csvTimelockBlocks != null) {
         console.log(`Timelock: wait ${pair.csvTimelockBlocks} blocks`)

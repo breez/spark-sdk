@@ -60,13 +60,6 @@ impl BreezSdk {
         self.inner.get_info(request).await
     }
 
-    pub async fn list_leaves(
-        &self,
-        request: ListLeavesRequest,
-    ) -> Result<ListLeavesResponse, SdkError> {
-        self.inner.list_leaves(request).await
-    }
-
     pub async fn prepare_unilateral_exit(
         &self,
         request: PrepareUnilateralExitRequest,

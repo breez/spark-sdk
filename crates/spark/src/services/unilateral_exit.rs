@@ -59,11 +59,62 @@ impl UnilateralExitService {
         }
     }
 
+    /// Fetches all ancestors for the given leaves, selects the profitable ones,
+    /// and builds their CPFP PSBTs.
+    ///
+    /// Returns the selected leaves and the CPFP transaction data. Returns an
+    /// empty vec pair when no leaves are profitable.
+    pub async fn unilateral_exit_autoselect(
+        &self,
+        fee_rate: u64,
+        leaf_ids: Vec<TreeNodeId>,
+        inputs: Vec<CpfpInput>,
+        destination_script_len: usize,
+    ) -> Result<(Vec<SelectedLeaf>, Vec<LeafTxCpfpPsbts>), ServiceError> {
+        if inputs.is_empty() {
+            return Err(ServiceError::ValidationError(
+                "At least one CPFP input is required".to_string(),
+            ));
+        }
+        if leaf_ids.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+
+        let tree_nodes_vec = self.fetch_leaves_parents(&leaf_ids).await?;
+        let tree_nodes: HashMap<TreeNodeId, TreeNode> = tree_nodes_vec
+            .into_iter()
+            .map(|n| (n.id.clone(), n))
+            .collect();
+
+        let params = LeafExitCostParams {
+            initial_cpfp_input_weight: inputs.iter().map(|i| i.signed_input_weight).sum(),
+            single_cpfp_input_weight: inputs[0].signed_input_weight,
+            change_script_len: inputs[0].witness_utxo.script_pubkey.len(),
+            total_cpfp_budget: inputs.iter().map(|i| i.witness_utxo.value.to_sat()).sum(),
+            destination_script_len,
+            fee_rate,
+        };
+
+        let selected = select_profitable_leaves(&tree_nodes, &leaf_ids, &params);
+        if selected.is_empty() {
+            return Ok((vec![], vec![]));
+        }
+
+        let selected_ids: Vec<TreeNodeId> = selected.iter().map(|s| s.id.clone()).collect();
+        let prefetched: Vec<TreeNode> = tree_nodes.into_values().collect();
+        let psbts = self
+            .unilateral_exit(fee_rate, selected_ids, inputs, Some(prefetched))
+            .await?;
+
+        Ok((selected, psbts))
+    }
+
     pub async fn unilateral_exit(
         &self,
         fee_rate: u64,
         leaf_ids: Vec<TreeNodeId>,
         mut inputs: Vec<CpfpInput>,
+        prefetched_nodes: Option<Vec<TreeNode>>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, ServiceError> {
         if leaf_ids.is_empty() {
             return Err(ServiceError::ValidationError(
@@ -79,13 +130,15 @@ impl UnilateralExitService {
         let mut all_leaf_tx_cpfp_psbts = Vec::new();
         let mut checked_txs = HashSet::new();
 
-        // Fetch leaves and parents for the given leaf IDs
-        let tree_nodes: HashMap<TreeNodeId, TreeNode> = self
-            .fetch_leaves_parents(&leaf_ids)
-            .await?
-            .into_iter()
-            .map(|node| (node.id.clone(), node))
-            .collect();
+        let tree_nodes: HashMap<TreeNodeId, TreeNode> = match prefetched_nodes {
+            Some(nodes) => nodes.into_iter().map(|n| (n.id.clone(), n)).collect(),
+            None => self
+                .fetch_leaves_parents(&leaf_ids)
+                .await?
+                .into_iter()
+                .map(|node| (node.id.clone(), node))
+                .collect(),
+        };
         for leaf_id in leaf_ids {
             let mut tx_cpfp_psbts = Vec::new();
             let mut nodes = Vec::new();
@@ -258,6 +311,15 @@ pub fn compute_sweep_fee(num_inputs: usize, destination_script_len: usize, fee_r
     (fee_rate * total_weight).div_ceil(4)
 }
 
+/// A leaf selected by the greedy profitability algorithm.
+#[derive(Debug, Clone)]
+pub struct SelectedLeaf {
+    pub id: TreeNodeId,
+    pub value: u64,
+    /// Estimated marginal exit cost (CPFP fees + sweep input fee).
+    pub estimated_cost: u64,
+}
+
 /// Parameters for the greedy leaf-selection algorithm.
 pub struct LeafExitCostParams {
     /// Total signed weight of all initial CPFP inputs (used for the very first
@@ -285,13 +347,13 @@ pub struct LeafExitCostParams {
 /// share ancestors with previously selected leaves benefit from reduced marginal
 /// cost.
 ///
-/// Returns the IDs of the selected leaves (order matches the CPFP broadcast
-/// sequence: highest-value first).
+/// Returns the selected leaves with their estimated costs (order matches the
+/// CPFP broadcast sequence: highest-value first).
 pub fn select_profitable_leaves(
     tree_nodes: &HashMap<TreeNodeId, TreeNode>,
     leaf_ids: &[TreeNodeId],
     params: &LeafExitCostParams,
-) -> Vec<TreeNodeId> {
+) -> Vec<SelectedLeaf> {
     // Collect leaves we can actually look up, sorted by value descending.
     let mut leaves: Vec<_> = leaf_ids
         .iter()
@@ -299,7 +361,7 @@ pub fn select_profitable_leaves(
         .collect();
     leaves.sort_by(|a, b| b.1.value.cmp(&a.1.value));
 
-    let mut selected: Vec<TreeNodeId> = Vec::new();
+    let mut selected: Vec<SelectedLeaf> = Vec::new();
     let mut covered_txids: HashSet<bitcoin::Txid> = HashSet::new();
     let mut remaining_budget = params.total_cpfp_budget;
     // The very first CPFP child tx in the chain spends all initial inputs;
@@ -373,7 +435,11 @@ pub fn select_profitable_leaves(
         // Include the leaf only when it strictly adds value and the CPFP
         // budget can cover the fee chain (remaining budget must stay > 0).
         if leaf.value > total_marginal_cost && remaining_budget > cpfp_cost {
-            selected.push((*leaf_id).clone());
+            selected.push(SelectedLeaf {
+                id: (*leaf_id).clone(),
+                value: leaf.value,
+                estimated_cost: total_marginal_cost,
+            });
             remaining_budget -= cpfp_cost;
             first_cpfp_pending = false;
             for ancestor in &ancestors {
@@ -999,8 +1065,8 @@ mod tests {
 
         let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
         assert_eq!(selected.len(), 2, "both leaves should be selected");
-        assert_eq!(selected[0].to_string(), "leaf-a");
-        assert_eq!(selected[1].to_string(), "leaf-b");
+        assert_eq!(selected[0].id.to_string(), "leaf-a");
+        assert_eq!(selected[1].id.to_string(), "leaf-b");
     }
 
     #[test_all]
@@ -1019,7 +1085,7 @@ mod tests {
 
         let selected = select_profitable_leaves(&nodes, &leaf_ids, &params);
         assert_eq!(selected.len(), 1, "only leaf-a should be selected");
-        assert_eq!(selected[0].to_string(), "leaf-a");
+        assert_eq!(selected[0].id.to_string(), "leaf-a");
     }
 
     #[test_all]

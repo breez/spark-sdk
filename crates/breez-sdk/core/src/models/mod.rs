@@ -1001,32 +1001,6 @@ pub struct Credentials {
     pub password: String,
 }
 
-/// Request to list the leaves of the wallet
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ListLeavesRequest {
-    /// Only return leaves with a value greater than or equal to this amount in satoshis
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub min_value_sats: Option<u64>,
-}
-
-/// Response containing the leaves of the wallet
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ListLeavesResponse {
-    pub leaves: Vec<Leaf>,
-}
-
-/// A leaf in the wallet's tree
-#[derive(Debug, Clone, Serialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct Leaf {
-    /// The unique identifier of the leaf
-    pub id: String,
-    /// The value of the leaf in satoshis
-    pub value: u64,
-}
-
 /// An input used to pay fees for a unilateral exit via CPFP.
 ///
 /// P2WPKH and P2TR variants auto-compute the scriptPubKey and signed input weight from
@@ -1069,8 +1043,6 @@ pub enum UnilateralExitCpfpInput {
 pub struct PrepareUnilateralExitRequest {
     /// Fee rate in sats/vbyte
     pub fee_rate: u64,
-    /// The leaf IDs to exit
-    pub leaf_ids: Vec<String>,
     /// CPFP inputs used to pay fees for the unilateral exit
     pub inputs: Vec<UnilateralExitCpfpInput>,
     /// Destination address for the sweep transaction that spends refund outputs
@@ -1101,11 +1073,26 @@ pub struct UnilateralExitLeafTxCpfpPairs {
     pub tx_cpfp_pairs: Vec<UnilateralExitTxCpfpPair>,
 }
 
+/// Summary of a leaf selected for unilateral exit
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitLeafSummary {
+    /// The unique identifier of the leaf
+    pub id: String,
+    /// The value of the leaf in satoshis
+    pub value: u64,
+    /// Estimated marginal exit cost in satoshis (CPFP fees + sweep input fee)
+    pub estimated_cost: u64,
+}
+
 /// Response containing the prepared unilateral exit transactions
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareUnilateralExitResponse {
-    pub leaves: Vec<UnilateralExitLeafTxCpfpPairs>,
+    /// Summary of each leaf selected for exit
+    pub selected_leaves: Vec<UnilateralExitLeafSummary>,
+    /// The signed transaction pairs for broadcasting, grouped per leaf
+    pub transactions: Vec<UnilateralExitLeafTxCpfpPairs>,
     /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address
     pub sweep_tx_hex: String,
 }

@@ -23,7 +23,19 @@ use spark::{
     utils::paging::PagingFilter,
 };
 
+use spark::services::{LeafTxCpfpPsbts, SelectedLeaf};
+
 use crate::SparkWalletError;
+
+/// Result of `unilateral_exit_autoselect`.
+pub struct UnilateralExitAutoselect {
+    /// The leaves selected for exit with their estimated costs.
+    pub selected_leaves: Vec<SelectedLeaf>,
+    /// CPFP PSBTs for each selected leaf's broadcast chain.
+    pub leaf_tx_cpfp_psbts: Vec<LeafTxCpfpPsbts>,
+    /// Signed sweep transaction that collects all refund outputs.
+    pub sweep_tx: Transaction,
+}
 
 /// Describes a refund output sitting on-chain after a unilateral exit.
 pub struct RefundOutput {

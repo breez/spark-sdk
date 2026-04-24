@@ -10,6 +10,7 @@ use bitcoin::{
     transaction::Version,
 };
 
+use crate::model::UnilateralExitAutoselect;
 use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
@@ -1264,19 +1265,80 @@ impl SparkWallet {
 
     /// Prepares a package of unilaterial exit PSBTs for each leaf
     ///
+    /// Automatically selects profitable leaves and builds all unilateral exit
+    /// transactions including the sweep transaction.
+    ///
+    /// Returns the selected leaves, CPFP PSBTs for broadcasting, and the signed
+    /// sweep transaction.
+    pub async fn unilateral_exit_autoselect(
+        &self,
+        fee_rate: u64,
+        inputs: Vec<CpfpInput>,
+        destination: Address,
+    ) -> Result<UnilateralExitAutoselect, SparkWalletError> {
+        let wallet_leaves = self.tree_service.list_leaves().await?;
+        let leaf_ids: Vec<TreeNodeId> = wallet_leaves.available.into_iter().map(|l| l.id).collect();
+
+        let dest_script = destination.script_pubkey();
+        let (selected_leaves, leaf_tx_cpfp_psbts) = self
+            .unilateral_exit_service
+            .unilateral_exit_autoselect(fee_rate, leaf_ids, inputs, dest_script.len())
+            .await?;
+
+        if selected_leaves.is_empty() {
+            return Err(SparkWalletError::ValidationError(
+                "No leaves are profitable to exit at the given fee rate".to_string(),
+            ));
+        }
+
+        // Extract refund outputs from the CPFP result to build the sweep tx.
+        let refund_outputs: Vec<RefundOutput> = leaf_tx_cpfp_psbts
+            .iter()
+            .map(|leaf| {
+                let refund_tx = &leaf
+                    .tx_cpfp_psbts
+                    .last()
+                    .ok_or_else(|| {
+                        SparkWalletError::Generic("No transactions for leaf".to_string())
+                    })?
+                    .parent_tx;
+                Ok(RefundOutput {
+                    outpoint: bitcoin::OutPoint {
+                        txid: refund_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    leaf_id: leaf.leaf_id.clone(),
+                    value: refund_tx.output[0].value.to_sat(),
+                })
+            })
+            .collect::<Result<Vec<_>, SparkWalletError>>()?;
+
+        let sweep_tx = self
+            .create_refund_sweep_transaction(refund_outputs, destination, fee_rate)
+            .await?;
+
+        Ok(UnilateralExitAutoselect {
+            selected_leaves,
+            leaf_tx_cpfp_psbts,
+            sweep_tx,
+        })
+    }
+
     /// # Arguments
     /// * `fee_rate` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
     /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
     /// * `inputs` - The CPFP inputs to use for fee-bumping
+    /// * `prefetched_nodes` - Optional pre-fetched tree nodes to avoid a redundant fetch
     pub async fn unilateral_exit(
         &self,
         fee_rate: u64,
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
+        prefetched_nodes: Option<Vec<spark::tree::TreeNode>>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
         Ok(self
             .unilateral_exit_service
-            .unilateral_exit(fee_rate, leaf_ids, inputs)
+            .unilateral_exit(fee_rate, leaf_ids, inputs, prefetched_nodes)
             .await?)
     }
 
