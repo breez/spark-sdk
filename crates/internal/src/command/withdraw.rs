@@ -103,6 +103,8 @@ pub enum WithdrawCommand {
     UnilateralExit {
         /// Fee rate in sats/vbyte.
         fee_rate: u64,
+        /// Destination address for the sweep transaction that spends refund outputs.
+        destination: String,
         /// The leaf IDs of the tree nodes to unilateral exit. Defaults to all leaves.
         #[clap(short, long = "leaf")]
         leaf_ids: Vec<TreeNodeId>,
@@ -153,6 +155,7 @@ pub async fn handle_command(
         }
         WithdrawCommand::UnilateralExit {
             fee_rate,
+            destination,
             leaf_ids,
             utxos,
             signing_key,
@@ -166,17 +169,16 @@ pub async fn handle_command(
                 .into_iter()
                 .map(|s| ParsedCpfpInput::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_cpfp_psbts = wallet
-                .unilateral_exit(
-                    fee_rate,
-                    leaf_ids,
-                    inputs,
-                    None,
-                    &std::collections::HashSet::new(),
-                )
+            let btc_network: bitcoin::Network = network.into();
+            let destination: Address = destination
+                .parse::<Address<bitcoin::address::NetworkUnchecked>>()?
+                .require_network(btc_network)
+                .map_err(|e| format!("destination network mismatch: {e}"))?;
+            let result = wallet
+                .unilateral_exit(fee_rate, leaf_ids, inputs, destination, None, Vec::new())
                 .await?;
 
-            for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
+            for leaf_tx_cpfp_psbts in &result.leaves {
                 println!();
                 println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
                 println!();
@@ -203,7 +205,11 @@ pub async fn handle_command(
                     println!("{index_str}{tx_type} ID: {txid}");
                     println!("{index_spaces}{tx_type}: {tx_hex}");
 
-                    let mut psbt = tx_cpfp_psbt.child_psbt.clone();
+                    let Some(mut psbt) = tx_cpfp_psbt.child_psbt.clone() else {
+                        println!("{index_spaces}Output already spent on-chain; skip this step.");
+                        println!();
+                        continue;
+                    };
                     let psbt_hex = psbt.serialize_hex();
                     println!("{index_spaces}PSBT (unsigned): {psbt_hex}");
 
@@ -218,17 +224,15 @@ pub async fn handle_command(
                     }
 
                     // Display CSV timelock for refund transaction
-                    if is_refund_tx && let Some(input) = tx_cpfp_psbt.parent_tx.input.first() {
-                        let sequence = input.sequence.to_consensus_u32();
-                        // CSV uses the lower 16 bits for the relative lock value
-                        // Bit 22 (0x00400000) indicates blocks vs time
-                        if sequence & 0x00400000 == 0 {
-                            let csv_blocks = sequence & 0xFFFF;
-                            println!(
-                                "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
-                                csv_blocks
-                            );
-                        }
+                    if is_refund_tx
+                        && let Some(input) = tx_cpfp_psbt.parent_tx.input.first()
+                        && let Some(bitcoin::relative::LockTime::Blocks(h)) =
+                            input.sequence.to_relative_lock_time()
+                    {
+                        println!(
+                            "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
+                            h.value()
+                        );
                     }
 
                     // Independent derivation path verification for refund TX

@@ -243,11 +243,15 @@ async fn full_exit_broadcast_test(
                 );
             }
             let signed_child = match input_type {
-                InputType::P2tr => sign_cpfp_psbt_p2tr(&tc.child_psbt, &utxo.secret_key)?,
-                InputType::P2wpkh => sign_cpfp_psbt_p2wpkh(&tc.child_psbt, &utxo.secret_key)?,
+                InputType::P2tr => {
+                    sign_cpfp_psbt_p2tr(tc.child_psbt.as_ref().unwrap(), &utxo.secret_key)?
+                }
+                InputType::P2wpkh => {
+                    sign_cpfp_psbt_p2wpkh(tc.child_psbt.as_ref().unwrap(), &utxo.secret_key)?
+                }
                 InputType::Custom => {
                     let sk = utxo.secret_key;
-                    sign_cpfp_psbt_custom(&tc.child_psbt, |psbt| {
+                    sign_cpfp_psbt_custom(tc.child_psbt.as_ref().unwrap(), |psbt| {
                         // Custom signer: manually do P2TR signing with a different code path
                         let secp = Secp256k1::new();
                         let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &sk)
@@ -320,11 +324,15 @@ async fn full_exit_broadcast_test(
                         })
                     });
                 if has_bip68_error {
-                    let csv_blocks = tc
+                    let csv_blocks: u32 = tc
                         .parent_tx
                         .input
-                        .first()
-                        .map(|i| i.sequence.to_consensus_u32() & 0xFFFF)
+                        .iter()
+                        .filter_map(|i| match i.sequence.to_relative_lock_time()? {
+                            bitcoin::relative::LockTime::Blocks(h) => Some(u32::from(h.value())),
+                            bitcoin::relative::LockTime::Time(_) => None,
+                        })
+                        .max()
                         .unwrap_or(0);
                     info!("CSV timelock: {csv_blocks} blocks. Mining...");
                     bitcoind.generate_blocks(csv_blocks.into()).await?;
@@ -400,7 +408,7 @@ async fn test_cpfp_rbf(#[future] wallets: WalletsFixture) -> Result<()> {
     // Sign and submit the node_tx package (first PSBT only)
     let first_leaf = &exit_a.leaf_tx_cpfp_psbts[0];
     let first_tc = &first_leaf.tx_cpfp_psbts[0];
-    let child_a = sign_cpfp_psbt_p2tr(&first_tc.child_psbt, &utxo_a.secret_key)?;
+    let child_a = sign_cpfp_psbt_p2tr(first_tc.child_psbt.as_ref().unwrap(), &utxo_a.secret_key)?;
 
     let result = bitcoind
         .submit_package(&[&first_tc.parent_tx, &child_a])
@@ -420,7 +428,7 @@ async fn test_cpfp_rbf(#[future] wallets: WalletsFixture) -> Result<()> {
 
     let first_leaf_b = &exit_b.leaf_tx_cpfp_psbts[0];
     let first_tc_b = &first_leaf_b.tx_cpfp_psbts[0];
-    let child_b = sign_cpfp_psbt_p2tr(&first_tc_b.child_psbt, &utxo_b.secret_key)?;
+    let child_b = sign_cpfp_psbt_p2tr(first_tc_b.child_psbt.as_ref().unwrap(), &utxo_b.secret_key)?;
 
     // The parent_tx (node_tx) is the same, already in mempool.
     // The new child conflicts on the anchor input → RBF replacement.
@@ -463,6 +471,8 @@ async fn test_unilateral_exit_p2tr_cpfp(#[future] wallets: WalletsFixture) -> Re
         for tc in &leaf_psbts.tx_cpfp_psbts {
             let p2tr_count = tc
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .inputs
                 .iter()
                 .filter(|i| {
@@ -475,6 +485,8 @@ async fn test_unilateral_exit_p2tr_cpfp(#[future] wallets: WalletsFixture) -> Re
 
             let has_p2tr_output = tc
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .unsigned_tx
                 .output
                 .iter()
@@ -510,6 +522,8 @@ async fn test_unilateral_exit_p2wpkh_cpfp(#[future] wallets: WalletsFixture) -> 
         for tc in &leaf_psbts.tx_cpfp_psbts {
             let wpkh_count = tc
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .inputs
                 .iter()
                 .filter(|i| {
@@ -522,6 +536,8 @@ async fn test_unilateral_exit_p2wpkh_cpfp(#[future] wallets: WalletsFixture) -> 
 
             let has_wpkh_output = tc
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .unsigned_tx
                 .output
                 .iter()
@@ -607,6 +623,8 @@ async fn test_unilateral_exit_cpfp_chain_threading(
         if let Some(first) = psbts.first() {
             let has_original_input = first
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .unsigned_tx
                 .input
                 .iter()
@@ -619,7 +637,12 @@ async fn test_unilateral_exit_cpfp_chain_threading(
 
         // Each subsequent PSBT should spend the previous PSBT's change output
         for window in psbts.windows(2) {
-            let prev_child_txid = window[0].child_psbt.unsigned_tx.compute_txid();
+            let prev_child_txid = window[0]
+                .child_psbt
+                .as_ref()
+                .unwrap()
+                .unsigned_tx
+                .compute_txid();
             let expected_outpoint = OutPoint {
                 txid: prev_child_txid,
                 vout: 0,
@@ -627,6 +650,8 @@ async fn test_unilateral_exit_cpfp_chain_threading(
 
             let next_has_prev_change = window[1]
                 .child_psbt
+                .as_ref()
+                .unwrap()
                 .unsigned_tx
                 .input
                 .iter()

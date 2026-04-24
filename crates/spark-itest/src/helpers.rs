@@ -14,6 +14,7 @@ use rand::Rng;
 use rstest::*;
 use spark_wallet::{
     CpfpInput, DefaultSigner, Network, SparkWallet, SparkWalletConfig, WalletEvent,
+    is_ephemeral_anchor_output,
 };
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
@@ -523,8 +524,7 @@ where
 fn finalize_anchor_inputs(psbt: &mut Psbt) {
     for input in &mut psbt.inputs {
         if let Some(ref tx_out) = input.witness_utxo
-            && tx_out.value.to_sat() == 0
-            && tx_out.script_pubkey.as_bytes() == [0x51, 0x02, 0x4e, 0x73]
+            && is_ephemeral_anchor_output(tx_out)
         {
             input.final_script_witness = Some(Witness::new());
         }
@@ -563,10 +563,16 @@ pub async fn submit_package_with_csv_retry(
             serde_json::to_string_pretty(&result).unwrap_or_default()
         );
     }
-    let csv_blocks = parent
+    // BIP68: every input's relative lock must be satisfied, so mine enough
+    // blocks to cover the max across all block-based CSVs.
+    let csv_blocks: u32 = parent
         .input
-        .first()
-        .map(|i| i.sequence.to_consensus_u32() & 0xFFFF)
+        .iter()
+        .filter_map(|i| match i.sequence.to_relative_lock_time()? {
+            bitcoin::relative::LockTime::Blocks(h) => Some(u32::from(h.value())),
+            bitcoin::relative::LockTime::Time(_) => None,
+        })
+        .max()
         .unwrap_or(0);
     bitcoind.generate_blocks(csv_blocks.into()).await?;
 

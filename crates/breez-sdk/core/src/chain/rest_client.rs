@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::info;
 
-use crate::chain::RecommendedFees;
+use crate::chain::{Outspend, RecommendedFees};
 use crate::{
     Network,
     chain::{ChainServiceError, Utxo},
@@ -228,6 +228,13 @@ impl BitcoinChainService for RestClientChainService {
             .get_response_text(format!("/tx/{txid}/hex").as_str())
             .await?;
         Ok(tx)
+    }
+
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        let outspend = self
+            .get_response_json::<Outspend>(format!("/tx/{txid}/outspend/{vout}").as_str())
+            .await?;
+        Ok(outspend)
     }
 
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {

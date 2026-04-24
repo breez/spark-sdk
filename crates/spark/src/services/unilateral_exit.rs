@@ -40,7 +40,22 @@ pub struct CpfpInput {
 pub struct TxCpfpPsbt {
     pub node_id: TreeNodeId,
     pub parent_tx: Transaction,
-    pub child_psbt: Psbt,
+    /// `Some(psbt)` when the caller must broadcast the CPFP package to progress
+    /// this step; `None` when the corresponding on-chain output has already been
+    /// spent by some spending transaction (CPFP variant, direct variant, or a
+    /// future protocol addition).
+    pub child_psbt: Option<Psbt>,
+    /// Outpoints the chain-level walk tracks for this step. If any of them is
+    /// already spent on-chain, the step is considered done and `child_psbt` is
+    /// `None`. Node steps carry a single outpoint (the parent's consumed vout);
+    /// the leaf refund step may carry a second entry for `direct_tx.output[0]`
+    /// when `direct_tx` is present.
+    pub spent_outpoints: Vec<OutPoint>,
+    /// Protocol-known alternative spending transactions for the outpoints in
+    /// `spent_outpoints` (e.g. `direct_tx`, `direct_from_cpfp_refund_tx`,
+    /// `direct_refund_tx`). Callers use this as a hydration cache to avoid
+    /// fetching transactions whose bytes are already known.
+    pub known_spenders: Vec<Transaction>,
 }
 
 pub struct LeafTxCpfpPsbts {
@@ -125,7 +140,7 @@ impl UnilateralExitService {
         leaf_ids: Vec<TreeNodeId>,
         mut inputs: Vec<CpfpInput>,
         prefetched_nodes: Option<Vec<TreeNode>>,
-        confirmed_txids: &HashSet<bitcoin::Txid>,
+        confirmed_outpoints: &HashSet<OutPoint>,
     ) -> Result<Vec<LeafTxCpfpPsbts>, ServiceError> {
         if leaf_ids.is_empty() {
             return Err(ServiceError::ValidationError(
@@ -139,7 +154,7 @@ impl UnilateralExitService {
         }
 
         let mut all_leaf_tx_cpfp_psbts = Vec::new();
-        let mut checked_txs = HashSet::new();
+        let mut checked_outpoints: HashSet<OutPoint> = HashSet::new();
 
         let tree_nodes: HashMap<TreeNodeId, TreeNode> = match prefetched_nodes {
             Some(nodes) => nodes.into_iter().map(|n| (n.id.clone(), n)).collect(),
@@ -185,41 +200,71 @@ impl UnilateralExitService {
                 node = parent;
             }
 
-            // For each node, create a child PSBT for its node tx (unless it
-            // was already processed through a shared ancestor, or already
-            // confirmed on-chain). If the node is a leaf, additionally create
-            // a child PSBT for its refund tx. Confirmations are checked per
-            // `Txid` because the leaf's node_tx and refund_tx are different
-            // transactions even though they share the same `TreeNodeId`.
+            // Emit an entry per node (the CPFP node_tx step) plus, for the leaf,
+            // a refund entry. Each entry is emitted unconditionally: `child_psbt`
+            // becomes `None` when any of its tracked outpoints is already spent
+            // on-chain. Node entries share the parent vout with the `direct_tx`
+            // variant, so one entry covers both possible spenders. The leaf
+            // refund has two candidate consumed outpoints when `direct_tx`
+            // exists (`node_tx.output[0]` for the CPFP / direct-from-cpfp
+            // refund paths, and `direct_tx.output[0]` for the direct-refund
+            // path); a single refund entry carries both so whichever actually
+            // materialized drives the decision.
             for node in nodes {
-                let node_txid = node.node_tx.compute_txid();
-                if !checked_txs.insert(node_txid) {
+                let node_parent_outpoint = node.node_tx.input[0].previous_output;
+                if !checked_outpoints.insert(node_parent_outpoint) {
                     continue;
                 }
 
-                if !confirmed_txids.contains(&node_txid) {
-                    // Create the PSBT to fee bump the node tx
-                    let child_psbt = create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?;
+                let child_psbt = if confirmed_outpoints.contains(&node_parent_outpoint) {
+                    None
+                } else {
+                    Some(create_tx_cpfp_psbt(&node.node_tx, &mut inputs, fee_rate)?)
+                };
+                let known_spenders: Vec<Transaction> = node.direct_tx.clone().into_iter().collect();
+
+                tx_cpfp_psbts.push(TxCpfpPsbt {
+                    node_id: node.id.clone(),
+                    parent_tx: node.node_tx.clone(),
+                    child_psbt,
+                    spent_outpoints: vec![node_parent_outpoint],
+                    known_spenders,
+                });
+
+                if node.id == leaf_id {
+                    let cpfp_refund_outpoint = refund_tx.input[0].previous_output;
+                    let mut spent_outpoints = vec![cpfp_refund_outpoint];
+                    if let Some(direct_tx) = &node.direct_tx {
+                        spent_outpoints.push(OutPoint {
+                            txid: direct_tx.compute_txid(),
+                            vout: 0,
+                        });
+                    }
+
+                    let any_confirmed = spent_outpoints
+                        .iter()
+                        .any(|op| confirmed_outpoints.contains(op));
+                    let child_psbt = if any_confirmed {
+                        None
+                    } else {
+                        Some(create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?)
+                    };
+
+                    let mut known_spenders: Vec<Transaction> = Vec::new();
+                    if let Some(tx) = &node.direct_from_cpfp_refund_tx {
+                        known_spenders.push(tx.clone());
+                    }
+                    if let Some(tx) = &node.direct_refund_tx {
+                        known_spenders.push(tx.clone());
+                    }
 
                     tx_cpfp_psbts.push(TxCpfpPsbt {
                         node_id: node.id.clone(),
-                        parent_tx: node.node_tx.clone(),
+                        parent_tx: refund_tx.clone(),
                         child_psbt,
+                        spent_outpoints,
+                        known_spenders,
                     });
-                }
-
-                if node.id == leaf_id {
-                    let refund_txid = refund_tx.compute_txid();
-                    if !confirmed_txids.contains(&refund_txid) {
-                        // Create the PSBT to fee bump the leaf refund tx
-                        let child_psbt = create_tx_cpfp_psbt(refund_tx, &mut inputs, fee_rate)?;
-
-                        tx_cpfp_psbts.push(TxCpfpPsbt {
-                            node_id: node.id.clone(),
-                            parent_tx: refund_tx.clone(),
-                            child_psbt,
-                        });
-                    }
                 }
             }
 
@@ -671,8 +716,8 @@ mod tests {
             lock_time: LockTime::ZERO,
             input: Vec::new(),
             output: vec![TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+                value: Amount::ZERO,
+                script_pubkey: ScriptBuf::new_p2a(),
             }],
         }
     }
@@ -940,8 +985,8 @@ mod tests {
                     ),
                 },
                 TxOut {
-                    value: Amount::from_sat(0),
-                    script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+                    value: Amount::ZERO,
+                    script_pubkey: ScriptBuf::new_p2a(),
                 },
             ],
         }
@@ -1303,19 +1348,19 @@ mod tests {
     #[test_all]
     fn test_is_ephemeral_anchor_output() {
         let valid_anchor = TxOut {
-            value: Amount::from_sat(0),
-            script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+            value: Amount::ZERO,
+            script_pubkey: ScriptBuf::new_p2a(),
         };
         assert!(is_ephemeral_anchor_output(&valid_anchor));
 
         let non_zero_value = TxOut {
             value: Amount::from_sat(1),
-            script_pubkey: ScriptBuf::from(vec![0x51, 0x02, 0x4e, 0x73]),
+            script_pubkey: ScriptBuf::new_p2a(),
         };
         assert!(!is_ephemeral_anchor_output(&non_zero_value));
 
         let different_script = TxOut {
-            value: Amount::from_sat(0),
+            value: Amount::ZERO,
             script_pubkey: ScriptBuf::from(vec![0x51]),
         };
         assert!(!is_ephemeral_anchor_output(&different_script));

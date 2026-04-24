@@ -6,7 +6,7 @@ use std::{
 };
 
 use bitcoin::{
-    Address, Amount, Transaction, TxIn, TxOut, Witness,
+    Address, Amount, OutPoint, Transaction, TxIn, TxOut, Txid, Witness,
     absolute::LockTime,
     address::NetworkUnchecked,
     hashes::{Hash as _, sha256::Hash},
@@ -15,7 +15,7 @@ use bitcoin::{
     transaction::Version,
 };
 
-use crate::model::UnilateralExitAutoselect;
+use crate::model::{UnilateralExitAutoselect, UnilateralExitResult};
 use futures::stream::{self, StreamExt};
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
@@ -34,12 +34,12 @@ use spark::{
     },
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpInput, DepositService, ExitSpeed,
-        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
-        QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
-        TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
-        TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
+        Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LightningReceivePayment,
+        LightningSendPayment, LightningService, Preimage, PreimageRequestStatus,
+        PreimageRequestWithTransfer, QueryHtlcFilter, QueryTokenTransactionsFilter, ServiceError,
+        StaticDepositQuote, Swap, TimelockManager, TokenTransaction, Transfer, TransferId,
+        TransferObserver, TransferService, TransferStatus, TransferTokenOutput, TransferType,
+        UnilateralExitService, Utxo,
     },
     session_manager::{InMemorySessionManager, SessionManager},
     signer::{SecretSource, Signer},
@@ -1268,13 +1268,15 @@ impl SparkWallet {
         Ok(transfer)
     }
 
-    /// Prepares a package of unilaterial exit PSBTs for each leaf
+    /// Builds the optimistic unilateral-exit path for every profitable leaf,
+    /// assuming nothing has been spent on-chain yet.
     ///
-    /// Automatically selects profitable leaves and builds all unilateral exit
-    /// transactions including the sweep transaction.
-    ///
-    /// Returns the selected leaves, CPFP PSBTs for broadcasting, and the signed
-    /// sweep transaction.
+    /// Returns the selected leaves, the full CPFP PSBT list (every step emitted
+    /// with `child_psbt: Some(...)`), and the prefetched tree nodes. The caller
+    /// is expected to run chain queries using the output info carried on each
+    /// entry (`spent_outpoints`, `known_spenders`) to discover confirmed
+    /// spending transactions, then call [`Self::unilateral_exit`] with those
+    /// transactions to get the final CPFP list and signed sweep.
     pub async fn unilateral_exit_autoselect(
         &self,
         fee_rate_sat_per_vbyte: u64,
@@ -1284,10 +1286,14 @@ impl SparkWallet {
         let wallet_leaves = self.tree_service.list_leaves().await?;
         let leaf_ids: Vec<TreeNodeId> = wallet_leaves.available.into_iter().map(|l| l.id).collect();
 
-        let dest_script = destination.script_pubkey();
         let (selected_leaves, leaf_tx_cpfp_psbts, prefetched_nodes) = self
             .unilateral_exit_service
-            .unilateral_exit_autoselect(fee_rate_sat_per_vbyte, leaf_ids, inputs, dest_script.len())
+            .unilateral_exit_autoselect(
+                fee_rate_sat_per_vbyte,
+                leaf_ids,
+                inputs,
+                destination.script_pubkey().len(),
+            )
             .await?;
 
         if selected_leaves.is_empty() {
@@ -1296,7 +1302,10 @@ impl SparkWallet {
             ));
         }
 
-        // Extract refund outputs from the CPFP result to build the sweep tx.
+        // Build an optimistic sweep assuming the CPFP `refund_tx` variants
+        // land on-chain. Callers that run a confirmation walk and discover a
+        // non-CPFP variant landed instead must re-invoke `unilateral_exit` to
+        // rebuild the sweep against the actually-confirmed outpoint.
         let refund_outputs: Vec<RefundOutput> = leaf_tx_cpfp_psbts
             .iter()
             .map(|leaf| {
@@ -1308,7 +1317,7 @@ impl SparkWallet {
                     })?
                     .parent_tx;
                 Ok(RefundOutput {
-                    outpoint: bitcoin::OutPoint {
+                    outpoint: OutPoint {
                         txid: refund_tx.compute_txid(),
                         vout: 0,
                     },
@@ -1330,29 +1339,97 @@ impl SparkWallet {
         })
     }
 
+    /// Re-builds the CPFP list — marking steps whose outputs are already spent
+    /// with `child_psbt: None` — and constructs the signed sweep transaction
+    /// pointing at whichever refund variant credited each leaf's P2TR.
+    ///
     /// # Arguments
     /// * `fee_rate_sat_per_vbyte` - The fee rate used to calculate the PSBT fee, in satoshis per vbyte
     /// * `leaf_ids` - The IDs of the leaves to unilaterally exit
     /// * `inputs` - The CPFP inputs to use for fee-bumping
+    /// * `destination` - The Bitcoin address the sweep pays to
     /// * `prefetched_nodes` - Optional pre-fetched tree nodes to avoid a redundant fetch
+    /// * `confirmed_spenders` - Transactions observed on-chain that consume any
+    ///   output in the exit chain (CPFP variants, direct variants, or future
+    ///   protocol additions). Deduplicated by txid internally; inputs are
+    ///   scanned across every input so multi-input spenders are supported.
     pub async fn unilateral_exit(
         &self,
         fee_rate_sat_per_vbyte: u64,
         leaf_ids: Vec<TreeNodeId>,
         inputs: Vec<CpfpInput>,
+        destination: Address,
         prefetched_nodes: Option<Vec<spark::tree::TreeNode>>,
-        confirmed_txids: &HashSet<bitcoin::Txid>,
-    ) -> Result<Vec<LeafTxCpfpPsbts>, SparkWalletError> {
-        Ok(self
+        confirmed_spenders: Vec<Transaction>,
+    ) -> Result<UnilateralExitResult, SparkWalletError> {
+        // Index confirmed spenders by outpoint consumed. Iterate *all* inputs —
+        // spenders we did not construct ourselves (watchtower direct paths,
+        // multi-input connector refunds, future protocol variants) may carry
+        // the relevant outpoint at a non-zero input index.
+        let mut consumed_outpoints: HashMap<OutPoint, Txid> = HashMap::new();
+        for tx in &confirmed_spenders {
+            let txid = tx.compute_txid();
+            for input in &tx.input {
+                consumed_outpoints.insert(input.previous_output, txid);
+            }
+        }
+        let confirmed_outpoints: HashSet<OutPoint> = consumed_outpoints.keys().copied().collect();
+
+        let leaves = self
             .unilateral_exit_service
             .unilateral_exit(
                 fee_rate_sat_per_vbyte,
                 leaf_ids,
                 inputs,
                 prefetched_nodes,
-                confirmed_txids,
+                &confirmed_outpoints,
             )
-            .await?)
+            .await?;
+
+        // For each leaf, pick the sweep input. The refund entry is always the
+        // last entry for a leaf (emitted after its node entry in the service
+        // loop). Prefer a confirmed spender that pays to the leaf P2TR —
+        // this handles CPFP-refund, direct-from-cpfp-refund, direct-refund,
+        // and any future variant identically. Fall back to the CPFP refund_tx
+        // defaults when no confirmed spender credits the leaf P2TR.
+        let refund_outputs: Vec<RefundOutput> = leaves
+            .iter()
+            .map(|leaf| {
+                let refund_entry = leaf.tx_cpfp_psbts.last().ok_or_else(|| {
+                    SparkWalletError::Generic("No transactions for leaf".to_string())
+                })?;
+                let leaf_p2tr_script = refund_entry.parent_tx.output[0].script_pubkey.clone();
+
+                let sweep_source = confirmed_spenders.iter().find_map(|tx| {
+                    tx.output
+                        .iter()
+                        .enumerate()
+                        .find(|(_, out)| out.script_pubkey == leaf_p2tr_script)
+                        .map(|(idx, out)| (tx.compute_txid(), idx, out.value))
+                });
+
+                let (txid, vout, value) = sweep_source.unwrap_or_else(|| {
+                    let rt = &refund_entry.parent_tx;
+                    (rt.compute_txid(), 0_usize, rt.output[0].value)
+                });
+
+                Ok(RefundOutput {
+                    outpoint: OutPoint {
+                        txid,
+                        vout: u32::try_from(vout)
+                            .map_err(|_| SparkWalletError::Generic("vout overflow".to_string()))?,
+                    },
+                    leaf_id: leaf.leaf_id.clone(),
+                    value: value.to_sat(),
+                })
+            })
+            .collect::<Result<Vec<_>, SparkWalletError>>()?;
+
+        let sweep_tx = self
+            .create_refund_sweep_transaction(refund_outputs, destination, fee_rate_sat_per_vbyte)
+            .await?;
+
+        Ok(UnilateralExitResult { leaves, sweep_tx })
     }
 
     /// Creates a signed transaction that sweeps unilateral exit refund outputs to a destination

@@ -7,7 +7,9 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use bitcoin::{Address, Txid};
-use breez_sdk_spark::{BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo};
+use breez_sdk_spark::{
+    BitcoinChainService, ChainServiceError, Outspend, RecommendedFees, TxStatus, Utxo,
+};
 use serde_json::{Value, json};
 use spark_itest::fixtures::setup::TestFixtures;
 
@@ -116,6 +118,33 @@ impl BitcoinChainService for LocalBitcoindChainService {
         Ok(hex)
     }
 
+    async fn get_outspend(&self, txid: String, vout: u32) -> Result<Outspend, ChainServiceError> {
+        let parsed = Txid::from_str(&txid).map_err(to_chain_err)?;
+        let target_txid = parsed.to_string();
+
+        // bitcoind has no direct outspend RPC. Scan mempool then blocks for
+        // any transaction whose inputs consume (target_txid:vout). If found,
+        // return its details; otherwise report the output as unspent.
+        if let Some(spend) = find_spender_in_mempool(&self.fixtures, &target_txid, vout)
+            .await
+            .map_err(to_chain_err)?
+        {
+            return Ok(spend);
+        }
+        if let Some(spend) = find_spender_in_blocks(&self.fixtures, &target_txid, vout)
+            .await
+            .map_err(to_chain_err)?
+        {
+            return Ok(spend);
+        }
+        Ok(Outspend {
+            spent: false,
+            txid: None,
+            vin: None,
+            status: None,
+        })
+    }
+
     async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let _: String = self
             .fixtures
@@ -136,4 +165,95 @@ impl BitcoinChainService for LocalBitcoindChainService {
             minimum_fee: 1,
         })
     }
+}
+
+async fn find_spender_in_mempool(
+    fixtures: &TestFixtures,
+    target_txid: &str,
+    vout: u32,
+) -> Result<Option<Outspend>> {
+    let mempool: Vec<String> = fixtures.bitcoind.rpc("getrawmempool", &[]).await?;
+    for entry in mempool {
+        let tx: Value = fixtures
+            .bitcoind
+            .rpc("getrawtransaction", &[json!(entry), json!(true)])
+            .await?;
+        if let Some(vin) = match_input(&tx, target_txid, vout) {
+            return Ok(Some(Outspend {
+                spent: true,
+                txid: tx
+                    .get("txid")
+                    .and_then(|v| v.as_str())
+                    .map(std::string::ToString::to_string),
+                vin: Some(vin),
+                status: Some(TxStatus {
+                    confirmed: false,
+                    block_height: None,
+                    block_time: None,
+                }),
+            }));
+        }
+    }
+    Ok(None)
+}
+
+async fn find_spender_in_blocks(
+    fixtures: &TestFixtures,
+    target_txid: &str,
+    vout: u32,
+) -> Result<Option<Outspend>> {
+    let tip_info: Value = fixtures.bitcoind.rpc("getblockchaininfo", &[]).await?;
+    let tip_height = tip_info
+        .get("blocks")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("missing blocks in getblockchaininfo"))?;
+
+    for height in (0..=tip_height).rev() {
+        let block_hash: String = fixtures
+            .bitcoind
+            .rpc("getblockhash", &[json!(height)])
+            .await?;
+        let block: Value = fixtures
+            .bitcoind
+            .rpc("getblock", &[json!(block_hash), json!(2)])
+            .await?;
+        let Some(txs) = block.get("tx").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let block_time = block.get("time").and_then(|v| v.as_u64());
+        for tx in txs {
+            if let Some(vin) = match_input(tx, target_txid, vout) {
+                return Ok(Some(Outspend {
+                    spent: true,
+                    txid: tx
+                        .get("txid")
+                        .and_then(|v| v.as_str())
+                        .map(std::string::ToString::to_string),
+                    vin: Some(vin),
+                    status: Some(TxStatus {
+                        confirmed: true,
+                        block_height: u32::try_from(height).ok(),
+                        block_time,
+                    }),
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn match_input(tx: &Value, target_txid: &str, vout: u32) -> Option<u32> {
+    let inputs = tx.get("vin")?.as_array()?;
+    for (idx, input) in inputs.iter().enumerate() {
+        let Some(in_txid) = input.get("txid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(in_vout) = input.get("vout").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        if in_txid == target_txid && u32::try_from(in_vout).ok() == Some(vout) {
+            return u32::try_from(idx).ok();
+        }
+    }
+    None
 }

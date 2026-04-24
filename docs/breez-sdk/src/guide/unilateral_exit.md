@@ -64,7 +64,7 @@ The call returns an error if:
 The response contains:
 - **{{#name leaves}}**: Per-leaf exit details, each containing the full broadcast chain
 - **{{#name sweep_tx_hex}}**: A fully signed sweep transaction (see [Step 3](#step-3-broadcast-the-sweep-transaction))
-- **{{#name unverified_node_ids}}**: Node IDs whose on-chain confirmation status could not be determined (see [Already-confirmed ancestors](#already-confirmed-ancestors))
+- **{{#name unverified_node_ids}}**: Node IDs whose on-chain status could not be determined (see [Already-spent outputs](#already-spent-outputs))
 
 Each entry in {{#name leaves}} contains:
 - **{{#name leaf_id}}**: The leaf's unique identifier
@@ -75,14 +75,14 @@ Each entry in {{#name leaves}} contains:
 Each transaction in {{#name transactions}} contains:
 - **{{#name node_id}}**: The tree node ID this transaction belongs to
 - **{{#name tx_hex}}**: The pre-signed Spark transaction (node TX, leaf TX, or refund TX)
-- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction. Not set if this node is already confirmed on-chain — skip it, there is nothing to broadcast.
+- **{{#name cpfp_tx_hex}}**: The signed CPFP fee-bump transaction. Not set if the output this step would consume is already spent on-chain — skip it, there is nothing to broadcast.
 - **{{#name csv_timelock_blocks}}**: If present, the number of blocks you must wait after the *previous* transaction confirms before broadcasting this one
 
 ## Step 2: Broadcast the transaction packages
 
 You are responsible for broadcasting the transactions yourself. For each transaction in a leaf's {{#name transactions}} list:
 
-1. **If {{#name cpfp_tx_hex}} is not set**: skip this entry — the transaction is already confirmed on-chain.
+1. **If {{#name cpfp_tx_hex}} is not set**: skip this entry — the output this step would consume is already spent on-chain.
 2. **If {{#name csv_timelock_blocks}} is set**: wait until the previous transaction has the required number of confirmations before proceeding.
 3. **Broadcast as a package**: submit {{#name tx_hex}} and {{#name cpfp_tx_hex}} together as a single package.
 
@@ -100,7 +100,7 @@ Many block explorers also support package submission.
 
 Within each leaf's transaction list, broadcast the entries **in order** — each transaction spends from the previous one's output. For non-timelocked transactions, the previous transaction only needs to be in the mempool. For timelocked transactions ({{#name csv_timelock_blocks}} is set), the previous transaction must have enough confirmations to satisfy the relative timelock.
 
-Skip any entry whose {{#name cpfp_tx_hex}} is unset — that node is already confirmed on-chain and requires no further action.
+Skip any entry whose {{#name cpfp_tx_hex}} is unset — that step's output is already spent on-chain and requires no further action.
 
 A single leaf's chain looks like:
 
@@ -134,11 +134,13 @@ bitcoin-cli sendrawtransaction "<sweep_tx_hex>"
 
 The sweep transaction spends from all refund outputs and sends the total value (minus fees) to your destination address.
 
-## Already-confirmed ancestors
+## Already-spent outputs
 
-If another party has already exited a different leaf from the same tree, some ancestor transactions may already be confirmed on-chain. The SDK automatically checks the chain service for confirmation status before building the CPFP chain. For confirmed ancestors, no CPFP child is needed — their {{#name cpfp_tx_hex}} will not be set and you should skip them during broadcast.
+If another party has already exited a different leaf from the same tree, or a watchtower's direct-broadcast path landed before yours, some of the outputs along your exit chain may already be spent on-chain. The SDK walks each leaf's outputs top-down and asks the chain service whether each one has been spent; whichever transaction spent an output counts as that step being done, whether it was the CPFP variant, a direct variant, or a future protocol addition. Completed steps come back with {{#name cpfp_tx_hex}} unset and you should skip them.
 
-If the chain service is unavailable or rate-limited, the SDK assumes the node is unconfirmed and builds a CPFP child for it anyway. These nodes are listed in {{#name unverified_node_ids}}. If any of these nodes are actually confirmed, broadcasting their CPFP child will fail because the anchor output has already been spent. In that case, call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
+The sweep adapts to whichever transaction credited each leaf's refund address, so you do not need to reconstruct it yourself.
+
+If the chain service is unavailable or rate-limited for a step, the SDK assumes it is unconfirmed and still builds a CPFP child. The corresponding node id is listed in {{#name unverified_node_ids}}. If that step was in fact already done, broadcasting the CPFP child will fail because the output has been spent. Call {{#name prepare_unilateral_exit}} again — the chain service may succeed on retry.
 
 If reliability is a concern, consider providing your own chain service. Public APIs can be rate-limited or unavailable during high-traffic periods, which is often when you need a unilateral exit most. A private endpoint ensures the SDK can always check confirmation status. See [Customizing the SDK — Chain Service](customizing.md#with-chain-service) for how to configure a custom chain service.
 

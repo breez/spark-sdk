@@ -18,6 +18,14 @@ pub struct Utxo {
     pub status: TxStatus,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Outspend)]
+pub struct Outspend {
+    pub spent: bool,
+    pub txid: Option<String>,
+    pub vin: Option<u32>,
+    pub status: Option<TxStatus>,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::RecommendedFees)]
 pub struct RecommendedFees {
     pub fastest_fee: u64,
@@ -88,6 +96,22 @@ impl breez_sdk_spark::BitcoinChainService for WasmBitcoinChainService {
         Ok(tx_hex)
     }
 
+    async fn get_outspend(
+        &self,
+        txid: String,
+        vout: u32,
+    ) -> Result<breez_sdk_spark::Outspend, breez_sdk_spark::ChainServiceError> {
+        let promise = self
+            .inner
+            .get_outspend(txid, vout)
+            .map_err(js_error_to_chain_service_error)?;
+        let future = JsFuture::from(promise);
+        let result = future.await.map_err(js_error_to_chain_service_error)?;
+        let outspend: Outspend = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| breez_sdk_spark::ChainServiceError::Generic(e.to_string()))?;
+        Ok(outspend.into())
+    }
+
     async fn broadcast_transaction(
         &self,
         tx: String,
@@ -121,6 +145,7 @@ const EVENT_INTERFACE: &'static str = r#"export interface BitcoinChainService {
     getAddressUtxos(address: string): Promise<Utxo[]>;
     getTransactionStatus(txid: string): Promise<TxStatus>;
     getTransactionHex(txid: string): Promise<string>;
+    getOutspend(txid: string, vout: number): Promise<Outspend>;
     broadcastTransaction(tx: string): Promise<void>;
     recommendedFees(): Promise<RecommendedFees>;
 }"#;
@@ -146,6 +171,13 @@ extern "C" {
     pub fn get_transaction_hex(
         this: &BitcoinChainService,
         txid: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "getOutspend", catch)]
+    pub fn get_outspend(
+        this: &BitcoinChainService,
+        txid: String,
+        vout: u32,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "broadcastTransaction", catch)]

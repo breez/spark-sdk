@@ -15,7 +15,8 @@ use breez_sdk_spark::{
 use rstest::*;
 use spark_itest::fixtures::setup::TestFixtures;
 use spark_itest::helpers::{
-    FundedUtxo, deposit_with_amount, fund_p2tr_utxo, submit_package_with_csv_retry,
+    FundedUtxo, P2TR_INPUT_WEIGHT, deposit_with_amount, fund_p2tr_utxo, make_cpfp_input,
+    submit_package_with_csv_retry,
 };
 
 const FEE_RATE: u64 = 1;
@@ -126,9 +127,9 @@ async fn test_nothing_confirmed() -> Result<()> {
 }
 
 /// Scenario B — broadcast + confirm only the node_tx package. The second
-/// `prepare_unilateral_exit` call must still return a CPFP for the unconfirmed
-/// refund_tx. This is the regression guard for the `TreeNodeId`-vs-`Txid`
-/// bug in `check_ancestor_confirmations`.
+/// `prepare_unilateral_exit` call must keep the node_tx entry (now with
+/// `cpfp_tx_hex: None`, per the docs' skip contract) and still return a CPFP
+/// for the unconfirmed refund_tx.
 #[rstest]
 #[tokio::test]
 #[test_log::test]
@@ -154,21 +155,25 @@ async fn test_only_node_tx_confirmed() -> Result<()> {
     assert_eq!(second.leaves.len(), 1);
     let leaf = &second.leaves[0];
 
+    let node_txid = node_tx.compute_txid();
     let refund_txid = txid_of(&first.leaves[0].transactions[1].tx_hex)?;
     assert_eq!(
         leaf.transactions.len(),
-        1,
-        "confirmed node_tx should drop, refund should remain; got {} entries",
+        2,
+        "confirmed node_tx must still appear (with cpfp_tx_hex = None); refund remains; got {} entries",
         leaf.transactions.len()
     );
-    let remaining_txid = txid_of(&leaf.transactions[0].tx_hex)?;
-    assert_eq!(
-        remaining_txid, refund_txid,
-        "remaining entry must be the refund_tx"
-    );
+    let node_entry = &leaf.transactions[0];
+    let refund_entry = &leaf.transactions[1];
+    assert_eq!(txid_of(&node_entry.tx_hex)?, node_txid);
     assert!(
-        leaf.transactions[0].cpfp_tx_hex.is_some(),
-        "refund entry must carry its CPFP child"
+        node_entry.cpfp_tx_hex.is_none(),
+        "confirmed node_tx entry must carry cpfp_tx_hex = None"
+    );
+    assert_eq!(txid_of(&refund_entry.tx_hex)?, refund_txid);
+    assert!(
+        refund_entry.cpfp_tx_hex.is_some(),
+        "unconfirmed refund entry must carry its CPFP child"
     );
     Ok(())
 }
@@ -251,8 +256,16 @@ async fn test_multi_leaf_mixed() -> Result<()> {
         if leaf.leaf_id == target_leaf_id {
             assert_eq!(
                 leaf.transactions.len(),
-                1,
-                "leaf A should have dropped the confirmed node_tx entry"
+                2,
+                "leaf A keeps both entries; node_tx carries cpfp_tx_hex = None"
+            );
+            assert!(
+                leaf.transactions[0].cpfp_tx_hex.is_none(),
+                "leaf A's confirmed node_tx entry must carry cpfp_tx_hex = None"
+            );
+            assert!(
+                leaf.transactions[1].cpfp_tx_hex.is_some(),
+                "leaf A's refund must still carry its CPFP child"
             );
             saw_partial = true;
         } else {
@@ -261,9 +274,101 @@ async fn test_multi_leaf_mixed() -> Result<()> {
                 2,
                 "leaf B is entirely unconfirmed, should keep both entries"
             );
+            assert!(
+                leaf.transactions.iter().all(|t| t.cpfp_tx_hex.is_some()),
+                "leaf B's entries must all carry their CPFP children"
+            );
             saw_full = true;
         }
     }
     assert!(saw_partial && saw_full, "must observe both leaf states");
+    Ok(())
+}
+
+/// Scenario E — the refund was satisfied by `direct_from_cpfp_refund_tx`
+/// instead of the CPFP `refund_tx`. Verify `SparkWallet::unilateral_exit`
+/// adapts the sweep to the direct-refund outpoint when that variant is in
+/// `confirmed_spenders`. Exercises the wallet method directly: once any
+/// refund lands on-chain the Spark operators flag the leaf as `OnChain` and
+/// autoselect no longer picks it, so routing this through
+/// `BreezSdk::prepare_unilateral_exit` isn't meaningful.
+#[rstest]
+#[tokio::test]
+#[test_log::test]
+async fn test_sweep_adapts_to_direct_from_cpfp_refund() -> Result<()> {
+    let sdk = new_local_sdk().await?;
+    deposit_and_claim(&sdk, Amount::from_sat(LEAF_SATS)).await?;
+    let cpfp_utxo = fund_p2tr_utxo(&sdk.fixtures.bitcoind, Amount::from_sat(CPFP_SATS)).await?;
+
+    // Pull the optimistic exit path so we can reach into the refund entry's
+    // hydrated `known_spenders` and pick out `direct_from_cpfp_refund_tx`.
+    let optimistic = sdk
+        .spark_wallet
+        .unilateral_exit_autoselect(
+            FEE_RATE,
+            vec![make_cpfp_input(&cpfp_utxo, P2TR_INPUT_WEIGHT)],
+            cpfp_utxo.address.clone(),
+        )
+        .await?;
+    assert_eq!(optimistic.leaf_tx_cpfp_psbts.len(), 1);
+    let leaf_psbts = &optimistic.leaf_tx_cpfp_psbts[0];
+    assert_eq!(leaf_psbts.tx_cpfp_psbts.len(), 2);
+
+    let node_entry = &leaf_psbts.tx_cpfp_psbts[0];
+    let refund_entry = &leaf_psbts.tx_cpfp_psbts[1];
+    let node_tx = node_entry.parent_tx.clone();
+    let cpfp_refund_tx = refund_entry.parent_tx.clone();
+
+    // direct_from_cpfp_refund_tx spends the same outpoint as refund_tx but
+    // with a higher-sequence CSV. Pick it out of known_spenders.
+    let cpfp_refund_input = cpfp_refund_tx.input[0].previous_output;
+    let direct_from_cpfp_refund_tx: Transaction = refund_entry
+        .known_spenders
+        .iter()
+        .find(|tx| {
+            tx.input
+                .iter()
+                .any(|i| i.previous_output == cpfp_refund_input)
+        })
+        .expect("direct_from_cpfp_refund_tx must be present in known_spenders")
+        .clone();
+
+    let selected_ids: Vec<_> = optimistic
+        .selected_leaves
+        .iter()
+        .map(|s| s.id.clone())
+        .collect();
+    let result = sdk
+        .spark_wallet
+        .unilateral_exit(
+            FEE_RATE,
+            selected_ids,
+            vec![make_cpfp_input(&cpfp_utxo, P2TR_INPUT_WEIGHT)],
+            cpfp_utxo.address.clone(),
+            Some(optimistic.prefetched_nodes.clone()),
+            vec![node_tx.clone(), direct_from_cpfp_refund_tx.clone()],
+        )
+        .await?;
+
+    assert_eq!(result.leaves.len(), 1);
+    let leaf = &result.leaves[0];
+    assert_eq!(leaf.tx_cpfp_psbts.len(), 2);
+    for entry in &leaf.tx_cpfp_psbts {
+        assert!(
+            entry.child_psbt.is_none(),
+            "consumed step must carry child_psbt = None"
+        );
+    }
+
+    let direct_refund_txid = direct_from_cpfp_refund_tx.compute_txid();
+    assert!(
+        result
+            .sweep_tx
+            .input
+            .iter()
+            .any(|i| i.previous_output.txid == direct_refund_txid && i.previous_output.vout == 0),
+        "sweep must spend direct_from_cpfp_refund_tx's output[0]; inputs: {:?}",
+        result.sweep_tx.input
+    );
     Ok(())
 }
