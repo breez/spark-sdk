@@ -159,6 +159,27 @@ jobs:
           zip -9 -r breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
           echo "XCF_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI.xcframework.zip`" >> $GITHUB_ENV
 
+      - name: Build iOS-only XCFramework variant
+        working-directory: build/crates/breez-sdk/bindings/langs/swift
+        run: |
+          cp -R breez_sdk_sparkFFI.xcframework breez_sdk_sparkFFI-ios-only.xcframework
+          rm -rf breez_sdk_sparkFFI-ios-only.xcframework/macos-arm64_x86_64
+
+          PLIST=breez_sdk_sparkFFI-ios-only.xcframework/Info.plist
+          for idx in 2 1 0; do
+            ident=$(/usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$idx:LibraryIdentifier" "$PLIST" 2>/dev/null || true)
+            if [[ "$ident" == macos-* ]]; then
+              /usr/libexec/PlistBuddy -c "Delete :AvailableLibraries:$idx" "$PLIST"
+            fi
+          done
+
+          /usr/libexec/PlistBuddy -c "Print :AvailableLibraries" "$PLIST"
+          ls breez_sdk_sparkFFI-ios-only.xcframework
+
+          zip -9 -r breez_sdk_sparkFFI-ios-only.xcframework.zip breez_sdk_sparkFFI-ios-only.xcframework
+          echo "XCF_IOS_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI-ios-only.xcframework.zip`" >> $GITHUB_ENV
+          echo "iOS-only XCFramework checksum: $(swift package compute-checksum breez_sdk_sparkFFI-ios-only.xcframework.zip)"
+
       - name: Remove dist Sources
         working-directory: dist
         run: git rm -r Sources || true
@@ -174,7 +195,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: swift-xcframework-${{ inputs.package-version || '0.0.2' }}
-          path: build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
+          path: |
+            build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
+            build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI-ios-only.xcframework.zip
 
       - name: Archive package
         if: ${{ !inputs.publish }}
@@ -203,6 +226,7 @@ jobs:
           repository: breez/breez-sdk-spark-swift
           files: |
             build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework.zip
+            build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI-ios-only.xcframework.zip
           tag_name: ${{ inputs.package-version || '0.0.1' }}
           generate_release_notes: false
           token: ${{ secrets.SWIFT_RELEASE_TOKEN }}
