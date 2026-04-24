@@ -1,9 +1,29 @@
 use breez_sdk_spark::{
     BreezSdk, RegisterWebhookRequest, UnregisterWebhookRequest, WebhookEventType,
 };
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 
 use crate::command::print_value;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum WebhookEventTypeArg {
+    LightningReceive,
+    LightningSend,
+    CoopExit,
+    StaticDeposit,
+}
+
+impl From<WebhookEventTypeArg> for WebhookEventType {
+    fn from(value: WebhookEventTypeArg) -> Self {
+        match value {
+            WebhookEventTypeArg::LightningReceive => WebhookEventType::LightningReceiveFinished,
+            WebhookEventTypeArg::LightningSend => WebhookEventType::LightningSendFinished,
+            WebhookEventTypeArg::CoopExit => WebhookEventType::CoopExitFinished,
+            WebhookEventTypeArg::StaticDeposit => WebhookEventType::StaticDepositFinished,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum WebhookCommand {
@@ -13,9 +33,9 @@ pub enum WebhookCommand {
         url: String,
         /// Secret for HMAC-SHA256 signature verification
         secret: String,
-        /// Event types to subscribe to (lightning-receive, lightning-send, coop-exit, static-deposit)
-        #[arg(required = true, num_args = 1..)]
-        events: Vec<String>,
+        /// Event types to subscribe to
+        #[arg(required = true, num_args = 1.., value_enum)]
+        events: Vec<WebhookEventTypeArg>,
     },
     /// Unregister a webhook
     Unregister {
@@ -24,18 +44,6 @@ pub enum WebhookCommand {
     },
     /// List all registered webhooks
     List,
-}
-
-fn parse_event_type(s: &str) -> Result<WebhookEventType, anyhow::Error> {
-    match s {
-        "lightning-receive" => Ok(WebhookEventType::LightningReceiveFinished),
-        "lightning-send" => Ok(WebhookEventType::LightningSendFinished),
-        "coop-exit" => Ok(WebhookEventType::CoopExitFinished),
-        "static-deposit" => Ok(WebhookEventType::StaticDepositFinished),
-        _ => Err(anyhow::anyhow!(
-            "Unknown event type: {s}. Valid values: lightning-receive, lightning-send, coop-exit, static-deposit"
-        )),
-    }
 }
 
 pub async fn handle_command(
@@ -48,10 +56,7 @@ pub async fn handle_command(
             secret,
             events,
         } => {
-            let event_types = events
-                .iter()
-                .map(|e| parse_event_type(e))
-                .collect::<Result<Vec<_>, _>>()?;
+            let event_types = events.into_iter().map(Into::into).collect();
             let response = sdk
                 .register_webhook(RegisterWebhookRequest {
                     url,

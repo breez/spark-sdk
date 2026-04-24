@@ -16,7 +16,7 @@ use breez_sdk_spark::{
     SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
     UpdateUserSettingsRequest,
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rand::RngCore;
 use rustyline::{
     Completer, Editor, Helper, Hinter, Validator, highlight::Highlighter, hint::HistoryHinter,
@@ -31,6 +31,15 @@ use crate::command::contacts::ContactCommand;
 use crate::command::issuer::IssuerCommand;
 use crate::command::stable_balance::StableBalanceCommand;
 use crate::command::webhooks::WebhookCommand;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum ReceivePaymentMethodArg {
+    SparkAddress,
+    SparkInvoice,
+    Bitcoin,
+    Bolt11,
+}
 
 #[derive(Clone, Parser)]
 pub enum Command {
@@ -100,8 +109,8 @@ pub enum Command {
 
     /// Receive
     Receive {
-        #[arg(short = 'm', long = "method")]
-        payment_method: String,
+        #[arg(short = 'm', long = "method", value_enum)]
+        payment_method: ReceivePaymentMethodArg,
 
         /// Optional description for the invoice
         #[clap(short = 'd', long = "description")]
@@ -547,9 +556,9 @@ pub(crate) async fn execute_command(
             hodl,
             new_address,
         } => {
-            let payment_method = match payment_method.as_str() {
-                "sparkaddress" => ReceivePaymentMethod::SparkAddress,
-                "sparkinvoice" => ReceivePaymentMethod::SparkInvoice {
+            let payment_method = match payment_method {
+                ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
+                ReceivePaymentMethodArg::SparkInvoice => ReceivePaymentMethod::SparkInvoice {
                     amount,
                     token_identifier,
                     expiry_time: expiry_secs
@@ -564,10 +573,10 @@ pub(crate) async fn execute_command(
                     description,
                     sender_public_key,
                 },
-                "bitcoin" => ReceivePaymentMethod::BitcoinAddress {
+                ReceivePaymentMethodArg::Bitcoin => ReceivePaymentMethod::BitcoinAddress {
                     new_address: Some(new_address),
                 },
-                "bolt11" => {
+                ReceivePaymentMethodArg::Bolt11 => {
                     let payment_hash = if hodl {
                         let mut preimage_bytes = [0u8; 32];
                         rand::thread_rng().fill_bytes(&mut preimage_bytes);
@@ -590,7 +599,6 @@ pub(crate) async fn execute_command(
                         payment_hash,
                     }
                 }
-                _ => return Err(anyhow::anyhow!("Invalid payment method")),
             };
 
             let receive_result = sdk
