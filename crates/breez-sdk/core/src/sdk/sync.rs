@@ -275,8 +275,7 @@ impl BreezSdk {
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
 
         // Skip if we synced recently (unless forced).
         if !request.force

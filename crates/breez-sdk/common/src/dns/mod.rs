@@ -50,8 +50,7 @@ fn verify_proof_and_extract_txt(proof: &[u8], name: &Name) -> Result<Vec<String>
     // Check that the proof is currently valid
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     if now < verified.valid_from || now > verified.expires {
         anyhow::bail!(

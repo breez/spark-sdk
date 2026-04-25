@@ -740,8 +740,7 @@ impl Storage for PostgresStorage {
                 &[],
             )
             .await
-            .map(|row| row.get(0))
-            .unwrap_or(false);
+            .is_ok_and(|row| row.get(0));
 
         if !has_related {
             return Ok(HashMap::new());

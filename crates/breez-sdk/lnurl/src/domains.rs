@@ -5,7 +5,7 @@ use tracing::{debug, error, info};
 
 use crate::repository::{LnurlRepository, LnurlRepositoryError};
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Load the allowed domains from the database and start a background task
 /// that periodically refreshes them. Returns the shared handle that should

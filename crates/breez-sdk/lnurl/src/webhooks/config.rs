@@ -7,7 +7,7 @@ use tracing::{debug, error, info};
 
 use super::repository::{WebhookConfig, WebhookRepository};
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const REFRESH_INTERVAL: Duration = Duration::from_mins(1);
 
 /// In-memory cache of webhook configurations keyed by domain.
 pub type WebhookConfigCache = Arc<RwLock<HashMap<String, WebhookConfig>>>;

@@ -636,7 +636,7 @@ impl ObjectCacheRepository {
     ) -> Result<Option<PaymentMetadata>, StorageError> {
         let value = self
             .storage
-            .get_cached_item(format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}",))
+            .get_cached_item(format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}"))
             .await?;
         match value {
             Some(value) => Ok(Some(serde_json::from_str(&value)?)),
@@ -649,7 +649,7 @@ impl ObjectCacheRepository {
         identifier: &str,
     ) -> Result<(), StorageError> {
         self.storage
-            .delete_cached_item(format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}",))
+            .delete_cached_item(format!("{PAYMENT_METADATA_KEY_PREFIX}-{identifier}"))
             .await?;
         Ok(())
     }

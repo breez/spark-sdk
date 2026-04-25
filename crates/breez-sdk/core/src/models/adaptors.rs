@@ -19,6 +19,7 @@ use crate::{
 };
 
 /// Feb 1, 2026 00:00:00 UTC — transfers before this may lack HTLC data on the operator.
+#[allow(clippy::duration_suboptimal_units)]
 const HTLC_DATA_REQUIRED_SINCE: Duration = Duration::from_secs(1_769_904_000);
 
 /// Derive HTLC details from SSP request fields when the operator lacks the
