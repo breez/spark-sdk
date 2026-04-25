@@ -90,6 +90,7 @@ pub(crate) struct GraphQLClientConfig {
 
     pub ssp_identity_public_key: PublicKey,
     pub user_agent: Option<String>,
+    pub retry_config: crate::ssp::RetryConfig,
 }
 
 /// Bitcoin network enum

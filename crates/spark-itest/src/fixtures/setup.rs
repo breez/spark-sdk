@@ -2,7 +2,7 @@ use anyhow::Result;
 use rand::Rng;
 use spark_wallet::{
     DefaultSigner, LeafOptimizationOptions, Network, OperatorConfig, OperatorPoolConfig, PublicKey,
-    ServiceProviderConfig, SparkWalletConfig, TokenOutputsOptimizationOptions,
+    RetryConfig, ServiceProviderConfig, SparkWalletConfig, TokenOutputsOptimizationOptions,
 };
 use tracing::info;
 
@@ -81,6 +81,7 @@ impl TestFixtures {
                 schema_endpoint: None,
                 identity_public_key: PublicKey::from_slice(&[2; 33])?,
                 user_agent: Some("spark-wallet-itest/0.1.0".to_string()),
+                retry_config: RetryConfig::default(),
             },
             tokens_config: SparkWalletConfig::default_tokens_config(),
             leaf_optimization_options: LeafOptimizationOptions::default(),

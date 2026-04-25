@@ -1,12 +1,16 @@
 use base64::Engine;
 use bitcoin::secp256k1::PublicKey;
 use graphql_client::{GraphQLQuery, Response};
+use rand::Rng;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, error};
+use std::time::Duration;
+use tracing::{debug, error, warn};
 
+use platform_utils::tokio;
 use platform_utils::{ContentType, HttpClient, add_content_type_header, create_http_client};
+use tokio::time::sleep;
 
 use crate::default_user_agent;
 use crate::session_manager::{Session, SessionManager};
@@ -25,7 +29,7 @@ use crate::ssp::graphql::{
 };
 use crate::ssp::{
     ClaimStaticDepositInput, CoopExitFeeQuote, RequestCoopExitInput, RequestLightningReceiveInput,
-    RequestLightningSendInput, RequestSwapInput, SspTransfer,
+    RequestLightningSendInput, RequestSwapInput, RetryConfig, SspTransfer,
 };
 
 /// GraphQL client for interacting with the Spark server
@@ -36,6 +40,7 @@ pub struct GraphQLClient {
     signer: Arc<dyn Signer>,
     session_manager: Arc<dyn SessionManager>,
     ssp_identity_public_key: PublicKey,
+    retry_config: RetryConfig,
 }
 
 impl GraphQLClient {
@@ -57,6 +62,7 @@ impl GraphQLClient {
             signer,
             session_manager,
             ssp_identity_public_key: config.ssp_identity_public_key,
+            retry_config: config.retry_config,
         }
     }
 
@@ -89,7 +95,7 @@ impl GraphQLClient {
         let status_code = response.status;
         let text = &response.body;
         tracing::trace!("Response: {text:?}");
-        if (400..500).contains(&status_code) {
+        if !response.is_success() {
             return Err(GraphQLError::Network {
                 reason: text.clone(),
                 code: Some(status_code),
@@ -110,7 +116,11 @@ impl GraphQLClient {
         ))
     }
 
-    /// Execute a raw GraphQL query
+    /// Execute a raw GraphQL query.
+    ///
+    /// Retries once on a 401 (after re-authenticating) and up to
+    /// `retry_config.max_retries` times on transient 5xx responses with
+    /// exponential backoff and jitter.
     pub async fn post_query<Q: GraphQLQuery, T>(
         &self,
         variables: T,
@@ -118,34 +128,59 @@ impl GraphQLClient {
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        let session = self.get_session().await?;
         let full_url = self.get_full_url();
-        let mut headers = HashMap::new();
-        self.add_auth_headers(&session, &mut headers)?;
+        let mut auth_retried = false;
+        let mut server_attempt: u32 = 0;
 
-        match self
-            .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
-            .await
-        {
-            Ok(response) => Ok(response),
-            Err(e) => {
-                tracing::debug!("Received error: {}", e.to_string());
-                if let GraphQLError::Network {
-                    code: Some(status_code),
-                    ..
-                } = e.clone()
-                    && status_code == 401
-                {
-                    let session = self.get_session().await?;
-                    let mut headers = HashMap::new();
-                    self.add_auth_headers(&session, &mut headers)?;
+        loop {
+            let session = self.get_session().await?;
+            let mut headers = HashMap::new();
+            self.add_auth_headers(&session, &mut headers)?;
 
-                    return self
-                        .post_query_inner::<Q, T>(&full_url, &headers, variables)
-                        .await;
-                }
-                Err(e)
+            let err = match self
+                .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(e) => e,
+            };
+
+            tracing::debug!("Received error: {}", err);
+
+            let GraphQLError::Network {
+                code: Some(status_code),
+                ..
+            } = &err
+            else {
+                return Err(err);
+            };
+
+            if *status_code == 401 && !auth_retried {
+                auth_retried = true;
+                continue;
             }
+
+            if (500..600).contains(status_code) && server_attempt < self.retry_config.max_retries {
+                let base = self
+                    .retry_config
+                    .base_delay_ms
+                    .saturating_mul(1u64 << server_attempt)
+                    .min(self.retry_config.max_delay_ms);
+                let jitter = rand::thread_rng().gen_range(0..=base / 2);
+                let delay_ms = base.saturating_add(jitter);
+                warn!(
+                    "Received {} from SSP, retrying in {}ms (attempt {}/{})",
+                    status_code,
+                    delay_ms,
+                    server_attempt + 1,
+                    self.retry_config.max_retries
+                );
+                sleep(Duration::from_millis(delay_ms)).await;
+                server_attempt += 1;
+                continue;
+            }
+
+            return Err(err);
         }
     }
 
@@ -571,5 +606,246 @@ impl GraphQLClient {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use macros::async_test_all;
+    use platform_utils::HttpError;
+
+    use super::*;
+    use crate::session_manager::InMemorySessionManager;
+    use crate::signer::create_test_signer;
+
+    /// Empty-list response for the `WalletWebhooks` query — used as a stand-in
+    /// for "any successful GraphQL response" in the retry tests.
+    const VALID_WEBHOOKS_RESPONSE: &str = r#"{"data":{"wallet_webhooks":{"webhooks":[]}}}"#;
+
+    #[derive(Default)]
+    struct MockHttpInner {
+        responses: Mutex<VecDeque<(u16, String)>>,
+        post_calls: AtomicUsize,
+    }
+
+    #[derive(Clone, Default)]
+    struct MockHttpClient(Arc<MockHttpInner>);
+
+    impl MockHttpClient {
+        fn with_responses(responses: Vec<(u16, &str)>) -> Self {
+            Self(Arc::new(MockHttpInner {
+                responses: Mutex::new(
+                    responses
+                        .into_iter()
+                        .map(|(s, b)| (s, b.to_string()))
+                        .collect(),
+                ),
+                post_calls: AtomicUsize::new(0),
+            }))
+        }
+
+        fn post_calls(&self) -> usize {
+            self.0.post_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[macros::async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn get(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+        ) -> Result<platform_utils::HttpResponse, HttpError> {
+            unimplemented!("get not used in these tests")
+        }
+
+        async fn post(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, HttpError> {
+            self.0.post_calls.fetch_add(1, Ordering::SeqCst);
+            let (status, body) = self
+                .0
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| HttpError::Other("mock: no more scripted responses".to_string()))?;
+            Ok(platform_utils::HttpResponse { status, body })
+        }
+
+        async fn delete(
+            &self,
+            _url: String,
+            _headers: Option<HashMap<String, String>>,
+            _body: Option<String>,
+        ) -> Result<platform_utils::HttpResponse, HttpError> {
+            unimplemented!("delete not used in these tests")
+        }
+    }
+
+    fn dummy_pubkey() -> PublicKey {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_slice(&[7u8; 32]).expect("valid secret key");
+        PublicKey::from_secret_key(&secp, &sk)
+    }
+
+    /// Build a `GraphQLClient` wired up with the mock HTTP client and a
+    /// pre-populated valid session so `post_query` never triggers an
+    /// `authenticate()` round-trip.
+    async fn build_test_client(http: MockHttpClient, retry_config: RetryConfig) -> GraphQLClient {
+        let ssp_pk = dummy_pubkey();
+        let session_manager = Arc::new(InMemorySessionManager::default());
+        session_manager
+            .set_session(
+                &ssp_pk,
+                Session {
+                    token: "test-token".to_string(),
+                    expiration: u64::MAX,
+                    headers: HashMap::new(),
+                },
+            )
+            .await
+            .expect("set session");
+
+        GraphQLClient {
+            client: Box::new(http),
+            base_url: "http://test.invalid".to_string(),
+            schema_endpoint: "graphql".to_string(),
+            signer: Arc::new(create_test_signer()),
+            session_manager,
+            ssp_identity_public_key: ssp_pk,
+            retry_config,
+        }
+    }
+
+    /// Fast retry config that keeps tests snappy.
+    fn fast_retry(max_retries: u32) -> RetryConfig {
+        RetryConfig {
+            max_retries,
+            base_delay_ms: 1,
+            max_delay_ms: 5,
+        }
+    }
+
+    #[async_test_all]
+    async fn post_query_succeeds_after_5xx_retries() {
+        let http = MockHttpClient::with_responses(vec![
+            (503, "<html>Bad Gateway</html>"),
+            (502, ""),
+            (200, VALID_WEBHOOKS_RESPONSE),
+        ]);
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(2)).await;
+
+        let result = client.list_wallet_webhooks().await;
+        assert!(result.is_ok(), "expected success, got {result:?}");
+        assert_eq!(handle.post_calls(), 3);
+    }
+
+    #[async_test_all]
+    async fn post_query_exhausts_5xx_retries() {
+        let max_retries = 2;
+        let attempts = (max_retries as usize) + 1;
+        let http = MockHttpClient::with_responses(
+            std::iter::repeat_n((500, "internal error"), attempts).collect(),
+        );
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(max_retries)).await;
+
+        let err = client.list_wallet_webhooks().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                GraphQLError::Network {
+                    code: Some(500),
+                    ..
+                }
+            ),
+            "expected Network 500 after exhausting retries, got {err:?}"
+        );
+        assert_eq!(handle.post_calls(), attempts);
+    }
+
+    #[async_test_all]
+    async fn post_query_does_not_retry_on_4xx() {
+        let http = MockHttpClient::with_responses(vec![(400, "bad request")]);
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(2)).await;
+
+        let err = client.list_wallet_webhooks().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                GraphQLError::Network {
+                    code: Some(400),
+                    ..
+                }
+            ),
+            "expected Network 400, got {err:?}"
+        );
+        assert_eq!(handle.post_calls(), 1);
+    }
+
+    #[async_test_all]
+    async fn post_query_retries_once_on_401() {
+        let http = MockHttpClient::with_responses(vec![
+            (401, "unauthorized"),
+            (200, VALID_WEBHOOKS_RESPONSE),
+        ]);
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(2)).await;
+
+        let result = client.list_wallet_webhooks().await;
+        assert!(result.is_ok(), "expected success, got {result:?}");
+        assert_eq!(handle.post_calls(), 2);
+    }
+
+    #[async_test_all]
+    async fn post_query_does_not_retry_401_twice() {
+        let http =
+            MockHttpClient::with_responses(vec![(401, "unauthorized"), (401, "unauthorized")]);
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(2)).await;
+
+        let err = client.list_wallet_webhooks().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                GraphQLError::Network {
+                    code: Some(401),
+                    ..
+                }
+            ),
+            "expected Network 401, got {err:?}"
+        );
+        assert_eq!(handle.post_calls(), 2);
+    }
+
+    #[async_test_all]
+    async fn post_query_respects_max_retries_zero() {
+        let http = MockHttpClient::with_responses(vec![(500, "boom")]);
+        let handle = http.clone();
+        let client = build_test_client(http, fast_retry(0)).await;
+
+        let err = client.list_wallet_webhooks().await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                GraphQLError::Network {
+                    code: Some(500),
+                    ..
+                }
+            ),
+            "expected Network 500 with no retries, got {err:?}"
+        );
+        assert_eq!(handle.post_calls(), 1);
     }
 }
