@@ -749,7 +749,24 @@ impl TransferService {
         debug!(
             "Transfer {transfer_id} already claimed by another instance; using coordinator's finalized leaves"
         );
-        Some(completed.leaves.into_iter().map(|l| l.leaf).collect())
+        let our_pubkey = self.signer.get_identity_public_key().await.ok()?;
+        let leaves: Vec<TreeNode> = completed
+            .leaves
+            .into_iter()
+            .map(|l| l.leaf)
+            .filter(|leaf| {
+                let is_ours = leaf.owner_identity_public_key == Some(our_pubkey);
+                if !is_ours {
+                    debug!(
+                        "Dropping leaf {} from already-claimed transfer {transfer_id} — \
+                         owner {:?} is no longer us",
+                        leaf.id, leaf.owner_identity_public_key
+                    );
+                }
+                is_ours
+            })
+            .collect();
+        Some(leaves)
     }
 
     /// Prepares leaves for claiming by creating LeafKeyTweak structs
