@@ -17,7 +17,7 @@ use spark_wallet::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
-use tracing::trace;
+use tracing::{info, trace};
 use uuid::Uuid;
 
 use crate::config::PostgresStorageConfig;
@@ -37,11 +37,6 @@ const TREE_STORE_WRITE_LOCK_KEY: i64 = 0x7472_6565_5354_4f52; // "treeTOR" as he
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
 const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
 
-/// Threshold in milliseconds for cleaning up spent leaf markers.
-/// Spent markers are kept in the database for this duration to support multiple
-/// SDK instances sharing the same postgres database. During `set_leaves`, spent
-/// markers older than `refresh_timestamp` are ignored (treated as deleted).
-/// Actual deletion only happens for markers older than this threshold.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
 /// `PostgreSQL`-backed tree store implementation.
@@ -62,17 +57,10 @@ impl TreeStore for PostgresTreeStore {
             return Ok(());
         }
 
-        tracing::trace!(
-            "PostgresTreeStore::add_leaves: adding {} leaves",
-            leaves.len()
-        );
         for leaf in leaves {
-            tracing::trace!(
-                "PostgresTreeStore::add_leaves: leaf {} owner={:?} value={} status={:?}",
-                leaf.id,
-                leaf.owner_identity_public_key,
-                leaf.value,
-                leaf.status
+            trace!(
+                "leaf_lifecycle add_leaves: leaf={} value={}",
+                leaf.id, leaf.value
             );
         }
 
@@ -191,24 +179,15 @@ impl TreeStore for PostgresTreeStore {
         };
 
         if has_active_swap || swap_completed_during_refresh {
-            trace!(
-                "Skipping set_leaves: active_swap={}, swap_completed_during_refresh={}",
-                has_active_swap, swap_completed_during_refresh
+            info!(
+                "leaf_lifecycle set_leaves: SKIP active_swap={} swap_completed_during_refresh={} refresh_timestamp={:?}",
+                has_active_swap, swap_completed_during_refresh, refresh_timestamp
             );
             return Ok(());
         }
 
-        // Clean up old spent markers (older than threshold).
-        // We don't immediately delete all spent markers because this postgres store
-        // may be shared by multiple SDK instances. Instead, we keep markers for a
-        // threshold period and ignore (treat as deleted) markers where spent_at < refresh_timestamp.
         Self::cleanup_spent_markers(&tx, refresh_timestamp).await?;
 
-        // Get recent spent leaf IDs (spent_at >= refresh_timestamp).
-        // Older spent markers are ignored - if the refresh started after the spend,
-        // operators had time to process it. A spent leaf won't appear in `leaves`
-        // (coordinator processed the spend), it may only appear in `missing_operators_leaves`
-        // if returned (e.g., HTLC refund).
         let spent_ids: HashSet<String> = {
             let rows = tx
                 .query(
@@ -219,6 +198,12 @@ impl TreeStore for PostgresTreeStore {
                 .map_err(map_err)?;
             rows.iter().map(|r| r.get(0)).collect()
         };
+        info!(
+            "leaf_lifecycle set_leaves: PROCEED refresh_timestamp={:?} active_spent_ids={} (ids={:?})",
+            refresh_timestamp,
+            spent_ids.len(),
+            spent_ids
+        );
 
         // Delete non-reserved leaves that were added BEFORE refresh started.
         // The advisory lock acquired at the start of this transaction prevents deadlocks.
@@ -264,13 +249,26 @@ impl TreeStore for PostgresTreeStore {
             return Ok(());
         }
 
-        // Delete the reservation (ON DELETE SET NULL will clear reservation_id on leaves)
+        let returned_leaf_ids: Vec<String> = tx
+            .query(
+                "SELECT id FROM tree_leaves WHERE reservation_id = $1",
+                &[id],
+            )
+            .await
+            .map_err(map_err)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        info!(
+            "leaf_lifecycle cancel: reservation={} returning_leaves={:?}",
+            id, returned_leaf_ids
+        );
+
         tx.execute("DELETE FROM tree_reservations WHERE id = $1", &[id])
             .await
             .map_err(map_err)?;
 
         tx.commit().await.map_err(map_err)?;
-        trace!("Cancelled reservation: {id}");
         self.notify_balance_change();
         Ok(())
     }
@@ -295,30 +293,32 @@ impl TreeStore for PostgresTreeStore {
             .await
             .map_err(map_err)?;
 
-        let Some(reservation_row) = reservation else {
-            // Already finalized or cancelled - match in-memory behavior by returning Ok
-            return Ok(());
-        };
-
-        let is_swap = reservation_row.get::<_, String>("purpose") == "Swap";
-
-        // Get reserved leaf IDs and mark as spent.
-        // The advisory lock prevents concurrent modifications.
-        let reserved_leaf_ids: Vec<String> = {
-            let rows = tx
+        let (is_swap, reserved_leaf_ids) = if let Some(row) = reservation {
+            let is_swap = row.get::<_, String>("purpose") == "Swap";
+            let leaf_ids: Vec<String> = tx
                 .query(
                     "SELECT id FROM tree_leaves WHERE reservation_id = $1",
                     &[id],
                 )
                 .await
-                .map_err(map_err)?;
-            rows.iter().map(|r| r.get(0)).collect()
+                .map_err(map_err)?
+                .iter()
+                .map(|r| r.get(0))
+                .collect();
+            (is_swap, leaf_ids)
+        } else {
+            (false, Vec::new())
         };
 
-        // Batch insert spent leaf markers
+        info!(
+            "leaf_lifecycle finalize: reservation={} is_swap={} marking_spent={:?} new_leaves={}",
+            id,
+            is_swap,
+            reserved_leaf_ids,
+            new_leaves.map_or(0, <[TreeNode]>::len)
+        );
         Self::batch_insert_spent_leaves(&tx, &reserved_leaf_ids).await?;
 
-        // Delete reserved leaves and reservation
         tx.execute("DELETE FROM tree_leaves WHERE reservation_id = $1", &[id])
             .await
             .map_err(map_err)?;
@@ -327,8 +327,13 @@ impl TreeStore for PostgresTreeStore {
             .await
             .map_err(map_err)?;
 
-        // Batch upsert new leaves if provided (with fresh timestamp for race condition fix)
         if let Some(leaves) = new_leaves {
+            for l in leaves {
+                trace!(
+                    "leaf_lifecycle finalize: adding new leaf={} value={} reservation={}",
+                    l.id, l.value, id
+                );
+            }
             Self::batch_upsert_leaves(&tx, leaves, false, None).await?;
         }
 
@@ -706,10 +711,19 @@ impl PostgresTreeStore {
         skip_ids: Option<&HashSet<String>>,
     ) -> Result<(), TreeServiceError> {
         let filtered: Vec<&TreeNode> = if let Some(skip) = skip_ids {
-            leaves
-                .iter()
-                .filter(|l| !skip.contains(&l.id.to_string()))
-                .collect()
+            let mut kept = Vec::new();
+            for l in leaves {
+                let id_str = l.id.to_string();
+                if skip.contains(&id_str) {
+                    trace!(
+                        "leaf_lifecycle batch_upsert: skipped leaf={} (in spent_ids) is_missing_from_operators={}",
+                        id_str, is_missing_from_operators
+                    );
+                } else {
+                    kept.push(l);
+                }
+            }
+            kept
         } else {
             leaves.iter().collect()
         };
@@ -916,8 +930,13 @@ impl PostgresTreeStore {
         .await
         .map_err(map_err)?;
 
-        // Set reservation_id on leaves
         let leaf_ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
+        for l in leaves {
+            trace!(
+                "leaf_lifecycle reserve: leaf={} value={} reservation={} purpose={:?}",
+                l.id, l.value, reservation_id, purpose
+            );
+        }
         Self::batch_set_reservation_id(tx, reservation_id, &leaf_ids).await?;
 
         Ok(())

@@ -205,7 +205,6 @@ class PostgresTreeStore {
         // Clean up old spent markers
         await this._cleanupSpentMarkers(client, refreshTimestamp);
 
-        // Get recent spent leaf IDs (spent_at >= refresh_timestamp)
         const spentResult = await client.query(
           "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= $1",
           [refreshTimestamp]
@@ -280,31 +279,25 @@ class PostgresTreeStore {
           [id]
         );
 
-        if (res.rows.length === 0) {
-          return; // Already finalized or cancelled
+        let isSwap = false;
+        let reservedLeafIds = [];
+        if (res.rows.length > 0) {
+          isSwap = res.rows[0].purpose === "Swap";
+          const leafResult = await client.query(
+            "SELECT id FROM tree_leaves WHERE reservation_id = $1",
+            [id]
+          );
+          reservedLeafIds = leafResult.rows.map((r) => r.id);
+          await this._batchInsertSpentLeaves(client, reservedLeafIds);
+          await client.query(
+            "DELETE FROM tree_leaves WHERE reservation_id = $1",
+            [id]
+          );
+          await client.query(
+            "DELETE FROM tree_reservations WHERE id = $1",
+            [id]
+          );
         }
-
-        const isSwap = res.rows[0].purpose === "Swap";
-
-        // Get reserved leaf IDs
-        const leafResult = await client.query(
-          "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-          [id]
-        );
-        const reservedLeafIds = leafResult.rows.map((r) => r.id);
-
-        // Mark as spent
-        await this._batchInsertSpentLeaves(client, reservedLeafIds);
-
-        // Delete reserved leaves and reservation
-        await client.query(
-          "DELETE FROM tree_leaves WHERE reservation_id = $1",
-          [id]
-        );
-        await client.query(
-          "DELETE FROM tree_reservations WHERE id = $1",
-          [id]
-        );
 
         // Add new leaves if provided
         if (newLeaves && newLeaves.length > 0) {
