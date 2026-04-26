@@ -230,78 +230,112 @@ impl LeafOptimizer {
         &self,
         _guard: RunningGuard,
     ) -> Result<(), TreeServiceError> {
-        // Reset cancellation flag
+        const MAX_PLANNING_ITERATIONS: u32 = 8;
+
         let _ = self.cancel_tx.send(false);
 
-        let leaves = self.tree_service.list_leaves().await?.available;
-
-        if leaves.is_empty() {
+        let initial_leaves = self.tree_service.list_leaves().await?.available;
+        if initial_leaves.is_empty() {
             debug!("No leaves available for optimization");
             self.emit_event(OptimizationEvent::Skipped);
             return Ok(());
         }
-
-        if !self.should_optimize(&leaves) {
+        if !self.should_optimize(&initial_leaves) {
             debug!("Optimization not needed, skipping");
             self.emit_event(OptimizationEvent::Skipped);
             return Ok(());
         }
 
-        let swaps = calculate_optimization_swaps(
-            &leaves.iter().map(|l| l.value).collect::<Vec<u64>>(),
-            self.config.multiplicity,
-            self.config.max_leaves_per_swap,
-        );
+        let mut started_emitted = false;
+        let mut cumulative_rounds: u32 = 0;
+        let mut next_leaves = Some(initial_leaves);
 
-        if swaps.is_empty() {
-            debug!("No swaps needed for optimization");
-            self.emit_event(OptimizationEvent::Skipped);
-            return Ok(());
-        }
-
-        let total_rounds = swaps.len() as u32;
-
-        info!(
-            "Starting leaf optimization with {} rounds, {} input leaves, {} output leaves",
-            total_rounds,
-            swaps.iter().map(|s| s.leaves_to_give.len()).sum::<usize>(),
-            swaps
-                .iter()
-                .map(|s| s.leaves_to_receive.len())
-                .sum::<usize>()
-        );
-
-        // Update progress with rounds info (is_running already set by start())
-        {
-            let mut progress = self.progress.lock().unwrap();
-            progress.current_round = 0;
-            progress.total_rounds = total_rounds;
-        }
-
-        self.emit_event(OptimizationEvent::Started { total_rounds });
-        info!("Starting leaf optimization with {} rounds", total_rounds);
-
-        // Execute each swap round using the reserved leaves
-        let result = self.execute_optimization_rounds(swaps).await;
-
-        match result {
-            Ok(true) => {
-                info!("Leaf optimization completed successfully");
-                self.emit_event(OptimizationEvent::Completed);
-                Ok(())
-            }
-            Ok(false) => {
-                info!("Leaf optimization was cancelled");
+        for iteration in 1..=MAX_PLANNING_ITERATIONS {
+            if *self.cancel_rx.borrow() {
+                debug!("Optimization cancelled before iteration {iteration}");
                 self.emit_event(OptimizationEvent::Cancelled);
-                Ok(())
+                return Ok(());
             }
-            Err(e) => {
-                self.emit_event(OptimizationEvent::Failed {
-                    error: e.to_string(),
+
+            let leaves = match next_leaves.take() {
+                Some(l) => l,
+                None => self.tree_service.list_leaves().await?.available,
+            };
+            if leaves.is_empty() {
+                break;
+            }
+
+            let swaps = calculate_optimization_swaps(
+                &leaves.iter().map(|l| l.value).collect::<Vec<u64>>(),
+                self.config.multiplicity,
+                self.config.max_leaves_per_swap,
+            );
+
+            if swaps.is_empty() {
+                if iteration == 1 {
+                    debug!("No swaps needed for optimization");
+                    self.emit_event(OptimizationEvent::Skipped);
+                    return Ok(());
+                }
+                break;
+            }
+
+            let rounds_in_iter = swaps.len() as u32;
+            let total_rounds_estimate = cumulative_rounds + rounds_in_iter;
+
+            info!(
+                "Optimization iteration {iteration}: {} rounds, {} input leaves, {} output leaves",
+                rounds_in_iter,
+                swaps.iter().map(|s| s.leaves_to_give.len()).sum::<usize>(),
+                swaps
+                    .iter()
+                    .map(|s| s.leaves_to_receive.len())
+                    .sum::<usize>()
+            );
+
+            if !started_emitted {
+                self.emit_event(OptimizationEvent::Started {
+                    total_rounds: total_rounds_estimate,
                 });
-                Err(e)
+                started_emitted = true;
+            }
+
+            {
+                let mut progress = self.progress.lock().unwrap();
+                progress.current_round = cumulative_rounds;
+                progress.total_rounds = total_rounds_estimate;
+            }
+
+            match self
+                .execute_optimization_rounds(swaps, cumulative_rounds, total_rounds_estimate)
+                .await
+            {
+                Ok(true) => {
+                    cumulative_rounds += rounds_in_iter;
+                }
+                Ok(false) => {
+                    info!("Leaf optimization was cancelled");
+                    self.emit_event(OptimizationEvent::Cancelled);
+                    return Ok(());
+                }
+                Err(e) => {
+                    self.emit_event(OptimizationEvent::Failed {
+                        error: e.to_string(),
+                    });
+                    return Err(e);
+                }
             }
         }
+
+        if !started_emitted {
+            self.emit_event(OptimizationEvent::Skipped);
+        } else {
+            info!(
+                "Leaf optimization completed successfully ({cumulative_rounds} rounds executed)"
+            );
+            self.emit_event(OptimizationEvent::Completed);
+        }
+        Ok(())
     }
 
     /// Cancels the ongoing optimization and waits for it to fully stop.
@@ -343,11 +377,13 @@ impl LeafOptimizer {
     async fn execute_optimization_rounds(
         &self,
         swaps: Vec<SwapPlan>,
+        rounds_offset: u32,
+        cumulative_total_rounds: u32,
     ) -> Result<bool, TreeServiceError> {
-        let total_rounds = swaps.len() as u32;
+        let total_rounds = cumulative_total_rounds.max(rounds_offset + swaps.len() as u32);
 
         for (index, swap) in swaps.into_iter().enumerate() {
-            let round = (index + 1) as u32;
+            let round = rounds_offset + (index + 1) as u32;
 
             // Check for cancellation before each round
             if *self.cancel_rx.borrow() {
