@@ -235,6 +235,7 @@ impl LightningService {
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         self.create_lightning_invoice_inner(
             amount_sats,
@@ -244,6 +245,7 @@ impl LightningService {
             expiry_secs,
             include_spark_address,
             identity_pubkey,
+            spark_invoice,
         )
         .await
     }
@@ -261,6 +263,7 @@ impl LightningService {
         payment_hash: sha256::Hash,
         expiry_secs: Option<u32>,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         self.create_lightning_invoice_inner(
             amount_sats,
@@ -270,6 +273,7 @@ impl LightningService {
             expiry_secs,
             false,
             identity_pubkey,
+            spark_invoice,
         )
         .await
     }
@@ -284,6 +288,7 @@ impl LightningService {
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         // Validate expiry_secs does not exceed i32::MAX (server limitation)
         if let Some(expiry) = expiry_secs
@@ -333,7 +338,7 @@ impl LightningService {
                 expiry_secs: Some(expiry.into()),
                 memo,
                 include_spark_address,
-                spark_invoice: None,
+                spark_invoice,
             })
             .await?;
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)

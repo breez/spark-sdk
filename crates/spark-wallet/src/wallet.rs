@@ -520,6 +520,7 @@ impl SparkWallet {
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -530,6 +531,7 @@ impl SparkWallet {
                 expiry_secs,
                 include_spark_address,
                 public_key,
+                spark_invoice,
             )
             .await?)
     }
@@ -543,6 +545,7 @@ impl SparkWallet {
         payment_hash: Hash,
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -552,6 +555,7 @@ impl SparkWallet {
                 payment_hash,
                 expiry_secs,
                 public_key,
+                spark_invoice,
             )
             .await?)
     }
