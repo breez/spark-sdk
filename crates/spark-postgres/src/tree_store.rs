@@ -295,24 +295,21 @@ impl TreeStore for PostgresTreeStore {
             .await
             .map_err(map_err)?;
 
-        let Some(reservation_row) = reservation else {
-            // Already finalized or cancelled - match in-memory behavior by returning Ok
-            return Ok(());
-        };
-
-        let is_swap = reservation_row.get::<_, String>("purpose") == "Swap";
-
-        // Get reserved leaf IDs and mark as spent.
-        // The advisory lock prevents concurrent modifications.
-        let reserved_leaf_ids: Vec<String> = {
-            let rows = tx
+        let (is_swap, reserved_leaf_ids) = if let Some(row) = reservation {
+            let is_swap = row.get::<_, String>("purpose") == "Swap";
+            let leaf_ids: Vec<String> = tx
                 .query(
                     "SELECT id FROM tree_leaves WHERE reservation_id = $1",
                     &[id],
                 )
                 .await
-                .map_err(map_err)?;
-            rows.iter().map(|r| r.get(0)).collect()
+                .map_err(map_err)?
+                .iter()
+                .map(|r| r.get(0))
+                .collect();
+            (is_swap, leaf_ids)
+        } else {
+            (false, Vec::new())
         };
 
         // Batch insert spent leaf markers
