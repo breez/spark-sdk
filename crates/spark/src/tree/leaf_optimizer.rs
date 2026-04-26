@@ -330,9 +330,7 @@ impl LeafOptimizer {
         if !started_emitted {
             self.emit_event(OptimizationEvent::Skipped);
         } else {
-            info!(
-                "Leaf optimization completed successfully ({cumulative_rounds} rounds executed)"
-            );
+            info!("Leaf optimization completed successfully ({cumulative_rounds} rounds executed)");
             self.emit_event(OptimizationEvent::Completed);
         }
         Ok(())

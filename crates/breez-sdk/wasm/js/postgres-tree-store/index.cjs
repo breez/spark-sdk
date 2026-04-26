@@ -205,7 +205,6 @@ class PostgresTreeStore {
         // Clean up old spent markers
         await this._cleanupSpentMarkers(client, refreshTimestamp);
 
-        // Get recent spent leaf IDs (spent_at >= refresh_timestamp)
         const spentResult = await client.query(
           "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= $1",
           [refreshTimestamp]

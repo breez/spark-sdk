@@ -181,7 +181,10 @@ async fn main() -> Result<()> {
     info!("Waiting for receiver sync...");
     wait_for_synced_event(&mut receiver.events, 120).await?;
 
-    info!("Funding sender with {} sats (need {} sats min)...", funding_amount, total_send);
+    info!(
+        "Funding sender with {} sats (need {} sats min)...",
+        funding_amount, total_send
+    );
     fund_via_faucet(&mut sender, funding_amount, total_send).await?;
 
     let optimizer_duration = if args.pre_optimize.is_some() {
@@ -497,8 +500,8 @@ fn print_summary(
 
     if !results.is_empty() && bucket_secs > 0 {
         let bucket = Duration::from_secs(bucket_secs);
-        let total_buckets = ((total_duration.as_secs_f64() / bucket.as_secs_f64()).ceil() as usize)
-            .max(1);
+        let total_buckets =
+            ((total_duration.as_secs_f64() / bucket.as_secs_f64()).ceil() as usize).max(1);
         let mut succ_buckets = vec![0usize; total_buckets];
         let mut fail_buckets = vec![0usize; total_buckets];
         for r in results {
@@ -517,8 +520,8 @@ fn print_summary(
             bucket_secs
         );
         println!(
-            "  {:<14} {:>5}  {:>5}  {:>10}  {}",
-            "window", "ok", "fail", "rate/min", "bar"
+            "  {:<14} {:>5}  {:>5}  {:>10}  bar",
+            "window", "ok", "fail", "rate/min"
         );
         let max_count = succ_buckets
             .iter()
@@ -650,15 +653,8 @@ async fn build_extra_sender(
     if let Some(multiplicity) = pre_optimize {
         config.optimization_config.multiplicity = multiplicity;
     }
-    let itest = build_sdk_with_tree_store_config(
-        path,
-        seed,
-        config,
-        None,
-        true,
-        sender_postgres,
-    )
-    .await?;
+    let itest =
+        build_sdk_with_tree_store_config(path, seed, config, None, true, sender_postgres).await?;
 
     Ok(BenchSdkInstance {
         sdk: itest.sdk,
@@ -792,9 +788,7 @@ async fn fund_via_faucet(
                 "Balance {} below min required {}; funding extra {} sats",
                 info.balance_sats, min_required, needed
             );
-            let extra = needed
-                .max(FAUCET_MIN_PER_CALL)
-                .min(FAUCET_MAX_PER_CALL);
+            let extra = needed.clamp(FAUCET_MIN_PER_CALL, FAUCET_MAX_PER_CALL);
             let txid = faucet.fund_address(&deposit_address, extra).await?;
             info!("Top-up faucet txid: {}", txid);
             wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
