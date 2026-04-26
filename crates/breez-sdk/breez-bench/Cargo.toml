@@ -19,6 +19,10 @@ path = "src/bin/parallel_perf.rs"
 name = "claim-perf"
 path = "src/bin/claim_perf.rs"
 
+[[bin]]
+name = "concurrent-perf"
+path = "src/bin/concurrent_perf.rs"
+
 [dependencies]
 # Reuse all test infrastructure from breez-itest
 breez-sdk-itest = { path = "../breez-itest" }
