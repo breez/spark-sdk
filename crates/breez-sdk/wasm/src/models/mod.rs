@@ -772,6 +772,7 @@ pub enum ReceivePaymentMethod {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        use_mrh: Option<bool>,
     },
 }
 
@@ -1036,6 +1037,7 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
     pub conversion_info: Option<ConversionInfo>,
     pub conversion_status: Option<ConversionStatus>,
+    pub mrh_payment_hash: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]

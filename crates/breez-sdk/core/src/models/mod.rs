@@ -1088,6 +1088,10 @@ pub enum ReceivePaymentMethod {
         /// The payer's HTLC will be held until the preimage is provided via
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
+        /// Whether or not to use Magic Routing Hints (MRH). Defaults to false.
+        /// When MRH is enabled payers will be able to pay directly via Spark invoice
+        /// if their clients support it.
+        use_mrh: Option<bool>,
     },
 }
 

@@ -555,6 +555,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: None,
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?
@@ -651,6 +652,7 @@ async fn test_06_lightning_timeout_and_wait(
                 amount_sats: None,
                 expiry_secs: None,
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?
@@ -895,6 +897,7 @@ async fn test_08_lightning_invoice_expiry_secs(
                 amount_sats: Some(invoice_amount_sats),
                 expiry_secs: Some(custom_expiry_secs),
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?;
@@ -1050,6 +1053,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 amount_sats: None,
                 expiry_secs: None,
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?

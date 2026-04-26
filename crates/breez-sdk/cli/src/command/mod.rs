@@ -600,6 +600,7 @@ pub(crate) async fn execute_command(
                         amount_sats: amount.map(TryInto::try_into).transpose()?,
                         expiry_secs,
                         payment_hash,
+                        use_mrh: None,
                     }
                 }
             };

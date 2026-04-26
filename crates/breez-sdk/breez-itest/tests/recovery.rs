@@ -391,6 +391,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 amount_sats: Some(1_000),
                 expiry_secs: None,
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?
@@ -431,6 +432,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
                 amount_sats: Some(800),
                 expiry_secs: None,
                 payment_hash: None,
+                use_mrh: None,
             },
         })
         .await?

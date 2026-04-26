@@ -22,7 +22,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
         conversion_steps_from_payments,
     },
-    persist::PaymentMetadata,
+    persist::{ObjectCacheRepository, PaymentMetadata},
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
@@ -102,9 +102,16 @@ impl BreezSdk {
                 amount_sats,
                 expiry_secs,
                 payment_hash,
+                use_mrh,
             } => {
-                self.receive_bolt11_invoice(description, amount_sats, expiry_secs, payment_hash)
-                    .await
+                self.receive_bolt11_invoice(
+                    description,
+                    amount_sats,
+                    expiry_secs,
+                    payment_hash,
+                    use_mrh.unwrap_or(false),
+                )
+                .await
             }
         }
     }
@@ -495,17 +502,36 @@ impl BreezSdk {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        use_mrh: bool,
     ) -> Result<ReceivePaymentResponse, SdkError> {
+        let spark_invoice = if use_mrh {
+            Some(
+                self.spark_wallet
+                    .create_spark_invoice(
+                        amount_sats.map(u128::from),
+                        None,
+                        expiry_secs.and_then(|secs| {
+                            SystemTime::now().checked_add(Duration::from_secs(u64::from(secs)))
+                        }),
+                        Some(description.clone()),
+                        None,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
         let invoice = if let Some(payment_hash_hex) = payment_hash {
             let hash = sha256::Hash::from_str(&payment_hash_hex)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
             self.spark_wallet
                 .create_hodl_lightning_invoice(
                     amount_sats.unwrap_or_default(),
-                    Some(InvoiceDescription::Memo(description.clone())),
+                    Some(InvoiceDescription::Memo(description)),
                     hash,
                     None,
                     expiry_secs,
+                    spark_invoice.clone(),
                 )
                 .await?
                 .invoice
@@ -513,14 +539,35 @@ impl BreezSdk {
             self.spark_wallet
                 .create_lightning_invoice(
                     amount_sats.unwrap_or_default(),
-                    Some(InvoiceDescription::Memo(description.clone())),
+                    Some(InvoiceDescription::Memo(description)),
                     None,
                     expiry_secs,
                     self.config.prefer_spark_over_lightning,
+                    spark_invoice.clone(),
                 )
                 .await?
                 .invoice
         };
+        // Store the MRH mapping: spark invoice → payment hash
+        if let Some(si) = spark_invoice {
+            if let Some(details) = breez_sdk_common::input::parse_invoice(&invoice) {
+                let cache = ObjectCacheRepository::new(self.storage.clone());
+                if let Err(e) = cache
+                    .save_payment_metadata(
+                        &si,
+                        &PaymentMetadata {
+                            mrh_payment_hash: Some(details.payment_hash),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    error!("Failed to store MRH payment hash mapping: {e:?}");
+                }
+            } else {
+                error!("Failed to parse BOLT11 invoice for MRH mapping");
+            }
+        }
         Ok(ReceivePaymentResponse {
             payment_request: invoice,
             fee: 0,
