@@ -26,8 +26,11 @@ namespace BreezSdkSnippets
         async Task BuyBitcoinViaCashapp(BreezSdk sdk)
         {
             // ANCHOR: buy-bitcoin-cashapp
+            // Cash App requires the amount to be specified up front.
+            var amountSats = (ulong)50_000;
+
             var request = new BuyBitcoinRequest.CashApp(
-                amountSats: null
+                amountSats: amountSats
             );
 
             var response = await sdk.BuyBitcoin(request: request);

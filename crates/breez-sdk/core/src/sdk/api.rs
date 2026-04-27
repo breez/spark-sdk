@@ -370,10 +370,15 @@ impl BreezSdk {
                         "CashApp is only available on mainnet".to_string(),
                     ));
                 }
+                if amount_sats == 0 {
+                    return Err(SdkError::Generic(
+                        "CashApp requires a non-zero amount".to_string(),
+                    ));
+                }
                 let receive_response = self
                     .receive_bolt11_invoice(
                         "Buy Bitcoin via CashApp".to_string(),
-                        amount_sats,
+                        Some(amount_sats),
                         None,
                         None,
                     )

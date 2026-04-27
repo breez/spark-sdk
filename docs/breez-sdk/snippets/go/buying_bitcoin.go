@@ -29,8 +29,11 @@ func BuyBitcoin(sdk *breez_sdk_spark.BreezSdk) error {
 
 func BuyBitcoinViaCashapp(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: buy-bitcoin-cashapp
+	// Cash App requires the amount to be specified up front.
+	amountSats := uint64(50_000)
+
 	request := breez_sdk_spark.BuyBitcoinRequestCashApp{
-		AmountSats: nil,
+		AmountSats: amountSats,
 	}
 
 	response, err := sdk.BuyBitcoin(request)

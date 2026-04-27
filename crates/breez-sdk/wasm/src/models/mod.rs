@@ -1369,7 +1369,7 @@ pub enum BuyBitcoinRequest {
         redirect_url: Option<String>,
     },
     CashApp {
-        amount_sats: Option<u64>,
+        amount_sats: u64,
     },
 }
 

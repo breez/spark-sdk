@@ -20,7 +20,10 @@ func buyBitcoin(sdk: BreezSdk) async throws {
 
 func buyBitcoinViaCashapp(sdk: BreezSdk) async throws {
     // ANCHOR: buy-bitcoin-cashapp
-    let request = BuyBitcoinRequest.cashApp(amountSats: nil)
+    // Cash App requires the amount to be specified up front.
+    let amountSats: UInt64 = 50_000
+
+    let request = BuyBitcoinRequest.cashApp(amountSats: amountSats)
 
     let response = try await sdk.buyBitcoin(request: request)
     print("Open this URL in Cash App to complete the purchase:")

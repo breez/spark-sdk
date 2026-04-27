@@ -23,9 +23,10 @@ async fn buy_bitcoin(sdk: &BreezSdk) -> Result<()> {
 
 async fn buy_bitcoin_via_cashapp(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: buy-bitcoin-cashapp
-    let request = BuyBitcoinRequest::CashApp {
-        amount_sats: None,
-    };
+    // Cash App requires the amount to be specified up front.
+    let amount_sats = 50_000;
+
+    let request = BuyBitcoinRequest::CashApp { amount_sats };
 
     let response = sdk.buy_bitcoin(request).await?;
     info!("Open this URL in Cash App to complete the purchase:");

@@ -734,6 +734,10 @@ Future<void> _handleBuyBitcoin(BreezSdk sdk, TokenIssuer tokenIssuer, List<Strin
   BuyBitcoinRequest request;
   switch (provider) {
     case 'cashapp' || 'cash_app' || 'cash-app':
+      if (amount == null) {
+        print('--amount-sat is required when --provider is cashapp');
+        return;
+      }
       request = BuyBitcoinRequest_CashApp(amountSats: amount);
     default:
       request = BuyBitcoinRequest_Moonpay(lockedAmountSat: amount, redirectUrl: redirectUrl);
