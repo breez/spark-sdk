@@ -11,32 +11,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Rust is the source of truth, kept on top.
           - platform: rust
             runner: ubuntu-latest
-          - platform: wasm
+          # Other bindings alphabetically.
+          - platform: csharp
             runner: ubuntu-latest
-            node-version: "22"
+            dotnet-version: "8.0.x"
           - platform: flutter
             runner: ubuntu-latest
             flutter: true
-          - platform: go
+          - platform: golang
             runner: ubuntu-latest
+          - platform: kotlin-multiplatform
+            runner: ubuntu-latest
+            java-version: "17"
+            gradle: true
           - platform: python
             runner: ubuntu-latest
             python-version: "3.12"
-          - platform: kotlin-mpp
-            runner: macos-latest
-            java-version: "17"
-            cargo-ndk: true
-          - platform: swift
-            runner: macos-latest
           - platform: react-native
             runner: macos-latest
             node-version: "22"
             ios-targets: true
-          - platform: csharp
+          - platform: swift
+            runner: macos-latest
+          - platform: wasm
             runner: ubuntu-latest
-            dotnet-version: "8.0.x"
+            node-version: "22"
     steps:
       - uses: actions/checkout@v4
 
@@ -75,9 +77,18 @@ jobs:
           distribution: "zulu"
           java-version: ${{ matrix.java-version }}
 
-      - name: Install cargo-ndk
-        if: matrix.cargo-ndk
-        run: cargo install cargo-ndk
+      - name: Setup Gradle
+        if: matrix.gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache gobley-uniffi-bindgen
+        if: matrix.gradle
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/gobley-uniffi-bindgen
+          # Bump the suffix when the gobley pin in
+          # crates/breez-sdk/bindings/Makefile changes.
+          key: gobley-uniffi-bindgen-v0.3.7-with-fixes-${{ runner.os }}
 
       - name: Install Rust targets (iOS)
         if: matrix.ios-targets

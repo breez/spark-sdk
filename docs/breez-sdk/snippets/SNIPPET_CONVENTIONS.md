@@ -440,7 +440,7 @@ cargo xtask check-doc-snippets --package <language>
 cargo xtask check-doc-snippets --package <language> --skip-build
 ```
 
-Languages: `rust`, `go`, `python`, `kotlin-mpp`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
+Languages: `rust`, `golang`, `python`, `kotlin-multiplatform`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
 
 **Node.js Requirement:** WASM and React Native require Node >= 22.
 ```bash

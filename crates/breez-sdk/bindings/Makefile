@@ -43,7 +43,7 @@ install-uniffi-bindgen-cs:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch v0.29.4-with-fixes
 
 install-uniffi-bindgen-gobley:
-	$(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --branch v0.3.7-with-fixes
+	@command -v gobley-uniffi-bindgen >/dev/null 2>&1 || $(INSTALL_PREFIX) cargo install gobley-uniffi-bindgen --git https://github.com/breez/gobley --branch v0.3.7-with-fixes
 
 install-uniffi-bindgen-golang:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-go --git https://github.com/breez/uniffi-bindgen-go --branch v0.29.5-with-fixes
@@ -124,6 +124,27 @@ build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk
 		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
 		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
 		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
+
+# Run bindgen using the host's release library, no Android NDK build required.
+# Used by the docs-snippets check to avoid cross-compiling for Android.
+build-kotlin-multiplatform-bindgen-host: install-uniffi-bindgen-gobley build-release
+	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
+		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
+		$(BIN_PATH)
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+
+# Build Android arm64 bindings (cross-compile + bindgen + jniLibs copy).
+# Used by the cli-ci `kotlin-multiplatform-android` job for the Android
+# Kotlin compile + AAR smoke check on PRs.
+build-kotlin-multiplatform-bindgen-android-arm64: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android
+	gobley-uniffi-bindgen --library -o $(FFI_DIR)kmp \
+		--crate-configs breez_sdk_spark_bindings=./uniffi.kotlin-multiplatform.toml \
+		--crate-configs breez_sdk_spark=../core/uniffi.kotlin-multiplatform.toml \
+		$(TARGET_DIR)aarch64-linux-android/release/$(BIN_NAME).so
+	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
+	mkdir -p $(KMP_BASE)/androidMain/jniLibs/arm64-v8a
+	cp $(FFI_DIR)kotlin/jniLibs/arm64-v8a/$(BIN_NAME).so $(KMP_BASE)/androidMain/jniLibs/arm64-v8a/
 
 # Build all binaries + run bindgen
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android

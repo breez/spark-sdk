@@ -37,7 +37,7 @@ When updating multiple snippet files:
 
 ### Phase 3: Update All Other Languages (Parallel)
 
-**Spawn all 8 agents in a single message** for: `go`, `python`, `kotlin-mpp`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
+**Spawn all 8 agents in a single message** for: `go`, `python`, `kotlin-multiplatform`, `swift`, `csharp`, `flutter`, `wasm`, `react-native`
 
 Use this prompt template for each:
 
@@ -73,9 +73,9 @@ After all agents complete, run verifications. Can be parallel.
 
 Run non-Node languages in parallel:
 ```bash
-cargo xtask check-doc-snippets --package go --skip-build
+cargo xtask check-doc-snippets --package golang --skip-build
 cargo xtask check-doc-snippets --package python --skip-build
-cargo xtask check-doc-snippets --package kotlin-mpp --skip-build
+cargo xtask check-doc-snippets --package kotlin-multiplatform --skip-build
 cargo xtask check-doc-snippets --package swift --skip-build
 cargo xtask check-doc-snippets --package csharp --skip-build
 cargo xtask check-doc-snippets --package flutter --skip-build
@@ -127,9 +127,9 @@ command -v nvm && nvm use 22 || true
 ```bash
 # Individual language (fast with --skip-build):
 cargo xtask check-doc-snippets --package rust --skip-build
-cargo xtask check-doc-snippets --package go --skip-build
+cargo xtask check-doc-snippets --package golang --skip-build
 cargo xtask check-doc-snippets --package python --skip-build
-cargo xtask check-doc-snippets --package kotlin-mpp --skip-build
+cargo xtask check-doc-snippets --package kotlin-multiplatform --skip-build
 cargo xtask check-doc-snippets --package swift --skip-build
 cargo xtask check-doc-snippets --package csharp --skip-build
 cargo xtask check-doc-snippets --package flutter --skip-build
