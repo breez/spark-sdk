@@ -3,6 +3,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use bitcoin::consensus::serialize;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use platform_utils::time::SystemTime;
+use platform_utils::tokio;
 use rand::rngs::OsRng;
 use tracing::{debug, warn};
 
@@ -18,12 +19,20 @@ use crate::{
     },
     services::{LeafKeyTweak, ServiceError, SigningResult, Transfer, TransferId, TransferService},
     signer::{SecretSource, Signer},
-    ssp::{RequestSwapInput, ServiceProvider, UserLeafInput},
+    ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
     utils::{frost::sign_aggregate_frost, refund::RefundSignatures},
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
+
+const SSP_REQUEST_SWAP_MAX_ATTEMPTS: u32 = 5;
+const SSP_REQUEST_SWAP_BASE_DELAY_MS: u64 = 100;
+const SSP_REQUEST_SWAP_MAX_DELAY_MS: u64 = 3000;
+
+fn is_retryable_ssp_error(error: &ServiceProviderError) -> bool {
+    matches!(error, ServiceProviderError::Network { .. })
+}
 
 pub struct Swap {
     network: Network,
@@ -142,8 +151,13 @@ impl Swap {
             transfer_package.direct_from_cpfp_leaves_to_send.clear();
         }
 
-        // Call initiate_swap_primary_transfer with the transfer_package and adaptor public keys
-        let response = self
+        let leaf_ids_for_log: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
+        debug!(
+            "leaf_lifecycle swap_rpc_initiate: transfer_id={} leaf_ids={:?}",
+            transfer_id, leaf_ids_for_log
+        );
+
+        let rpc_result = self
             .operator_pool
             .get_coordinator()
             .client
@@ -156,7 +170,24 @@ impl Swap {
                     direct_from_cpfp_adaptor_public_key: Vec::new(),
                 }),
             })
-            .await?;
+            .await;
+
+        let response = match rpc_result {
+            Ok(r) => {
+                debug!(
+                    "leaf_lifecycle swap_rpc_success: transfer_id={} leaf_ids={:?}",
+                    transfer_id, leaf_ids_for_log
+                );
+                r
+            }
+            Err(e) => {
+                warn!(
+                    "leaf_lifecycle swap_rpc_error: transfer_id={} leaf_ids={:?} error={:?}",
+                    transfer_id, leaf_ids_for_log, e
+                );
+                return Err(e.into());
+            }
+        };
 
         let _transfer = response.transfer.ok_or(ServiceError::Generic(
             "response missing transfer".to_string(),
@@ -243,20 +274,53 @@ impl Swap {
             });
         }
 
-        // Call request_swap to SSP (swap v3)
-        let swap_response = self
-            .ssp_client
-            .request_swap(RequestSwapInput {
-                adaptor_pubkey: hex::encode(cpfp_adaptor_public_key.serialize()),
-                total_amount_sats: leaf_sum,
-                target_amount_sats: maybe_target_amounts
-                    .clone()
-                    .unwrap_or_else(|| vec![target_sum]),
-                fee_sats: 0, // TODO: Request fee estimate from SSP
-                user_leaves,
-                user_outbound_transfer_external_id: transfer_id.to_string(),
-            })
-            .await?;
+        let request_swap_input = RequestSwapInput {
+            adaptor_pubkey: hex::encode(cpfp_adaptor_public_key.serialize()),
+            total_amount_sats: leaf_sum,
+            target_amount_sats: maybe_target_amounts
+                .clone()
+                .unwrap_or_else(|| vec![target_sum]),
+            fee_sats: 0, // TODO: Request fee estimate from SSP
+            user_leaves,
+            user_outbound_transfer_external_id: transfer_id.to_string(),
+        };
+
+        let swap_response = {
+            let mut attempt: u32 = 1;
+            loop {
+                match self
+                    .ssp_client
+                    .request_swap(request_swap_input.clone())
+                    .await
+                {
+                    Ok(r) => break r,
+                    Err(e)
+                        if attempt < SSP_REQUEST_SWAP_MAX_ATTEMPTS
+                            && is_retryable_ssp_error(&e) =>
+                    {
+                        let delay_ms = (SSP_REQUEST_SWAP_BASE_DELAY_MS * 2u64.pow(attempt - 1))
+                            .min(SSP_REQUEST_SWAP_MAX_DELAY_MS);
+                        warn!(
+                            "leaf_lifecycle swap_ssp_retry: transfer_id={} attempt={}/{} delay_ms={} error={:?}",
+                            transfer_id, attempt, SSP_REQUEST_SWAP_MAX_ATTEMPTS, delay_ms, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        attempt += 1;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "leaf_lifecycle swap_ssp_error_after_initiate: transfer_id={} leaf_ids={:?} attempt={}/{} error={:?}",
+                            transfer_id,
+                            leaf_ids_for_log,
+                            attempt,
+                            SSP_REQUEST_SWAP_MAX_ATTEMPTS,
+                            e
+                        );
+                        return Err(e.into());
+                    }
+                }
+            }
+        };
 
         // TODO: Validate the amounts in swap_response match the leaf sum, and the target amounts are met.
         let inbound_transfer_id = swap_response

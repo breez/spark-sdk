@@ -234,27 +234,43 @@ class PostgresTreeStore {
   }
 
   /**
-   * Cancel a reservation, releasing reserved leaves.
+   * Cancel a reservation. All leaves currently attached to the reservation are
+   * deleted from the store. The reservation row is dropped. The supplied
+   * `leavesToKeep` are inserted into the available pool.
+   *
+   * Callers pass the original reservation leaves to preserve the legacy
+   * "release everything back to the pool" behavior. Callers that have
+   * verified leaf state with the operator pass only the leaves confirmed
+   * safe to make available (e.g. dropping operator-locked leaves).
+   *
    * @param {string} id - Reservation ID
+   * @param {Array} leavesToKeep - Leaves to insert as available
    */
-  async cancelReservation(id) {
+  async cancelReservation(id, leavesToKeep) {
     try {
       await this._withWriteTransaction(async (client) => {
-        // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM tree_reservations WHERE id = $1",
           [id]
         );
 
         if (res.rows.length === 0) {
-          return; // Already cancelled or finalized
+          return;
         }
 
-        // Delete reservation (ON DELETE SET NULL releases leaves)
+        await client.query(
+          "DELETE FROM tree_leaves WHERE reservation_id = $1",
+          [id]
+        );
+
         await client.query(
           "DELETE FROM tree_reservations WHERE id = $1",
           [id]
         );
+
+        if (leavesToKeep && leavesToKeep.length > 0) {
+          await this._batchUpsertLeaves(client, leavesToKeep, false, null);
+        }
       });
     } catch (error) {
       if (error instanceof TreeStoreError) throw error;

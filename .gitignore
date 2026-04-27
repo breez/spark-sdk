@@ -30,3 +30,4 @@ fly.toml
 # Wasm package
 packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
 .claude/settings.local.json
+crates/breez-sdk/breez-bench/js/node_modules/

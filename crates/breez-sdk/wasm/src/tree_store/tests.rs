@@ -90,6 +90,19 @@ async fn test_cancel_reservation() {
 }
 
 #[wasm_bindgen_test]
+async fn test_cancel_reservation_drops_unkept_leaves() {
+    let store = create_test_tree_store("pg_tree_cancel_drop_some").await;
+    breez_sdk_spark::tree_store_tests::test_cancel_reservation_drops_unkept_leaves(&store).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_cancel_reservation_drops_all_when_keep_empty() {
+    let store = create_test_tree_store("pg_tree_cancel_drop_all").await;
+    breez_sdk_spark::tree_store_tests::test_cancel_reservation_drops_all_when_keep_empty(&store)
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_cancel_reservation_nonexistent() {
     let store = create_test_tree_store("pg_tree_cancel_nonexist").await;
     breez_sdk_spark::tree_store_tests::test_cancel_reservation_nonexistent(&store).await;

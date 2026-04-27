@@ -287,10 +287,11 @@ pub async fn test_cancel_reservation(store: &dyn TreeStore) {
     .await
     .unwrap();
 
-    // Cancel the reservation
-    store.cancel_reservation(&reservation.id).await.unwrap();
+    store
+        .cancel_reservation(&reservation.id, &reservation.leaves)
+        .await
+        .unwrap();
 
-    // Check that leaf was returned to main pool
     let all = get_all(store).await;
     assert!(all.reserved_for_payment.is_empty());
     assert_eq!(all.available.len(), 2);
@@ -298,11 +299,70 @@ pub async fn test_cancel_reservation(store: &dyn TreeStore) {
     assert!(all.available.iter().any(|l| l.id == leaves[1].id));
 }
 
+pub async fn test_cancel_reservation_drops_unkept_leaves(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(300, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reservation.leaves.len(), 2);
+
+    let keep: Vec<_> = reservation
+        .leaves
+        .iter()
+        .filter(|l| l.id == leaves[0].id)
+        .cloned()
+        .collect();
+    store
+        .cancel_reservation(&reservation.id, &keep)
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert!(all.reserved_for_payment.is_empty());
+    assert_eq!(all.available.len(), 1);
+    assert_eq!(all.available[0].id, leaves[0].id);
+}
+
+pub async fn test_cancel_reservation_drops_all_when_keep_empty(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let reservation = reserve_leaves(
+        store,
+        Some(&TargetAmounts::new_amount_and_fee(300, None)),
+        true,
+        ReservationPurpose::Payment,
+    )
+    .await
+    .unwrap();
+
+    store
+        .cancel_reservation(&reservation.id, &[])
+        .await
+        .unwrap();
+
+    let all = get_all(store).await;
+    assert!(all.reserved_for_payment.is_empty());
+    assert!(all.available.is_empty());
+}
+
 pub async fn test_cancel_reservation_nonexistent(store: &dyn TreeStore) {
     let fake_id = "fake-reservation-id".to_string();
 
-    // Should not panic or cause issues
-    store.cancel_reservation(&fake_id).await.unwrap();
+    store.cancel_reservation(&fake_id, &[]).await.unwrap();
     assert_available_count(store, 0).await;
 }
 
@@ -376,8 +436,10 @@ pub async fn test_multiple_reservations(store: &dyn TreeStore) {
     assert_eq!(all.available.len(), 1);
     assert_eq!(all.available[0].id, leaves[2].id);
 
-    // Cancel one reservation
-    store.cancel_reservation(&reservation1.id).await.unwrap();
+    store
+        .cancel_reservation(&reservation1.id, &reservation1.leaves)
+        .await
+        .unwrap();
     assert_eq!(get_all(store).await.available.len(), 2);
 
     // Finalize the other
@@ -400,7 +462,7 @@ pub async fn test_reservation_ids_are_unique(store: &dyn TreeStore) {
     )
     .await
     .unwrap();
-    store.cancel_reservation(&r1.id).await.unwrap();
+    store.cancel_reservation(&r1.id, &r1.leaves).await.unwrap();
     let r2 = reserve_leaves(
         store,
         Some(&TargetAmounts::new_amount_and_fee(100, None)),
@@ -631,13 +693,15 @@ pub async fn test_pending_cleared_on_cancel(store: &dyn TreeStore) {
         .await
         .unwrap();
 
-    let reservation_id = match r1 {
-        ReserveResult::Success(r) => r.id,
+    let (reservation_id, prior_leaves) = match r1 {
+        ReserveResult::Success(r) => (r.id, r.leaves),
         _ => panic!("Expected Success"),
     };
 
-    // Cancel the reservation - pending should be cleared
-    store.cancel_reservation(&reservation_id).await.unwrap();
+    store
+        .cancel_reservation(&reservation_id, &prior_leaves)
+        .await
+        .unwrap();
 
     // Try to reserve 300 - should succeed since 1000 sat leaf is back
     let r2 = store
@@ -768,13 +832,15 @@ pub async fn test_notification_on_pending_balance_change(store: &dyn TreeStore) 
         platform_utils::tokio::time::timeout(std::time::Duration::from_millis(100), rx.changed())
             .await;
 
-    let reservation_id = match r1 {
-        ReserveResult::Success(r) => r.id,
+    let (reservation_id, prior_leaves) = match r1 {
+        ReserveResult::Success(r) => (r.id, r.leaves),
         _ => panic!("Expected Success"),
     };
 
-    // Cancel the reservation - pending changes from 900 to 0
-    store.cancel_reservation(&reservation_id).await.unwrap();
+    store
+        .cancel_reservation(&reservation_id, &prior_leaves)
+        .await
+        .unwrap();
 
     // Should get notification because pending balance changed
     let notification_result =

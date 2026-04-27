@@ -17,7 +17,7 @@ use spark_wallet::{
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::config::PostgresStorageConfig;
@@ -231,25 +231,26 @@ impl TreeStore for PostgresTreeStore {
         Ok(())
     }
 
-    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
+    async fn cancel_reservation(
+        &self,
+        id: &LeavesReservationId,
+        leaves_to_keep: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Acquire advisory lock to prevent deadlocks with concurrent operations
         Self::acquire_write_lock(&tx).await?;
 
-        // Check if reservation exists (advisory lock provides serialization, no row locking needed)
         let reservation = tx
             .query_opt("SELECT id FROM tree_reservations WHERE id = $1", &[id])
             .await
             .map_err(map_err)?;
 
         if reservation.is_none() {
-            // Already cancelled or finalized
             return Ok(());
         }
 
-        let returned_leaf_ids: Vec<String> = tx
+        let prior_leaf_ids: Vec<String> = tx
             .query(
                 "SELECT id FROM tree_leaves WHERE reservation_id = $1",
                 &[id],
@@ -259,14 +260,25 @@ impl TreeStore for PostgresTreeStore {
             .iter()
             .map(|r| r.get(0))
             .collect();
+        let keep_ids: Vec<String> = leaves_to_keep.iter().map(|l| l.id.to_string()).collect();
+        let dropped_ids: Vec<&String> = prior_leaf_ids
+            .iter()
+            .filter(|id| !keep_ids.contains(id))
+            .collect();
         info!(
-            "leaf_lifecycle cancel: reservation={} returning_leaves={:?}",
-            id, returned_leaf_ids
+            "leaf_lifecycle cancel: reservation={} prior_leaves={:?} keeping={:?} dropping={:?}",
+            id, prior_leaf_ids, keep_ids, dropped_ids
         );
+
+        tx.execute("DELETE FROM tree_leaves WHERE reservation_id = $1", &[id])
+            .await
+            .map_err(map_err)?;
 
         tx.execute("DELETE FROM tree_reservations WHERE id = $1", &[id])
             .await
             .map_err(map_err)?;
+
+        Self::batch_upsert_leaves(&tx, leaves_to_keep, false, None).await?;
 
         tx.commit().await.map_err(map_err)?;
         self.notify_balance_change();
@@ -931,12 +943,10 @@ impl PostgresTreeStore {
         .map_err(map_err)?;
 
         let leaf_ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
-        for l in leaves {
-            trace!(
-                "leaf_lifecycle reserve: leaf={} value={} reservation={} purpose={:?}",
-                l.id, l.value, reservation_id, purpose
-            );
-        }
+        debug!(
+            "leaf_lifecycle reserve: reservation={} purpose={:?} leaf_ids={:?}",
+            reservation_id, purpose, leaf_ids
+        );
         Self::batch_set_reservation_id(tx, reservation_id, &leaf_ids).await?;
 
         Ok(())
@@ -1068,6 +1078,18 @@ mod tests {
     async fn test_cancel_reservation() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_cancel_reservation(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_drops_unkept_leaves() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_drops_unkept_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_drops_all_when_keep_empty() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_drops_all_when_keep_empty(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -1553,7 +1575,9 @@ mod tests {
                         .await?;
 
                     if let ReserveResult::Success(reservation) = result {
-                        store_clone.cancel_reservation(&reservation.id).await?;
+                        store_clone
+                            .cancel_reservation(&reservation.id, &reservation.leaves)
+                            .await?;
                     }
                     tracing::debug!("Task {i} cycle {cycle} complete");
                 }
@@ -1627,7 +1651,9 @@ mod tests {
 
                 match result {
                     Ok(ReserveResult::Success(reservation)) => {
-                        store_clone.cancel_reservation(&reservation.id).await?;
+                        store_clone
+                            .cancel_reservation(&reservation.id, &reservation.leaves)
+                            .await?;
                         Ok((100 + i, "reserve success"))
                     }
                     Ok(_) => Ok((100 + i, "no leaves available")),

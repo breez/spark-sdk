@@ -215,7 +215,7 @@ where
             Ok(r)
         }
         Err(e) => {
-            if let Err(e) = tree_service.cancel_reservation(leaves.id.clone()).await {
+            if let Err(e) = tree_service.cancel_reservation(leaves.clone()).await {
                 error!("Failed to cancel reservation: {e:?}");
             }
             Err(e)

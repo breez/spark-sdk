@@ -1,0 +1,16 @@
+{
+  "name": "breez-bench-nodejs",
+  "version": "0.1.0",
+  "description": "Concurrent payment benchmark for Breez SDK Spark on Node.js (wasm)",
+  "private": true,
+  "main": "concurrent_perf.js",
+  "scripts": {
+    "start": "node concurrent_perf.js"
+  },
+  "dependencies": {
+    "@breeztech/breez-sdk-spark": "file:../../../../packages/wasm",
+    "better-sqlite3": "^11.10.0",
+    "bip39": "^3.1.0",
+    "pg": "^8.20.0"
+  }
+}
