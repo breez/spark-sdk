@@ -660,8 +660,7 @@ impl SparkWallet {
     }
 
     /// Submits a static deposit claim and returns the resulting transfer id.
-    /// Use [`Self::query_static_deposit_claim_transfer`] to fetch the full
-    /// transfer when needed.
+    /// The transfer can then be fetched with [`Self::list_transfers`].
     pub async fn claim_static_deposit(
         &self,
         quote: StaticDepositQuote,
@@ -671,26 +670,6 @@ impl SparkWallet {
         self.maybe_start_optimization().await;
 
         Ok(transfer_id)
-    }
-
-    /// Looks up the transfer produced by a static deposit claim, retrying
-    /// while the operator pool has not yet indexed it.
-    pub async fn query_static_deposit_claim_transfer(
-        &self,
-        transfer_id: String,
-    ) -> Result<WalletTransfer, SparkWalletError> {
-        let transfer = self
-            .deposit_service
-            .query_static_deposit_claim_transfer(transfer_id)
-            .await?;
-
-        Ok(WalletTransfer::from_transfer(
-            transfer,
-            None,
-            None,
-            self.identity_public_key,
-            self.config.service_provider_config.identity_public_key,
-        ))
     }
 
     pub async fn refund_static_deposit(

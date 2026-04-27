@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use bitcoin::{
     Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
@@ -8,7 +8,6 @@ use bitcoin::{
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa::Signature, schnorr},
 };
-use platform_utils::tokio;
 use serde::Serialize;
 use tracing::{error, trace};
 
@@ -17,12 +16,9 @@ use crate::{
     bitcoin::{BitcoinService, sighash_from_tx},
     operator::{
         OperatorPool,
-        rpc::{
-            self as operator_rpc,
-            spark::{HashVariant, TransferFilter, transfer_filter::Participant},
-        },
+        rpc::{self as operator_rpc, spark::HashVariant},
     },
-    services::{Transfer, Utxo},
+    services::Utxo,
     signer::{SecretSource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
@@ -40,12 +36,6 @@ use crate::{
 use super::ServiceError;
 
 const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
-
-// Retry parameters for looking up the transfer created by a static deposit
-// claim while it propagates from the SSP to the receiver-side operator pool.
-const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
-const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
-const CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS: u64 = 2_000;
 
 // Conservative minimum fee threshold for refund transactions
 // Based on 194 vbyte estimate for 1-in/1-out tx at 1 sat/vB minimum relay fee.
@@ -271,8 +261,8 @@ impl DepositService {
     }
 
     /// Submits a static deposit claim to the SSP and returns the resulting
-    /// transfer id. Use [`Self::query_static_deposit_claim_transfer`] to
-    /// fetch the full transfer.
+    /// transfer id. The transfer can then be looked up by id via the
+    /// transfer service / `SparkWallet::list_transfers`.
     pub async fn claim_static_deposit(
         &self,
         quote: StaticDepositQuote,
@@ -323,64 +313,6 @@ impl DepositService {
             .await?;
 
         Ok(resp.transfer_id)
-    }
-
-    /// Looks up the transfer produced by a static deposit claim. Retries
-    /// while the operator pool has not yet indexed the transfer or the
-    /// query fails transiently; returns the last error if every attempt
-    /// fails.
-    pub async fn query_static_deposit_claim_transfer(
-        &self,
-        transfer_id: String,
-    ) -> Result<Transfer, ServiceError> {
-        let identity_public_key = self
-            .signer
-            .get_identity_public_key()
-            .await?
-            .serialize()
-            .to_vec();
-
-        let mut last_error: Option<ServiceError> = None;
-
-        for attempt in 0..CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS {
-            if attempt > 0 {
-                let delay_ms = CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS
-                    .saturating_mul(2u64.saturating_pow(attempt - 1))
-                    .min(CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                trace!(
-                    "Retrying claim transfer lookup (attempt {}/{}) for transfer {transfer_id}",
-                    attempt + 1,
-                    CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS
-                );
-            }
-
-            match self
-                .operator_pool
-                .get_coordinator()
-                .client
-                .query_all_transfers(TransferFilter {
-                    participant: Some(Participant::ReceiverIdentityPublicKey(
-                        identity_public_key.clone(),
-                    )),
-                    transfer_ids: vec![transfer_id.clone()],
-                    network: self.network.to_proto_network() as i32,
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(resp) => {
-                    if let Some(transfer) = resp.transfers.into_iter().next() {
-                        return transfer.try_into();
-                    }
-                    last_error = None;
-                }
-                Err(e) => last_error = Some(e.into()),
-            }
-        }
-
-        Err(last_error
-            .unwrap_or_else(|| ServiceError::Generic("transfer not found after claim".to_string())))
     }
 
     pub async fn refund_static_deposit(

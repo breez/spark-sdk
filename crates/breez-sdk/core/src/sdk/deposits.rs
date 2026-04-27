@@ -1,5 +1,9 @@
+use std::{str::FromStr, time::Duration};
+
 use bitcoin::{consensus::serialize, hex::DisplayHex};
-use tracing::error;
+use platform_utils::tokio;
+use spark_wallet::{ListTransfersRequest, TransferId, WalletTransfer};
+use tracing::{error, trace};
 
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
@@ -8,6 +12,11 @@ use crate::{
 };
 
 use super::{BreezSdk, SyncType};
+
+// Retry parameters for looking up the transfer created by a static deposit
+// claim while it propagates across Spark operators.
+const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
+const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -27,10 +36,7 @@ impl BreezSdk {
             .or(self.config.max_deposit_claim_fee.clone());
         match self.claim_utxo(&detailed_utxo, max_fee).await {
             Ok(transfer_id) => {
-                let transfer = self
-                    .spark_wallet
-                    .query_static_deposit_claim_transfer(transfer_id)
-                    .await?;
+                let transfer = self.lookup_claim_transfer_with_retry(transfer_id).await?;
                 let payment: Payment = transfer.try_into()?;
                 // Insert the payment before returning so callers that
                 // immediately list payments see the claim.
@@ -104,5 +110,54 @@ impl BreezSdk {
     ) -> Result<ListUnclaimedDepositsResponse, SdkError> {
         let deposits = self.storage.list_deposits().await?;
         Ok(ListUnclaimedDepositsResponse { deposits })
+    }
+}
+
+impl BreezSdk {
+    /// Looks up the transfer produced by a static deposit claim, retrying
+    /// while the Spark operators have not yet indexed it. The SSP commits
+    /// the claim synchronously, but there is a brief window before the
+    /// transfer becomes queryable from the operators; transient query
+    /// errors are also retried. Returns the last error if every attempt
+    /// fails.
+    async fn lookup_claim_transfer_with_retry(
+        &self,
+        transfer_id: String,
+    ) -> Result<WalletTransfer, SdkError> {
+        let parsed_id = TransferId::from_str(&transfer_id).map_err(SdkError::Generic)?;
+        let mut last_error: Option<SdkError> = None;
+
+        for attempt in 0..CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS {
+            if attempt > 0 {
+                let delay_ms = CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS
+                    .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)));
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                trace!(
+                    "Retrying claim transfer lookup (attempt {}/{}) for transfer {transfer_id}",
+                    attempt.saturating_add(1),
+                    CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS
+                );
+            }
+
+            match self
+                .spark_wallet
+                .list_transfers(ListTransfersRequest {
+                    transfer_ids: vec![parsed_id.clone()],
+                    paging: None,
+                })
+                .await
+            {
+                Ok(mut resp) => {
+                    if let Some(transfer) = resp.items.pop() {
+                        return Ok(transfer);
+                    }
+                    last_error = None;
+                }
+                Err(e) => last_error = Some(e.into()),
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| SdkError::Generic("transfer not found after claim".to_string())))
     }
 }
