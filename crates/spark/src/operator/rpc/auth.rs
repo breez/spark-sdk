@@ -92,7 +92,8 @@ impl OperatorAuth {
             expiration: verify_resp.expiration_timestamp.try_into().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid expiration timestamp".to_string())
             })?,
-            headers: HashMap::new(),
+            so_headers: HashMap::new(),
+            ssp_headers: HashMap::new(),
         };
         Ok(session)
     }

@@ -118,13 +118,11 @@ impl GraphQLClient {
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        let session = self.get_session().await?;
+        let mut session = self.get_session().await?;
+        self.add_auth_headers(&mut session)?;
         let full_url = self.get_full_url();
-        let mut headers = HashMap::new();
-        self.add_auth_headers(&session, &mut headers)?;
-
         match self
-            .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
+            .post_query_inner::<Q, T>(&full_url, &session.ssp_headers, variables.clone())
             .await
         {
             Ok(response) => Ok(response),
@@ -136,12 +134,10 @@ impl GraphQLClient {
                 } = e.clone()
                     && status_code == 401
                 {
-                    let session = self.get_session().await?;
-                    let mut headers = HashMap::new();
-                    self.add_auth_headers(&session, &mut headers)?;
-
+                    let mut session = self.get_session().await?;
+                    self.add_auth_headers(&mut session)?;
                     return self
-                        .post_query_inner::<Q, T>(&full_url, &headers, variables)
+                        .post_query_inner::<Q, T>(&full_url, &session.ssp_headers, variables)
                         .await;
                 }
                 Err(e)
@@ -210,7 +206,8 @@ impl GraphQLClient {
                 .map_err(|_| {
                     GraphQLError::Authentication("Invalid expiration timestamp".to_string())
                 })?,
-            headers: HashMap::new(),
+            so_headers: HashMap::new(),
+            ssp_headers: HashMap::new(),
         })
     }
 
@@ -559,13 +556,9 @@ impl GraphQLClient {
         Ok(valid_session)
     }
 
-    fn add_auth_headers(
-        &self,
-        session: &Session,
-        headers: &mut HashMap<String, String>,
-    ) -> Result<(), GraphQLError> {
-        add_content_type_header(headers, ContentType::Json);
-        headers.insert(
+    fn add_auth_headers(&self, session: &mut Session) -> Result<(), GraphQLError> {
+        add_content_type_header(&mut session.ssp_headers, ContentType::Json);
+        session.ssp_headers.insert(
             "Authorization".to_string(),
             format!("Bearer {}", session.token),
         );

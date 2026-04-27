@@ -26,6 +26,21 @@ impl BreezSessionManager {
     pub(crate) async fn set_token(&self, new_token: String) {
         *self.token.write().await = Some(new_token);
     }
+
+    async fn set_headers(&self, session: &mut Session) {
+        if let Some(token) = self.token.read().await.as_ref() {
+            if Some(token) != session.so_headers.get(PARTNER_ID_HEADER) {
+                session
+                    .so_headers
+                    .insert(PARTNER_ID_HEADER.to_string(), token.clone());
+            }
+            if Some(token) != session.ssp_headers.get(PARTNER_ID_HEADER) {
+                session
+                    .ssp_headers
+                    .insert(PARTNER_ID_HEADER.to_string(), token.clone());
+            }
+        }
+    }
 }
 
 #[macros::async_trait]
@@ -35,13 +50,7 @@ impl SessionManager for BreezSessionManager {
         service_identity_key: &PublicKey,
     ) -> Result<Session, SessionManagerError> {
         let mut session = self.inner.get_session(service_identity_key).await?;
-        if let Some(token) = self.token.read().await.as_ref()
-            && session.headers.get(PARTNER_ID_HEADER) != Some(token)
-        {
-            session
-                .headers
-                .insert(PARTNER_ID_HEADER.to_string(), token.clone());
-        }
+        self.set_headers(&mut session).await;
         Ok(session)
     }
 
@@ -50,11 +59,7 @@ impl SessionManager for BreezSessionManager {
         service_identity_key: &PublicKey,
         mut session: Session,
     ) -> Result<(), SessionManagerError> {
-        if let Some(token) = self.token.read().await.as_ref() {
-            session
-                .headers
-                .insert(PARTNER_ID_HEADER.to_string(), token.clone());
-        }
+        self.set_headers(&mut session).await;
         self.inner.set_session(service_identity_key, session).await
     }
 }
