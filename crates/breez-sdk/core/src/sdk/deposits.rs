@@ -4,7 +4,7 @@ use tracing::error;
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse, error::SdkError,
-    persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
+    models::Payment, persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
 use super::{BreezSdk, SyncType};
@@ -26,16 +26,22 @@ impl BreezSdk {
             .max_fee
             .or(self.config.max_deposit_claim_fee.clone());
         match self.claim_utxo(&detailed_utxo, max_fee).await {
-            Ok(transfer) => {
+            Ok(transfer_id) => {
+                let transfer = self
+                    .spark_wallet
+                    .query_static_deposit_claim_transfer(transfer_id)
+                    .await?;
+                let payment: Payment = transfer.try_into()?;
+                // Insert the payment before returning so callers that
+                // immediately list payments see the claim.
+                self.storage.insert_payment(payment.clone()).await?;
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
                 self.sync_coordinator
                     .trigger_sync_no_wait(SyncType::WalletState, true)
                     .await;
-                Ok(ClaimDepositResponse {
-                    payment: transfer.try_into()?,
-                })
+                Ok(ClaimDepositResponse { payment })
             }
             Err(e) => {
                 error!("Failed to claim deposit: {e:?}");

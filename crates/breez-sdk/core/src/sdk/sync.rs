@@ -135,22 +135,17 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
-                // Extract the claimed deposit outpoint (if any) before the
-                // transfer is moved into Payment::try_from. The outpoint is
-                // used below to clean up stale unclaimed-deposit records.
-                let claimed_deposit_outpoint = claim_static_deposit_outpoint(&transfer);
+                // Drop any unclaimed-deposit record for this outpoint
+                // independently of payment ingestion below, so a
+                // Payment::try_from failure does not leave the record
+                // lingering.
+                if let Some((tx_id, vout)) = claim_static_deposit_outpoint(&transfer) {
+                    self.cleanup_claimed_deposit(&tx_id, vout).await;
+                }
                 if let Ok(mut payment) = Payment::try_from(transfer) {
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                         error!("Failed to insert succeeded payment: {e:?}");
-                    }
-
-                    // If this was a static-deposit claim, remove the stale
-                    // unclaimed-deposit record for that specific outpoint.
-                    // It may have been left behind by the synchronous claim
-                    // path failing while the event path succeeded.
-                    if let Some((tx_id, vout)) = &claimed_deposit_outpoint {
-                        self.cleanup_claimed_deposit(tx_id, *vout).await;
                     }
 
                     // Ensure potential lnurl metadata is synced before emitting the event.
@@ -196,10 +191,8 @@ impl BreezSdk {
         }
     }
 
-    /// Removes the unclaimed-deposit storage record for `(tx_id, vout)`.
-    /// Called after a deposit transfer has been claimed via the event-driven
-    /// path so that a `claim_error` persisted by a previously-failed
-    /// synchronous claim attempt does not linger.
+    /// Removes the unclaimed-deposit storage record for `(tx_id, vout)`,
+    /// logging on failure rather than propagating the error.
     async fn cleanup_claimed_deposit(&self, tx_id: &str, vout: u32) {
         if let Err(e) = self.storage.delete_deposit(tx_id.to_string(), vout).await {
             error!("Failed to delete claimed deposit {tx_id}:{vout} from storage: {e:?}");
@@ -596,11 +589,13 @@ impl BreezSdk {
         Ok(())
     }
 
+    /// Submits a static deposit claim for `detailed_utxo` and returns the
+    /// resulting transfer id.
     pub(super) async fn claim_utxo(
         &self,
         detailed_utxo: &DetailedUtxo,
         max_claim_fee: Option<MaxFee>,
-    ) -> Result<spark_wallet::WalletTransfer, SdkError> {
+    ) -> Result<String, SdkError> {
         info!(
             "Fetching static deposit claim quote for deposit tx {}:{} and amount: {}",
             detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value
@@ -645,12 +640,13 @@ impl BreezSdk {
             "Claiming static deposit for utxo {}:{}",
             detailed_utxo.txid, detailed_utxo.vout
         );
-        let transfer = self.spark_wallet.claim_static_deposit(quote).await?;
+        let credit_amount_sats = quote.credit_amount_sats;
+        let transfer_id = self.spark_wallet.claim_static_deposit(quote).await?;
         info!(
-            "Claimed static deposit transfer for utxo {}:{}, value {}",
-            detailed_utxo.txid, detailed_utxo.vout, transfer.total_value_sat,
+            "Claimed static deposit for utxo {}:{} (deposit value {}, credit {}), transfer {transfer_id}",
+            detailed_utxo.txid, detailed_utxo.vout, detailed_utxo.value, credit_amount_sats,
         );
-        Ok(transfer)
+        Ok(transfer_id)
     }
 }
 

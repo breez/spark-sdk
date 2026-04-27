@@ -42,8 +42,7 @@ use super::ServiceError;
 const CLAIM_STATIC_DEPOSIT_ACTION: &str = "claim_static_deposit";
 
 // Retry parameters for looking up the transfer created by a static deposit
-// claim. The SSP creates the transfer synchronously, but it can take a brief
-// window before it becomes visible to the receiver via the operator pool.
+// claim while it propagates from the SSP to the receiver-side operator pool.
 const CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS: u32 = 3;
 const CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS: u64 = 500;
 const CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS: u64 = 2_000;
@@ -271,10 +270,13 @@ impl DepositService {
         .await
     }
 
+    /// Submits a static deposit claim to the SSP and returns the resulting
+    /// transfer id. Use [`Self::query_static_deposit_claim_transfer`] to
+    /// fetch the full transfer.
     pub async fn claim_static_deposit(
         &self,
         quote: StaticDepositQuote,
-    ) -> Result<Transfer, ServiceError> {
+    ) -> Result<String, ServiceError> {
         trace!("Claiming static deposit with quote: {quote:?}");
         let StaticDepositQuote {
             txid,
@@ -320,30 +322,17 @@ impl DepositService {
             })
             .await?;
 
-        // Fetch the transfer from the operator pool coordinator, retrying
-        // while the receiver side has not yet indexed it.
-        let transfer = self
-            .query_claim_transfer_with_retry(resp.transfer_id)
-            .await?;
-
-        transfer.try_into()
+        Ok(resp.transfer_id)
     }
 
-    /// Look up the transfer created by a static deposit claim, retrying
-    /// while the operator pool has not yet indexed it or the query itself
-    /// fails transiently.
-    ///
-    /// The SSP creates the transfer synchronously, but it can take a brief
-    /// window before it becomes visible to the receiver, during which
-    /// `query_all_transfers` returns an empty list. The query can also fail
-    /// transiently (network, gRPC). Since the SSP has already committed the
-    /// claim by the time we get here, both cases are retried rather than
-    /// surfacing a spurious error. If every attempt fails, the last error
-    /// is returned.
-    async fn query_claim_transfer_with_retry(
+    /// Looks up the transfer produced by a static deposit claim. Retries
+    /// while the operator pool has not yet indexed the transfer or the
+    /// query fails transiently; returns the last error if every attempt
+    /// fails.
+    pub async fn query_static_deposit_claim_transfer(
         &self,
         transfer_id: String,
-    ) -> Result<operator_rpc::spark::Transfer, ServiceError> {
+    ) -> Result<Transfer, ServiceError> {
         let identity_public_key = self
             .signer
             .get_identity_public_key()
@@ -355,7 +344,8 @@ impl DepositService {
 
         for attempt in 0..CLAIM_TRANSFER_LOOKUP_MAX_ATTEMPTS {
             if attempt > 0 {
-                let delay_ms = (CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS * 2u64.pow(attempt - 1))
+                let delay_ms = CLAIM_TRANSFER_LOOKUP_BASE_DELAY_MS
+                    .saturating_mul(2u64.saturating_pow(attempt - 1))
                     .min(CLAIM_TRANSFER_LOOKUP_MAX_DELAY_MS);
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 trace!(
@@ -381,7 +371,7 @@ impl DepositService {
             {
                 Ok(resp) => {
                     if let Some(transfer) = resp.transfers.into_iter().next() {
-                        return Ok(transfer);
+                        return transfer.try_into();
                     }
                     last_error = None;
                 }

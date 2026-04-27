@@ -104,7 +104,10 @@ pub async fn handle_command(
                 let quote = wallet
                     .fetch_static_deposit_claim_quote(tx.clone(), output_index)
                     .await?;
-                let transfer = wallet.claim_static_deposit(quote).await?;
+                let transfer_id = wallet.claim_static_deposit(quote).await?;
+                let transfer = wallet
+                    .query_static_deposit_claim_transfer(transfer_id)
+                    .await?;
                 println!("{}", serde_json::to_string_pretty(&transfer)?);
             } else if let Some(output_index) = output_index {
                 let leaves = wallet.claim_deposit(tx, output_index).await?;
