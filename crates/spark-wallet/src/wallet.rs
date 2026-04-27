@@ -659,21 +659,17 @@ impl SparkWallet {
         Ok(deposit_nodes.into_iter().map(WalletLeaf::from).collect())
     }
 
+    /// Submits a static deposit claim and returns the resulting transfer id.
+    /// The transfer can then be fetched with [`Self::list_transfers`].
     pub async fn claim_static_deposit(
         &self,
         quote: StaticDepositQuote,
-    ) -> Result<WalletTransfer, SparkWalletError> {
-        let transfer = self.deposit_service.claim_static_deposit(quote).await?;
+    ) -> Result<String, SparkWalletError> {
+        let transfer_id = self.deposit_service.claim_static_deposit(quote).await?;
 
         self.maybe_start_optimization().await;
 
-        Ok(WalletTransfer::from_transfer(
-            transfer,
-            None,
-            None,
-            self.identity_public_key,
-            self.config.service_provider_config.identity_public_key,
-        ))
+        Ok(transfer_id)
     }
 
     pub async fn refund_static_deposit(

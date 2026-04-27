@@ -16,12 +16,9 @@ use crate::{
     bitcoin::{BitcoinService, sighash_from_tx},
     operator::{
         OperatorPool,
-        rpc::{
-            self as operator_rpc,
-            spark::{HashVariant, TransferFilter, transfer_filter::Participant},
-        },
+        rpc::{self as operator_rpc, spark::HashVariant},
     },
-    services::{Transfer, Utxo},
+    services::Utxo,
     signer::{SecretSource, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId, TreeNodeStatus},
@@ -263,10 +260,13 @@ impl DepositService {
         .await
     }
 
+    /// Submits a static deposit claim to the SSP and returns the resulting
+    /// transfer id. The transfer can then be looked up by id via the
+    /// transfer service / `SparkWallet::list_transfers`.
     pub async fn claim_static_deposit(
         &self,
         quote: StaticDepositQuote,
-    ) -> Result<Transfer, ServiceError> {
+    ) -> Result<String, ServiceError> {
         trace!("Claiming static deposit with quote: {quote:?}");
         let StaticDepositQuote {
             txid,
@@ -312,31 +312,7 @@ impl DepositService {
             })
             .await?;
 
-        // Fetch the transfer from the operator pool coordinator
-        let transfers: operator_rpc::spark::QueryTransfersResponse = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .query_all_transfers(TransferFilter {
-                participant: Some(Participant::ReceiverIdentityPublicKey(
-                    self.signer
-                        .get_identity_public_key()
-                        .await?
-                        .serialize()
-                        .to_vec(),
-                )),
-                transfer_ids: vec![resp.transfer_id],
-                network: self.network.to_proto_network() as i32,
-                ..Default::default()
-            })
-            .await?;
-        let transfer = transfers
-            .transfers
-            .into_iter()
-            .nth(0)
-            .ok_or(ServiceError::Generic("transfer not found".to_string()))?;
-
-        transfer.try_into()
+        Ok(resp.transfer_id)
     }
 
     pub async fn refund_static_deposit(
