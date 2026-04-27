@@ -99,6 +99,7 @@ enum StoreCommand {
     },
     CancelReservation {
         id: LeavesReservationId,
+        leaves_to_keep: Vec<TreeNode>,
         response_tx: oneshot::Sender<Result<(), TreeServiceError>>,
     },
     FinalizeReservation {
@@ -236,9 +237,12 @@ impl InMemoryTreeStore {
                     );
                     let _ = response_tx.send(result);
                 }
-                StoreCommand::CancelReservation { id, response_tx } => {
-                    // Permit is automatically released when ReservationEntry is dropped
-                    Self::process_cancel_reservation(&mut state, &id);
+                StoreCommand::CancelReservation {
+                    id,
+                    leaves_to_keep,
+                    response_tx,
+                } => {
+                    Self::process_cancel_reservation(&mut state, &id, &leaves_to_keep);
                     let _ = response_tx.send(Ok(()));
                 }
                 StoreCommand::FinalizeReservation {
@@ -589,18 +593,40 @@ impl InMemoryTreeStore {
         }
     }
 
-    /// Cancel a reservation and return leaves to the pool.
-    /// The permit is automatically released when the ReservationEntry is dropped.
-    fn process_cancel_reservation(state: &mut LeavesState, id: &LeavesReservationId) {
-        if let Some(entry) = state.leaves_reservations.remove(id) {
-            for stored in entry.leaves {
-                trace!(
-                    "leaf_lifecycle cancel: returning leaf={} value={} reservation={} purpose={:?}",
-                    stored.node.id, stored.node.value, id, entry.purpose
-                );
-                state.leaves.insert(stored.node.id.clone(), stored);
-            }
-            trace!("Canceled leaves reservation: {}", id);
+    /// Cancel a reservation. The reservation entry and all of its currently-held leaves
+    /// are removed; the supplied `leaves_to_keep` are inserted into the available pool
+    /// with a fresh `added_at`. To release the original leaves unchanged, callers pass
+    /// them as `leaves_to_keep`.
+    fn process_cancel_reservation(
+        state: &mut LeavesState,
+        id: &LeavesReservationId,
+        leaves_to_keep: &[TreeNode],
+    ) {
+        let removed = state.leaves_reservations.remove(id);
+        let purpose = removed.as_ref().map(|e| e.purpose);
+        let prior_ids: Vec<TreeNodeId> = removed
+            .as_ref()
+            .map(|e| e.leaves.iter().map(|s| s.node.id.clone()).collect())
+            .unwrap_or_default();
+        let keep_ids: Vec<&TreeNodeId> = leaves_to_keep.iter().map(|l| &l.id).collect();
+        let dropped_ids: Vec<&TreeNodeId> = prior_ids
+            .iter()
+            .filter(|pid| !keep_ids.contains(pid))
+            .collect();
+        trace!(
+            "leaf_lifecycle cancel: reservation={} purpose={:?} prior_leaves={:?} keeping={:?} dropping={:?}",
+            id, purpose, prior_ids, keep_ids, dropped_ids
+        );
+
+        let now = SystemTime::now();
+        for leaf in leaves_to_keep {
+            state.leaves.insert(
+                leaf.id.clone(),
+                StoredLeaf {
+                    node: leaf.clone(),
+                    added_at: now,
+                },
+            );
         }
     }
 
@@ -811,10 +837,16 @@ impl TreeStore for InMemoryTreeStore {
         .await
     }
 
-    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
+    async fn cancel_reservation(
+        &self,
+        id: &LeavesReservationId,
+        leaves_to_keep: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
         let id = id.clone();
+        let leaves_to_keep = leaves_to_keep.to_vec();
         self.send_command(|tx| StoreCommand::CancelReservation {
             id,
+            leaves_to_keep,
             response_tx: tx,
         })
         .await
@@ -950,6 +982,17 @@ mod tests {
     #[async_test_all]
     async fn test_cancel_reservation() {
         shared_tests::test_cancel_reservation(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_cancel_reservation_drops_unkept_leaves() {
+        shared_tests::test_cancel_reservation_drops_unkept_leaves(&InMemoryTreeStore::new()).await;
+    }
+
+    #[async_test_all]
+    async fn test_cancel_reservation_drops_all_when_keep_empty() {
+        shared_tests::test_cancel_reservation_drops_all_when_keep_empty(&InMemoryTreeStore::new())
+            .await;
     }
 
     #[async_test_all]

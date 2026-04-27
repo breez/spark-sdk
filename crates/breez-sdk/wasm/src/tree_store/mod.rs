@@ -230,10 +230,16 @@ impl TreeStore for WasmTreeStore {
         Ok(())
     }
 
-    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError> {
+    async fn cancel_reservation(
+        &self,
+        id: &LeavesReservationId,
+        leaves_to_keep: &[TreeNode],
+    ) -> Result<(), TreeServiceError> {
+        let leaves_js = serde_wasm_bindgen::to_value(leaves_to_keep)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
         let promise = self
             .tree_store
-            .cancel_reservation(id.clone())
+            .cancel_reservation(id.clone(), leaves_js)
             .map_err(js_error_to_tree_error)?;
         JsFuture::from(promise)
             .await
@@ -373,7 +379,7 @@ export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
-    cancelReservation: (id: string) => Promise<void>;
+    cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
     now: () => Promise<number>;
@@ -400,7 +406,11 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = cancelReservation, catch)]
-    pub fn cancel_reservation(this: &TreeStoreJs, id: String) -> Result<Promise, JsValue>;
+    pub fn cancel_reservation(
+        this: &TreeStoreJs,
+        id: String,
+        leaves_to_keep: JsValue,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = finalizeReservation, catch)]
     pub fn finalize_reservation(

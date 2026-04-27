@@ -474,10 +474,17 @@ impl LeafOptimizer {
                     );
                 }
                 Err(e) => {
-                    if let Err(cancel_err) = self
-                        .tree_service
-                        .cancel_reservation(swap_reservation.id)
-                        .await
+                    let reserved_leaf_ids: Vec<String> = swap_reservation
+                        .leaves
+                        .iter()
+                        .map(|l| l.id.to_string())
+                        .collect();
+                    warn!(
+                        "leaf_lifecycle swap_failed_in_optimize: reservation={} round={} leaf_ids={:?} error={:?}",
+                        swap_reservation.id, round, reserved_leaf_ids, e
+                    );
+                    if let Err(cancel_err) =
+                        self.tree_service.cancel_reservation(swap_reservation).await
                     {
                         error!(
                             "Failed to cancel reservation on optimization round failure: {cancel_err:?}"

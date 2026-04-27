@@ -549,43 +549,21 @@ pub trait TreeStore: Send + Sync {
         refresh_started_at: platform_utils::time::SystemTime,
     ) -> Result<(), TreeServiceError>;
 
-    /// Cancels a leaf reservation and returns the leaves to the available pool.
+    /// Cancels a leaf reservation, replacing its leaves with the given keep-list.
     ///
-    /// This method releases a previously created reservation, making the reserved
-    /// leaves available again for future reservations. This is typically used
-    /// when a transaction fails or is cancelled.
+    /// All leaves currently attached to this reservation are removed from the store.
+    /// The reservation row is dropped. The supplied `leaves_to_keep` are then upserted
+    /// into the available pool with no reservation.
     ///
-    /// # Parameters
-    ///
-    /// * `id` - The unique reservation ID to cancel
-    ///
-    /// # Returns
-    ///
-    /// * `Result<(), TreeServiceError>` - Ok if the reservation was successfully
-    ///   cancelled, or an error if the operation fails
-    ///
-    /// # Errors
-    ///
-    /// Returns a `TreeServiceError` if:
-    /// * The reservation ID does not exist
-    /// * The reservation has already been finalized
-    /// * Storage operation fails
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use spark::tree::{TreeStore, TargetAmounts, TreeServiceError, ReservationPurpose, ReserveResult};
-    ///
-    /// # async fn example(store: &dyn TreeStore) -> Result<(), TreeServiceError> {
-    /// let target = TargetAmounts::new_amount_and_fee(25_000, None);
-    /// if let ReserveResult::Success(reservation) = store.try_reserve_leaves(Some(&target), false, ReservationPurpose::Payment).await? {
-    ///     // Later, if the transaction is cancelled
-    ///     store.cancel_reservation(&reservation.id).await?;
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    async fn cancel_reservation(&self, id: &LeavesReservationId) -> Result<(), TreeServiceError>;
+    /// To preserve today's "release everything back to the pool" behavior, callers
+    /// pass the original reservation leaves as `leaves_to_keep`. To drop part of the
+    /// set (e.g. operator-locked leaves the caller has just verified), callers pass
+    /// only the leaves they have confirmed are safe to make available.
+    async fn cancel_reservation(
+        &self,
+        id: &LeavesReservationId,
+        leaves_to_keep: &[TreeNode],
+    ) -> Result<(), TreeServiceError>;
 
     /// Finalizes a leaf reservation, marking the leaves as consumed and optionally adding new leaves to the main pool.
     ///
@@ -879,13 +857,11 @@ pub trait TreeService: Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `id` - The unique reservation ID returned from [`select_leaves`]
+    /// * `reservation` - The reservation to cancel, including its current leaves
     ///
     /// # Errors
     ///
     /// Returns a `TreeServiceError` if:
-    /// * The reservation ID does not exist
-    /// * The reservation has already been finalized
     /// * Storage operation fails
     ///
     /// # Examples
@@ -899,12 +875,15 @@ pub trait TreeService: Send + Sync {
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment, SelectLeavesOptions::default()).await?;
     ///
     /// // Later, if the transaction fails, cancel the reservation
-    /// tree_service.cancel_reservation(reservation.id).await;
+    /// tree_service.cancel_reservation(reservation).await;
     /// println!("Reservation cancelled, leaves returned to pool");
     /// # Ok(())
     /// # }
     /// ```
-    async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError>;
+    async fn cancel_reservation(
+        &self,
+        reservation: LeavesReservation,
+    ) -> Result<(), TreeServiceError>;
 
     /// Finalizes a leaf reservation, marking the reserved leaves as consumed and optionally adding new leaves to the main pool.
     ///

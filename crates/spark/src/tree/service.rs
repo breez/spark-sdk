@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::tokio;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::tree::{Leaves, ReservationPurpose, ReserveResult, SelectLeavesOptions, TreeNodeStatus};
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
         OperatorPool,
         rpc::{
             SparkRpcClient,
-            spark::{QueryNodesRequest, query_nodes_request::Source},
+            spark::{QueryNodesRequest, TreeNodeIds, query_nodes_request::Source},
         },
     },
     services::{ServiceError, Swap, TimelockManager},
@@ -44,8 +44,14 @@ impl TreeService for SynchronousTreeService {
         self.state.get_leaves().await
     }
 
-    async fn cancel_reservation(&self, id: LeavesReservationId) -> Result<(), TreeServiceError> {
-        self.state.cancel_reservation(&id).await
+    async fn cancel_reservation(
+        &self,
+        reservation: LeavesReservation,
+    ) -> Result<(), TreeServiceError> {
+        let leaves_to_keep = self.verify_leaves_against_coordinator(&reservation).await;
+        self.state
+            .cancel_reservation(&reservation.id, &leaves_to_keep)
+            .await
     }
 
     async fn finalize_reservation(
@@ -381,8 +387,16 @@ impl SynchronousTreeService {
         let new_leaves = match swap_result {
             Ok(leaves) => leaves,
             Err(e) => {
-                // Swap failed - cancel the reservation to release the permit
-                if let Err(cancel_err) = self.state.cancel_reservation(&reservation.id).await {
+                let reserved_leaf_ids: Vec<String> = reservation
+                    .leaves
+                    .iter()
+                    .map(|l| l.id.to_string())
+                    .collect();
+                warn!(
+                    "leaf_lifecycle swap_failed_in_select: reservation={} leaf_ids={:?} error={:?}",
+                    reservation.id, reserved_leaf_ids, e
+                );
+                if let Err(cancel_err) = self.cancel_reservation(reservation).await {
                     error!("Failed to cancel reservation after swap error: {cancel_err:?}");
                 }
                 return Err(e);
@@ -445,6 +459,98 @@ impl SynchronousTreeService {
                 Err(e)
             }
         }
+    }
+
+    async fn verify_leaves_against_coordinator(
+        &self,
+        reservation: &LeavesReservation,
+    ) -> Vec<TreeNode> {
+        if reservation.leaves.is_empty() {
+            return Vec::new();
+        }
+
+        let node_ids: Vec<String> = reservation
+            .leaves
+            .iter()
+            .map(|l| l.id.to_string())
+            .collect();
+        let coordinator_client = self.operator_pool.get_coordinator().client.clone();
+
+        const MAX_ATTEMPTS: u32 = 3;
+        const BASE_DELAY_MS: u64 = 100;
+        const MAX_DELAY_MS: u64 = 1000;
+
+        let mut last_err: Option<TreeServiceError> = None;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let source = Source::NodeIds(TreeNodeIds {
+                node_ids: node_ids.clone(),
+            });
+            match self
+                .query_nodes(&coordinator_client, false, Some(source))
+                .await
+            {
+                Ok(nodes) => {
+                    let by_id: HashMap<TreeNodeId, TreeNode> =
+                        nodes.into_iter().map(|n| (n.id.clone(), n)).collect();
+                    let mut keep: Vec<TreeNode> = Vec::new();
+                    let mut dropped: Vec<(TreeNodeId, String)> = Vec::new();
+                    for original in &reservation.leaves {
+                        match by_id.get(&original.id) {
+                            Some(fresh) => {
+                                let owned = fresh
+                                    .owner_identity_public_key
+                                    .map(|owner| owner == self.identity_pubkey)
+                                    .unwrap_or(false);
+                                if !owned {
+                                    dropped.push((original.id.clone(), "not_owned".to_string()));
+                                } else if fresh.status != TreeNodeStatus::Available {
+                                    dropped.push((
+                                        original.id.clone(),
+                                        format!("status:{:?}", fresh.status),
+                                    ));
+                                } else {
+                                    keep.push(fresh.clone());
+                                }
+                            }
+                            None => dropped
+                                .push((original.id.clone(), "missing_from_response".to_string())),
+                        }
+                    }
+                    if dropped.is_empty() {
+                        debug!(
+                            "leaf_lifecycle cancel_verified_available: reservation={} kept={}",
+                            reservation.id,
+                            keep.len()
+                        );
+                    } else {
+                        warn!(
+                            "leaf_lifecycle cancel_verify_dropped: reservation={} kept={} dropped={:?}",
+                            reservation.id,
+                            keep.len(),
+                            dropped
+                        );
+                    }
+                    return keep;
+                }
+                Err(e) => {
+                    warn!(
+                        "leaf_lifecycle cancel_verify_query_attempt: reservation={} attempt={}/{} error={:?}",
+                        reservation.id, attempt, MAX_ATTEMPTS, e
+                    );
+                    last_err = Some(e);
+                    if attempt < MAX_ATTEMPTS {
+                        let delay_ms = (BASE_DELAY_MS * 2u64.pow(attempt - 1)).min(MAX_DELAY_MS);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                }
+            }
+        }
+
+        warn!(
+            "leaf_lifecycle cancel_verify_dropped_all: reservation={} reason=query_failed error={:?}",
+            reservation.id, last_err
+        );
+        Vec::new()
     }
 
     async fn query_nodes_inner(
@@ -520,15 +626,14 @@ impl SynchronousTreeService {
         &self,
         reservation: LeavesReservation,
     ) -> Result<LeavesReservation, TreeServiceError> {
+        let id = reservation.id.clone();
+        let cancel_input = reservation.clone();
         let new_leaves = self
             .check_renew_nodes(reservation.leaves, async |e| {
-                // Cancel the reservation if the timelock check fails
-                if let Err(e) = self.state.cancel_reservation(&reservation.id).await {
-                    error!("Failed to cancel reservation: {e:?}");
+                if let Err(err) = self.cancel_reservation(cancel_input).await {
+                    error!("Failed to cancel reservation: {err:?}");
                     return;
                 }
-                // If this is a partial check timelock error, the extend node timelock failed
-                // but we can still update the leaves that were refreshed
                 if let ServiceError::PartialCheckTimelockError(ref nodes) = e
                     && let Err(e) = self.state.add_leaves(nodes).await
                 {
@@ -537,7 +642,7 @@ impl SynchronousTreeService {
             })
             .await?;
 
-        Ok(LeavesReservation::new(new_leaves, reservation.id))
+        Ok(LeavesReservation::new(new_leaves, id))
     }
 
     /// Performs a swap operation and returns the new leaves.

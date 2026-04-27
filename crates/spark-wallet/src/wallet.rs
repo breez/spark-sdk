@@ -582,9 +582,9 @@ impl SparkWallet {
         // Fetches fee quote for the coop exit then cancels the reservation.
         let fee_quote_res = self
             .coop_exit_service
-            .fetch_coop_exit_fee_quote(reservation.leaves, withdrawal_address)
+            .fetch_coop_exit_fee_quote(reservation.leaves.clone(), withdrawal_address)
             .await;
-        self.tree_service.cancel_reservation(reservation.id).await?;
+        self.tree_service.cancel_reservation(reservation).await?;
 
         Ok(fee_quote_res?)
     }
