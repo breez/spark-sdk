@@ -857,13 +857,11 @@ pub trait TreeService: Send + Sync {
     ///
     /// # Parameters
     ///
-    /// * `id` - The unique reservation ID returned from [`select_leaves`]
+    /// * `reservation` - The reservation to cancel, including its current leaves
     ///
     /// # Errors
     ///
     /// Returns a `TreeServiceError` if:
-    /// * The reservation ID does not exist
-    /// * The reservation has already been finalized
     /// * Storage operation fails
     ///
     /// # Examples
@@ -877,7 +875,7 @@ pub trait TreeService: Send + Sync {
     /// let reservation = tree_service.select_leaves(Some(&target), ReservationPurpose::Payment, SelectLeavesOptions::default()).await?;
     ///
     /// // Later, if the transaction fails, cancel the reservation
-    /// tree_service.cancel_reservation(reservation.id).await;
+    /// tree_service.cancel_reservation(reservation).await;
     /// println!("Reservation cancelled, leaves returned to pool");
     /// # Ok(())
     /// # }
