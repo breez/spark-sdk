@@ -11,7 +11,7 @@ use super::{
     parse_input,
 };
 use crate::{
-    DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
+    DepositInfo, InputType, MaxFee, PaymentDetails, PaymentStatus, PaymentType, SparkHtlcStatus,
     error::SdkError,
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::ListMetadataRequest,
@@ -135,6 +135,7 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
+                let spark_invoice = transfer.spark_invoice.clone();
                 // Drop any unclaimed-deposit record for this outpoint
                 // independently of payment ingestion below, so a
                 // Payment::try_from failure does not leave the record
@@ -146,6 +147,12 @@ impl BreezSdk {
                     // Insert the payment into storage to make it immediately available for listing
                     if let Err(e) = self.storage.insert_payment(payment.clone()).await {
                         error!("Failed to insert succeeded payment: {e:?}");
+                    }
+
+                    // If this Spark transfer settles an MRH BOLT11 invoice, mark the associated
+                    // Lightning receive payment as complete.
+                    if let Some(si) = &spark_invoice {
+                        self.complete_mrh_lightning_payment(si).await;
                     }
 
                     // Ensure potential lnurl metadata is synced before emitting the event.
@@ -281,6 +288,62 @@ impl BreezSdk {
             return;
         };
         *lnurl_receive_metadata = db_lnurl_receive_metadata;
+    }
+
+    /// When a Spark transfer settles an MRH BOLT11 invoice, find the pending Lightning
+    /// receive payment by its payment hash and mark it as Completed.
+    async fn complete_mrh_lightning_payment(&self, spark_invoice: &str) {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let payment_hash = match cache.fetch_payment_metadata(spark_invoice).await {
+            Ok(Some(metadata)) => metadata.mrh_payment_hash,
+            Ok(None) => return,
+            Err(e) => {
+                error!("Failed to fetch MRH payment metadata for {spark_invoice}: {e:?}");
+                return;
+            }
+        };
+        let Some(payment_hash) = payment_hash else {
+            return;
+        };
+
+        let lightning_payment = match self
+            .storage
+            .get_payment_by_payment_hash(&payment_hash)
+            .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => {
+                error!("Failed to look up Lightning payment by payment hash {payment_hash}: {e:?}");
+                return;
+            }
+        };
+
+        // Only update pending Lightning receive payments
+        if lightning_payment.status == PaymentStatus::Completed
+            || lightning_payment.status == PaymentStatus::Failed
+        {
+            return;
+        }
+
+        let mut updated = lightning_payment;
+        updated.status = PaymentStatus::Completed;
+
+        // Set HTLC status to PreimageShared
+        if let Some(PaymentDetails::Lightning {
+            ref mut htlc_details,
+            ..
+        }) = updated.details
+        {
+            htlc_details.status = SparkHtlcStatus::PreimageShared;
+        }
+
+        if let Err(e) = self.storage.insert_payment(updated.clone()).await {
+            error!("Failed to mark MRH Lightning payment as complete: {e:?}");
+            return;
+        }
+
+        get_payment_and_emit_event(&self.storage, &self.event_emitter, updated).await;
     }
 
     #[allow(clippy::too_many_lines)]
