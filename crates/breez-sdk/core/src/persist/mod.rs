@@ -262,6 +262,9 @@ pub struct PaymentMetadata {
     pub conversion_info: Option<ConversionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_status: Option<ConversionStatus>,
+    /// The payment hash of the BOLT11 invoice this Spark payment was settled with via MRH.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mrh_payment_hash: Option<String>,
 }
 
 /// Trait for persistent storage
@@ -332,6 +335,18 @@ pub trait Storage: Send + Sync {
     async fn get_payment_by_invoice(
         &self,
         invoice: String,
+    ) -> Result<Option<Payment>, StorageError>;
+
+    /// Gets a Lightning payment by its payment hash
+    /// # Arguments
+    ///
+    /// * `payment_hash` - The payment hash to look up
+    /// # Returns
+    ///
+    /// The payment if found or None if not found
+    async fn get_payment_by_payment_hash(
+        &self,
+        payment_hash: &str,
     ) -> Result<Option<Payment>, StorageError>;
 
     /// Gets payments that have any of the specified parent payment IDs.

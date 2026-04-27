@@ -157,3 +157,15 @@ async fn test_sync_storage() {
     let storage = create_test_storage("pg_sync_storage").await;
     breez_sdk_spark::storage_tests::test_sync_storage(Box::new(storage)).await;
 }
+
+#[wasm_bindgen_test]
+async fn test_mrh_payment_hash() {
+    let storage = create_test_storage("pg_mrh_payment_hash").await;
+    breez_sdk_spark::storage_tests::test_mrh_payment_hash(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
+async fn test_payment_by_payment_hash() {
+    let storage = create_test_storage("pg_payment_by_payment_hash").await;
+    breez_sdk_spark::storage_tests::test_payment_by_payment_hash(Box::new(storage)).await;
+}
