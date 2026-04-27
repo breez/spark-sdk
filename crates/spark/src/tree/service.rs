@@ -396,9 +396,7 @@ impl SynchronousTreeService {
                     "leaf_lifecycle swap_failed_in_select: reservation={} leaf_ids={:?} error={:?}",
                     reservation.id, reserved_leaf_ids, e
                 );
-                if let Err(cancel_err) =
-                    <Self as TreeService>::cancel_reservation(self, reservation).await
-                {
+                if let Err(cancel_err) = self.cancel_reservation(reservation).await {
                     error!("Failed to cancel reservation after swap error: {cancel_err:?}");
                 }
                 return Err(e);
@@ -632,9 +630,7 @@ impl SynchronousTreeService {
         let cancel_input = reservation.clone();
         let new_leaves = self
             .check_renew_nodes(reservation.leaves, async |e| {
-                if let Err(err) =
-                    <Self as TreeService>::cancel_reservation(self, cancel_input).await
-                {
+                if let Err(err) = self.cancel_reservation(cancel_input).await {
                     error!("Failed to cancel reservation: {err:?}");
                     return;
                 }

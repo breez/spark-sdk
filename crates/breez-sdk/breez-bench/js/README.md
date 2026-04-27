@@ -8,7 +8,7 @@ Requires Node.js with native module support for `better-sqlite3`. Tested on Node
 
 ```sh
 cd crates/breez-sdk/breez-bench/js
-nvm use 22   # or any node >=18
+nvm use 22   # or any node >=22
 npm install
 ```
 
