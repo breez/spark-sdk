@@ -30,9 +30,12 @@ async def buy_bitcoin(sdk: BreezSdk):
 
 async def buy_bitcoin_via_cashapp(sdk: BreezSdk):
     # ANCHOR: buy-bitcoin-cashapp
+    # Cash App requires the amount to be specified up front.
+    amount_sats = 50_000
+
     try:
         request = BuyBitcoinRequest.CASH_APP(
-            amount_sats=None,
+            amount_sats=amount_sats,
         )
 
         response = await sdk.buy_bitcoin(request=request)

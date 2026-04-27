@@ -941,8 +941,14 @@ public static class Commands
             case "cashapp":
             case "cash_app":
             case "cash-app":
+                var cashAppAmount = ParseOptionalUlong(amountSatStr);
+                if (cashAppAmount is null)
+                {
+                    Console.WriteLine("--amount-sat is required when --provider is cashapp");
+                    return;
+                }
                 request = new BuyBitcoinRequest.CashApp(
-                    amountSats: ParseOptionalUlong(amountSatStr)
+                    amountSats: cashAppAmount.Value
                 );
                 break;
             default:

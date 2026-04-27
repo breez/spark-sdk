@@ -957,11 +957,16 @@ pub enum BuyBitcoinRequest {
         redirect_url: Option<String>,
     },
     /// `CashApp`: Pay via the Lightning Network.
-    /// Generates a bolt11 invoice and returns a `cash.app` deep link.
-    /// Only available on mainnet.
+    /// Generates a bolt11 invoice for the given amount and returns a
+    /// `cash.app` deep link. Only available on mainnet.
+    ///
+    /// The amount is required. With an amountless invoice, Cash App only
+    /// lets the payer fund from their existing Cash App BTC balance. With
+    /// a fixed-amount invoice, Cash App opens up funding via fiat balance
+    /// and debit card.
     CashApp {
-        /// Amount in satoshis for the Lightning invoice.
-        amount_sats: Option<u64>,
+        /// Amount in satoshis for the Lightning invoice. Must be non-zero.
+        amount_sats: u64,
     },
 }
 

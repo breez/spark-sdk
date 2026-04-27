@@ -23,8 +23,11 @@ const buyBitcoin = async (sdk: BreezSdk) => {
 
 const buyBitcoinViaCashapp = async (sdk: BreezSdk) => {
   // ANCHOR: buy-bitcoin-cashapp
+  // Cash App requires the amount to be specified up front.
+  const amountSats = BigInt(50_000)
+
   const request = new BuyBitcoinRequest.CashApp({
-    amountSats: undefined
+    amountSats
   })
 
   const response = await sdk.buyBitcoin(request)

@@ -533,9 +533,12 @@ pub(crate) async fn execute_command(
             redirect_url,
         } => {
             let request = match provider.to_lowercase().as_str() {
-                "cashapp" | "cash_app" | "cash-app" => BuyBitcoinRequest::CashApp {
-                    amount_sats: amount_sat,
-                },
+                "cashapp" | "cash_app" | "cash-app" => {
+                    let amount_sats = amount_sat.ok_or_else(|| {
+                        anyhow::anyhow!("--amount-sat is required when --provider is cashapp")
+                    })?;
+                    BuyBitcoinRequest::CashApp { amount_sats }
+                }
                 _ => BuyBitcoinRequest::Moonpay {
                     locked_amount_sat: amount_sat,
                     redirect_url,

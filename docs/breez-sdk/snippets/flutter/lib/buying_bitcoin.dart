@@ -19,8 +19,10 @@ Future<void> buyBitcoin(BreezSdk sdk) async {
 
 Future<void> buyBitcoinViaCashapp(BreezSdk sdk) async {
   // ANCHOR: buy-bitcoin-cashapp
-  final request = BuyBitcoinRequest_CashApp(
-      amountSats: null);
+  // Cash App requires the amount to be specified up front.
+  final amountSats = BigInt.from(50000);
+
+  final request = BuyBitcoinRequest_CashApp(amountSats: amountSats);
 
   final response = await sdk.buyBitcoin(request: request);
   print("Open this URL in Cash App to complete the purchase:");

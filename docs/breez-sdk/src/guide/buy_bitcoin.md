@@ -23,11 +23,14 @@ MoonPay supports Apple Pay and Google Pay, but these payment methods will not wo
 
 ## CashApp
 
-CashApp uses **Lightning (bolt11 invoices)** to receive purchased funds. The SDK generates a Lightning invoice and returns a CashApp deep link (`cash.app/launch/lightning/...`) that opens the CashApp for the user to complete payment.
+CashApp uses **Lightning (bolt11 invoices)** to receive purchased funds. The caller specifies the amount in satoshis; the SDK generates a bolt11 invoice for that amount and returns a CashApp deep link (`cash.app/launch/lightning/...`) that opens CashApp so the user can complete payment.
 
 <div class="warning">
-<h4>Developer note</h4>
-CashApp is only available on <strong>mainnet</strong>. Attempting to use CashApp on testnet or regtest will return an error.
+<h4>Developer notes</h4>
+<ul>
+<li>CashApp is only available on <strong>mainnet</strong>. Using CashApp on testnet or regtest returns an error.</li>
+<li>The amount is <strong>required</strong>. With an amountless invoice, Cash App only lets the payer fund from their existing Cash App BTC balance. When the invoice carries an amount, Cash App opens up funding via fiat balance and debit card.</li>
+</ul>
 </div>
 
 To initiate a Bitcoin purchase via CashApp:
@@ -36,38 +39,40 @@ To initiate a Bitcoin purchase via CashApp:
 
 The returned URL is a CashApp universal link (`https://cash.app/launch/lightning/<bolt11>`). On devices with CashApp installed it opens the app directly; otherwise it falls back to the CashApp website.
 
-<div class="warning">
-<h4>Developer note</h4>
+### Recommended UX
 
-The URL is obtained <strong>after an async SDK call</strong>, which means <code>window.open()</code> will be blocked by popup blockers on most mobile browsers and PWAs.
+1. Collect a non-zero amount before calling {{#name buy_bitcoin}}.
+2. On mobile, redirect to the returned URL. On desktop, render it as a QR code and dismiss when {{#enum SdkEvent::PaymentSucceeded}} fires for the invoice.
 
-**Recommended approach: pre-open a blank tab before the async call:**
+### Popup blockers on the web
+
+On web, `window.open()` called after `await sdk.buyBitcoin(...)` is typically blocked by mobile browsers and PWAs because it falls outside the original user gesture. Pre-open a blank tab synchronously inside the click handler, then navigate it once the URL is ready:
 
 ```javascript
-// 1. Open blank tab synchronously during the user gesture (click handler)
+// Open a placeholder tab during the user gesture so the browser
+// allows it; we navigate it once the SDK returns.
 const newTab = window.open('', '_blank');
 
-// 2. Async SDK call
-const response = await sdk.buyBitcoin({ provider: 'cashApp' });
+// Generate the Cash App invoice for the chosen amount.
+const response = await sdk.buyBitcoin({ type: 'cashApp', amountSats: 50_000 });
 
-// 3. Navigate the pre-opened tab (or fall back to same-tab)
+// Send the user to Cash App. If the placeholder was blocked, redirect
+// the current tab. The OS opens Cash App via the universal link.
 if (newTab) {
   newTab.location.href = response.url;
 } else {
-  // Mobile/PWA: popup was blocked, navigate in same tab
   window.location.href = response.url;
 }
 ```
 
-**Platform-specific guidance:**
+### Platform-specific guidance
 
 | Platform | Behavior | Recommendation |
 |----------|----------|----------------|
-| **Desktop browsers** | Pre-opened tab works reliably | Use the pattern above |
-| **Mobile browsers** | `window.open` may be blocked after async | Falls back to `location.href` automatically |
-| **PWA (standalone)** | `window.open` is almost always blocked | Same-tab redirect via `location.href`; opens system browser |
-| **iOS (native)** | Use `SFSafariViewController` or `UIApplication.open()` | Universal link triggers CashApp if installed |
-| **Android (native)** | Use <a href="https://developer.chrome.com/docs/android/custom-tabs" target="_blank">Chrome Custom Tabs</a> or `Intent` | Universal link triggers CashApp if installed |
+| **Desktop browsers** | Pre-opened tab works reliably; most desktops won't have CashApp installed | Render the CashApp URL as a QR for the user to scan on their phone |
+| **Mobile browsers** | `window.open` may be blocked after async | Pre-open a tab (see above); falls back to `location.href` automatically |
+| **PWA (standalone)** | `window.open` is almost always blocked | Same-tab redirect via `location.href`; opens system browser, which hands off to CashApp |
+| **iOS (native)** | Universal link triggers CashApp if installed | Open via `UIApplication.open()` or `SFSafariViewController` |
+| **Android (native)** | Universal link triggers CashApp if installed | Open via `Intent` or <a href="https://developer.chrome.com/docs/android/custom-tabs" target="_blank">Chrome Custom Tabs</a> |
 
 **CashApp availability:** US and UK only (excluding New York State for Bitcoin/Lightning features). CashApp handles region restrictions on their end, so no client-side gating is needed.
-</div>

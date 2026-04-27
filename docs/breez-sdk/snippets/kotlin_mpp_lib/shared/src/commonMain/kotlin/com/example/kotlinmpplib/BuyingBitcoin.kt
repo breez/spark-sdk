@@ -23,7 +23,10 @@ class BuyingBitcoin {
 
     suspend fun buyBitcoinViaCashapp(sdk: BreezSdk) {
         // ANCHOR: buy-bitcoin-cashapp
-        val request = BuyBitcoinRequest.CashApp(amountSats = null)
+        // Cash App requires the amount to be specified up front.
+        val amountSats: ULong = 50_000u
+
+        val request = BuyBitcoinRequest.CashApp(amountSats = amountSats)
 
         val response = sdk.buyBitcoin(request)
         // Log.v("Breez", "Open this URL in Cash App to complete the purchase:")
