@@ -712,57 +712,26 @@ impl BreezSdk {
         conversion_options: Option<&ConversionOptions>,
         amount: u128,
     ) -> Result<Option<ConversionOptions>, SdkError> {
-        // 1) Explicit caller intent wins.
-        if let Some(opts) = conversion_options {
-            return Ok(Some(opts.clone()));
-        }
+        let active_stable_token = match &self.stable_balance {
+            Some(sb) => sb.get_active_token_identifier().await,
+            None => None,
+        };
+        let stable_max_slippage_bps = self
+            .stable_balance
+            .as_ref()
+            .and_then(|sb| sb.config.max_slippage_bps);
 
-        match token_identifier {
-            // 2) Caller specified a token.
-            Some(token_id) => {
-                let route_accepts_token = route
-                    .supported_sources
-                    .iter()
-                    .any(|s| matches!(s, SourceAsset::Token(t) if t == token_id));
-                if route_accepts_token {
-                    // Direct token send — no conversion needed.
-                    return Ok(None);
-                }
-
-                let route_accepts_bitcoin = route.supported_sources.contains(&SourceAsset::Bitcoin);
-                if !route_accepts_bitcoin {
-                    // Neither direct nor auto-inject; caller must handle.
-                    return Ok(None);
-                }
-
-                // Auto-inject ToBitcoin if and only if `token_id` is the
-                // stable-balance active token.
-                if let Some(sb) = &self.stable_balance
-                    && sb.get_active_token_identifier().await.as_deref() == Some(token_id)
-                {
-                    return Ok(Some(ConversionOptions {
-                        conversion_type: ConversionType::ToBitcoin {
-                            from_token_identifier: token_id.clone(),
-                        },
-                        max_slippage_bps: sb.config.max_slippage_bps,
-                        completion_timeout_secs: None,
-                    }));
-                }
-                Ok(None)
-            }
-            // 3) No token specified.
-            None => {
-                if route.supported_sources.contains(&SourceAsset::Bitcoin) {
-                    // Defer to stable_balance auto-inject: fires when the
-                    // sats balance is insufficient to cover `amount`.
-                    self.get_conversion_options_for_payment(None, None, amount)
-                        .await
-                } else {
-                    // Route only accepts tokens but user didn't specify one.
-                    // FromBitcoin + CrossChain is out of scope; nothing to
-                    // auto-inject. Leave as None; post-validation will error.
-                    Ok(None)
-                }
+        match resolve_cross_chain_source_pure(
+            route,
+            token_identifier,
+            conversion_options,
+            active_stable_token.as_ref(),
+            stable_max_slippage_bps,
+        ) {
+            CrossChainSourceResolution::UseAsIs(opts) => Ok(opts),
+            CrossChainSourceResolution::DeferToStableBalance => {
+                self.get_conversion_options_for_payment(None, None, amount)
+                    .await
             }
         }
     }
@@ -2069,8 +2038,12 @@ impl BreezSdk {
             // `prepare_send_payment` intercepts `PaymentRequest::CrossChain`
             // up front and dispatches to `prepare_cross_chain_send`, so the
             // Bolt11 path is only ever entered with `PaymentRequest::Input`.
+            // Defensive guard: error rather than panic if the dispatcher
+            // invariant is ever violated.
             PaymentRequest::CrossChain { .. } => {
-                unreachable!("CrossChain dispatched before bolt11 prepare path")
+                return Err(SdkError::Generic(
+                    "internal: CrossChain reached bolt11 prepare path".to_string(),
+                ));
             }
         };
         let lightning_fee_sats = self
@@ -2211,5 +2184,253 @@ impl BreezSdk {
             )
             .await
             .map_err(Into::into)
+    }
+}
+
+/// Result of the pure cross-chain source-selection decision tree.
+///
+/// `DeferToStableBalance` covers the no-token + sats-supported case where the
+/// caller must consult `stable_balance.get_conversion_options` (which itself
+/// depends on the runtime sats balance) to decide whether a top-up conversion
+/// is needed. Every other branch is fully resolved by static inputs.
+#[derive(Debug, Clone, PartialEq)]
+enum CrossChainSourceResolution {
+    UseAsIs(Option<ConversionOptions>),
+    DeferToStableBalance,
+}
+
+/// Pure decision logic for `BreezSdk::resolve_cross_chain_source`.
+///
+/// Inputs:
+/// - `active_stable_token` — `Some(id)` when stable-balance is configured AND
+///   has an active token; `None` otherwise.
+/// - `stable_max_slippage_bps` — slippage from `StableBalanceConfig` to put on
+///   the auto-injected `ToBitcoin` options when stable-balance fires.
+fn resolve_cross_chain_source_pure(
+    route: &CrossChainRoutePair,
+    token_identifier: Option<&String>,
+    conversion_options: Option<&ConversionOptions>,
+    active_stable_token: Option<&String>,
+    stable_max_slippage_bps: Option<u32>,
+) -> CrossChainSourceResolution {
+    // 1) Explicit caller intent wins.
+    if let Some(opts) = conversion_options {
+        return CrossChainSourceResolution::UseAsIs(Some(opts.clone()));
+    }
+
+    match token_identifier {
+        // 2) Caller specified a token.
+        Some(token_id) => {
+            let route_accepts_token = route
+                .supported_sources
+                .iter()
+                .any(|s| matches!(s, SourceAsset::Token(t) if t == token_id));
+            if route_accepts_token {
+                // Direct token send — no conversion needed.
+                return CrossChainSourceResolution::UseAsIs(None);
+            }
+
+            let route_accepts_bitcoin = route.supported_sources.contains(&SourceAsset::Bitcoin);
+            if !route_accepts_bitcoin {
+                // Neither direct nor auto-inject; caller must handle.
+                return CrossChainSourceResolution::UseAsIs(None);
+            }
+
+            // Auto-inject ToBitcoin if and only if `token_id` is the
+            // stable-balance active token.
+            if active_stable_token == Some(token_id) {
+                return CrossChainSourceResolution::UseAsIs(Some(ConversionOptions {
+                    conversion_type: ConversionType::ToBitcoin {
+                        from_token_identifier: token_id.clone(),
+                    },
+                    max_slippage_bps: stable_max_slippage_bps,
+                    completion_timeout_secs: None,
+                }));
+            }
+            CrossChainSourceResolution::UseAsIs(None)
+        }
+        // 3) No token specified.
+        None => {
+            if route.supported_sources.contains(&SourceAsset::Bitcoin) {
+                // Defer to stable_balance auto-inject: fires when the
+                // sats balance is insufficient to cover `amount`.
+                CrossChainSourceResolution::DeferToStableBalance
+            } else {
+                // Route only accepts tokens but user didn't specify one.
+                // FromBitcoin + CrossChain is out of scope; nothing to
+                // auto-inject. Leave as None; post-validation will error.
+                CrossChainSourceResolution::UseAsIs(None)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CrossChainProvider;
+
+    fn make_route(supported_sources: Vec<SourceAsset>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "tron".to_string(),
+            chain_id: None,
+            asset: "USDT".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources,
+        }
+    }
+
+    fn explicit_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "USDC".to_string(),
+            },
+            max_slippage_bps: Some(123),
+            completion_timeout_secs: Some(42),
+        }
+    }
+
+    #[test]
+    fn explicit_conversion_options_win() {
+        // Even when the route would accept the token directly, explicit
+        // caller-supplied options short-circuit the decision tree.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let opts = explicit_options();
+        let usdb = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&usdb),
+            Some(&opts),
+            Some(&usdb),
+            Some(50),
+        );
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(Some(opts.clone())),
+            "explicit options should pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn token_directly_supported_no_conversion() {
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let usdb = "USDB".to_string();
+
+        let result =
+            resolve_cross_chain_source_pure(&route, Some(&usdb), None, Some(&usdb), Some(50));
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(None),
+            "direct token send should not auto-inject conversion"
+        );
+    }
+
+    #[test]
+    fn token_unsupported_route_lacks_bitcoin_no_inject() {
+        // Route only supports a different token; no Bitcoin path exists, so
+        // we cannot auto-inject ToBitcoin. Leave as None — post-validation
+        // will reject.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let user_token = "USDC".to_string();
+        let active_stable_token = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&user_token),
+            None,
+            Some(&active_stable_token),
+            Some(50),
+        );
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
+    }
+
+    #[test]
+    fn token_is_active_stable_balance_auto_injects_to_bitcoin() {
+        // Route accepts sats but not the user's token; the user's token IS
+        // the stable-balance active token, so auto-inject ToBitcoin.
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let usdb = "USDB".to_string();
+
+        let result =
+            resolve_cross_chain_source_pure(&route, Some(&usdb), None, Some(&usdb), Some(75));
+
+        let expected_opts = ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "USDB".to_string(),
+            },
+            max_slippage_bps: Some(75),
+            completion_timeout_secs: None,
+        };
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(Some(expected_opts))
+        );
+    }
+
+    #[test]
+    fn token_is_not_active_stable_balance_no_inject() {
+        // Route accepts sats and a token, the user supplied a token, but the
+        // token is NOT the stable-balance active token — we leave the
+        // conversion options None. Post-validation will reject because the
+        // effective source (Token(USDC)) isn't in supported_sources.
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let user_token = "USDC".to_string();
+        let active_stable_token = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&user_token),
+            None,
+            Some(&active_stable_token),
+            Some(50),
+        );
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
+    }
+
+    #[test]
+    fn token_specified_no_stable_balance_configured_no_inject() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let usdb = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(&route, Some(&usdb), None, None, None);
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(None),
+            "without stable balance, no auto-inject is possible"
+        );
+    }
+
+    #[test]
+    fn no_token_route_accepts_sats_defers_to_stable_balance() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+
+        let result = resolve_cross_chain_source_pure(&route, None, None, None, None);
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::DeferToStableBalance,
+            "no-token + sats-route must defer so stable balance can decide"
+        );
+    }
+
+    #[test]
+    fn no_token_route_token_only_no_inject() {
+        // Route only accepts a token; caller didn't specify one and we
+        // cannot auto-inject FromBitcoin (out of scope). Post-validation
+        // will reject.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+
+        let result = resolve_cross_chain_source_pure(&route, None, None, None, None);
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
     }
 }

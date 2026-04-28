@@ -137,22 +137,37 @@ impl BoltzService {
             .await?;
         let ln_fee_probe_sats = self.fetch_ln_fee(&probe_invoice).await?;
 
-        if total_sats <= ln_fee_probe_sats {
-            return Err(SdkError::InvalidInput(format!(
-                "Amount too small for cross-chain send: {total_sats} sats <= LN fee {ln_fee_probe_sats} sats."
-            )));
-        }
+        let real_invoice_sats = fees_included_real_invoice_sats(total_sats, ln_fee_probe_sats)?;
 
         // Phase 2: real invoice sized to leave room for the probed fee.
-        let real_invoice_sats = total_sats.saturating_sub(ln_fee_probe_sats);
-        let (prepared, created) = self
-            .create_swap(
+        // Translate `AmountOutOfRange` here (rather than in `boltz_err_to_sdk`)
+        // so the message names the user's `total_sats` and the probed fee —
+        // the raw boltz error references `real_invoice_sats`, a number the
+        // caller never chose. The phase-2 prepare validates against the Boltz
+        // pair limits before `create_reverse_swap` is called, so a failure
+        // here commits no state.
+        let prepared = self
+            .client
+            .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
                 real_invoice_sats,
                 max_slippage_bps,
             )
-            .await?;
+            .await
+            .map_err(|e| match &e {
+                BoltzError::AmountOutOfRange { min, .. } => SdkError::InvalidInput(format!(
+                    "Amount {total_sats} sats too small for cross-chain send: \
+                    after subtracting LN fee ({ln_fee_probe_sats} sats), the remaining \
+                    invoice ({real_invoice_sats} sats) is below Boltz minimum ({min} sats)."
+                )),
+                _ => boltz_err_to_sdk(&e),
+            })?;
+        let created = self
+            .client
+            .create_reverse_swap(&prepared)
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
         let ln_fee_final_sats = self.fetch_ln_fee(&created.invoice).await?;
 
         // Mirrors LNURL's guard: if fee moved between queries, fail so caller retries.
@@ -208,10 +223,12 @@ impl BoltzService {
 
     /// Fetch a throwaway hold invoice for LN-fee estimation only.
     ///
-    /// Goes through `prepare_reverse_swap_from_sats` to get a fresh
-    /// `pair_hash` and validate the destination, then calls boltz-client's
-    /// `create_probe_invoice` — random preimage, short server-side expiry,
-    /// no HD index, no DB row, no WS subscription.
+    /// Both calls in this path are stateless on our side:
+    /// - `prepare_reverse_swap_from_sats` is a pure quote (HTTP fetch only,
+    ///   no HD index burn, no DB row, no WS subscription).
+    /// - `create_probe_invoice` uses a random preimage, sets a short
+    ///   server-side expiry, and likewise does not increment the HD key
+    ///   index, persist to local storage, or open a WS subscription.
     ///
     /// The returned invoice MUST NOT be paid: the preimage is discarded,
     /// so any payment cannot be claimed.
@@ -501,6 +518,20 @@ fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
     SdkError::Generic(format!("Boltz: {err}"))
 }
 
+/// Phase-1 check for the `FeesIncluded` path: returns the size to use for the
+/// real invoice, or rejects if the probed LN fee already eats the budget.
+fn fees_included_real_invoice_sats(
+    total_sats: u64,
+    ln_fee_probe_sats: u64,
+) -> Result<u64, SdkError> {
+    if total_sats <= ln_fee_probe_sats {
+        return Err(SdkError::InvalidInput(format!(
+            "Amount too small for cross-chain send: {total_sats} sats <= LN fee {ln_fee_probe_sats} sats."
+        )));
+    }
+    Ok(total_sats.saturating_sub(ln_fee_probe_sats))
+}
+
 /// Build a [`CrossChainRoutePair`] from a Boltz [`ChainSpec`]. Surfaces
 /// `chain_id` for EVM chains as a decimal string; non-EVM transports
 /// (Solana, Tron) get `None`, matching the USDT0 deployments feed.
@@ -563,5 +594,33 @@ mod tests {
             pair.chain_id, None,
             "Non-EVM transports (Solana, Tron) expose no chain_id"
         );
+    }
+
+    #[test]
+    fn fees_included_real_invoice_sats_subtracts_probe_fee() {
+        let real = fees_included_real_invoice_sats(10_000, 250).expect("fits within budget");
+        assert_eq!(
+            real, 9_750,
+            "real invoice should leave room for the probed LN fee"
+        );
+    }
+
+    #[test]
+    fn fees_included_real_invoice_sats_rejects_when_fee_eats_budget() {
+        // Fee exactly equals total: no room for any invoice → reject.
+        let err = fees_included_real_invoice_sats(500, 500)
+            .expect_err("equal probe fee leaves zero invoice");
+        match err {
+            SdkError::InvalidInput(msg) => {
+                assert!(msg.contains("500"), "error should report the figures");
+                assert!(msg.contains("Amount too small"));
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+
+        // Fee exceeds total → also reject.
+        let err =
+            fees_included_real_invoice_sats(100, 250).expect_err("probe fee greater than total");
+        assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 }
