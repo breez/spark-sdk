@@ -285,6 +285,46 @@ impl OrchestraService {
 
         Ok(())
     }
+
+    /// Resolves the Orchestra-side `source_asset` wire symbol (e.g. `"BTC"`,
+    /// `"USDB"`) for the given destination route + Spark source.
+    ///
+    /// Orchestra's `/quote` API identifies the source asset by
+    /// `(sourceChain, sourceAsset)` symbols rather than contract addresses,
+    /// so we look up the matching raw route and read its `source.asset`.
+    /// This doubles as validation that Orchestra actually offers a route for
+    /// the requested source-to-destination combination.
+    ///
+    /// `spark_routes()` is cache-backed (TTL'd) so this call is effectively
+    /// free in the hot path.
+    async fn resolve_source_asset(
+        &self,
+        dest: &CrossChainRoutePair,
+        token_identifier: Option<&str>,
+    ) -> Result<String, SdkError> {
+        let raw_routes =
+            self.client.spark_routes(true).await.map_err(|e| {
+                SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
+            })?;
+        let matched = raw_routes.iter().find(|r| {
+            let dest_matches = r.destination.chain == dest.chain
+                && r.destination.asset == dest.asset
+                && r.destination.contract_address == dest.contract_address;
+            let source_matches = match token_identifier {
+                None => r.source.asset.eq_ignore_ascii_case("BTC"),
+                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
+            };
+            dest_matches && source_matches
+        });
+        matched.map(|r| r.source.asset.clone()).ok_or_else(|| {
+            SdkError::InvalidInput(format!(
+                "Orchestra does not offer a route for source {} → {}/{}",
+                token_identifier.unwrap_or("BTC"),
+                dest.chain,
+                dest.asset
+            ))
+        })
+    }
 }
 
 #[macros::async_trait]
@@ -381,43 +421,15 @@ impl CrossChainService for OrchestraService {
         max_slippage_bps: Option<u32>,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
-        let dest_chain = &route.chain;
-        let dest_asset = &route.asset;
-        // Resolve the Orchestra-side source_asset string (e.g. "BTC", "USDB")
-        // from the cached spark_routes. Match the route with the correct
-        // destination triplet AND the desired source (contract_address when
-        // a token_identifier is requested, asset == "BTC" otherwise).
-        let raw_routes =
-            self.client.spark_routes(true).await.map_err(|e| {
-                SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
-            })?;
-        let matched = raw_routes.iter().find(|r| {
-            let dest_matches = r.destination.chain == *dest_chain
-                && r.destination.asset == *dest_asset
-                && r.destination.contract_address == route.contract_address;
-            let source_matches = match token_identifier.as_deref() {
-                None => r.source.asset.eq_ignore_ascii_case("BTC"),
-                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
-            };
-            dest_matches && source_matches
-        });
-        let source_asset = match matched {
-            Some(r) => r.source.asset.clone(),
-            None => {
-                return Err(SdkError::InvalidInput(format!(
-                    "Orchestra does not offer a route for source {} → {}/{}",
-                    token_identifier.as_deref().unwrap_or("BTC"),
-                    dest_chain,
-                    dest_asset
-                )));
-            }
-        };
+        let source_asset = self
+            .resolve_source_asset(route, token_identifier.as_deref())
+            .await?;
 
         let request = QuoteRequest {
             source_chain: SPARK_SOURCE_CHAIN.to_string(),
             source_asset: source_asset.clone(),
-            destination_chain: dest_chain.clone(),
-            destination_asset: dest_asset.clone(),
+            destination_chain: route.chain.clone(),
+            destination_asset: route.asset.clone(),
             amount: amount.to_string(),
             recipient_address: recipient_address.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
