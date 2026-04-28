@@ -107,10 +107,12 @@ impl BoltzService {
     /// Two-phase prepare for `FeesIncluded`: size the real invoice to
     /// `amount - ln_fee_probe_sats` so `invoice_sats + ln_fee_probe <= amount`.
     ///
-    /// Mirrors LNURL pay's `FeesIncluded` pattern at `lnurl.rs`. A throwaway swap
-    /// is created to probe the LN fee; it times out server-side (~24h). The
-    /// probe value is stored on the prepare as `source_transfer_fee_sats`
-    /// and enforced as a hard cap at send time.
+    /// Mirrors LNURL pay's `FeesIncluded` pattern at `lnurl.rs`. Phase 1 uses
+    /// boltz-client's lightweight probe-invoice API — random preimage, short
+    /// server-side expiry, no HD index burn / DB row / WS subscription — so
+    /// the probe doesn't pile up persistent state. The probe value is stored
+    /// on the prepare as `source_transfer_fee_sats` and enforced as a hard
+    /// cap at send time.
     async fn prepare_fees_included(
         &self,
         recipient_address: &str,
@@ -124,16 +126,16 @@ impl BoltzService {
             route.chain
         );
 
-        // Phase 1: throwaway invoice at `total_sats` to probe LN fee.
-        let (_throwaway_prepared, throwaway_created) = self
-            .create_swap(
+        // Phase 1: throwaway probe invoice at `total_sats` to probe LN fee.
+        let probe_invoice = self
+            .fetch_probe_invoice(
                 recipient_address,
                 chain.clone(),
                 total_sats,
                 max_slippage_bps,
             )
             .await?;
-        let ln_fee_probe_sats = self.fetch_ln_fee(&throwaway_created.invoice).await?;
+        let ln_fee_probe_sats = self.fetch_ln_fee(&probe_invoice).await?;
 
         if total_sats <= ln_fee_probe_sats {
             return Err(SdkError::InvalidInput(format!(
@@ -202,6 +204,39 @@ impl BoltzService {
             .map_err(|e| boltz_err_to_sdk(&e))?;
 
         Ok((prepared, created))
+    }
+
+    /// Fetch a throwaway hold invoice for LN-fee estimation only.
+    ///
+    /// Goes through `prepare_reverse_swap_from_sats` to get a fresh
+    /// `pair_hash` and validate the destination, then calls boltz-client's
+    /// `create_probe_invoice` — random preimage, short server-side expiry,
+    /// no HD index, no DB row, no WS subscription.
+    ///
+    /// The returned invoice MUST NOT be paid: the preimage is discarded,
+    /// so any payment cannot be claimed.
+    async fn fetch_probe_invoice(
+        &self,
+        recipient_address: &str,
+        chain: ChainId,
+        invoice_amount_sats: u64,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<String, SdkError> {
+        let prepared: PreparedSwap = self
+            .client
+            .prepare_reverse_swap_from_sats(
+                recipient_address,
+                chain,
+                invoice_amount_sats,
+                max_slippage_bps,
+            )
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))?;
+
+        self.client
+            .create_probe_invoice(&prepared)
+            .await
+            .map_err(|e| boltz_err_to_sdk(&e))
     }
 
     async fn fetch_ln_fee(&self, invoice: &str) -> Result<u64, SdkError> {
