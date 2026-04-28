@@ -476,6 +476,9 @@ impl CrossChainService for OrchestraService {
             // Spark transfer fee is 0 today; the field is wired for a future
             // non-zero case. Both FeesIncluded/FeesExcluded pass through
             // identically since `amount_in = amount`.
+            // TODO: when source_transfer_fee_sats becomes non-zero, branch on
+            // fee_mode here like Boltz does — `FeesIncluded` will need to size
+            // `amount_in` so `amount_in + source_transfer_fee_sats <= amount`.
             source_transfer_fee_sats: 0,
             fee_mode,
             expires_at: quote.expires_at,

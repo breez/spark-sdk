@@ -1257,7 +1257,8 @@ pub struct PrepareLnurlPayResponse {
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
     /// The fee policy actually applied. May differ from the request — e.g.,
-    /// AMM-conversion sends are always `FeesIncluded`.
+    /// LNURL sends with `token_identifier` set + conversion are always
+    /// `FeesIncluded` (explicit `FeesExcluded` is rejected).
     pub fee_policy: FeePolicy,
 }
 
@@ -1406,10 +1407,11 @@ pub struct PrepareSendPaymentRequest {
     pub conversion_options: Option<ConversionOptions>,
     /// How fees are handled. See [`FeePolicy`]. Defaults to `FeesExcluded`.
     ///
-    /// Ignored on AMM-conversion sends (whether the conversion was explicitly
-    /// requested or auto-injected by stable balance) — fees come out of the
-    /// converted sats. The prepare response's `fee_policy` reflects what was
-    /// actually applied.
+    /// Ignored on cross-chain AMM-conversion sends (whether the conversion was
+    /// explicitly requested or auto-injected by stable balance) — fees come
+    /// out of the converted sats. Bolt11 and Bitcoin AMM-conversion sends
+    /// still respect this field by sizing the conversion to cover fees. The
+    /// prepare response's `fee_policy` reflects what was actually applied.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1429,7 +1431,7 @@ pub struct PrepareSendPaymentResponse {
     /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
     /// The fee policy actually applied. May differ from the request — e.g.,
-    /// AMM-conversion sends are always `FeesIncluded`.
+    /// cross-chain AMM-conversion sends are always `FeesIncluded`.
     pub fee_policy: FeePolicy,
 }
 
