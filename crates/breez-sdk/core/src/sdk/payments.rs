@@ -750,6 +750,22 @@ impl BreezSdk {
                 "Idempotency key is not supported for token payments".to_string(),
             ));
         }
+        // Cross-chain sends ignore the user's idempotency_key today: the
+        // top-level lookup below would never hit (provider rows are keyed by
+        // LN payment id / spark_tx_hash, not the user key), and neither
+        // provider's send leg threads the key into its underlying Spark
+        // transfer. Reject explicitly so callers don't get the misleading
+        // impression that retries are deduped.
+        if request.idempotency_key.is_some()
+            && matches!(
+                request.prepare_response.payment_method,
+                SendPaymentMethod::CrossChainAddress { .. }
+            )
+        {
+            return Err(SdkError::InvalidInput(
+                "Idempotency key is not supported for cross-chain sends".to_string(),
+            ));
+        }
         if let Some(idempotency_key) = &request.idempotency_key {
             // If an idempotency key is provided, check if a payment with that id already exists
             if let Ok(payment) = self

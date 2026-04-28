@@ -1469,7 +1469,8 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub options: Option<SendPaymentOptions>,
-    /// The optional idempotency key for all Spark based transfers (excludes token payments).
+    /// The optional idempotency key for all Spark based transfers (excludes token payments
+    /// and cross-chain sends).
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
     /// The idempotency key must be a valid UUID.
