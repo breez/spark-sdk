@@ -376,7 +376,7 @@ pub(crate) struct TokenConversionResponse {
 /// Options for conversion when fulfilling a payment. When set, the SDK will
 /// perform a conversion before fulfilling the payment. If not set, the payment
 /// will only be fulfilled if the wallet has sufficient balance of the required asset.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionOptions {
     /// The type of conversion to perform when fulfilling the payment
