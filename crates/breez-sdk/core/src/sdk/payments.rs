@@ -605,23 +605,20 @@ impl BreezSdk {
 
         let is_conversion = effective_conversion_options.is_some();
 
-        // Boltz conversion + AmountIn + FeesExcluded is unfundable in the
-        // typical stable-balance case: the AMM consumes the token balance, so
-        // there's no separate sats reserve to cover LN routing fees. Reject
-        // the combination rather than supporting a partial set of cases.
-        if is_conversion && fee_policy == FeePolicy::FeesExcluded {
-            return Err(SdkError::InvalidInput(
-                "Token-conversion CrossChain sends require FeesIncluded fee policy.".to_string(),
-            ));
-        }
-
-        let fee_mode = if is_conversion {
-            CrossChainFeeMode::FeesIncluded
+        // On the conversion path, `fee_policy` has no coherent partition: the
+        // wallet's only sats budget comes from the AMM output, so fees can
+        // only come out of that budget. Force `FeesIncluded` regardless of
+        // what the caller passed — keeps the stable-balance illusion intact
+        // for callers that default to `FeesExcluded` for sat sends.
+        let effective_fee_policy = if is_conversion {
+            FeePolicy::FeesIncluded
         } else {
-            match fee_policy {
-                FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
-                FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
-            }
+            fee_policy
+        };
+
+        let fee_mode = match effective_fee_policy {
+            FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
+            FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
         };
 
         // Compute conversion estimate + provider-leg amount.
@@ -631,7 +628,7 @@ impl BreezSdk {
                     effective_conversion_options.as_ref(),
                     token_identifier.as_ref(),
                     amount,
-                    fee_policy,
+                    effective_fee_policy,
                 )
                 .await?;
             // Balance sufficiency: token balance must cover conversion input.
@@ -695,7 +692,7 @@ impl BreezSdk {
             amount: provider_amount,
             token_identifier: response_token_identifier,
             conversion_estimate,
-            fee_policy,
+            fee_policy: effective_fee_policy,
         })
     }
 
