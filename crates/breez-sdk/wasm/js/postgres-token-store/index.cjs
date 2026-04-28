@@ -36,6 +36,12 @@ const TOKEN_STORE_WRITE_LOCK_KEY = "8390042714201347154"; // 0x746F6B656E535452 
  */
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Reservations whose created_at is older than this are considered stale and are
+ * dropped at the start of setTokensOutputs. Matches the tree store's timeout.
+ */
+const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
+
 class PostgresTokenStore {
   constructor(pool, logger = null) {
     this.pool = pool;
@@ -102,6 +108,13 @@ class PostgresTokenStore {
       const refreshTimestamp = new Date(refreshStartedAtMs);
 
       await this._withWriteTransaction(async (client) => {
+        // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
+        // Swap reservation (from a crashed client or a swap whose finalize/cancel never
+        // ran) keeps has_active_swap true forever, which makes setTokensOutputs
+        // early-return and never reach any subsequent reconciliation. The reservation
+        // pins itself in place and the local token-output set freezes.
+        await this._cleanupStaleReservations(client);
+
         // Skip if swap is active or completed during this refresh
         const swapCheckResult = await client.query(
           `SELECT
@@ -723,6 +736,19 @@ class PostgresTokenStore {
       const v = c === "x" ? r : (r & 0x3) | 0x8;
       return v.toString(16);
     });
+  }
+
+  /**
+   * Delete reservations that have exceeded the timeout.
+   * Called during setTokensOutputs to clean up stale reservations from crashed clients.
+   * The ON DELETE SET NULL foreign key constraint automatically releases the outputs.
+   */
+  async _cleanupStaleReservations(client) {
+    await client.query(
+      `DELETE FROM token_reservations
+       WHERE created_at < NOW() - make_interval(secs => $1)`,
+      [RESERVATION_TIMEOUT_SECS]
+    );
   }
 
   /**

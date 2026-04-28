@@ -38,6 +38,10 @@ const TOKEN_STORE_WRITE_LOCK_KEY: i64 = 0x746F_6B65_6E53_5452; // "toknSTR" as h
 /// Actual deletion only happens for markers older than this threshold.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 
+/// Reservations whose `created_at` is older than this are considered stale and are
+/// dropped at the start of `set_tokens_outputs`. Matches the tree store's timeout.
+const RESERVATION_TIMEOUT_SECS: f64 = 300.0; // 5 minutes
+
 /// `PostgreSQL`-backed token output store implementation.
 pub struct PostgresTokenStore {
     pool: Pool,
@@ -58,6 +62,13 @@ impl TokenOutputStore for PostgresTokenStore {
         let tx = client.transaction().await.map_err(map_err)?;
 
         Self::acquire_write_lock(&tx).await?;
+
+        // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
+        // Swap reservation (from a crashed client or a swap whose finalize/cancel never
+        // ran) keeps has_active_swap true forever, which makes set_tokens_outputs
+        // early-return and never reach any subsequent reconciliation. The reservation
+        // pins itself in place and the local token-output set freezes.
+        Self::cleanup_stale_reservations(&tx).await?;
 
         // Skip if swap is active or completed during this refresh
         let (has_active_swap, swap_completed_during_refresh): (bool, bool) = {
@@ -861,6 +872,28 @@ impl PostgresTokenStore {
         Ok(())
     }
 
+    /// Deletes reservations that have exceeded the timeout.
+    /// Called during `set_tokens_outputs` to clean up stale reservations from crashed clients.
+    /// The `ON DELETE SET NULL` foreign key constraint automatically releases the outputs.
+    async fn cleanup_stale_reservations(
+        tx: &tokio_postgres::Transaction<'_>,
+    ) -> Result<u64, TokenOutputServiceError> {
+        let result = tx
+            .execute(
+                r"DELETE FROM token_reservations
+                  WHERE created_at < NOW() - make_interval(secs => $1)",
+                &[&RESERVATION_TIMEOUT_SECS],
+            )
+            .await
+            .map_err(map_err)?;
+
+        if result > 0 {
+            trace!("Cleaned up {} stale token reservations", result);
+        }
+
+        Ok(result)
+    }
+
     /// Cleans up spent markers older than the cleanup threshold relative to refresh timestamp.
     async fn cleanup_spent_markers(
         tx: &tokio_postgres::Transaction<'_>,
@@ -1261,5 +1294,87 @@ mod tests {
     async fn test_insert_outputs_clears_spent_status() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
         shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_stale_swap_reservation_does_not_block_set_tokens_outputs() {
+        // Regression test mirroring the tree store fix: a stale Swap reservation
+        // must be cleaned up before has_active_swap is evaluated, otherwise the
+        // reservation pins itself in place and the local token-output set freezes.
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        let token1 = shared_tests::create_token_outputs(1, vec![100, 200]);
+        fixture
+            .store
+            .set_tokens_outputs(
+                std::slice::from_ref(&token1),
+                shared_tests::future_refresh_start(),
+            )
+            .await
+            .unwrap();
+
+        let reservation = fixture
+            .store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                TokenReservationPurpose::Swap,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let stored = fixture
+            .store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert!(!stored.reserved_for_swap.is_empty());
+
+        // Backdate the swap reservation past the 5-minute timeout.
+        let client = fixture.store.pool.get().await.unwrap();
+        client
+            .execute(
+                "UPDATE token_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                &[&reservation.id],
+            )
+            .await
+            .unwrap();
+
+        // set_tokens_outputs brings fresh data including a new output. Pre-fix:
+        // skipped on has_active_swap, the new output is dropped and the reservation
+        // lingers forever. Post-fix: cleanup runs first, the stale reservation is
+        // dropped, has_active_swap is false, set_tokens_outputs applies.
+        let token1_refresh = shared_tests::create_token_outputs(1, vec![100, 200, 300]);
+        fixture
+            .store
+            .set_tokens_outputs(
+                std::slice::from_ref(&token1_refresh),
+                shared_tests::future_refresh_start(),
+            )
+            .await
+            .unwrap();
+
+        let stored = fixture
+            .store
+            .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+            .await
+            .unwrap();
+        assert!(
+            stored.reserved_for_swap.is_empty(),
+            "Stale swap reservation should be cleaned up"
+        );
+        assert_eq!(
+            stored.available.len(),
+            3,
+            "set_tokens_outputs should have proceeded and applied the operator's view (3 outputs)"
+        );
+        assert!(
+            stored
+                .available
+                .iter()
+                .any(|o| o.output.token_amount == 300),
+            "the 300-amount output from the refresh should be present"
+        );
     }
 }

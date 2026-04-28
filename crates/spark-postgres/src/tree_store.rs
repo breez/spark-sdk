@@ -161,6 +161,12 @@ impl TreeStore for PostgresTreeStore {
         // Acquire advisory lock to prevent deadlocks with concurrent operations
         Self::acquire_write_lock(&tx).await?;
 
+        // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
+        // Swap reservation (from a crashed client or a swap whose finalize/cancel never
+        // ran) keeps has_active_swap true forever, which makes set_leaves early-return
+        // and never reach the cleanup again. The reservation pins itself in place.
+        Self::cleanup_stale_reservations(&tx).await?;
+
         // Check if any swap reservation is currently active, or if a swap completed
         // after this refresh started (making the refresh data potentially inconsistent).
         let (has_active_swap, swap_completed_during_refresh): (bool, bool) = {
@@ -207,18 +213,15 @@ impl TreeStore for PostgresTreeStore {
 
         // Delete non-reserved leaves that were added BEFORE refresh started.
         // The advisory lock acquired at the start of this transaction prevents deadlocks.
+        // Includes leaves released earlier in this transaction by cleanup_stale_reservations
+        // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
+        // dropped here and re-fetched from the operator response in the upsert below.
         tx.execute(
             "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < $1",
             &[&refresh_timestamp],
         )
         .await
         .map_err(map_err)?;
-
-        // Clean up stale reservations from crashed clients.
-        // This MUST be done AFTER the leaf delete above, because DELETE on tree_reservations
-        // can affect tree_leaves through the ON DELETE SET NULL foreign key constraint,
-        // which interferes with the timestamp-based leaf deletion.
-        Self::cleanup_stale_reservations(&tx).await?;
 
         // Upsert all leaves. batch_upsert_leaves handles spent filtering via skip_ids,
         // and its ON CONFLICT clause preserves reservation_id (not in the UPDATE SET list).
@@ -1476,6 +1479,79 @@ mod tests {
             "Fresh reservation should NOT be cleaned up"
         );
         assert_eq!(all_leaves.available.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_stale_swap_reservation_does_not_block_set_leaves() {
+        // Regression test: a stale Swap reservation must be cleaned up before
+        // has_active_swap is evaluated, otherwise the reservation pins itself in
+        // place — set_leaves early-returns on has_active_swap, never reaches the
+        // cleanup, and the wallet's leaf set freezes at the snapshot when the swap
+        // started.
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        fixture.store.add_leaves(&leaves).await.unwrap();
+
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.reserved_for_swap.len(), 1);
+        assert_eq!(all_leaves.available.len(), 1);
+
+        // Backdate the swap reservation past the 5-minute timeout.
+        let client = fixture.store.pool.get().await.unwrap();
+        client
+            .execute(
+                "UPDATE tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                &[&reservation.id],
+            )
+            .await
+            .unwrap();
+
+        // set_leaves brings fresh data from the operator that includes both leaves
+        // plus a new one. Pre-fix: skipped on has_active_swap, the new leaf is lost
+        // and the reservation lingers forever. Post-fix: cleanup runs first, the
+        // stale reservation is dropped, has_active_swap is false, set_leaves applies.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+        let refresh_leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300),
+        ];
+        fixture
+            .store
+            .set_leaves(&refresh_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert!(
+            all_leaves.reserved_for_swap.is_empty(),
+            "Stale swap reservation should be cleaned up"
+        );
+        assert_eq!(
+            all_leaves.available.len(),
+            3,
+            "set_leaves should have proceeded and applied the operator's view (3 leaves)"
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node3"),
+            "node3 from the refresh should be present"
+        );
     }
 
     // ==================== Concurrency Stress Tests ====================

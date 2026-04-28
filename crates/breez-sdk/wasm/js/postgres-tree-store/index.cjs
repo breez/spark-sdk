@@ -189,6 +189,12 @@ class PostgresTreeStore {
       await this._withWriteTransaction(async (client) => {
         const refreshTimestamp = new Date(refreshStartedAtMs);
 
+        // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
+        // Swap reservation (from a crashed client or a swap whose finalize/cancel never
+        // ran) keeps has_active_swap true forever, which makes set_leaves early-return
+        // and never reach the cleanup again. The reservation pins itself in place.
+        await this._cleanupStaleReservations(client);
+
         // Check for active swap or swap completed during refresh
         const swapCheckResult = await client.query(`
           SELECT
@@ -211,14 +217,14 @@ class PostgresTreeStore {
         );
         const spentIds = new Set(spentResult.rows.map((r) => r.leaf_id));
 
-        // Delete non-reserved leaves added before refresh started
+        // Delete non-reserved leaves added before refresh started.
+        // Includes leaves released earlier in this transaction by _cleanupStaleReservations
+        // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
+        // dropped here and re-fetched from the operator response in the upsert below.
         await client.query(
           "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < $1",
           [refreshTimestamp]
         );
-
-        // Clean up stale reservations (after leaf delete)
-        await this._cleanupStaleReservations(client);
 
         // Upsert all leaves (filtering spent)
         await this._batchUpsertLeaves(client, leaves, false, spentIds);
