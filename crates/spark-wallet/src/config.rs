@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use spark::{
     Network,
     operator::{OperatorConfig, OperatorPoolConfig},
-    ssp::ServiceProviderConfig,
+    ssp::{RetryConfig, ServiceProviderConfig},
     token::TokensConfig,
     tree::LeafOptimizationOptions,
 };
@@ -138,6 +138,7 @@ impl SparkWalletConfig {
                 SparkWalletError::ValidationError("Invalid identity public key".to_string())
             })?,
             user_agent: None,
+            retry_config: RetryConfig::default(),
         })
     }
 
