@@ -1234,7 +1234,7 @@ pub struct PrepareLnurlPayRequest {
     /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
-    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    /// How fees are handled. See [`FeePolicy`]. Defaults to `FeesExcluded`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1256,7 +1256,8 @@ pub struct PrepareLnurlPayResponse {
     pub success_action: Option<SuccessAction>,
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
-    /// How fees are handled for this payment.
+    /// The fee policy actually applied. May differ from the request — e.g.,
+    /// AMM-conversion sends are always `FeesIncluded`.
     pub fee_policy: FeePolicy,
 }
 
@@ -1343,15 +1344,23 @@ impl LnurlPayInfo {
 }
 
 /// Specifies how fees are handled in a payment.
+///
+/// "Fees" are the wallet's sender-paid fees (Lightning routing, on-chain,
+/// Spark transfer). They do not include provider spreads or destination-chain
+/// costs on cross-chain routes; those are reported separately via
+/// `estimated_out` on the prepare response and are not deterministic.
+/// `FeePolicy` only controls the wallet's spend accounting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FeePolicy {
-    /// Fees are added on top of the specified amount (default behavior).
-    /// The receiver gets the exact amount specified.
+    /// Fees are added on top of `amount`. Wallet's total spend is
+    /// `amount + fees`. For direct sat sends, the recipient receives exactly
+    /// `amount`. Default.
     #[default]
     FeesExcluded,
-    /// Fees are deducted from the specified amount.
-    /// The receiver gets the amount minus fees.
+    /// Fees are deducted from `amount`. Wallet's total spend is `amount`.
+    /// Use this to drain a balance — pass `amount = balance` and the wallet
+    /// spends exactly that.
     FeesIncluded,
 }
 
@@ -1395,7 +1404,12 @@ pub struct PrepareSendPaymentRequest {
     /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
-    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    /// How fees are handled. See [`FeePolicy`]. Defaults to `FeesExcluded`.
+    ///
+    /// Ignored on AMM-conversion sends (whether the conversion was explicitly
+    /// requested or auto-injected by stable balance) — fees come out of the
+    /// converted sats. The prepare response's `fee_policy` reflects what was
+    /// actually applied.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1414,7 +1428,8 @@ pub struct PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
-    /// How fees are handled for this payment.
+    /// The fee policy actually applied. May differ from the request — e.g.,
+    /// AMM-conversion sends are always `FeesIncluded`.
     pub fee_policy: FeePolicy,
 }
 
