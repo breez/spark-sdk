@@ -10,19 +10,6 @@
           }
         ]
       }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "agent",
-            "prompt": "Code changes were just made. Verify the changes by running 'make claude-check' (which runs fmt-check, clippy-check, and cargo-test). If any checks fail, analyze the error output and provide a clear summary of what failed and what needs to be fixed. If all checks pass, confirm that verification succeeded. The main Claude session will see your response and can iterate on fixes if needed.",
-            "timeout": 300,
-            "statusMessage": "Verifying code changes..."
-          }
-        ]
-      }
     ]
   },
   "permissions": {
