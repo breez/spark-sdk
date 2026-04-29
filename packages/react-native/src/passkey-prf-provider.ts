@@ -74,6 +74,15 @@ export interface PasskeyProviderOptions {
    * not affect existing credentials.
    */
   userDisplayName?: string;
+
+  /**
+   * When true (default), `derivePrfSeed` automatically creates a new passkey
+   * if none exists for this RP ID, then retries the assertion. When false,
+   * throws an error instead, letting the caller control registration
+   * separately via `createPasskey()`.
+   * @default true
+   */
+  autoRegister?: boolean;
 }
 
 /**
@@ -105,12 +114,14 @@ export class PasskeyProvider {
   private rpName: string;
   private userName: string;
   private userDisplayName: string;
+  private autoRegister: boolean;
 
   constructor(options?: PasskeyProviderOptions) {
     this.rpId = options?.rpId ?? 'keys.breez.technology';
     this.rpName = options?.rpName ?? 'Breez SDK';
     this.userName = options?.userName ?? this.rpName;
     this.userDisplayName = options?.userDisplayName ?? this.userName;
+    this.autoRegister = options?.autoRegister !== false;
   }
 
   /**
@@ -133,7 +144,8 @@ export class PasskeyProvider {
       this.rpId,
       this.rpName,
       this.userName,
-      this.userDisplayName
+      this.userDisplayName,
+      this.autoRegister
     );
 
     return base64ToUint8Array(base64Result);
