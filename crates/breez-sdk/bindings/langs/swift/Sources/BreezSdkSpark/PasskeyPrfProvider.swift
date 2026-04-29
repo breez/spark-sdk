@@ -124,7 +124,7 @@ public class PasskeyPrfProvider: PrfProvider {
             return try await performAssertionWithPrf(saltData: saltData)
         } catch let error as PasskeyPrfError where error.isCredentialNotFound {
             // No credential found — register a new one and retry
-            try await registerCredential()
+            _ = try await registerCredential()
             return try await performAssertionWithPrf(saltData: saltData)
         }
     }
@@ -135,9 +135,15 @@ public class PasskeyPrfProvider: PrfProvider {
     /// 1 platform prompt. Use this to separate credential creation from
     /// derivation in multi-step onboarding flows.
     ///
+    /// - Parameters:
+    ///   - excludeCredentialIds: Optional list of credential IDs to exclude.
+    ///     Pass previously created credential IDs to prevent the authenticator
+    ///     from creating a duplicate on the same device.
+    /// - Returns: The credential ID of the newly created passkey.
     /// - Throws: `PasskeyPrfError` if the user cancels or PRF is not supported by the authenticator.
-    public func createPasskey() async throws {
-        try await registerCredential()
+    @discardableResult
+    public func createPasskey(excludeCredentialIds: [Data] = []) async throws -> Data {
+        return try await registerCredential(excludeCredentialIds: excludeCredentialIds)
     }
 
     /// Check if this device's OS version supports the passkey PRF extension.
@@ -420,7 +426,7 @@ public class PasskeyPrfProvider: PrfProvider {
         }
     }
 
-    private func registerCredential() async throws {
+    private func registerCredential(excludeCredentialIds: [Data] = []) async throws -> Data {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let userId = randomBytes(count: 16)
@@ -429,6 +435,12 @@ public class PasskeyPrfProvider: PrfProvider {
             name: userName,
             userID: userId
         )
+
+        if !excludeCredentialIds.isEmpty {
+            registrationRequest.excludedCredentials = excludeCredentialIds.map {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+            }
+        }
 
         // Request PRF support during registration via ObjC helper
         PasskeyPRFHelper.setRegistrationPRFOn(registrationRequest)
@@ -439,7 +451,7 @@ public class PasskeyPrfProvider: PrfProvider {
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
 
-        let _: Data = try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = false
             controller.performRequests()
@@ -489,8 +501,14 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
 
             continuation?.resume(returning: prfData)
         } else {
-            // Registration complete — PRF support is implicit on iOS 18+ / macOS 15+
-            continuation?.resume(returning: Data())
+            // Registration complete — extract and return the credential ID
+            guard let credential = authorization.credential
+                as? ASAuthorizationPlatformPublicKeyCredentialRegistration
+            else {
+                continuation?.resume(throwing: PasskeyPrfError.AuthenticationFailed("Unexpected credential type"))
+                return
+            }
+            continuation?.resume(returning: credential.credentialID)
         }
     }
 
