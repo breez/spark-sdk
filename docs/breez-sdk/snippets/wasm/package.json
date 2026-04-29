@@ -3,6 +3,7 @@
     "version": "0.0.1",
     "description": "Wasm Snippets",
     "main": "index.ts",
+    "type": "module",
     "license": "MIT",
     "scripts": {
         "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
