@@ -45,7 +45,7 @@ impl Passkey {
     /// Create a new `Passkey` instance.
     ///
     /// @param prfProvider - Implementation of PRF operations (typically the
-    ///                      built-in `PasskeyPrfProvider`, or a custom `PrfProvider`)
+    ///                      built-in `PasskeyProvider`, or a custom `PrfProvider`)
     /// @param relayConfig - Optional configuration for Nostr relay connections
     #[wasm_bindgen(constructor)]
     pub fn new(prf_provider: PrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {

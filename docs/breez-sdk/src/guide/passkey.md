@@ -125,9 +125,9 @@ The SDK also implements <a target="_blank" href="https://github.com/nostr-protoc
 
 A PRF provider handles passkey credential registration, assertion, and PRF evaluation against the platform's authenticator. The SDK uses the seed it returns to deterministically derive wallet keys.
 
-### Built-in PasskeyPrfProvider
+### Built-in PasskeyProvider
 
-The SDK ships a built-in `PasskeyPrfProvider` on every platform with native passkey support: Web (browsers), iOS, macOS, Android, Kotlin Multiplatform, React Native, and Flutter. Each one implements the underlying `PrfProvider` trait against the platform's WebAuthn / Credential Manager / AuthenticationServices APIs, so most apps can use it as-is without writing any glue code.
+The SDK ships a built-in `PasskeyProvider` on every platform with native passkey support: Web (browsers), iOS, macOS, Android, Kotlin Multiplatform, React Native, and Flutter. Each one implements the underlying `PrfProvider` trait against the platform's WebAuthn / Credential Manager / AuthenticationServices APIs, so most apps can use it as-is without writing any glue code.
 
 Built-in providers are not currently available for C#, Go, and Python.
 
@@ -142,7 +142,7 @@ Built-in providers are not currently available for C#, Go, and Python.
 
 Apps that share an RP ID, whether the default `keys.breez.technology` or a custom domain, recognize the same user's passkey without per-app enrollment. Users don't need to manually enroll a passkey before using a built-in provider; it auto-registers a new credential on first use if one doesn't already exist for the RP ID.
 
-Pass a `PasskeyPrfProvider` instance to `Passkey` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
+Pass a `PasskeyProvider` instance to `Passkey` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
 
 ## Checking passkey availability
 
@@ -155,7 +155,7 @@ Use {{#name is_prf_available}} to gate passkey UI elements. This returns `false`
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.get_wallet">API docs</a>
 </h2>
 
-To connect with a passkey, instantiate the built-in `PasskeyPrfProvider`, pass it to `Passkey`, call {{#name Passkey.get_wallet}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to `"Default"` when omitted.
+To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it to `Passkey`, call {{#name Passkey.get_wallet}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to `"Default"` when omitted.
 
 {{#tabs passkey:connect-with-passkey}}
 
@@ -179,7 +179,7 @@ Publish a label to Nostr so it can be discovered later.
 
 ## Custom PrfProvider (advanced)
 
-If the built-in `PasskeyPrfProvider` does not satisfy your requirements (e.g., you need a hardware security key, a FIDO2/CTAP2 transport, an air-gapped backup file, or a custom authenticator), implement the `PrfProvider` interface directly. The Breez CLI ships [YubiKey](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/yubikey_prf.rs), [FIDO2](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/fido2_prf.rs), and [file-based](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/file_prf.rs) implementations as references.
+If the built-in `PasskeyProvider` does not satisfy your requirements (e.g., you need a hardware security key, a FIDO2/CTAP2 transport, an air-gapped backup file, or a custom authenticator), implement the `PrfProvider` interface directly. The Breez CLI ships [YubiKey](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/yubikey_prf.rs), [FIDO2](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/fido2_prf.rs), and [file-based](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/file_prf.rs) implementations as references.
 
 {{#tabs passkey:implement-prf-provider}}
 
