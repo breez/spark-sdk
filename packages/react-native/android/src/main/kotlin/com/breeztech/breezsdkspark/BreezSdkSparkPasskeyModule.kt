@@ -144,6 +144,7 @@ class BreezSdkSparkPasskeyModule(
             CredentialManagerPrfCore.Kind.UserCancelled -> "ERR_USER_CANCELLED"
             CredentialManagerPrfCore.Kind.CredentialNotFound -> "ERR_NO_CREDENTIAL"
             CredentialManagerPrfCore.Kind.PrfNotSupported -> "ERR_PRF_NOT_SUPPORTED"
+            CredentialManagerPrfCore.Kind.Configuration -> "ERR_CONFIGURATION"
             else -> "ERR_PASSKEY"
         }
 
@@ -154,6 +155,7 @@ class BreezSdkSparkPasskeyModule(
             CredentialManagerPrfCore.Kind.PrfNotSupported -> "PRF not supported by authenticator"
             CredentialManagerPrfCore.Kind.AuthenticationFailed -> "Passkey authentication failed"
             CredentialManagerPrfCore.Kind.PrfEvaluationFailed -> "PRF evaluation failed"
+            CredentialManagerPrfCore.Kind.Configuration -> "Platform or app configuration error"
             CredentialManagerPrfCore.Kind.Generic -> "Passkey operation failed"
         }
 

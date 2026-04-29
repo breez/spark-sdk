@@ -96,7 +96,8 @@ public object CredentialManagerPrfCore {
             try {
                 getAssertionWithPrf(activity, salt, rpId)
             } catch (e: NoCredentialException) {
-                registerCredential(activity, rpId, rpName, userName, userDisplayName)
+                @Suppress("UNUSED_VARIABLE")
+                val ignored = registerCredential(activity, rpId, rpName, userName, userDisplayName)
                 getAssertionWithPrf(activity, salt, rpId)
             }
         } catch (e: CredentialManagerPrfCoreException) {
@@ -292,6 +293,11 @@ public object CredentialManagerPrfCore {
      *
      * Use this to separate credential creation from derivation in
      * multi-step onboarding flows. Triggers exactly one platform prompt.
+     *
+     * @param excludeCredentialIds Optional list of credential IDs to exclude.
+     *   Pass previously created credential IDs to prevent the authenticator
+     *   from creating a duplicate on the same device.
+     * @return The credential ID of the newly created passkey.
      */
     public suspend fun createCredential(
         activity: Activity,
@@ -299,9 +305,10 @@ public object CredentialManagerPrfCore {
         rpName: String,
         userName: String,
         userDisplayName: String,
-    ): Unit = withContext(Dispatchers.Main) {
+        excludeCredentialIds: List<ByteArray> = emptyList(),
+    ): ByteArray = withContext(Dispatchers.Main) {
         try {
-            registerCredential(activity, rpId, rpName, userName, userDisplayName)
+            registerCredential(activity, rpId, rpName, userName, userDisplayName, excludeCredentialIds)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
@@ -381,7 +388,8 @@ public object CredentialManagerPrfCore {
         rpName: String,
         userName: String,
         userDisplayName: String,
-    ) {
+        excludeCredentialIds: List<ByteArray> = emptyList(),
+    ): ByteArray {
         val credentialManager = CredentialManager.create(activity)
         val challenge = randomBase64Url(32)
         val userId = randomBase64Url(16)
@@ -407,6 +415,19 @@ public object CredentialManagerPrfCore {
                 put(JSONObject().apply { put("type", "public-key"); put("alg", -7) })
                 put(JSONObject().apply { put("type", "public-key"); put("alg", -257) })
             })
+            if (excludeCredentialIds.isNotEmpty()) {
+                put("excludeCredentials", JSONArray().apply {
+                    for (credId in excludeCredentialIds) {
+                        put(JSONObject().apply {
+                            put("type", "public-key")
+                            put("id", Base64.encodeToString(
+                                credId,
+                                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                            ))
+                        })
+                    }
+                })
+            }
             put("authenticatorSelection", JSONObject().apply {
                 put("residentKey", "required")
                 put("requireResidentKey", true)
@@ -417,10 +438,26 @@ public object CredentialManagerPrfCore {
             })
         }.toString()
 
-        credentialManager.createCredential(
+        val response = credentialManager.createCredential(
             activity,
             CreatePublicKeyCredentialRequest(requestJson),
         )
+
+        val registrationJson = response.data.getString(
+            "androidx.credentials.BUNDLE_KEY_REGISTRATION_RESPONSE_JSON"
+        ) ?: throw CredentialManagerPrfCoreException(
+            Kind.AuthenticationFailed,
+            "No registration response",
+        )
+        val responseJson = JSONObject(registrationJson)
+        val rawId = responseJson.optString("rawId", "")
+        if (rawId.isEmpty()) {
+            throw CredentialManagerPrfCoreException(
+                Kind.AuthenticationFailed,
+                "No credential ID in registration response",
+            )
+        }
+        return Base64.decode(rawId, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
     private fun randomBase64Url(byteCount: Int): String {
@@ -483,6 +520,8 @@ public object CredentialManagerPrfCore {
         AuthenticationFailed,
         /** PRF evaluation produced an empty or malformed response. */
         PrfEvaluationFailed,
+        /** Platform or app configuration error (e.g. missing assetlinks.json, misconfigured RP ID). */
+        Configuration,
         /** Any other unexpected error — message contains the details. */
         Generic,
     }
