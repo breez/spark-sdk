@@ -51,6 +51,8 @@ class BreezSdkSparkPasskey: NSObject {
                 reject("ERR_USER_CANCELLED", "User cancelled authentication", nil)
             } catch PasskeyError.prfNotSupported {
                 reject("ERR_PRF_NOT_SUPPORTED", "PRF not supported by authenticator", nil)
+            } catch PasskeyError.configuration(let msg) {
+                reject("ERR_CONFIGURATION", msg, nil)
             } catch {
                 reject("ERR_PASSKEY", error.localizedDescription, nil)
             }
@@ -85,6 +87,8 @@ class BreezSdkSparkPasskey: NSObject {
                 reject("ERR_USER_CANCELLED", "User cancelled registration", nil)
             } catch PasskeyError.prfNotSupported {
                 reject("ERR_PRF_NOT_SUPPORTED", "PRF not supported by authenticator", nil)
+            } catch PasskeyError.configuration(let msg) {
+                reject("ERR_CONFIGURATION", msg, nil)
             } catch {
                 reject("ERR_PASSKEY", error.localizedDescription, nil)
             }
@@ -113,10 +117,20 @@ class BreezSdkSparkPasskey: NSObject {
         do {
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         } catch PasskeyError.credentialNotFound {
-            _ = try await registerCredential(
-                rpId: rpId, rpName: rpName,
-                userName: userName, userDisplayName: userDisplayName
-            )
+            do {
+                _ = try await registerCredential(
+                    rpId: rpId, rpName: rpName,
+                    userName: userName, userDisplayName: userDisplayName
+                )
+            } catch PasskeyError.credentialNotFound {
+                // Registration also got notHandled: entitlement or
+                // domain association is misconfigured, not a missing credential.
+                throw PasskeyError.configuration(
+                    "Associated Domains entitlement not configured. "
+                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
+                    + "and ensure a valid provisioning profile."
+                )
+            }
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         }
     }
@@ -270,5 +284,6 @@ private enum PasskeyError: Error {
     case userCancelled
     case credentialNotFound
     case prfNotSupported
+    case configuration(String)
     case authenticationFailed(String)
 }
