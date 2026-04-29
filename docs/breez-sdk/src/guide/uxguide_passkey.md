@@ -20,6 +20,27 @@ The steps below describe one possible shape for a passkey onboarding flow that s
 
 Each step should own its own error handling. A failure partway through should retry only the failed step, not the entire flow.
 
+### Credential ID management
+
+`createPasskey()` returns the credential ID of the newly registered passkey. Store this ID locally (for example in `localStorage`, `SharedPreferences`, or `UserDefaults`) so you can:
+
+1. **Prevent duplicate credentials.** On subsequent calls to `createPasskey()`, pass the stored IDs via the `excludeCredentialIds` parameter. When the authenticator already holds one of these credentials, the platform will reject the registration with a "credential already registered" error instead of silently creating a duplicate.
+2. **Track which credentials belong to this app instance.** The credential ID is an opaque byte array assigned by the authenticator. It is not sensitive, but it is only useful on the device where the credential was created.
+
+```typescript
+// Web example
+const credentialId = await prfProvider.createPasskey();
+// Store for later use
+localStorage.setItem('passkeyCredentialId', btoa(String.fromCharCode(...credentialId)));
+
+// On next registration attempt, exclude existing credentials
+const existingId = localStorage.getItem('passkeyCredentialId');
+const exclude = existingId
+  ? [Uint8Array.from(atob(existingId), c => c.charCodeAt(0))]
+  : [];
+const newId = await prfProvider.createPasskey(exclude);
+```
+
 ### Guidelines
 
 1. **Gate passkey UI on availability.** Check {{#name is_prf_available}} at startup and fall back to mnemonic onboarding on unsupported devices (Android < 9, iOS < 18, browsers without WebAuthn PRF).

@@ -67,16 +67,20 @@ class BreezSdkSparkPasskey: NSObject {
         rpName: String,
         userName: String,
         userDisplayName: String,
+        excludeCredentialIds: [String],
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
+        let excludeIds: [Data] = excludeCredentialIds.compactMap { Data(base64Encoded: $0) }
+
         Task { @MainActor in
             do {
-                try await registerCredential(
+                let credentialId = try await registerCredential(
                     rpId: rpId, rpName: rpName,
-                    userName: userName, userDisplayName: userDisplayName
+                    userName: userName, userDisplayName: userDisplayName,
+                    excludeCredentialIds: excludeIds
                 )
-                resolve(nil)
+                resolve(credentialId.base64EncodedString())
             } catch PasskeyError.userCancelled {
                 reject("ERR_USER_CANCELLED", "User cancelled registration", nil)
             } catch PasskeyError.prfNotSupported {
@@ -109,7 +113,7 @@ class BreezSdkSparkPasskey: NSObject {
         do {
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         } catch PasskeyError.credentialNotFound {
-            try await registerCredential(
+            _ = try await registerCredential(
                 rpId: rpId, rpName: rpName,
                 userName: userName, userDisplayName: userDisplayName
             )
@@ -141,10 +145,12 @@ class BreezSdkSparkPasskey: NSObject {
         }
     }
 
+    @discardableResult
     private func registerCredential(
         rpId: String, rpName: String,
-        userName: String, userDisplayName: String
-    ) async throws {
+        userName: String, userDisplayName: String,
+        excludeCredentialIds: [Data] = []
+    ) async throws -> Data {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let userId = randomBytes(count: 16)
@@ -154,6 +160,12 @@ class BreezSdkSparkPasskey: NSObject {
             userID: userId
         )
 
+        if !excludeCredentialIds.isEmpty {
+            request.excludedCredentials = excludeCredentialIds.map {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+            }
+        }
+
         let prfInput = ASAuthorizationPublicKeyCredentialPRFRegistrationInput()
         request.prf = prfInput
 
@@ -162,7 +174,7 @@ class BreezSdkSparkPasskey: NSObject {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
 
-        let _: Data = try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = false
             DispatchQueue.main.async {
@@ -216,15 +228,17 @@ private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
 
             continuation?.resume(returning: first)
         } else {
-            if let credential = authorization.credential
+            guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration
-            {
-                if let prfOutput = credential.prf, !prfOutput.isSupported {
-                    continuation?.resume(throwing: PasskeyError.prfNotSupported)
-                    return
-                }
+            else {
+                continuation?.resume(throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
+                return
             }
-            continuation?.resume(returning: Data())
+            if let prfOutput = credential.prf, !prfOutput.isSupported {
+                continuation?.resume(throwing: PasskeyError.prfNotSupported)
+                return
+            }
+            continuation?.resume(returning: credential.credentialID)
         }
     }
 
