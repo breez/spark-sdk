@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 
 use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
@@ -171,19 +171,10 @@ impl SparkSyncService {
             }
         };
 
-        // Build a map of payment ID → status. Payment IDs for bitcoin/lightning payments are transfer UUIDs;
-        // token payment IDs use a different format. Parse each to filter for transfers only.
-        let (transfer_ids, pending_by_id): (Vec<TransferId>, HashMap<String, PaymentStatus>) =
-            pending_payments
-                .iter()
-                .fold((Vec::new(), HashMap::new()), |(mut ids, mut map), p| {
-                    if let Ok(transfer_id) = TransferId::from_str(&p.id) {
-                        ids.push(transfer_id);
-                        map.insert(p.id.clone(), p.status);
-                    }
-                    (ids, map)
-                });
-
+        let transfer_ids: Vec<TransferId> = pending_payments
+            .iter()
+            .filter_map(|p| TransferId::from_str(&p.id).ok())
+            .collect();
         if transfer_ids.is_empty() {
             return;
         }
@@ -216,16 +207,13 @@ impl SparkSyncService {
                 }
             };
 
-            // Only act if the status has changed from what we have stored
-            let maybe_existing_status = pending_by_id.get(&payment.id).copied();
-
-            if !maybe_existing_status.is_some_and(|s| s != payment.status) {
+            if payment.status == PaymentStatus::Pending {
                 continue;
             }
 
             info!(
-                "Reconciliation: payment {} status changed from {:?} to {:?}",
-                payment.id, maybe_existing_status, payment.status
+                "Reconciliation: payment {} status changed from Pending to {:?}",
+                payment.id, payment.status
             );
 
             if let Err(e) = self.storage.insert_payment(payment.clone()).await {
