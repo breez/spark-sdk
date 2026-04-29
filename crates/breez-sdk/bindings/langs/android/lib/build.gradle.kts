@@ -18,7 +18,7 @@ android {
         minSdk = 24
         consumerProguardFiles("consumer-rules.pro")
     }
-    
+
     kotlinOptions {
         jvmTarget = "1.8"
     }
@@ -28,6 +28,15 @@ android {
             @Suppress("UnstableApiUsage")
             isMinifyEnabled = false
             proguardFiles(file("proguard-android-optimize.txt"), file("proguard-rules.pro"))
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDirs(
+                "src/main/kotlin",
+                "../../shared/android-passkey/src/main/kotlin",
+            )
         }
     }
 
@@ -46,6 +55,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    // Required for Dispatchers.Main on Android
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
 }
 
 val libraryVersion: String by project
