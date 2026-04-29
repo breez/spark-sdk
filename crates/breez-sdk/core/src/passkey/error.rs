@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Error type for passkey PRF operations.
-/// Platforms implement `PasskeyPrfProvider` and return this error type.
+/// Platforms implement `PrfProvider` and return this error type.
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PasskeyPrfError {
