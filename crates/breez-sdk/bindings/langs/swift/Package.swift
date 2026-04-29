@@ -17,10 +17,21 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),
+        // ObjC helper for passkey PRF types hidden by NS_REFINED_FOR_SWIFT
+        .target(
+            name: "PasskeyPRFHelperObjC",
+            path: "Sources/PasskeyPRFHelperObjC",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("AuthenticationServices"),
+            ]
+        ),
         .target(
             name: "BreezSdkSpark",
             dependencies: [
-                "breez_sdk_sparkFFI", .product(name: "BigNumber", package: "Swift-BigInt"),
+                "breez_sdk_sparkFFI",
+                "PasskeyPRFHelperObjC",
+                .product(name: "BigNumber", package: "Swift-BigInt"),
             ]),
     ]
 )
