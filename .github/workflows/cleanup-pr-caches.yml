@@ -1,0 +1,38 @@
+# Deletes branch-ref caches (refs/heads/<branch>) when a PR closes.
+#
+# GitHub auto-deletes refs/pull/<n>/merge caches on PR close, but caches
+# scoped to the branch ref (e.g. saved by `gh workflow run --ref <branch>`
+# or push-event runs) survive until 7-day access eviction. With the repo
+# under the 10 GB cache cap, those orphans evict caches from active PRs.
+#
+# Safe: after merge, main runs only read/write refs/heads/main caches,
+# never feature-branch caches (cache fallback is non-default to default,
+# never the reverse). Fork PRs cannot write to source-repo branch refs.
+
+name: Cleanup PR branch caches
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Delete branch-ref caches for the closed PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_REF: refs/heads/${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/${REPO}/actions/caches?ref=${BRANCH_REF}" --paginate \
+            --jq '.actions_caches[].id' \
+          | while read id; do
+              echo "Deleting cache $id on ${BRANCH_REF}"
+              gh api -X DELETE "repos/${REPO}/actions/caches/${id}" || true
+            done
