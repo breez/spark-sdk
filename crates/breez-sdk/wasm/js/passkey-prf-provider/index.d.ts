@@ -13,7 +13,9 @@ export type DomainAssociation =
  */
 export interface PasskeyProviderOptions {
     /**
-     * Relying Party ID. Must match the domain configured in .well-known/webauthn
+     * Relying Party ID. Must match the domain hosting your passkeys. On native
+     * platforms this corresponds to the AASA / assetlinks.json domain. On web,
+     * rpId must be a registrable suffix of window.location.hostname
      * for cross-platform credential sharing.
      *
      * Changing this after users have registered passkeys will make their existing
