@@ -55,12 +55,18 @@ export class PasskeyProvider {
      * @param {string} [options.userDisplayName] - User display name shown as the
      *   primary label in the passkey picker. Defaults to userName. Only used during
      *   registration; changing it does not affect existing credentials.
+     * @param {boolean} [options.autoRegister=true] - When true (default),
+     *   `derivePrfSeed` automatically creates a new passkey if none exists for
+     *   this RP ID, then retries the assertion. When false, throws an error
+     *   instead, letting the caller control registration separately via
+     *   `createPasskey()`.
      */
     constructor(options = {}) {
         this.rpId = options.rpId || DEFAULT_RP_ID;
         this.rpName = options.rpName || DEFAULT_RP_NAME;
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
+        this.autoRegister = options.autoRegister !== false;
     }
 
     /**
@@ -80,8 +86,9 @@ export class PasskeyProvider {
         try {
             return await this._getAssertionWithPrf(saltBytes);
         } catch (error) {
-            // If no credential found, register a new one and retry
-            if (this._isNoCredentialError(error)) {
+            // If no credential found and autoRegister is enabled,
+            // register a new one and retry
+            if (this.autoRegister && this._isNoCredentialError(error)) {
                 await this._registerCredential();
                 return await this._getAssertionWithPrf(saltBytes);
             }

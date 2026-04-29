@@ -7,6 +7,7 @@ RCT_EXTERN_METHOD(derivePrfSeed:(NSString *)salt
                   rpName:(NSString *)rpName
                   userName:(NSString *)userName
                   userDisplayName:(NSString *)userDisplayName
+                  autoRegister:(BOOL)autoRegister
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

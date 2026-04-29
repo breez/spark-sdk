@@ -42,6 +42,15 @@ export interface PasskeyProviderOptions {
      * not affect existing credentials.
      */
     userDisplayName?: string;
+
+    /**
+     * When true (default), `derivePrfSeed` automatically creates a new passkey
+     * if none exists for this RP ID, then retries the assertion. When false,
+     * throws an error instead, letting the caller control registration
+     * separately via `createPasskey()`.
+     * @default true
+     */
+    autoRegister?: boolean;
 }
 
 /**

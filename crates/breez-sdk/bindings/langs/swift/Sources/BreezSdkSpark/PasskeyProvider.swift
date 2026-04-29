@@ -29,6 +29,7 @@ public class PasskeyProvider: PrfProvider {
     private let rpName: String
     private let userName: String
     private let userDisplayName: String
+    private let autoRegister: Bool
     private let anchor: PresentationAnchorProvider
     private let explicitTeamId: String?
     private let urlSession: URLSession
@@ -88,6 +89,11 @@ public class PasskeyProvider: PrfProvider {
     ///     the entitlement lookup fails.
     ///   - urlSession: Optional custom URLSession for the AASA CDN fetch.
     ///     Defaults to `.shared`. Override in tests to mock the HTTP layer.
+    ///   - autoRegister: When `true` (default), `derivePrfSeed` automatically
+    ///     creates a new passkey if none exists for this RP ID, then retries
+    ///     the assertion. When `false`, `derivePrfSeed` throws
+    ///     `PasskeyPrfError.CredentialNotFound` instead, letting the caller
+    ///     control registration separately via `createPasskey()`.
     public init(
         rpId: String = "keys.breez.technology",
         rpName: String = "Breez SDK",
@@ -95,12 +101,14 @@ public class PasskeyProvider: PrfProvider {
         userDisplayName: String? = nil,
         anchorProvider: PresentationAnchorProvider? = nil,
         teamId: String? = nil,
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        autoRegister: Bool = true
     ) {
         self.rpId = rpId
         self.rpName = rpName
         self.userName = userName ?? rpName
         self.userDisplayName = userDisplayName ?? (userName ?? rpName)
+        self.autoRegister = autoRegister
         self.anchor = anchorProvider ?? DefaultAnchorProvider()
         self.explicitTeamId = teamId
         self.urlSession = urlSession
@@ -109,7 +117,9 @@ public class PasskeyProvider: PrfProvider {
     /// Derive a 32-byte seed from passkey PRF with the given salt.
     ///
     /// Authenticates the user via a platform passkey and evaluates the PRF extension.
-    /// If no credential exists for this RP ID, a new passkey is created automatically.
+    /// If `autoRegister` is `true` (the default) and no credential exists for this
+    /// RP ID, a new passkey is created automatically before retrying. If `autoRegister`
+    /// is `false`, throws `PasskeyPrfError.CredentialNotFound` instead.
     ///
     /// - Parameter salt: The salt string to use for PRF evaluation.
     /// - Returns: The 32-byte PRF output.
@@ -123,7 +133,9 @@ public class PasskeyProvider: PrfProvider {
         do {
             return try await performAssertionWithPrf(saltData: saltData)
         } catch let error as PasskeyPrfError where error.isCredentialNotFound {
-            // No credential found — register a new one and retry
+            guard autoRegister else { throw error }
+
+            // No credential found, auto-register a new one and retry
             do {
                 _ = try await registerCredential()
             } catch let regError as PasskeyPrfError where regError.isCredentialNotFound {

@@ -32,6 +32,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                 return
             }
 
+            let autoRegister = (args["autoRegister"] as? Bool) ?? true
+
             guard let saltData = salt.data(using: .utf8) else {
                 result(FlutterError(code: "ERR_PASSKEY", message: "Failed to encode salt as UTF-8", details: nil))
                 return
@@ -41,7 +43,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                 do {
                     let prfOutput = try await performDerivation(
                         saltData: saltData, rpId: rpId, rpName: rpName,
-                        userName: userName, userDisplayName: userDisplayName
+                        userName: userName, userDisplayName: userDisplayName,
+                        autoRegister: autoRegister
                     )
                     result(prfOutput.base64EncodedString())
                 } catch PasskeyError.userCancelled {
@@ -108,11 +111,14 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
 
     private func performDerivation(
         saltData: Data, rpId: String, rpName: String,
-        userName: String, userDisplayName: String
+        userName: String, userDisplayName: String,
+        autoRegister: Bool
     ) async throws -> Data {
         do {
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         } catch PasskeyError.credentialNotFound {
+            guard autoRegister else { throw PasskeyError.credentialNotFound }
+
             do {
                 _ = try await registerCredential(
                     rpId: rpId, rpName: rpName,

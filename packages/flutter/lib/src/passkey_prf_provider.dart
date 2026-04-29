@@ -30,11 +30,19 @@ class PasskeyProviderOptions {
   /// not affect existing credentials.
   final String? userDisplayName;
 
+  /// When true (default), [PasskeyProvider.derivePrfSeed] automatically creates
+  /// a new passkey if none exists for this RP ID, then retries the assertion.
+  /// When false, throws a [PasskeyPrfException] with code `noCredential`
+  /// instead, letting the caller control registration separately via
+  /// [PasskeyProvider.createPasskey].
+  final bool autoRegister;
+
   const PasskeyProviderOptions({
     this.rpId = 'keys.breez.technology',
     this.rpName = 'Breez SDK',
     this.userName,
     this.userDisplayName,
+    this.autoRegister = true,
   });
 }
 
@@ -93,12 +101,14 @@ class PasskeyProvider {
   final String _rpName;
   final String _userName;
   final String _userDisplayName;
+  final bool _autoRegister;
 
   PasskeyProvider([PasskeyProviderOptions? options])
     : _rpId = options?.rpId ?? 'keys.breez.technology',
       _rpName = options?.rpName ?? 'Breez SDK',
       _userName = options?.userName ?? (options?.rpName ?? 'Breez SDK'),
-      _userDisplayName = options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK'));
+      _userDisplayName = options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
+      _autoRegister = options?.autoRegister ?? true;
 
   /// Derive a 32-byte seed from passkey PRF with the given salt.
   ///
@@ -115,6 +125,7 @@ class PasskeyProvider {
         'rpName': _rpName,
         'userName': _userName,
         'userDisplayName': _userDisplayName,
+        'autoRegister': _autoRegister,
       });
       return base64Decode(result!);
     } on PlatformException catch (e) {

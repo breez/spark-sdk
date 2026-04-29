@@ -85,6 +85,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         val rpName = call.argument<String>("rpName")
         val userName = call.argument<String>("userName")
         val userDisplayName = call.argument<String>("userDisplayName")
+        val autoRegister = call.argument<Boolean>("autoRegister") ?: true
 
         if (salt == null || rpId == null || rpName == null || userName == null || userDisplayName == null) {
             result.error("ERR_PASSKEY", "Invalid arguments", null)
@@ -104,6 +105,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    autoRegister = autoRegister,
                 )
                 result.success(Base64.encodeToString(prfOutput, Base64.NO_WRAP))
             } catch (e: CredentialManagerPrfCoreException) {

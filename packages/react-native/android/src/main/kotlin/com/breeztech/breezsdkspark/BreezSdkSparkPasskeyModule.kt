@@ -60,6 +60,7 @@ class BreezSdkSparkPasskeyModule(
         rpName: String,
         userName: String,
         userDisplayName: String,
+        autoRegister: Boolean,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -77,6 +78,7 @@ class BreezSdkSparkPasskeyModule(
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    autoRegister = autoRegister,
                 )
                 promise.resolve(Base64.encodeToString(prfOutput, Base64.NO_WRAP))
             } catch (e: CredentialManagerPrfCoreException) {
