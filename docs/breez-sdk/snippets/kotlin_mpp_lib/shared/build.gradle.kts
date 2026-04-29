@@ -3,6 +3,10 @@ plugins {
     alias(libs.plugins.androidLibrary)
 }
 
+// Skip iOS targets when the breez SDK was published JVM-only (used by
+// docs CI together with `-PskipIosTargets` on the SDK build).
+val skipIosTargets = project.hasProperty("skipIosTargets")
+
 kotlin {
     androidTarget {
         compilations.all {
@@ -14,14 +18,16 @@ kotlin {
 
     jvm()
 
-    listOf(
-        iosX64(),
-        iosArm64(),
-        iosSimulatorArm64()
-    ).forEach {
-        it.binaries.framework {
-            baseName = "shared"
-            isStatic = true
+    if (!skipIosTargets) {
+        listOf(
+            iosX64(),
+            iosArm64(),
+            iosSimulatorArm64()
+        ).forEach {
+            it.binaries.framework {
+                baseName = "shared"
+                isStatic = true
+            }
         }
     }
 

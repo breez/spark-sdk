@@ -11,7 +11,7 @@ pub enum DocSnippetsPackage {
     Wasm,
     Flutter,
     Go,
-    KotlinMPP,
+    KotlinMultiplatform,
     Python,
     ReactNative,
     Rust,
@@ -25,8 +25,8 @@ impl FromStr for DocSnippetsPackage {
         match s {
             "wasm" => Ok(DocSnippetsPackage::Wasm),
             "flutter" => Ok(DocSnippetsPackage::Flutter),
-            "go" => Ok(DocSnippetsPackage::Go),
-            "kotlin-mpp" => Ok(DocSnippetsPackage::KotlinMPP),
+            "golang" => Ok(DocSnippetsPackage::Go),
+            "kotlin-multiplatform" => Ok(DocSnippetsPackage::KotlinMultiplatform),
             "python" => Ok(DocSnippetsPackage::Python),
             "react-native" => Ok(DocSnippetsPackage::ReactNative),
             "rust" => Ok(DocSnippetsPackage::Rust),
@@ -51,8 +51,8 @@ pub fn check_doc_snippets_cmd(
         Some(DocSnippetsPackage::Go) => {
             check_doc_snippets_go_cmd(skip_binding_gen)?;
         }
-        Some(DocSnippetsPackage::KotlinMPP) => {
-            check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen)?;
+        Some(DocSnippetsPackage::KotlinMultiplatform) => {
+            check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen)?;
         }
         Some(DocSnippetsPackage::Python) => {
             check_doc_snippets_python_cmd(skip_binding_gen)?;
@@ -73,7 +73,7 @@ pub fn check_doc_snippets_cmd(
             check_doc_snippets_wasm_cmd(skip_binding_gen)?;
             check_doc_snippets_flutter_cmd(skip_binding_gen)?;
             check_doc_snippets_go_cmd(skip_binding_gen)?;
-            check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen)?;
+            check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen)?;
             check_doc_snippets_python_cmd(skip_binding_gen)?;
             check_doc_snippets_react_native_cmd(skip_binding_gen)?;
             check_doc_snippets_rust_cmd()?;
@@ -270,48 +270,59 @@ go 1.19
     Ok(())
 }
 
-fn check_doc_snippets_kotlin_mpp_cmd(skip_binding_gen: bool) -> Result<()> {
+fn check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen: bool) -> Result<()> {
     let workspace_root = env::current_dir()?;
 
     if !skip_binding_gen {
-        println!("Building Kotlin MPP Bindings");
+        println!("Building Kotlin Multiplatform bindings (host + JVM publication)");
 
+        // Run gobley-uniffi-bindgen against the host's release library, then
+        // copy the generated Kotlin sources into the KMP module. Skipping the
+        // Android NDK build keeps this off the cargo-ndk + cross-compile path.
         let bindings_dir = workspace_root.join("crates/breez-sdk/bindings");
         let status = Command::new("make")
-            .arg("package-kotlin-multiplatform-dummy-binaries")
+            .arg("build-kotlin-multiplatform-bindgen-host")
             .current_dir(&bindings_dir)
             .status()?;
         if !status.success() {
             anyhow::bail!(
-                "Failed to run 'make package-kotlin-multiplatform-dummy-binaries' in {:?}",
+                "Failed to run 'make build-kotlin-multiplatform-bindgen-host' in {:?}",
                 bindings_dir
             );
         }
 
-        let kotlin_mpp_dir = bindings_dir.join("langs/kotlin-multiplatform");
+        // `-PskipIosTargets` excludes the iOS targets from the module
+        // configuration so publishing the JVM publication doesn't pull in
+        // Konan downloads + iOS cinterop + iOS native compiles. SDK iOS
+        // compile coverage is provided by the cli-ci `kotlin-multiplatform-ios`
+        // job.
+        let kotlin_multiplatform_dir = bindings_dir.join("langs/kotlin-multiplatform");
         let status = Command::new("./gradlew")
-            .arg("publishToMavenLocal")
+            .arg("publishKotlinMultiplatformPublicationToMavenLocal")
+            .arg("publishJvmPublicationToMavenLocal")
             .arg("-PlibraryVersion=0.0.0-local-docs")
-            .current_dir(&kotlin_mpp_dir)
+            .arg("-PskipIosTargets")
+            .current_dir(&kotlin_multiplatform_dir)
             .status()?;
         if !status.success() {
             anyhow::bail!(
-                "Failed to run 'gradlew publishToMavenLocal' in {:?}",
-                kotlin_mpp_dir
+                "Failed to publish JVM Kotlin Multiplatform publication in {:?}",
+                kotlin_multiplatform_dir
             );
         }
     }
 
-    println!("Checking doc snippets Kotlin MPP");
+    println!("Checking doc snippets Kotlin Multiplatform");
 
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
     let status = Command::new("./gradlew")
         .arg("compileKotlinJvm")
+        .arg("-PskipIosTargets")
         .current_dir(&kotlin_snippets_dir)
         .status()?;
     if !status.success() {
         anyhow::bail!(
-            "Failed to run './gradlew compileKotlinJvm' in {:?}",
+            "Failed to compile Kotlin doc snippets in {:?}",
             kotlin_snippets_dir
         );
     }
