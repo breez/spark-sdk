@@ -98,32 +98,52 @@ pub trait PrfProvider: Send + Sync {
     /// * `Err(PasskeyPrfError)` - If the check fails
     async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError>;
 
-    /// Verify the app's identity against the platform's out-of-band domain
-    /// verification source (iOS AASA / Android assetlinks).
+    /// Diagnostic check: verify the app's identity against the platform's
+    /// domain verification source (iOS AASA / Android assetlinks / browser
+    /// rpId scope).
     ///
-    /// Designed to be called **once per session**, before the first `WebAuthn`
-    /// ceremony, so applications can gate onboarding/discovery UX on a
-    /// reliable signal. Without this check, AASA/assetlinks-related failures
-    /// are indistinguishable from "no credential found" or "user cancelled"
-    /// at the platform error layer, forcing callers to rely on error-string
-    /// heuristics.
+    /// This method is **advisory**. The SDK never blocks internally on its
+    /// result. Applications choose their own policy for how to use it.
     ///
-    /// The default implementation returns [`DomainAssociation::Skipped`].
-    /// The built-in `PasskeyProvider` on each platform (iOS / Android /
-    /// browser) overrides this with an active check against Apple's AASA CDN,
-    /// Google's Digital Asset Links API, or a browser-side registrable-suffix
-    /// check respectively. Custom providers (`YubiKey`, FIDO2, file-backed)
-    /// that have no platform cache to verify against should inherit the
-    /// default.
+    /// # When to call
+    ///
+    /// - **First launch / onboarding**: call once to catch misconfiguration
+    ///   early, before the first WebAuthn ceremony.
+    /// - **Error recovery**: if `derivePrfSeed` returns `CredentialNotFound`
+    ///   but you expect a credential to exist, call this to distinguish
+    ///   "genuinely no credential" from "platform configuration is broken."
+    ///   On iOS, `ASAuthorizationError.notHandled` collapses both cases into
+    ///   the same error code, making this check the only reliable diagnostic.
+    /// - **Not needed per-session**: once association is confirmed, the
+    ///   configuration rarely changes. Re-check only after errors.
+    ///
+    /// # Platform behavior
+    ///
+    /// The built-in `PasskeyProvider` on each platform overrides this with
+    /// an active check:
+    /// - **iOS/macOS**: fetches the AASA file from Apple's CDN and verifies
+    ///   the app's bundle ID + team ID appear in `webcredentials.apps`.
+    /// - **Android**: queries Google's Digital Asset Links API for a matching
+    ///   `get_login_creds` statement. Returns `Skipped` (not `NotAssociated`)
+    ///   on mismatch, because Android's CredentialManager performs its own
+    ///   internal DAL verification via Google Play Services, which may have a
+    ///   fresher cache than the public API.
+    /// - **Browser**: checks that `rpId` is a registrable suffix of
+    ///   `window.location.hostname` (the same rule the browser enforces
+    ///   at WebAuthn call time). No network request needed.
+    ///
+    /// Custom providers (YubiKey, FIDO2, file-backed) that have no platform
+    /// cache to verify against should inherit the default, which returns
+    /// `Skipped`.
     ///
     /// # Returns
-    /// * `Ok(DomainAssociation::Associated)` — safe to proceed with `WebAuthn`
-    /// * `Ok(DomainAssociation::NotAssociated { ... })` — stop the flow and
-    ///   surface a dedicated error state; `WebAuthn` calls will fail
-    /// * `Ok(DomainAssociation::Skipped { ... })` — provider does not verify,
-    ///   or the check could not complete; proceed normally
-    /// * `Err(PasskeyPrfError)` — the check mechanism itself failed in a
-    ///   way that shouldn't be treated as "associated" or "skipped"
+    /// * `Ok(DomainAssociation::Associated)`: configuration looks correct.
+    /// * `Ok(DomainAssociation::NotAssociated { .. })`: configuration problem
+    ///   detected. On iOS this is a hard signal (AASA mismatch). On Android
+    ///   the provider degrades this to `Skipped` (see above).
+    /// * `Ok(DomainAssociation::Skipped { .. })`: check was not performed or
+    ///   could not complete. Proceed normally.
+    /// * `Err(PasskeyPrfError)`: the check mechanism itself failed.
     async fn check_domain_association(&self) -> Result<DomainAssociation, PasskeyPrfError> {
         Ok(DomainAssociation::Skipped {
             reason: "Provider does not verify domain association".to_string(),
