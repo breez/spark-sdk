@@ -86,9 +86,13 @@ export declare class PasskeyPrfProvider {
      * 1 WebAuthn prompt. Use this to separate credential creation from
      * derivation in multi-step onboarding flows.
      *
+     * @param excludeCredentialIds - Optional list of credential IDs to exclude.
+     *   Pass previously created credential IDs to prevent the authenticator
+     *   from creating a duplicate on the same device.
+     * @returns The credential ID of the newly created passkey.
      * @throws If the user cancels or PRF is not supported by the authenticator.
      */
-    createPasskey(): Promise<void>;
+    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

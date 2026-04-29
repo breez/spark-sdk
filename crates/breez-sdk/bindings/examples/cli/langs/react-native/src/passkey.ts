@@ -282,7 +282,7 @@ export async function resolvePasskeySeed(
   provider: {
     derivePrfSeed: (salt: string) => Promise<ArrayBuffer>
     isPrfAvailable: () => Promise<boolean>
-    createPasskey?: () => Promise<void>
+    createPasskey?: (excludeCredentialIds?: Uint8Array[]) => Promise<Uint8Array>
   },
   breezApiKey: string | undefined,
   label: string | undefined,
