@@ -70,7 +70,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const getSparkStatus: any;
 
   // --- passkey ---
-  // Note: PasskeyPrfProvider (concrete class) ships at the
+  // Note: PasskeyProvider (concrete class) ships at the
   // `/passkey-prf-provider` subpath export, declared separately below.
   // PrfProvider is the trait that custom implementations target.
   export type PrfProvider = any;
@@ -88,7 +88,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
 }
 
 declare module '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider' {
-  export const PasskeyPrfProvider: any;
-  export type PasskeyPrfProvider = any;
-  export type PasskeyPrfProviderOptions = any;
+  export const PasskeyProvider: any;
+  export type PasskeyProvider = any;
+  export type PasskeyProviderOptions = any;
 }

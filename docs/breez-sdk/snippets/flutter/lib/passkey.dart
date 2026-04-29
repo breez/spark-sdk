@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 // ANCHOR: implement-prf-provider
-// Implement custom callbacks if the built-in PasskeyPrfProvider doesn't fit your needs.
+// Implement custom callbacks if the built-in PasskeyProvider doesn't fit your needs.
 Future<Uint8List> derivePrfSeed(String salt) async {
   // Call platform passkey API with PRF extension
   // Returns 32-byte PRF output
@@ -17,7 +17,7 @@ Future<bool> isPrfAvailable() async {
 
 Future<void> checkAvailability() async {
   // ANCHOR: check-availability
-  final prfProvider = PasskeyPrfProvider();
+  final prfProvider = PasskeyProvider();
   if (await prfProvider.isPrfAvailable()) {
     // Show passkey as primary option
   } else {
@@ -29,7 +29,7 @@ Future<void> checkAvailability() async {
 Future<BreezSdk> connectWithPasskey() async {
   // ANCHOR: connect-with-passkey
   // Use the built-in platform PRF provider (or pass custom callbacks)
-  final prfProvider = PasskeyPrfProvider();
+  final prfProvider = PasskeyProvider();
   final passkey = Passkey(
     derivePrfSeed: prfProvider.derivePrfSeed,
     isPrfAvailable: prfProvider.isPrfAvailable,
@@ -48,7 +48,7 @@ Future<BreezSdk> connectWithPasskey() async {
 
 Future<List<String>> listLabels() async {
   // ANCHOR: list-labels
-  final prfProvider = PasskeyPrfProvider();
+  final prfProvider = PasskeyProvider();
   final relayConfig = NostrRelayConfig(
     breezApiKey: '<breez api key>',
   );
@@ -70,7 +70,7 @@ Future<List<String>> listLabels() async {
 
 Future<void> storeLabel() async {
   // ANCHOR: store-label
-  final prfProvider = PasskeyPrfProvider();
+  final prfProvider = PasskeyProvider();
   final relayConfig = NostrRelayConfig(
     breezApiKey: '<breez api key>',
   );

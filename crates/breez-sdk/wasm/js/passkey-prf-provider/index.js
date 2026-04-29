@@ -13,9 +13,9 @@
  * @example
  * ```javascript
  * import { Passkey } from '@breeztech/breez-sdk-spark'
- * import { PasskeyPrfProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
+ * import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
  *
- * const prfProvider = new PasskeyPrfProvider()
+ * const prfProvider = new PasskeyProvider()
  * const passkey = new Passkey(prfProvider, undefined)
  * const wallet = await passkey.getWallet('personal')
  * ```
@@ -38,7 +38,7 @@ function randomBytes(length) {
 /**
  * Built-in passkey-based PRF provider for browser environments.
  */
-export class PasskeyPrfProvider {
+export class PasskeyProvider {
     /**
      * @param {object} [options]
      * @param {string} [options.rpId='keys.breez.technology'] - Relying Party ID.
@@ -362,3 +362,8 @@ export class PasskeyPrfProvider {
         }
     }
 }
+
+/**
+ * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
+ */
+export { PasskeyProvider as PasskeyPrfProvider };

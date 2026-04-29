@@ -2,10 +2,10 @@ package com.example.kotlinmpplib
 
 import android.app.Activity
 import breez_sdk_spark.*
-import technology.breez.spark.passkey.PasskeyPrfProvider
+import technology.breez.spark.passkey.PasskeyProvider
 
 // ANCHOR: implement-prf-provider
-// Implement the interface for custom logic if the built-in PasskeyPrfProvider doesn't fit your needs.
+// Implement the interface for custom logic if the built-in PasskeyProvider doesn't fit your needs.
 class CustomPrfProvider : PrfProvider {
     override suspend fun derivePrfSeed(salt: String): ByteArray {
         // Call platform passkey API with PRF extension
@@ -21,7 +21,7 @@ class CustomPrfProvider : PrfProvider {
     override suspend fun checkDomainAssociation(): DomainAssociation {
         // Optional: verify the app's identity against the platform's domain
         // verification source (e.g., Android Digital Asset Links for the
-        // built-in PasskeyPrfProvider). Custom providers without a platform
+        // built-in PasskeyProvider). Custom providers without a platform
         // cache to verify against return `Skipped`, which tells callers
         // "proceed with WebAuthn as normal".
         return DomainAssociation.Skipped("CustomPrfProvider does not verify domain association")
@@ -32,7 +32,7 @@ class CustomPrfProvider : PrfProvider {
 class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
-        val prfProvider = PasskeyPrfProvider(
+        val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
         if (prfProvider.isPrfAvailable()) {
@@ -45,7 +45,7 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
-        val prfProvider = PasskeyPrfProvider(
+        val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
         val passkey = Passkey(prfProvider, null)
@@ -61,7 +61,7 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun listLabels(): List<String> {
         // ANCHOR: list-labels
-        val prfProvider = PasskeyPrfProvider(
+        val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
@@ -79,7 +79,7 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun storeLabel() {
         // ANCHOR: store-label
-        val prfProvider = PasskeyPrfProvider(
+        val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
         val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")

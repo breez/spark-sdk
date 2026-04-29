@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
-/// Options for constructing a [PasskeyPrfProvider].
-class PasskeyPrfProviderOptions {
+/// Options for constructing a [PasskeyProvider].
+class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
   /// credential sharing.
   ///
@@ -30,7 +30,7 @@ class PasskeyPrfProviderOptions {
   /// not affect existing credentials.
   final String? userDisplayName;
 
-  const PasskeyPrfProviderOptions({
+  const PasskeyProviderOptions({
     this.rpId = 'keys.breez.technology',
     this.rpName = 'Breez SDK',
     this.userName,
@@ -38,7 +38,7 @@ class PasskeyPrfProviderOptions {
   });
 }
 
-/// Error thrown by [PasskeyPrfProvider] when a passkey operation fails.
+/// Error thrown by [PasskeyProvider] when a passkey operation fails.
 ///
 /// Provides a structured [code] that maps to native error codes and a
 /// human-readable [message]. The [code] can be used for programmatic
@@ -79,14 +79,14 @@ class PasskeyPrfException implements Exception {
 /// ```dart
 /// import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 ///
-/// final prfProvider = PasskeyPrfProvider();
+/// final prfProvider = PasskeyProvider();
 /// final passkey = Passkey(
 ///   derivePrfSeed: prfProvider.derivePrfSeed,
 ///   isPrfAvailable: prfProvider.isPrfAvailable,
 /// );
 /// final wallet = await passkey.getWallet(label: 'personal');
 /// ```
-class PasskeyPrfProvider {
+class PasskeyProvider {
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
 
   final String _rpId;
@@ -94,7 +94,7 @@ class PasskeyPrfProvider {
   final String _userName;
   final String _userDisplayName;
 
-  PasskeyPrfProvider([PasskeyPrfProviderOptions? options])
+  PasskeyProvider([PasskeyProviderOptions? options])
     : _rpId = options?.rpId ?? 'keys.breez.technology',
       _rpName = options?.rpName ?? 'Breez SDK',
       _userName = options?.userName ?? (options?.rpName ?? 'Breez SDK'),
@@ -173,3 +173,9 @@ class PasskeyPrfProvider {
     };
   }
 }
+
+/// @Deprecated('Use PasskeyProviderOptions instead.')
+typedef PasskeyPrfProviderOptions = PasskeyProviderOptions;
+
+/// @Deprecated('Use PasskeyProvider instead.')
+typedef PasskeyPrfProvider = PasskeyProvider;

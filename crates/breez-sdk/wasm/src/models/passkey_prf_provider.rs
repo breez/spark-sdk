@@ -52,14 +52,14 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * Interface for PRF (Pseudo-Random Function) operations backing seedless
  * wallet restore.
  *
- * Implemented by the built-in `PasskeyPrfProvider` (browser passkey via the
+ * Implemented by the built-in `PasskeyProvider` (browser passkey via the
  * WebAuthn PRF extension); also implementable directly for custom
  * deterministic sources (YubiKey HMAC challenge, FIDO2 hmac-secret, on-disk
  * key material, hardware HSMs).
  *
  * @example
  * ```typescript
- * class BrowserPasskeyPrfProvider implements PrfProvider {
+ * class BrowserPasskeyProvider implements PrfProvider {
  *     async derivePrfSeed(salt: string): Promise<Uint8Array> {
  *         const credential = await navigator.credentials.get({
  *             publicKey: {
