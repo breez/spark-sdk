@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use clap::Parser;
 use rand::{Rng, RngCore, SeedableRng};
-use tempdir::TempDir;
+use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -582,7 +582,9 @@ async fn initialize_sdk_pair(
     sender_postgres: Option<String>,
     receiver_postgres: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32])> {
-    let sender_dir = TempDir::new("concurrent-perf-sender")?;
+    let sender_dir = tempfile::Builder::new()
+        .prefix("concurrent-perf-sender")
+        .tempdir()?;
     let sender_path = sender_dir.path().to_string_lossy().to_string();
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
@@ -604,7 +606,9 @@ async fn initialize_sdk_pair(
     )
     .await?;
 
-    let receiver_dir = TempDir::new("concurrent-perf-receiver")?;
+    let receiver_dir = tempfile::Builder::new()
+        .prefix("concurrent-perf-receiver")
+        .tempdir()?;
     let receiver_path = receiver_dir.path().to_string_lossy().to_string();
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
@@ -643,7 +647,9 @@ async fn build_extra_sender(
     sender_postgres: Option<String>,
     instance_index: u32,
 ) -> Result<BenchSdkInstance> {
-    let dir = TempDir::new(&format!("concurrent-perf-sender-{instance_index}"))?;
+    let dir = tempfile::Builder::new()
+        .prefix(format!("concurrent-perf-sender-{instance_index}").as_str())
+        .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
 
     let mut config = default_config(Network::Regtest);

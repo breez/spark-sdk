@@ -114,7 +114,9 @@ async fn test_concurrent_multi_instance_operations() -> Result<()> {
 
     // Create counterparty with different seed using SQLite (standard setup)
     info!("Creating counterparty SDK with SQLite storage...");
-    let counterparty_dir = tempdir::TempDir::new("breez-sdk-counterparty")?;
+    let counterparty_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-counterparty")
+        .tempdir()?;
     let counterparty_path = counterparty_dir.path().to_string_lossy().to_string();
     let mut counterparty_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut counterparty_seed);

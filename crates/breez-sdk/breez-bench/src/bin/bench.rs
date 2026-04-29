@@ -100,7 +100,7 @@ struct BenchSdkInstance {
     sdk: BreezSdk,
     events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
-    temp_dir: Option<tempdir::TempDir>, // Keep alive for regtest
+    temp_dir: Option<tempfile::TempDir>, // Keep alive for regtest
 }
 
 /// Event listener that forwards events to a channel
@@ -623,10 +623,10 @@ async fn initialize_regtest_sdk_pair(
 ) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     use breez_sdk_itest::build_sdk_with_custom_config;
     use rand::RngCore;
-    use tempdir::TempDir;
-
     // Create sender SDK - keep TempDir alive by storing in BenchSdkInstance
-    let sender_dir = TempDir::new("breez-bench-sender")?;
+    let sender_dir = tempfile::Builder::new()
+        .prefix("breez-bench-sender")
+        .tempdir()?;
     let sender_path = sender_dir.path().to_string_lossy().to_string();
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
@@ -640,7 +640,9 @@ async fn initialize_regtest_sdk_pair(
         build_sdk_with_custom_config(sender_path, sender_seed, sender_config, None, true).await?;
 
     // Create receiver SDK
-    let receiver_dir = TempDir::new("breez-bench-receiver")?;
+    let receiver_dir = tempfile::Builder::new()
+        .prefix("breez-bench-receiver")
+        .tempdir()?;
     let receiver_path = receiver_dir.path().to_string_lossy().to_string();
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);

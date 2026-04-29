@@ -14,7 +14,7 @@ pub use helpers::*;
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};
 use rand::RngCore;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 /// Container for SDK instance, event channel, and storage directory

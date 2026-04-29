@@ -1,15 +1,18 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use axum::Json;
+use axum::Router;
+use axum::extract::{Query, State};
+use axum::routing::get;
 use bech32::{Bech32, Hrp};
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rand::RngCore;
 use rstest::*;
-use tempdir::TempDir;
 use tokio::sync::Mutex;
 use tracing::info;
-use warp::Filter;
 
 // ---------------------
 // Mock LNURL Auth Server
@@ -31,6 +34,33 @@ struct AuthState {
 
 type SharedAuthState = Arc<Mutex<AuthState>>;
 
+/// LNURL auth handler - handles both initial request and callback
+/// Per LUD-04: the callback URL is the same as the initial URL with sig and key params appended
+async fn lnurl_auth_handler(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<SharedAuthState>,
+) -> Json<serde_json::Value> {
+    let sig = params.get("sig").map(|s| s.to_string());
+    let key = params.get("key").map(|s| s.to_string());
+
+    if sig.is_some() && key.is_some() {
+        // This is a callback - validate and store
+        let mut state = state.lock().await;
+        state.authenticated_key = key;
+        state.signature = sig;
+        return Json(serde_json::json!({"status": "OK"}));
+    }
+
+    // This is an initial request - return the challenge
+    let action = params.get("action").map(|s| s.as_str()).unwrap_or("login");
+    let state = state.lock().await;
+    Json(serde_json::json!({
+        "tag": "login",
+        "k1": state.k1,
+        "action": action,
+    }))
+}
+
 /// Creates a mock LNURL auth server that returns a challenge and validates signatures
 async fn start_mock_lnurl_auth_server() -> Result<(String, SharedAuthState)> {
     // Generate a random k1 challenge (32 bytes hex encoded)
@@ -44,47 +74,9 @@ async fn start_mock_lnurl_auth_server() -> Result<(String, SharedAuthState)> {
         signature: None,
     }));
 
-    let state_for_filter = state.clone();
-    let state_filter = warp::any().map(move || state_for_filter.clone());
-
-    // LNURL auth endpoint - handles both initial request and callback
-    // Per LUD-04: the callback URL is the same as the initial URL with sig and key params appended
-    let auth_endpoint = warp::path!("lnurl-auth")
-        .and(warp::query::<std::collections::HashMap<String, String>>())
-        .and(state_filter.clone())
-        .and_then(
-            |params: std::collections::HashMap<String, String>, state: SharedAuthState| async move {
-                // Check if this is a callback (has sig and key params)
-                let sig = params.get("sig").map(|s| s.to_string());
-                let key = params.get("key").map(|s| s.to_string());
-
-                if sig.is_some() && key.is_some() {
-                    // This is a callback - validate and store
-                    let mut state = state.lock().await;
-                    state.authenticated_key = key;
-                    state.signature = sig;
-
-                    let success_response = serde_json::json!({
-                        "status": "OK"
-                    });
-                    return Ok::<_, warp::Rejection>(warp::reply::json(&success_response));
-                }
-
-                // This is an initial request - return the challenge
-                let action = params.get("action").map(|s| s.as_str()).unwrap_or("login");
-                let state = state.lock().await;
-
-                let response = serde_json::json!({
-                    "tag": "login",
-                    "k1": state.k1,
-                    "action": action,
-                });
-
-                Ok::<_, warp::Rejection>(warp::reply::json(&response))
-            },
-        );
-
-    let routes = auth_endpoint;
+    let app = Router::new()
+        .route("/lnurl-auth", get(lnurl_auth_handler))
+        .with_state(state.clone());
 
     // Start the server on a random available port
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -92,9 +84,7 @@ async fn start_mock_lnurl_auth_server() -> Result<(String, SharedAuthState)> {
     let port = addr.port();
 
     tokio::spawn(async move {
-        warp::serve(routes)
-            .serve_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-            .await;
+        axum::serve(listener, app).await.unwrap();
     });
 
     // Wait a bit for server to start
@@ -113,7 +103,9 @@ async fn start_mock_lnurl_auth_server() -> Result<(String, SharedAuthState)> {
 /// Fixture: SDK for LNURL auth testing
 #[fixture]
 async fn auth_sdk() -> Result<SdkInstance> {
-    let temp_dir = TempDir::new("breez-sdk-lnurl-auth")?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-lnurl-auth")
+        .tempdir()?;
 
     // Generate random seed
     let mut seed = [0u8; 32];
