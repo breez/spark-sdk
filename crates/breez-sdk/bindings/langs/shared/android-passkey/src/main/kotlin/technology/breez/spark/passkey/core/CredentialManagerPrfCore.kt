@@ -520,6 +520,8 @@ public object CredentialManagerPrfCore {
         AuthenticationFailed,
         /** PRF evaluation produced an empty or malformed response. */
         PrfEvaluationFailed,
+        /** Platform or app configuration error (e.g. missing assetlinks.json, misconfigured RP ID). */
+        Configuration,
         /** Any other unexpected error — message contains the details. */
         Generic,
     }
