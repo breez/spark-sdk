@@ -3,6 +3,20 @@ name: CLI static analysis
 on:
   workflow_call:
 
+# Version pins for the kmp-* matrix jobs. Bump these in lockstep with the
+# canonical source so the cache keys invalidate alongside the binary itself.
+env:
+  # cargo-ndk 4.x is required by the `--link-libcxx-shared` flag the
+  # bindings Makefile passes (see `build-ndk-release-target-%`); the flag
+  # was added in 4.0.
+  CARGO_NDK_VERSION: 4.1.2
+  # Mirror of the gobley branch pinned in
+  # `crates/breez-sdk/bindings/Makefile` (`install-uniffi-bindgen-gobley`).
+  GOBLEY_REF: v0.3.7-with-fixes
+  # Mirror of `kotlin_target_version` in
+  # `crates/breez-sdk/bindings/uniffi.kotlin-multiplatform.toml`.
+  KOTLIN_NATIVE_VERSION: 1.9.21
+
 jobs:
   check:
     name: ${{ matrix.lang }}
@@ -89,9 +103,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.konan
-          # Bump the suffix when the Kotlin version pinned in
-          # crates/breez-sdk/bindings/uniffi.kotlin-multiplatform.toml changes.
-          key: konan-1.9.21-${{ runner.os }}
+          key: konan-${{ env.KOTLIN_NATIVE_VERSION }}-${{ runner.os }}
 
       - name: Add Android Rust target
         if: matrix.android-ndk
@@ -102,20 +114,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-ndk
-          key: cargo-ndk-${{ runner.os }}
+          key: cargo-ndk-${{ env.CARGO_NDK_VERSION }}-${{ runner.os }}
 
       - name: Install cargo-ndk
         if: matrix.android-ndk
-        run: command -v cargo-ndk || cargo install cargo-ndk --locked
+        run: command -v cargo-ndk || cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
 
       - name: Cache gobley-uniffi-bindgen
         if: matrix.gradle
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/gobley-uniffi-bindgen
-          # Bump the suffix when the gobley pin in
-          # crates/breez-sdk/bindings/Makefile changes.
-          key: gobley-uniffi-bindgen-v0.3.7-with-fixes-${{ runner.os }}
+          key: gobley-uniffi-bindgen-${{ env.GOBLEY_REF }}-${{ runner.os }}
 
       - name: Generate KMP bindings (host)
         if: matrix.lang == 'kotlin-multiplatform-ios'
