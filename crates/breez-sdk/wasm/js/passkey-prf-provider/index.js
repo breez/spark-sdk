@@ -42,8 +42,8 @@ export class PasskeyProvider {
     /**
      * @param {object} [options]
      * @param {string} [options.rpId='keys.breez.technology'] - Relying Party ID.
-     *   Must match the domain configured in .well-known/webauthn for cross-platform
-     *   credential sharing. Changing this after users have registered passkeys will
+     *   Must match the domain hosting your passkeys. On native platforms this
+     *   corresponds to the AASA / assetlinks.json domain. Changing this after users have registered passkeys will
      *   make their existing credentials undiscoverable — they would need to create
      *   new passkeys with the new RP ID.
      * @param {string} [options.rpName='Breez SDK'] - RP display name shown during
