@@ -1,5 +1,5 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyPrfProvider};
+use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
 use ctap_hid_fido2::fidokey::get_assertion::get_assertion_params::{
     Extension as GetExtension, GetAssertionArgsBuilder,
 };
@@ -33,7 +33,7 @@ struct CachedState {
     pin: Option<String>,
 }
 
-/// FIDO2 hmac-secret implementation of `PasskeyPrfProvider`.
+/// FIDO2 hmac-secret implementation of `PrfProvider`.
 ///
 /// Uses CTAP2 hmac-secret extension for browser-compatible PRF.
 /// Applies `WebAuthn` salt transformation for cross-platform compatibility.
@@ -184,7 +184,7 @@ impl Fido2PrfProvider {
 }
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for Fido2PrfProvider {
+impl PrfProvider for Fido2PrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         let rp_id = self.rp_id.clone();
         let rp_name = self.rp_name.clone();
