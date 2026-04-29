@@ -47,7 +47,7 @@ data class PasskeyConfig(
 private const val SECRET_FILE_NAME = "seedless-restore-secret"
 
 /**
- * File-based implementation of [PasskeyPrfProvider].
+ * File-based implementation of [PrfProvider].
  *
  * Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
  * randomly on first use and persisted to disk.
@@ -57,7 +57,7 @@ private const val SECRET_FILE_NAME = "seedless-restore-secret"
  * - This is less secure than hardware-backed solutions like YubiKey
  * - Suitable for development/testing or when hardware keys are unavailable
  */
-class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
+class FilePrfProvider(dataDir: String) : PrfProvider {
     private val secret: ByteArray
 
     init {
@@ -92,6 +92,9 @@ class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
     override suspend fun isPrfAvailable(): Boolean {
         return true
     }
+
+    override suspend fun checkDomainAssociation(): DomainAssociation =
+        DomainAssociation.Skipped("FilePrfProvider does not verify domain association")
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +104,7 @@ class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
 /**
  * Stub provider for hardware-dependent backends that are not yet supported.
  */
-class NotYetSupportedProvider(private val name: String) : PasskeyPrfProvider {
+class NotYetSupportedProvider(private val name: String) : PrfProvider {
     override suspend fun derivePrfSeed(salt: String): ByteArray {
         throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
     }
@@ -109,6 +112,9 @@ class NotYetSupportedProvider(private val name: String) : PasskeyPrfProvider {
     override suspend fun isPrfAvailable(): Boolean {
         throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
     }
+
+    override suspend fun checkDomainAssociation(): DomainAssociation =
+        DomainAssociation.Skipped("$name does not verify domain association")
 }
 
 // ---------------------------------------------------------------------------
@@ -116,9 +122,9 @@ class NotYetSupportedProvider(private val name: String) : PasskeyPrfProvider {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a [PasskeyPrfProvider] for the given provider type.
+ * Creates a [PrfProvider] for the given provider type.
  */
-fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? = null): PasskeyPrfProvider {
+fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? = null): PrfProvider {
     return when (provider) {
         PasskeyProvider.FILE -> FilePrfProvider(dataDir)
         PasskeyProvider.YUBIKEY -> NotYetSupportedProvider("YubiKey")
@@ -135,7 +141,7 @@ fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? =
  * matching the Rust CLI's resolve_passkey_seed logic.
  */
 suspend fun resolvePasskeySeed(
-    provider: PasskeyPrfProvider,
+    provider: PrfProvider,
     breezApiKey: String?,
     label: String?,
     listLabels: Boolean,

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
-use breez_sdk_spark::passkey::{NostrRelayConfig, Passkey, PasskeyPrfError, PasskeyPrfProvider};
+use breez_sdk_spark::passkey::{NostrRelayConfig, Passkey, PasskeyPrfError, PrfProvider};
 
 #[cfg(feature = "fido2")]
 pub mod fido2_prf;
@@ -70,7 +70,7 @@ impl PasskeyProvider {
         self,
         data_dir: &PathBuf,
         fido2_rp_id: Option<String>,
-    ) -> Result<Arc<dyn PasskeyPrfProvider>, PasskeyPrfError> {
+    ) -> Result<Arc<dyn PrfProvider>, PasskeyPrfError> {
         match self {
             PasskeyProvider::File => Ok(Arc::new(FilePrfProvider::new(data_dir)?)),
             PasskeyProvider::YubiKey => Ok(Arc::new(YubiKeyPrfProvider::new()?)),
@@ -82,7 +82,7 @@ impl PasskeyProvider {
 
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn resolve_passkey_seed(
-    provider: Arc<dyn PasskeyPrfProvider>,
+    provider: Arc<dyn PrfProvider>,
     breez_api_key: Option<String>,
     label: Option<String>,
     list_labels: bool,

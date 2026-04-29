@@ -3,6 +3,7 @@
     "target": "esnext",
     "module": "esnext",
     "lib": ["es2020"],
+    "types": [],
     "jsx": "react-native",
     "strict": true,
     "esModuleInterop": true,

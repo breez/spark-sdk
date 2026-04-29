@@ -13,17 +13,29 @@
   },
   "dependencies": {
     "@breeztech/breez-sdk-spark-react-native": "file:../../../../../../../packages/react-native",
-    "react": "19.1.0",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "react": "19.0.0",
     "react-native": "0.79.2",
     "react-native-fs": "^2.20.0",
-    "react-native-get-random-values": "^1.11.0",
-    "@react-native-async-storage/async-storage": "^2.1.2"
+    "react-native-get-random-values": "^1.11.0"
+  },
+  "overrides": {
+    "react-native": "0.79.2"
   },
   "devDependencies": {
-    "@react-native-community/cli": "latest",
-    "@react-native/metro-config": "*",
+    "@react-native-community/cli": "^15.0.1",
+    "@react-native-community/cli-platform-android": "^15.0.1",
+    "@react-native-community/cli-platform-ios": "^15.0.1",
+    "@react-native/assets-registry": "0.79.2",
+    "@react-native/codegen": "0.79.2",
+    "@react-native/community-cli-plugin": "0.79.2",
+    "@react-native/gradle-plugin": "0.79.2",
+    "@react-native/js-polyfills": "0.79.2",
+    "@react-native/metro-config": "0.79.2",
+    "@react-native/normalize-colors": "0.79.2",
+    "@react-native/typescript-config": "0.79.2",
+    "@react-native/virtualized-lists": "0.79.2",
     "@types/react": "^19.0.0",
-    "typescript": "^5.7.0",
-    "@react-native/typescript-config": "*"
+    "typescript": "^5.7.0"
   }
 }
