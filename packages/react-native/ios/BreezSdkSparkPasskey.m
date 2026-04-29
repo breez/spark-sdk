@@ -14,6 +14,7 @@ RCT_EXTERN_METHOD(createPasskey:(NSString *)rpId
                   rpName:(NSString *)rpName
                   userName:(NSString *)userName
                   userDisplayName:(NSString *)userDisplayName
+                  excludeCredentialIds:(NSArray *)excludeCredentialIds
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

@@ -66,13 +66,21 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                 return
             }
 
+            var excludeCredentialIds: [Data] = []
+            if let rawIds = args["excludeCredentialIds"] as? [FlutterStandardTypedData] {
+                excludeCredentialIds = rawIds.map { $0.data }
+            } else if let base64Ids = args["excludeCredentialIds"] as? [String] {
+                excludeCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
+            }
+
             Task { @MainActor in
                 do {
-                    try await registerCredential(
+                    let credentialId = try await registerCredential(
                         rpId: rpId, rpName: rpName,
-                        userName: userName, userDisplayName: userDisplayName
+                        userName: userName, userDisplayName: userDisplayName,
+                        excludeCredentialIds: excludeCredentialIds
                     )
-                    result(nil)
+                    result(credentialId.base64EncodedString())
                 } catch PasskeyError.userCancelled {
                     result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled registration", details: nil))
                 } catch PasskeyError.prfNotSupported {
@@ -106,7 +114,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         } catch PasskeyError.credentialNotFound {
             do {
-                try await registerCredential(
+                _ = try await registerCredential(
                     rpId: rpId, rpName: rpName,
                     userName: userName, userDisplayName: userDisplayName
                 )
@@ -144,10 +152,12 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         }
     }
 
+    @discardableResult
     private func registerCredential(
         rpId: String, rpName: String,
-        userName: String, userDisplayName: String
-    ) async throws {
+        userName: String, userDisplayName: String,
+        excludeCredentialIds: [Data] = []
+    ) async throws -> Data {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let userId = randomBytes(count: 16)
@@ -157,6 +167,12 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             userID: userId
         )
 
+        if !excludeCredentialIds.isEmpty {
+            request.excludedCredentials = excludeCredentialIds.map {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+            }
+        }
+
         PasskeyPRFHelper.setRegistrationPRFOn(request)
 
         let delegate = PasskeyDelegate()
@@ -164,7 +180,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
 
-        let _: Data = try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = false
             DispatchQueue.main.async {
@@ -218,8 +234,14 @@ private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
 
             continuation?.resume(returning: prfData)
         } else {
-            // Registration complete — PRF support is implicit on iOS 18+ platform authenticators
-            continuation?.resume(returning: Data())
+            // Registration complete — extract and return the credential ID
+            guard let credential = authorization.credential
+                as? ASAuthorizationPlatformPublicKeyCredentialRegistration
+            else {
+                continuation?.resume(throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
+                return
+            }
+            continuation?.resume(returning: credential.credentialID)
         }
     }
 

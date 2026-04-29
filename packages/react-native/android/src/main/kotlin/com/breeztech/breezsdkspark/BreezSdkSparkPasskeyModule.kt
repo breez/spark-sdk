@@ -99,6 +99,7 @@ class BreezSdkSparkPasskeyModule(
         rpName: String,
         userName: String,
         userDisplayName: String,
+        excludeCredentialIdsBase64: com.facebook.react.bridge.ReadableArray,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -107,16 +108,23 @@ class BreezSdkSparkPasskeyModule(
             return
         }
 
+        val excludeCredentialIds = mutableListOf<ByteArray>()
+        for (i in 0 until excludeCredentialIdsBase64.size()) {
+            val b64 = excludeCredentialIdsBase64.getString(i)
+            excludeCredentialIds.add(Base64.decode(b64, Base64.NO_WRAP))
+        }
+
         scope.launch {
             try {
-                CredentialManagerPrfCore.createCredential(
+                val credentialId = CredentialManagerPrfCore.createCredential(
                     activity = activity,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    excludeCredentialIds = excludeCredentialIds,
                 )
-                promise.resolve(null)
+                promise.resolve(Base64.encodeToString(credentialId, Base64.NO_WRAP))
             } catch (e: CredentialManagerPrfCoreException) {
                 promise.reject(e.errorCode, e.message ?: e.defaultMessage)
             } catch (e: Exception) {

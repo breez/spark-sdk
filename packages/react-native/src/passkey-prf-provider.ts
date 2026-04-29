@@ -146,19 +146,28 @@ export class PasskeyPrfProvider {
    * 1 platform prompt. Use this to separate credential creation from
    * derivation in multi-step onboarding flows.
    *
+   * @param excludeCredentialIds - Optional list of credential IDs to exclude.
+   *   Pass previously created credential IDs to prevent the authenticator
+   *   from creating a duplicate on the same device.
+   * @returns The credential ID of the newly created passkey.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
-  async createPasskey(): Promise<void> {
+  async createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
-    await BreezSdkSparkPasskey.createPasskey(
+    const excludeBase64 = (excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
+
+    const base64Result: string = await BreezSdkSparkPasskey.createPasskey(
       this.rpId,
       this.rpName,
       this.userName,
-      this.userDisplayName
+      this.userDisplayName,
+      excludeBase64
     );
+
+    return base64ToUint8Array(base64Result);
   }
 
   /**
@@ -185,4 +194,15 @@ function base64ToUint8Array(base64: string): Uint8Array {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes;
+}
+
+/**
+ * Encode a Uint8Array to base64 string.
+ */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }

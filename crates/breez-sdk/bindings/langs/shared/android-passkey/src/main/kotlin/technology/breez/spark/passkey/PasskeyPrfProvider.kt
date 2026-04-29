@@ -133,15 +133,21 @@ public class PasskeyPrfProvider(
      *
      * Triggers exactly one platform prompt. Use this to separate credential
      * creation from derivation in multi-step onboarding flows.
+     *
+     * @param excludeCredentialIds Optional list of credential IDs to exclude.
+     *   Pass previously created credential IDs to prevent the authenticator
+     *   from creating a duplicate on the same device.
+     * @return The credential ID of the newly created passkey.
      */
-    public suspend fun createPasskey() {
+    public suspend fun createPasskey(excludeCredentialIds: List<ByteArray> = emptyList()): ByteArray {
         try {
-            CredentialManagerPrfCore.createCredential(
+            return CredentialManagerPrfCore.createCredential(
                 activity = activityProvider(),
                 rpId = rpId,
                 rpName = rpName,
                 userName = userName,
                 userDisplayName = userDisplayName,
+                excludeCredentialIds = excludeCredentialIds,
             )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPasskeyPrfException()

@@ -128,15 +128,26 @@ class PasskeyPrfProvider {
   /// 1 platform prompt. Use this to separate credential creation from
   /// derivation in multi-step onboarding flows.
   ///
+  /// [excludeCredentialIds] is an optional list of credential IDs to exclude.
+  /// Pass previously created credential IDs to prevent the authenticator from
+  /// creating a duplicate on the same device.
+  ///
+  /// Returns the credential ID of the newly created passkey.
+  ///
   /// Throws [PasskeyPrfException] if the user cancels or PRF is not supported.
-  Future<void> createPasskey() async {
+  Future<Uint8List> createPasskey({List<Uint8List>? excludeCredentialIds}) async {
     try {
-      await _channel.invokeMethod<void>('createPasskey', {
+      final result = await _channel.invokeMethod<String>('createPasskey', {
         'rpId': _rpId,
         'rpName': _rpName,
         'userName': _userName,
         'userDisplayName': _userDisplayName,
+        if (excludeCredentialIds != null && excludeCredentialIds.isNotEmpty)
+          'excludeCredentialIds': excludeCredentialIds
+              .map((id) => base64Encode(id))
+              .toList(),
       });
+      return base64Decode(result!);
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);
     }

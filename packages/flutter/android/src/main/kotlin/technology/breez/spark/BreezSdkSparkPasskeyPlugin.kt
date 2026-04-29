@@ -129,16 +129,22 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
+        val excludeCredentialIds: List<ByteArray> =
+            (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
+                Base64.decode(it, Base64.NO_WRAP)
+            }
+
         scope.launch {
             try {
-                CredentialManagerPrfCore.createCredential(
+                val credentialId = CredentialManagerPrfCore.createCredential(
                     activity = currentActivity,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    excludeCredentialIds = excludeCredentialIds,
                 )
-                result.success(null)
+                result.success(Base64.encodeToString(credentialId, Base64.NO_WRAP))
             } catch (e: CredentialManagerPrfCoreException) {
                 result.error(e.errorCode, e.message ?: e.defaultMessage, null)
             } catch (e: Exception) {

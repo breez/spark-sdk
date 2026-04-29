@@ -102,8 +102,8 @@ export class PasskeyPrfProvider {
      * @returns {Promise<void>}
      * @throws {Error} If the user cancels or PRF is not supported by the authenticator.
      */
-    async createPasskey() {
-        await this._registerCredential();
+    async createPasskey(excludeCredentialIds) {
+        return await this._registerCredential(excludeCredentialIds);
     }
 
     /**
@@ -245,40 +245,46 @@ export class PasskeyPrfProvider {
 
     /**
      * Register a new discoverable credential with PRF extension enabled.
-     * @returns {Promise<void>}
+     * @param {Uint8Array[]} [excludeCredentialIds=[]] - Credential IDs to exclude.
+     * @returns {Promise<Uint8Array>} The credential ID of the newly created passkey.
      * @private
      */
-    async _registerCredential() {
-        const options = {
-            publicKey: {
-                challenge: randomBytes(32),
-                rp: {
-                    id: this.rpId,
-                    name: this.rpName,
-                },
-                user: {
-                    id: randomBytes(16),
-                    name: this.userName,
-                    displayName: this.userDisplayName,
-                },
-                pubKeyCredParams: [
-                    { type: 'public-key', alg: -7 },   // ES256 (P-256)
-                    { type: 'public-key', alg: -257 },  // RS256
-                ],
-                authenticatorSelection: {
-                    residentKey: 'required',
-                    requireResidentKey: true,
-                    userVerification: 'required',
-                },
-                extensions: {
-                    prf: {},
-                },
+    async _registerCredential(excludeCredentialIds = []) {
+        const publicKeyOptions = {
+            challenge: randomBytes(32),
+            rp: {
+                id: this.rpId,
+                name: this.rpName,
+            },
+            user: {
+                id: randomBytes(16),
+                name: this.userName,
+                displayName: this.userDisplayName,
+            },
+            pubKeyCredParams: [
+                { type: 'public-key', alg: -7 },   // ES256 (P-256)
+                { type: 'public-key', alg: -257 },  // RS256
+            ],
+            authenticatorSelection: {
+                residentKey: 'required',
+                requireResidentKey: true,
+                userVerification: 'required',
+            },
+            extensions: {
+                prf: {},
             },
         };
 
+        if (excludeCredentialIds.length > 0) {
+            publicKeyOptions.excludeCredentials = excludeCredentialIds.map(id => ({
+                type: 'public-key',
+                id,
+            }));
+        }
+
         let credential;
         try {
-            credential = await navigator.credentials.create(options);
+            credential = await navigator.credentials.create({ publicKey: publicKeyOptions });
         } catch (error) {
             throw this._mapError(error);
         }
@@ -292,6 +298,8 @@ export class PasskeyPrfProvider {
         if (!extensionResults.prf || !extensionResults.prf.enabled) {
             throw new Error('PRF not supported by authenticator');
         }
+
+        return new Uint8Array(credential.rawId);
     }
 
     /**
