@@ -179,17 +179,23 @@ impl SnippetsProcessor {
         format!("<code class=\"lang-fn\">{}</code>", spans)
     }
 
-    fn get_language_paths(file_base: &str) -> Vec<(&'static str, &'static str, String)> {
+    fn get_language_paths(file_base: &str) -> Vec<(&'static str, &'static str, Vec<String>)> {
         vec![
-            ("Rust", "rust", format!("snippets/rust/src/{}.rs", file_base)),
-            ("Swift", "swift", format!("snippets/swift/BreezSdkSnippets/Sources/{}.swift", capitalize_first(file_base))),
-            ("Kotlin", "kotlin", format!("snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/{}.kt", capitalize_first(file_base))),
-            ("C#", "csharp", format!("snippets/csharp/{}.cs", capitalize_first(file_base))),
-            ("Javascript", "typescript", format!("snippets/wasm/{}.ts", file_base)),
-            ("React Native", "typescript", format!("snippets/react-native/{}.ts", file_base)),
-            ("Flutter", "dart", format!("snippets/flutter/lib/{}.dart", file_base)),
-            ("Python", "python", format!("snippets/python/src/{}.py", file_base)),
-            ("Go", "go", format!("snippets/go/{}.go", file_base)),
+            ("Rust", "rust", vec![format!("snippets/rust/src/{}.rs", file_base)]),
+            ("Swift", "swift", vec![format!("snippets/swift/BreezSdkSnippets/Sources/{}.swift", capitalize_first(file_base))]),
+            // Kotlin MPP: most snippets live in commonMain, but Android-only
+            // ones (e.g. Passkey, which uses Credential Manager APIs) live in
+            // androidMain. Try commonMain first, then fall back to androidMain.
+            ("Kotlin", "kotlin", vec![
+                format!("snippets/kotlin_mpp_lib/shared/src/commonMain/kotlin/com/example/kotlinmpplib/{}.kt", capitalize_first(file_base)),
+                format!("snippets/kotlin_mpp_lib/shared/src/androidMain/kotlin/com/example/kotlinmpplib/{}.kt", capitalize_first(file_base)),
+            ]),
+            ("C#", "csharp", vec![format!("snippets/csharp/{}.cs", capitalize_first(file_base))]),
+            ("Javascript", "typescript", vec![format!("snippets/wasm/{}.ts", file_base)]),
+            ("React Native", "typescript", vec![format!("snippets/react-native/{}.ts", file_base)]),
+            ("Flutter", "dart", vec![format!("snippets/flutter/lib/{}.dart", file_base)]),
+            ("Python", "python", vec![format!("snippets/python/src/{}.py", file_base)]),
+            ("Go", "go", vec![format!("snippets/go/{}.go", file_base)]),
         ]
     }
 
@@ -263,25 +269,18 @@ impl SnippetsProcessor {
         let config = Self::get_language_paths(file_base);
         let mut result = String::from("<custom-tabs category=\"lang\">\n");
 
-        for (lang_name, lang_code, relative_path) in &config {
-            let full_path = ctx.root.join(&relative_path);
+        for (lang_name, lang_code, relative_paths) in &config {
+            // Try each candidate path in order and use the first one that both
+            // exists and contains the requested snippet anchor.
+            let snippet = relative_paths.iter().find_map(|relative_path| {
+                let full_path = ctx.root.join(relative_path);
+                let content = fs::read_to_string(&full_path).ok()?;
+                Self::extract_snippet(&content, snippet_name)
+            });
 
-            // Try to read the file
-            let content = match fs::read_to_string(&full_path) {
-                Ok(content) => content,
-                Err(_) => {
-                    // Skip this language if file doesn't exist
-                    continue;
-                }
-            };
-
-            // Try to extract the snippet
-            let snippet = match Self::extract_snippet(&content, snippet_name) {
-                Some(snippet) => snippet,
-                None => {
-                    // Skip this language if snippet doesn't exist
-                    continue;
-                }
+            let Some(snippet) = snippet else {
+                // Skip this language if no candidate file has the snippet
+                continue;
             };
 
             result.push_str(&format!(

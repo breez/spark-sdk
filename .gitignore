@@ -28,6 +28,6 @@ __pycache__/
 fly.toml
 
 # Wasm package
-packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+packages/wasm/breeztech-breez-sdk-spark-*.tgz
 .claude/settings.local.json
 crates/breez-sdk/breez-bench/js/node_modules/
