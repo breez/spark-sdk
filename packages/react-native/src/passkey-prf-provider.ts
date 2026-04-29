@@ -41,9 +41,9 @@ function passkeyModuleUnavailableError(operation: string): Error {
 }
 
 /**
- * Options for constructing a PasskeyPrfProvider.
+ * Options for constructing a PasskeyProvider.
  */
-export interface PasskeyPrfProviderOptions {
+export interface PasskeyProviderOptions {
   /**
    * Relying Party ID. Must match the domain configured for cross-platform
    * credential sharing.
@@ -93,20 +93,20 @@ export interface PasskeyPrfProviderOptions {
  * @example
  * ```typescript
  * import { Passkey } from '@breeztech/breez-sdk-spark-react-native'
- * import { PasskeyPrfProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+ * import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
  *
- * const prfProvider = new PasskeyPrfProvider()
+ * const prfProvider = new PasskeyProvider()
  * const passkey = new Passkey(prfProvider, undefined)
  * const wallet = await passkey.getWallet('personal')
  * ```
  */
-export class PasskeyPrfProvider {
+export class PasskeyProvider {
   private rpId: string;
   private rpName: string;
   private userName: string;
   private userDisplayName: string;
 
-  constructor(options?: PasskeyPrfProviderOptions) {
+  constructor(options?: PasskeyProviderOptions) {
     this.rpId = options?.rpId ?? 'keys.breez.technology';
     this.rpName = options?.rpName ?? 'Breez SDK';
     this.userName = options?.userName ?? this.rpName;
@@ -206,3 +206,13 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   }
   return btoa(binary);
 }
+
+/**
+ * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
+ */
+export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
+
+/**
+ * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
+ */
+export { PasskeyProvider as PasskeyPrfProvider };

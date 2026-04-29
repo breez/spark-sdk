@@ -20,7 +20,7 @@
  *        - register BreezSdkSparkPasskeyModule alongside the generated
  *          UniFFI TurboModule so React Native can find it at runtime
  *
- * The PasskeyPrfProvider class is exposed via a subpath export
+ * The PasskeyProvider class is exposed via a subpath export
  * (`@breeztech/breez-sdk-spark-react-native/passkey-prf-provider`) declared
  * in package.json `exports`, so no edit to the generated `src/index.tsx`
  * is required.

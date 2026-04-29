@@ -45,7 +45,7 @@ import java.security.SecureRandom
  * Framework-agnostic helper that wraps the AndroidX Credential Manager +
  * WebAuthn PRF extension machinery for passkey-based seed derivation.
  *
- * Wrappers (the UniFFI `PasskeyPrfProvider`, the Flutter MethodChannel
+ * Wrappers (the UniFFI `PasskeyProvider`, the Flutter MethodChannel
  * plugin, the React Native native module) delegate to this object and
  * only provide framework-specific glue on top: error mapping, activity
  * retrieval, and call-site boilerplate.

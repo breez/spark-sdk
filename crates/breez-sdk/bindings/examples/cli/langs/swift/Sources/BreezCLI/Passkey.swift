@@ -138,7 +138,7 @@ func createPrfProvider(type: PasskeyProviderType, dataDir: String, rpId: String?
     switch type {
     case .platform:
         if #available(iOS 18.0, macOS 15.0, *) {
-            return PasskeyPrfProvider(
+            return PasskeyProvider(
                 rpId: rpId ?? "keys.breez.technology",
                 rpName: "Breez SDK"
             )
