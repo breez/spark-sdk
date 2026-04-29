@@ -1,9 +1,9 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyPrfProvider};
+use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
 use challenge_response::ChallengeResponse;
 use challenge_response::config::{Config, Mode, Slot};
 
-/// `YubiKey` HMAC challenge-response implementation of `PasskeyPrfProvider`.
+/// `YubiKey` HMAC challenge-response implementation of `PrfProvider`.
 ///
 /// Uses HMAC-SHA1 from `YubiKey` Slot 2, then expands to 32 bytes via SHA256.
 /// The expansion is performed using `SHA256(hmac_output)` for cross-implementation
@@ -33,7 +33,7 @@ impl YubiKeyPrfProvider {
 }
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for YubiKeyPrfProvider {
+impl PrfProvider for YubiKeyPrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         eprintln!("Touch your YubiKey (if configured)...");
 

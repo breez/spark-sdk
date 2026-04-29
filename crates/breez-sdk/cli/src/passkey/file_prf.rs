@@ -2,13 +2,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyPrfProvider};
+use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
 use rand::{RngCore, thread_rng};
 
 /// File name for the seed restore secret.
 const SECRET_FILE_NAME: &str = "seedless-restore-secret";
 
-/// File-based implementation of `PasskeyPrfProvider`.
+/// File-based implementation of `PrfProvider`.
 ///
 /// Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
 /// randomly on first use and persisted to disk.
@@ -74,7 +74,7 @@ impl FilePrfProvider {
 }
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for FilePrfProvider {
+impl PrfProvider for FilePrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         // Use HMAC-SHA256(secret, salt) as the PRF output
         let mut engine = HmacEngine::<sha256::Hash>::new(&self.secret);

@@ -56,9 +56,9 @@ public static class PasskeyProviderExtensions
     }
 
     /// <summary>
-    /// Creates a PasskeyPrfProvider for the given provider type.
+    /// Creates a PrfProvider for the given provider type.
     /// </summary>
-    public static PasskeyPrfProvider BuildPrfProvider(
+    public static PrfProvider BuildPrfProvider(
         PasskeyProvider provider,
         string dataDir,
         string? rpId = null)
@@ -78,7 +78,7 @@ public static class PasskeyProviderExtensions
 // ---------------------------------------------------------------------------
 
 /// <summary>
-/// File-based implementation of PasskeyPrfProvider.
+/// File-based implementation of PrfProvider.
 ///
 /// Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
 /// randomly on first use and persisted to disk.
@@ -88,7 +88,7 @@ public static class PasskeyProviderExtensions
 /// - This is less secure than hardware-backed solutions like YubiKey
 /// - Suitable for development/testing or when hardware keys are unavailable
 /// </summary>
-public class FilePrfProvider : PasskeyPrfProvider
+public class FilePrfProvider : PrfProvider
 {
     private const string SecretFileName = "seedless-restore-secret";
     private readonly byte[] _secret;
@@ -137,6 +137,12 @@ public class FilePrfProvider : PasskeyPrfProvider
         // File-based PRF is always available once initialized
         return await Task.FromResult(true);
     }
+
+    public async Task<DomainAssociation> CheckDomainAssociation()
+    {
+        return await Task.FromResult<DomainAssociation>(
+            new DomainAssociation.Skipped("FilePrfProvider does not verify domain association"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +152,7 @@ public class FilePrfProvider : PasskeyPrfProvider
 /// <summary>
 /// Stub provider for backends that are not yet supported in the C# CLI.
 /// </summary>
-public class NotYetSupportedProvider : PasskeyPrfProvider
+public class NotYetSupportedProvider : PrfProvider
 {
     private readonly string _name;
 
@@ -166,6 +172,12 @@ public class NotYetSupportedProvider : PasskeyPrfProvider
         throw new NotSupportedException(
             $"{_name} passkey provider is not yet supported in the C# CLI");
     }
+
+    public Task<DomainAssociation> CheckDomainAssociation()
+    {
+        return Task.FromResult<DomainAssociation>(
+            new DomainAssociation.Skipped($"{_name} does not verify domain association"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +191,7 @@ public static class PasskeyResolver
     /// matching the Rust CLI's resolve_passkey_seed logic.
     /// </summary>
     public static async Task<Seed> ResolvePasskeySeed(
-        PasskeyPrfProvider provider,
+        PrfProvider provider,
         string? breezApiKey,
         string? label,
         bool listLabels,

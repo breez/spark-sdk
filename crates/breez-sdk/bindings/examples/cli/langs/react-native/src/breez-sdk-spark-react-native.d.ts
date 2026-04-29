@@ -69,8 +69,26 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const OnchainConfirmationSpeed: any;
   export const getSparkStatus: any;
 
+  // --- passkey ---
+  // Note: PasskeyPrfProvider (concrete class) ships at the
+  // `/passkey-prf-provider` subpath export, declared separately below.
+  // PrfProvider is the trait that custom implementations target.
+  export type PrfProvider = any;
+
+  export const Passkey: any;
+  export type Passkey = any;
+
+  export const NostrRelayConfig: any;
+  export type NostrRelayConfig = any;
+
   // --- types only ---
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
   export type SdkEvent = any;
+}
+
+declare module '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider' {
+  export const PasskeyPrfProvider: any;
+  export type PasskeyPrfProvider = any;
+  export type PasskeyPrfProviderOptions = any;
 }
