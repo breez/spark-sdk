@@ -48,6 +48,7 @@ impl BreezSdk {
         if let PaymentRequest::CrossChain {
             ref address,
             ref route,
+            max_slippage_bps,
         } = request.payment_request
         {
             let amount = request.amount.ok_or(SdkError::InvalidInput(
@@ -60,6 +61,7 @@ impl BreezSdk {
                 amount,
                 request.token_identifier.clone(),
                 request.fee_policy.unwrap_or_default(),
+                max_slippage_bps,
             )
             .await;
         }

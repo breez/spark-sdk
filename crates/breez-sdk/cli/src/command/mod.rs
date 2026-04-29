@@ -175,6 +175,11 @@ pub enum Command {
         #[arg(short = 's', long)]
         convert_max_slippage_bps: Option<u32>,
 
+        /// Maximum slippage in basis points for cross-chain sends. Must be in 10..=500.
+        /// Falls back to the SDK config default (100 bps) when unset.
+        #[arg(long = "cross-chain-max-slippage-bps")]
+        cross_chain_max_slippage_bps: Option<u32>,
+
         /// If set, fees will be deducted from the specified amount instead of added on top.
         #[arg(long = "fees-included", action = clap::ArgAction::SetTrue)]
         fees_included: bool,
@@ -626,6 +631,7 @@ pub(crate) async fn execute_command(
             convert_from_bitcoin,
             convert_from_token_identifier,
             convert_max_slippage_bps: max_slippage_bps,
+            cross_chain_max_slippage_bps,
             fees_included,
         } => {
             let conversion_options = match (convert_from_bitcoin, convert_from_token_identifier) {
@@ -655,7 +661,11 @@ pub(crate) async fn execute_command(
                 Ok(InputType::CrossChainAddress(address_details)) => {
                     let address = address_details.address.clone();
                     let route = select_cross_chain_route(sdk, rl, address_details).await?;
-                    PaymentRequest::CrossChain { address, route }
+                    PaymentRequest::CrossChain {
+                        address,
+                        route,
+                        max_slippage_bps: cross_chain_max_slippage_bps,
+                    }
                 }
                 _ => PaymentRequest::Input {
                     input: payment_request,

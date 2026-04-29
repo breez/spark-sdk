@@ -18,6 +18,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CrossChainAddressDetails, error::SdkError};
 
+/// SDK-level bounds for cross-chain slippage.
+pub(crate) const MIN_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 10;
+pub(crate) const MAX_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 500;
+/// Used when neither the request nor [`crate::Config::default_slippage_bps`]
+/// supplies a value.
+pub(crate) const DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum CrossChainProvider {

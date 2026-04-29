@@ -690,7 +690,12 @@ pub struct Config {
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
     pub background_tasks_enabled: bool,
-    pub cross_chain_enabled: bool,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]
+pub struct CrossChainConfig {
+    pub default_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]
@@ -919,6 +924,7 @@ pub enum PaymentRequest {
     CrossChain {
         address: String,
         route: CrossChainRoutePair,
+        max_slippage_bps: Option<u32>,
     },
 }
 

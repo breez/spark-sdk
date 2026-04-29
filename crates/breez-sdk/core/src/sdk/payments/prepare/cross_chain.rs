@@ -14,6 +14,7 @@ pub(crate) async fn prepare(
     amount: u128,
     token_identifier: Option<String>,
     fee_policy: FeePolicy,
+    max_slippage_bps: Option<u32>,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     if amount == 0 {
         return Err(SdkError::InvalidInput(
@@ -28,6 +29,27 @@ pub(crate) async fn prepare(
         ));
     }
 
+    // Resolve slippage: request → config default → built-in default.
+    let config_default = sdk
+        .config
+        .cross_chain_config
+        .as_ref()
+        .and_then(|c| c.default_slippage_bps);
+    if let Some(bps) = max_slippage_bps
+        && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+            ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+            .contains(&bps)
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "max_slippage_bps {bps} must be in {}..={}",
+            crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+            crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+        )));
+    }
+    let resolved_slippage_bps = max_slippage_bps
+        .or(config_default)
+        .unwrap_or(crate::cross_chain::DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS);
+
     let service = sdk.cross_chain_providers.get(route.provider)?;
 
     let fee_mode = match fee_policy {
@@ -41,7 +63,7 @@ pub(crate) async fn prepare(
             route,
             amount,
             token_identifier.clone(),
-            None,
+            Some(resolved_slippage_bps),
             fee_mode,
         )
         .await?;

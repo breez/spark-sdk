@@ -218,7 +218,8 @@ pub fn default_config(network: Network) -> Config {
         max_concurrent_claims: 4,
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
-        cross_chain_enabled: matches!(network, Network::Mainnet),
+        cross_chain_config: matches!(network, Network::Mainnet)
+            .then(crate::CrossChainConfig::default),
     }
 }
 
