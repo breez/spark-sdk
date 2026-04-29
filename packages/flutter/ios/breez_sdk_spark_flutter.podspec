@@ -17,6 +17,7 @@ Pod::Spec.new do |spec|
   # `../src/*` so that the C sources can be shared among all target platforms.
   spec.source              = { :path => '.' }
   spec.source_files        = 'Classes/**/*'
+  spec.public_header_files = 'Classes/**/*.h'
   spec.dependency 'Flutter'
 
   spec.platform            = :ios, '13.0'
