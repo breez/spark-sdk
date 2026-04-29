@@ -20,7 +20,7 @@
 //! # Platform Implementation
 //!
 //! Platforms must implement the [`PrfProvider`] trait to derive wallet seeds.
-//! The built-in `PasskeyPrfProvider` on each platform satisfies this contract
+//! The built-in `PasskeyProvider` on each platform satisfies this contract
 //! by authenticating with a platform passkey; custom CLI providers (`YubiKey`,
 //! FIDO2, file-backed) implement the same trait for deterministic derivation
 //! from other sources. The SDK orchestrates the flow, while implementations

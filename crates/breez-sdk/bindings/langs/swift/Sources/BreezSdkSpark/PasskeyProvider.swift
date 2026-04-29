@@ -19,12 +19,12 @@ import Security
 ///
 /// Example:
 /// ```swift
-/// let prfProvider = PasskeyPrfProvider()
+/// let prfProvider = PasskeyProvider()
 /// let passkey = Passkey(prfProvider: prfProvider, relayConfig: nil)
 /// let wallet = try await passkey.getWallet(walletName: "personal")
 /// ```
 @available(iOS 18.0, macOS 15.0, *)
-public class PasskeyPrfProvider: PrfProvider {
+public class PasskeyProvider: PrfProvider {
     private let rpId: String
     private let rpName: String
     private let userName: String

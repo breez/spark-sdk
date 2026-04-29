@@ -9,9 +9,9 @@ export type DomainAssociation =
     | { kind: 'Skipped'; reason: string };
 
 /**
- * Options for constructing a PasskeyPrfProvider.
+ * Options for constructing a PasskeyProvider.
  */
-export interface PasskeyPrfProviderOptions {
+export interface PasskeyProviderOptions {
     /**
      * Relying Party ID. Must match the domain configured in .well-known/webauthn
      * for cross-platform credential sharing.
@@ -57,15 +57,15 @@ export interface PasskeyPrfProviderOptions {
  * @example
  * ```typescript
  * import { Passkey } from '@breeztech/breez-sdk-spark'
- * import { PasskeyPrfProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
+ * import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
  *
- * const prfProvider = new PasskeyPrfProvider()
+ * const prfProvider = new PasskeyProvider()
  * const passkey = new Passkey(prfProvider, undefined)
  * const wallet = await passkey.getWallet('personal')
  * ```
  */
-export declare class PasskeyPrfProvider {
-    constructor(options?: PasskeyPrfProviderOptions);
+export declare class PasskeyProvider {
+    constructor(options?: PasskeyProviderOptions);
 
     /**
      * Derive a 32-byte seed from passkey PRF with the given salt.
@@ -122,3 +122,13 @@ export declare class PasskeyPrfProvider {
      */
     checkDomainAssociation(): Promise<DomainAssociation>;
 }
+
+/**
+ * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
+ */
+export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
+
+/**
+ * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
+ */
+export { PasskeyProvider as PasskeyPrfProvider };

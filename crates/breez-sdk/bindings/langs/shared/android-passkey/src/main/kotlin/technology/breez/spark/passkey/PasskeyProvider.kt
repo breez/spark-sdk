@@ -28,7 +28,7 @@ import technology.breez.spark.passkey.core.DomainAssociationResult
  * ## Example
  *
  * ```kotlin
- * val prfProvider = PasskeyPrfProvider(
+ * val prfProvider = PasskeyProvider(
  *     activityProvider = { MainActivity.currentInstance!! },
  * )
  * val passkey = Passkey(prfProvider, relayConfig = null)
@@ -50,7 +50,7 @@ import technology.breez.spark.passkey.core.DomainAssociationResult
  *   Defaults to [userName] (or [rpName] if [userName] is null). Only used
  *   during registration.
  */
-public class PasskeyPrfProvider(
+public class PasskeyProvider(
     private val activityProvider: () -> Activity,
     private val rpId: String = CredentialManagerPrfCore.DEFAULT_RP_ID,
     private val rpName: String = CredentialManagerPrfCore.DEFAULT_RP_NAME,

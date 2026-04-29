@@ -328,7 +328,7 @@ fn check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen: bool) -> Result
     }
 
     // Compile Android target (androidMain sources, including passkey snippets
-    // that use the built-in PasskeyPrfProvider which requires android.app.Activity)
+    // that use the built-in PasskeyProvider which requires android.app.Activity)
     let status = Command::new("./gradlew")
         .arg("compileReleaseKotlinAndroid")
         .current_dir(&kotlin_snippets_dir)

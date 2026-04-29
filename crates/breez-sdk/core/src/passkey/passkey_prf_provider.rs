@@ -61,7 +61,7 @@ pub enum DomainAssociation {
 /// Trait for PRF (Pseudo-Random Function) operations backing a passkey-derived
 /// wallet seed.
 ///
-/// The built-in passkey provider on each platform (`PasskeyPrfProvider`)
+/// The built-in passkey provider on each platform (`PasskeyProvider`)
 /// implements this trait by authenticating with a platform passkey and
 /// evaluating the `WebAuthn` PRF extension. Custom providers (CLI tools
 /// backed by `YubiKey`, FIDO2 hmac-secret, on-disk key material, hardware
@@ -109,7 +109,7 @@ pub trait PrfProvider: Send + Sync {
     /// heuristics.
     ///
     /// The default implementation returns [`DomainAssociation::Skipped`].
-    /// The built-in `PasskeyPrfProvider` on each platform (iOS / Android /
+    /// The built-in `PasskeyProvider` on each platform (iOS / Android /
     /// browser) overrides this with an active check against Apple's AASA CDN,
     /// Google's Digital Asset Links API, or a browser-side registrable-suffix
     /// check respectively. Custom providers (`YubiKey`, FIDO2, file-backed)

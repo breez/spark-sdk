@@ -5,10 +5,10 @@ import {
   defaultConfig,
   Network
 } from '@breeztech/breez-sdk-spark-react-native'
-import { PasskeyPrfProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
-// Implement the interface for custom logic if the built-in PasskeyPrfProvider doesn't fit your needs.
+// Implement the interface for custom logic if the built-in PasskeyProvider doesn't fit your needs.
 class CustomPrfProvider {
   derivePrfSeed = async (salt: string): Promise<ArrayBuffer> => {
     // Call platform passkey API with PRF extension
@@ -25,7 +25,7 @@ class CustomPrfProvider {
 
 const checkAvailability = async () => {
   // ANCHOR: check-availability
-  const prfProvider = new PasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   if (await prfProvider.isPrfAvailable()) {
     // Show passkey as primary option
   } else {
@@ -37,7 +37,7 @@ const checkAvailability = async () => {
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Use the built-in platform PRF provider (or pass a custom implementation)
-  const prfProvider = new PasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   const passkey = new Passkey(prfProvider as any, undefined)
 
   // Construct the wallet using the passkey (pass undefined for the default wallet)
@@ -51,7 +51,7 @@ const connectWithPasskey = async () => {
 
 const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
-  const prfProvider = new PasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined
@@ -70,7 +70,7 @@ const listLabels = async (): Promise<string[]> => {
 
 const storeLabel = async () => {
   // ANCHOR: store-label
-  const prfProvider = new PasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>',
     timeoutSecs: undefined

@@ -17,7 +17,7 @@ import {
   type PrfProvider,
   type NostrRelayConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
-import { PasskeyPrfProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
@@ -229,7 +229,7 @@ export async function buildPrfProvider(
 ): Promise<{ derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> }> {
   switch (provider) {
     case PasskeyProvider.Platform:
-      return new PasskeyPrfProvider()
+      return new PasskeyProvider()
     case PasskeyProvider.File:
       return FilePrfProvider.create(dataDir)
     case PasskeyProvider.YubiKey:
@@ -292,7 +292,7 @@ export async function resolvePasskeySeed(
   const relayConfig: NostrRelayConfig = { breezApiKey, timeoutSecs: undefined }
   // The Passkey constructor accepts any object implementing the
   // PrfProvider shape (derivePrfSeed + isPrfAvailable). FilePrfProvider,
-  // NotYetSupportedProvider, and the built-in PasskeyPrfProvider all satisfy
+  // NotYetSupportedProvider, and the built-in PasskeyProvider all satisfy
   // this, same trick the WASM CLI uses (see langs/wasm/src/passkey.js).
   const passkey = new Passkey(provider as unknown as PrfProvider, relayConfig)
 
