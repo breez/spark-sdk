@@ -91,11 +91,15 @@ public object CredentialManagerPrfCore {
         rpName: String,
         userName: String,
         userDisplayName: String,
+        autoRegister: Boolean = true,
     ): ByteArray = withContext(Dispatchers.Main) {
         try {
             try {
                 getAssertionWithPrf(activity, salt, rpId)
             } catch (e: NoCredentialException) {
+                if (!autoRegister) {
+                    throw CredentialManagerPrfCoreException(Kind.CredentialNotFound, e.message)
+                }
                 @Suppress("UNUSED_VARIABLE")
                 val ignored = registerCredential(activity, rpId, rpName, userName, userDisplayName)
                 getAssertionWithPrf(activity, salt, rpId)

@@ -32,6 +32,7 @@ class BreezSdkSparkPasskey: NSObject {
         rpName: String,
         userName: String,
         userDisplayName: String,
+        autoRegister: Bool,
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
@@ -44,7 +45,8 @@ class BreezSdkSparkPasskey: NSObject {
             do {
                 let result = try await performDerivation(
                     saltData: saltData, rpId: rpId, rpName: rpName,
-                    userName: userName, userDisplayName: userDisplayName
+                    userName: userName, userDisplayName: userDisplayName,
+                    autoRegister: autoRegister
                 )
                 resolve(result.base64EncodedString())
             } catch PasskeyError.userCancelled {
@@ -112,11 +114,14 @@ class BreezSdkSparkPasskey: NSObject {
 
     private func performDerivation(
         saltData: Data, rpId: String, rpName: String,
-        userName: String, userDisplayName: String
+        userName: String, userDisplayName: String,
+        autoRegister: Bool
     ) async throws -> Data {
         do {
             return try await assertionWithPrf(saltData: saltData, rpId: rpId)
         } catch PasskeyError.credentialNotFound {
+            guard autoRegister else { throw PasskeyError.credentialNotFound }
+
             do {
                 _ = try await registerCredential(
                     rpId: rpId, rpName: rpName,
