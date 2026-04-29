@@ -6,7 +6,7 @@ use crate::{
     error::WasmResult,
     models::{
         Seed,
-        passkey_prf_provider::{PasskeyPrfProvider, WasmPasskeyPrfProvider},
+        passkey_prf_provider::{PrfProvider, WasmPrfProvider},
     },
 };
 
@@ -33,7 +33,7 @@ pub struct Wallet {
 
 /// Passkey-based wallet operations using WebAuthn PRF extension.
 ///
-/// Wraps a `PasskeyPrfProvider` and optional relay configuration to provide
+/// Wraps a `PrfProvider` and optional relay configuration to provide
 /// wallet derivation and label management via Nostr relays.
 #[wasm_bindgen]
 pub struct Passkey {
@@ -44,11 +44,12 @@ pub struct Passkey {
 impl Passkey {
     /// Create a new `Passkey` instance.
     ///
-    /// @param prfProvider - Platform implementation of passkey PRF operations
+    /// @param prfProvider - Implementation of PRF operations (typically the
+    ///                      built-in `PasskeyPrfProvider`, or a custom `PrfProvider`)
     /// @param relayConfig - Optional configuration for Nostr relay connections
     #[wasm_bindgen(constructor)]
-    pub fn new(prf_provider: PasskeyPrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
-        let wasm_provider = WasmPasskeyPrfProvider {
+    pub fn new(prf_provider: PrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
+        let wasm_provider = WasmPrfProvider {
             inner: prf_provider,
         };
         Self {
