@@ -210,7 +210,8 @@ pub fn default_config(network: Network) -> Config {
         stable_balance_config: None,
         max_concurrent_claims: 4,
         spark_config: None,
-        cross_chain_enabled: matches!(network, Network::Mainnet),
+        cross_chain_config: matches!(network, Network::Mainnet)
+            .then(crate::CrossChainConfig::default),
     }
 }
 

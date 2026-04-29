@@ -153,6 +153,7 @@ impl BreezSdk {
         if let PaymentRequest::CrossChain {
             ref address,
             ref route,
+            max_slippage_bps,
         } = request.payment_request
         {
             let amount = request.amount.ok_or(SdkError::InvalidInput(
@@ -167,6 +168,7 @@ impl BreezSdk {
                     token_identifier,
                     request.conversion_options.clone(),
                     fee_policy,
+                    max_slippage_bps,
                 )
                 .await;
         }
@@ -564,7 +566,7 @@ impl BreezSdk {
     }
 
     /// Prepare a cross-chain send using the given route.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn prepare_cross_chain_send(
         &self,
         address: &str,
@@ -573,6 +575,7 @@ impl BreezSdk {
         token_identifier: Option<String>,
         conversion_options: Option<ConversionOptions>,
         fee_policy: FeePolicy,
+        max_slippage_bps: Option<u32>,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         // Validate address is a recognized cross-chain address.
         if input::detect_address_family(address).is_none() {
@@ -580,6 +583,29 @@ impl BreezSdk {
                 "Address is not a recognized cross-chain address".to_string(),
             ));
         }
+
+        // Resolve slippage: request → config default → 100 bps. Bounds for
+        // request-supplied values are checked here; config-supplied values
+        // are validated at SDK startup in `Config::validate`.
+        let config_default = self
+            .config
+            .cross_chain_config
+            .as_ref()
+            .and_then(|c| c.default_slippage_bps);
+        if let Some(bps) = max_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "max_slippage_bps {bps} must be in {}..={}",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
+        }
+        let resolved_slippage_bps = max_slippage_bps
+            .or(config_default)
+            .unwrap_or(crate::cross_chain::DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS);
 
         crate::utils::send_payment_validation::validate_prepare_cross_chain_request_pre(
             amount,
@@ -671,7 +697,7 @@ impl BreezSdk {
                 route,
                 provider_amount,
                 provider_token_identifier,
-                None,
+                Some(resolved_slippage_bps),
                 fee_mode,
             )
             .await?;

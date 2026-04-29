@@ -636,7 +636,7 @@ impl SdkBuilder {
         // Build cross-chain providers. Each provider owns its own HTTP
         // client, route cache, and background monitor task.
         let mut cross_chain_providers = crate::cross_chain::CrossChainProviders::new();
-        if self.config.cross_chain_enabled {
+        if self.config.cross_chain_config.is_some() {
             if let Some(orchestra_config) = &flashnet_config.orchestra {
                 cross_chain_providers.insert(
                     crate::cross_chain::CrossChainProvider::Orchestra,

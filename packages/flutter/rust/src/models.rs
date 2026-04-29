@@ -42,7 +42,12 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
-    pub cross_chain_enabled: bool,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[frb(mirror(CrossChainConfig))]
+pub struct _CrossChainConfig {
+    pub default_slippage_bps: Option<u32>,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -445,6 +450,7 @@ pub enum _PaymentRequest {
     CrossChain {
         address: String,
         route: CrossChainRoutePair,
+        max_slippage_bps: Option<u32>,
     },
 }
 

@@ -622,12 +622,27 @@ pub struct Config {
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
 
-    /// Whether cross-chain providers (Orchestra and Boltz) are enabled.
+    /// Configuration for cross-chain sends via Orchestra and Boltz.
     ///
-    /// When `true` (default on mainnet) the SDK enables cross-chain sends
-    /// (sats → USDT on external chains) via Orchestra and Boltz. On regtest
-    /// the flag has no effect since no provider is available.
-    pub cross_chain_enabled: bool,
+    /// `Some(_)` enables cross-chain sends (sats → USDT on external chains).
+    /// `None` (default on regtest) disables them entirely. On mainnet, the
+    /// `default_config` populates this with [`CrossChainConfig::default`].
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+/// Configuration for cross-chain sends.
+///
+/// The presence of this struct on [`Config::cross_chain_config`] enables
+/// cross-chain providers; `None` disables them.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainConfig {
+    /// Default maximum slippage in basis points used when
+    /// [`PaymentRequest::CrossChain::max_slippage_bps`] is not set on the
+    /// prepare request. Must be in `10..=500`. Falls back to 100 bps (1%)
+    /// when this field is `None`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_slippage_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -829,6 +844,19 @@ impl Config {
                     "default_active_label '{default_label}' not found in tokens list"
                 )));
             }
+        }
+
+        if let Some(cc) = &self.cross_chain_config
+            && let Some(bps) = cc.default_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "cross_chain_config.default_slippage_bps {bps} must be in {}..={}",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
         }
 
         Ok(())
@@ -1386,6 +1414,11 @@ pub enum PaymentRequest {
     CrossChain {
         address: String,
         route: CrossChainRoutePair,
+        /// Maximum slippage tolerance in basis points (1/100 of a percent)
+        /// for the cross-chain quote. Must be in `10..=500`. Falls back to
+        /// [`Config::default_slippage_bps`] when `None`, which itself
+        /// defaults to 100 bps (1%) when unset.
+        max_slippage_bps: Option<u32>,
     },
 }
 
