@@ -33,7 +33,10 @@ flutter:
     platforms:
       android:
         ffiPlugin: true
+        package: technology.breez.spark
+        pluginClass: BreezSdkSparkPasskeyPlugin
       ios:
         ffiPlugin: true
+        pluginClass: BreezSdkSparkPasskeyPlugin
       macos:
         ffiPlugin: true
