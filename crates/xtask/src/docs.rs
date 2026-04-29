@@ -482,14 +482,15 @@ fn check_doc_snippets_react_native_cmd(skip_binding_gen: bool) -> Result<()> {
             anyhow::bail!("`npx patch-package` failed in packages/react-native");
         }
 
-        // TODO: Skip building binaries (right now building just for ios as it's enough to generate the bindings)
-        // Run `yarn ubrn:ios`
+        // Generate bindings from a host build instead of the iOS framework
+        // (uniffi reads its metadata from any built library, no iOS arches needed).
+        // The full iOS build still runs in publish-react-native.yml via `yarn ubrn:ios`.
         let status = Command::new("yarn")
-            .arg("ubrn:ios")
+            .arg("ubrn:bindings-only")
             .current_dir(&react_native_pkg_dir)
             .status()?;
         if !status.success() {
-            anyhow::bail!("`yarn ubrn:ios` failed in packages/react-native");
+            anyhow::bail!("`yarn ubrn:bindings-only` failed in packages/react-native");
         }
 
         // Run `yarn prepare`

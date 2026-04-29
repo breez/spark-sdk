@@ -53,6 +53,7 @@
     "release": "release-it --only-version",
     "typecheck": "tsc",
     "ubrn:android": "ubrn build android --release --config ubrn.config.yaml --and-generate",
+    "ubrn:bindings-only": "node scripts/ubrn-bindings-only.mjs",
     "ubrn:build": "yarn ubrn:ios && yarn ubrn:android",
     "ubrn:checkout": "ubrn checkout --config ubrn.config.yaml",
     "ubrn:clean": "rm -rfv cpp/ android/CMakeLists.txt android/src/main/java android/*.cpp ios/ src/Native* src/index.*ts* src/generated/",

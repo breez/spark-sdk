@@ -31,9 +31,8 @@ jobs:
           - platform: swift
             runner: macos-latest
           - platform: react-native
-            runner: macos-latest
+            runner: ubuntu-latest
             node-version: "22"
-            ios-targets: true
           - platform: csharp
             runner: ubuntu-latest
             dotnet-version: "8.0.x"
@@ -78,10 +77,6 @@ jobs:
       - name: Install cargo-ndk
         if: matrix.cargo-ndk
         run: cargo install cargo-ndk
-
-      - name: Install Rust targets (iOS)
-        if: matrix.ios-targets
-        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
       - name: Setup .NET
         if: matrix.dotnet-version
