@@ -99,7 +99,7 @@ jobs:
         with:
           name: android-${{ inputs.package-version || '0.0.2' }}
           path: crates/breez-sdk/bindings/langs/android/lib/build/outputs/aar/lib-release.aar
-        
+
       - name: Publish artifacts
         if: ${{ inputs.publish }}
         working-directory: crates/breez-sdk/bindings/langs/android
