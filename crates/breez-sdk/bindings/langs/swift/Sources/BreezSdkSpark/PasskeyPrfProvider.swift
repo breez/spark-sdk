@@ -124,7 +124,17 @@ public class PasskeyPrfProvider: PrfProvider {
             return try await performAssertionWithPrf(saltData: saltData)
         } catch let error as PasskeyPrfError where error.isCredentialNotFound {
             // No credential found — register a new one and retry
-            _ = try await registerCredential()
+            do {
+                _ = try await registerCredential()
+            } catch let regError as PasskeyPrfError where regError.isCredentialNotFound {
+                // Registration also got notHandled: the entitlement or
+                // domain association is misconfigured, not a missing credential.
+                throw PasskeyPrfError.Configuration(
+                    "Associated Domains entitlement not configured. "
+                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
+                    + "and ensure a valid provisioning profile."
+                )
+            }
             return try await performAssertionWithPrf(saltData: saltData)
         }
     }

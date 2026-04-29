@@ -25,6 +25,11 @@ pub enum PasskeyPrfError {
     #[error("PRF evaluation failed: {0}")]
     PrfEvaluationFailed(String),
 
+    /// Platform or app configuration error (e.g. missing AASA entitlement,
+    /// invalid assetlinks.json, misconfigured RP ID).
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+
     /// Generic error
     #[error("Passkey error: {0}")]
     Generic(String),

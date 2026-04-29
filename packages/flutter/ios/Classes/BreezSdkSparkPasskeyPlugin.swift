@@ -48,7 +48,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled authentication", details: nil))
                 } catch PasskeyError.prfNotSupported {
                     result(FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: "PRF not supported by authenticator", details: nil))
-                } catch PasskeyError.configurationError(let msg) {
+                } catch PasskeyError.configuration(let msg) {
                     result(FlutterError(code: "ERR_CONFIGURATION", message: msg, details: nil))
                 } catch {
                     result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
@@ -85,7 +85,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled registration", details: nil))
                 } catch PasskeyError.prfNotSupported {
                     result(FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: "PRF not supported by authenticator", details: nil))
-                } catch PasskeyError.configurationError(let msg) {
+                } catch PasskeyError.configuration(let msg) {
                     result(FlutterError(code: "ERR_CONFIGURATION", message: msg, details: nil))
                 } catch {
                     result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
@@ -119,9 +119,9 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     userName: userName, userDisplayName: userDisplayName
                 )
             } catch PasskeyError.credentialNotFound {
-                // Registration also got notHandled — this means the entitlement
-                // or domain association is misconfigured, not a missing credential.
-                throw PasskeyError.configurationError(
+                // Registration also got notHandled: the entitlement or
+                // domain association is misconfigured, not a missing credential.
+                throw PasskeyError.configuration(
                     "Associated Domains entitlement not configured. "
                     + "Add 'webcredentials:\(rpId)' to your app's entitlements "
                     + "and ensure a valid provisioning profile."
@@ -273,6 +273,6 @@ private enum PasskeyError: Error {
     case userCancelled
     case credentialNotFound
     case prfNotSupported
-    case configurationError(String)
+    case configuration(String)
     case authenticationFailed(String)
 }
