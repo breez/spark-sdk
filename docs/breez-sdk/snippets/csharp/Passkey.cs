@@ -3,8 +3,8 @@ using Breez.Sdk.Spark;
 namespace BreezSdkSnippets
 {
     // ANCHOR: implement-prf-provider
-    // In practice, implement using platform-specific passkey APIs.
-    class ExamplePasskeyPrfProvider : PasskeyPrfProvider
+    // Implement using platform-specific passkey APIs if the SDK does not ship a built-in provider for your target.
+    class CustomPrfProvider : PrfProvider
     {
         public async Task<byte[]> DerivePrfSeed(string salt)
         {
@@ -18,15 +18,45 @@ namespace BreezSdkSnippets
             // Check if PRF-capable passkey exists
             throw new NotImplementedException("Check platform passkey availability");
         }
+
+        public async Task<DomainAssociation> CheckDomainAssociation()
+        {
+            // Optional: verify the app's identity against the platform's domain
+            // verification source (e.g., Apple AASA CDN, Google Digital Asset Links).
+            // Built-in providers do this automatically; custom providers that don't
+            // have a platform cache to verify against return Skipped, which tells
+            // callers "proceed with WebAuthn as normal".
+            return await Task.FromResult<DomainAssociation>(
+                new DomainAssociation.Skipped("CustomPrfProvider does not verify domain association"));
+        }
     }
     // ANCHOR_END: implement-prf-provider
+
+    class CheckAvailabilitySnippet
+    {
+        async Task CheckAvailability()
+        {
+            // ANCHOR: check-availability
+            var prfProvider = new CustomPrfProvider();
+
+            if (await prfProvider.IsPrfAvailable())
+            {
+                // Show passkey as primary option
+            }
+            else
+            {
+                // Fall back to mnemonic flow
+            }
+            // ANCHOR_END: check-availability
+        }
+    }
 
     class PasskeySnippets
     {
         async Task<BreezSdk> ConnectWithPasskey()
         {
             // ANCHOR: connect-with-passkey
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPrfProvider();
             var passkey = new Passkey(prfProvider, null);
 
             // Derive the wallet from the passkey (pass null for the default wallet)
@@ -45,7 +75,7 @@ namespace BreezSdkSnippets
         async Task<string[]> ListLabels()
         {
             // ANCHOR: list-labels
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );
@@ -65,7 +95,7 @@ namespace BreezSdkSnippets
         async Task StoreLabel()
         {
             // ANCHOR: store-label
-            var prfProvider = new ExamplePasskeyPrfProvider();
+            var prfProvider = new CustomPrfProvider();
             var relayConfig = new NostrRelayConfig(
                 breezApiKey: "<breez api key>"
             );

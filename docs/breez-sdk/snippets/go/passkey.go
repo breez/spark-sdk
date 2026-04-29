@@ -7,25 +7,49 @@ import (
 )
 
 // ANCHOR: implement-prf-provider
-// In practice, implement using platform-specific passkey APIs.
-type ExamplePasskeyPrfProvider struct{}
+// Implement using platform-specific passkey APIs if the SDK does not ship a built-in provider for your target.
+type CustomPrfProvider struct{}
 
-func (p *ExamplePasskeyPrfProvider) DerivePrfSeed(salt string) ([]byte, error) {
+func (p *CustomPrfProvider) DerivePrfSeed(salt string) ([]byte, error) {
 	// Call platform passkey API with PRF extension
 	// Returns 32-byte PRF output
 	panic("Implement using WebAuthn or native passkey APIs")
 }
 
-func (p *ExamplePasskeyPrfProvider) IsPrfAvailable() (bool, error) {
+func (p *CustomPrfProvider) IsPrfAvailable() (bool, error) {
 	// Check if PRF-capable passkey exists
 	panic("Check platform passkey availability")
 }
 
+func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	// Optional: verify the app's identity against the platform's domain
+	// verification source (e.g., Apple AASA CDN, Google Digital Asset Links).
+	// Built-in providers do this automatically; custom providers that don't
+	// have a platform cache to verify against return Skipped, which tells
+	// callers "proceed with WebAuthn as normal".
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: "CustomPrfProvider does not verify domain association",
+	}, nil
+}
+
 // ANCHOR_END: implement-prf-provider
+
+func CheckAvailability() {
+	// ANCHOR: check-availability
+	prfProvider := &CustomPrfProvider{}
+
+	available, err := prfProvider.IsPrfAvailable()
+	if err == nil && available {
+		// Show passkey as primary option
+	} else {
+		// Fall back to mnemonic flow
+	}
+	// ANCHOR_END: check-availability
+}
 
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: connect-with-passkey
-	prfProvider := &ExamplePasskeyPrfProvider{}
+	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskey(prfProvider, nil)
 
 	// Derive the wallet from the passkey (pass nil for the default wallet)
@@ -50,7 +74,7 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 
 func ListLabels() ([]string, error) {
 	// ANCHOR: list-labels
-	prfProvider := &ExamplePasskeyPrfProvider{}
+	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
 	relayConfig := &breez_sdk_spark.NostrRelayConfig{
 		BreezApiKey: &breezApiKey,
@@ -72,7 +96,7 @@ func ListLabels() ([]string, error) {
 
 func StoreLabel() error {
 	// ANCHOR: store-label
-	prfProvider := &ExamplePasskeyPrfProvider{}
+	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
 	relayConfig := &breez_sdk_spark.NostrRelayConfig{
 		BreezApiKey: &breezApiKey,

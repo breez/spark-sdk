@@ -40,6 +40,7 @@ kotlin {
         }
         androidMain.dependencies {
             implementation("androidx.core:core-ktx:1.15.0")
+            implementation("androidx.credentials:credentials:1.3.0")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

@@ -21,7 +21,6 @@
     "allowJs": true
   },
   "include": [
-    "**/*.ts",
-    ".eslintrc.js",
+    "**/*.ts"
   ]
 }
