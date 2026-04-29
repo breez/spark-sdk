@@ -121,19 +121,19 @@ pub trait PrfProvider: Send + Sync {
     ///
     /// The built-in `PasskeyProvider` on each platform overrides this with
     /// an active check:
-    /// - **iOS/macOS**: fetches the AASA file from Apple's CDN and verifies
-    ///   the app's bundle ID + team ID appear in `webcredentials.apps`.
-    /// - **Android**: queries Google's Digital Asset Links API for a matching
+    /// - **iOS/macOS**: verifies the app's bundle ID + team ID appear in the
+    ///   AASA `webcredentials.apps` array for the RP domain. Results may be
+    ///   stale if the AASA file was recently updated.
+    /// - **Android**: queries the Digital Asset Links API for a matching
     ///   `get_login_creds` statement. Returns `Skipped` (not `NotAssociated`)
     ///   on mismatch, because Android's CredentialManager performs its own
-    ///   internal DAL verification via Google Play Services, which may have a
-    ///   fresher cache than the public API.
+    ///   internal verification that may be more up-to-date than the public API.
     /// - **Browser**: checks that `rpId` is a registrable suffix of
     ///   `window.location.hostname` (the same rule the browser enforces
     ///   at WebAuthn call time). No network request needed.
     ///
     /// Custom providers (YubiKey, FIDO2, file-backed) that have no platform
-    /// cache to verify against should inherit the default, which returns
+    /// verification source should inherit the default, which returns
     /// `Skipped`.
     ///
     /// # Returns
