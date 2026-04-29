@@ -147,7 +147,7 @@ pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
 }
 // ANCHOR_END: disconnect
 
-// ANCHOR: unrecoverable-error
+// ANCHOR: corrupt-storage-error
 pub(crate) async fn connect_with_recovery() -> Result<BreezSdk> {
     let storage_dir = "./.data".to_string();
 
@@ -166,7 +166,7 @@ pub(crate) async fn connect_with_recovery() -> Result<BreezSdk> {
 
     let sdk = match connect(make_request()).await {
         Ok(sdk) => sdk,
-        Err(SdkError::Unrecoverable(_)) => {
+        Err(SdkError::CorruptStorage(_)) => {
             // The SDK storage is corrupted and cannot be recovered by retrying.
             // Clear the storage directory and reconnect with fresh storage.
             std::fs::remove_dir_all(&storage_dir).ok();
@@ -176,5 +176,5 @@ pub(crate) async fn connect_with_recovery() -> Result<BreezSdk> {
     };
     Ok(sdk)
 }
-// ANCHOR_END: unrecoverable-error
+// ANCHOR_END: corrupt-storage-error
 

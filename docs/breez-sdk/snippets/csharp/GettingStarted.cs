@@ -160,7 +160,7 @@ namespace BreezSdkSnippets
         }
         // ANCHOR_END: disconnect
 
-        // ANCHOR: unrecoverable-error
+        // ANCHOR: corrupt-storage-error
         async Task<BreezSdk> ConnectWithRecovery()
         {
             var storageDir = "./.data";
@@ -180,7 +180,7 @@ namespace BreezSdkSnippets
             {
                 return await BreezSdkMethods.Connect(MakeRequest());
             }
-            catch (SdkException.Unrecoverable)
+            catch (SdkException.CorruptStorage)
             {
                 // The SDK storage is corrupted and cannot be recovered by retrying.
                 // Clear the storage directory and reconnect with fresh storage.
@@ -189,6 +189,6 @@ namespace BreezSdkSnippets
                 return await BreezSdkMethods.Connect(MakeRequest());
             }
         }
-        // ANCHOR_END: unrecoverable-error
+        // ANCHOR_END: corrupt-storage-error
     }
 }

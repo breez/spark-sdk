@@ -43,7 +43,7 @@ pub enum _SdkError {
     LnurlError(String),
     Signer(String),
     Generic(String),
-    Unrecoverable(String),
+    CorruptStorage(String),
 }
 
 #[frb(mirror(StorageError))]
@@ -51,6 +51,7 @@ pub enum _StorageError {
     Connection(String),
     Implementation(String),
     InitializationError(String),
+    MigrationError(String),
     Serialization(String),
 }
 

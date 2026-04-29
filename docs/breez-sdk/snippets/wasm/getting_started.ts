@@ -176,7 +176,7 @@ const exampleDisconnect = async (sdk: BreezSdk) => {
 }
 
 const exampleConnectWithRecovery = async () => {
-  // ANCHOR: unrecoverable-error
+  // ANCHOR: corrupt-storage-error
   const storageDir = './.data'
 
   const connectRequest = {
@@ -193,7 +193,7 @@ const exampleConnectWithRecovery = async () => {
   try {
     sdk = await connect(connectRequest)
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Unrecoverable error')) {
+    if (error instanceof Error && error.message.startsWith('Corrupt storage')) {
       // The SDK storage is corrupted and cannot be recovered by retrying.
       // Clear the storage directory and reconnect with fresh storage.
       // (Platform-specific: delete the storageDir directory or clear IndexedDB)
@@ -202,5 +202,5 @@ const exampleConnectWithRecovery = async () => {
       throw error
     }
   }
-  // ANCHOR_END: unrecoverable-error
+  // ANCHOR_END: corrupt-storage-error
 }

@@ -171,7 +171,7 @@ class BreezSdkSpark {
   }
   // ANCHOR_END: disconnect
 
-  // ANCHOR: unrecoverable-error
+  // ANCHOR: corrupt-storage-error
   Future<BreezSdk> connectWithRecovery() async {
     final storageDir = './.data';
 
@@ -187,7 +187,7 @@ class BreezSdkSpark {
 
     try {
       return await connect(req: makeRequest());
-    } on SdkError_Unrecoverable {
+    } on SdkError_CorruptStorage {
       // The SDK storage is corrupted and cannot be recovered by retrying.
       // Clear the storage directory and reconnect with fresh storage.
       final dir = Directory(storageDir);
@@ -195,5 +195,5 @@ class BreezSdkSpark {
       return await connect(req: makeRequest());
     }
   }
-  // ANCHOR_END: unrecoverable-error
+  // ANCHOR_END: corrupt-storage-error
 }

@@ -36,7 +36,7 @@ See [Connecting with a Passkey](passkey.md) for the full setup guide including P
 
 ## Handling Initialization Failures
 
-Some initialization failures are **unrecoverable** — they indicate that the local SDK storage is corrupted and retrying without action will not help. When {{#name connect}} returns an `Unrecoverable`, the app must clear the SDK storage directory and retry.
+Some initialization failures indicate that the local SDK storage is corrupted and retrying without action will not help. When {{#name connect}} returns a `CorruptStorage` error, the app must clear the SDK storage directory and retry.
 
 <div class="warning">
 <h4>Important</h4>
@@ -45,7 +45,7 @@ Clearing the storage directory removes locally cached state. The wallet funds ar
 
 </div>
 
-{{#tabs getting_started:unrecoverable-error}}
+{{#tabs getting_started:corrupt-storage-error}}
 
 ## Advanced Initialization
 

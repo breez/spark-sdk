@@ -163,7 +163,7 @@ class GettingStarted {
     }
     // ANCHOR_END: disconnect
 
-    // ANCHOR: unrecoverable-error
+    // ANCHOR: corrupt-storage-error
     suspend fun connectWithRecovery(): BreezSdk? {
         val storageDir = "./.data"
 
@@ -179,7 +179,7 @@ class GettingStarted {
 
         return try {
             connect(makeRequest())
-        } catch (e: SdkError.Unrecoverable) {
+        } catch (e: SdkError.CorruptStorage) {
             // The SDK storage is corrupted and cannot be recovered by retrying.
             // Clear the storage directory and reconnect with fresh storage.
             java.io.File(storageDir).deleteRecursively()
@@ -194,5 +194,5 @@ class GettingStarted {
             null
         }
     }
-    // ANCHOR_END: unrecoverable-error
+    // ANCHOR_END: corrupt-storage-error
 }

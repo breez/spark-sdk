@@ -165,7 +165,7 @@ func Disconnect(sdk *breez_sdk_spark.BreezSdk) {
 
 // ANCHOR_END: disconnect
 
-// ANCHOR: unrecoverable-error
+// ANCHOR: corrupt-storage-error
 func ConnectWithRecovery() (*breez_sdk_spark.BreezSdk, error) {
 	storageDir := "./.data"
 
@@ -184,7 +184,7 @@ func ConnectWithRecovery() (*breez_sdk_spark.BreezSdk, error) {
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
-			if _, ok := (*sdkErr).(breez_sdk_spark.SdkErrorUnrecoverable); ok {
+			if _, ok := (*sdkErr).(breez_sdk_spark.SdkErrorCorruptStorage); ok {
 				// The SDK storage is corrupted and cannot be recovered by retrying.
 				// Clear the storage directory and reconnect with fresh storage.
 				os.RemoveAll(storageDir)
@@ -196,4 +196,4 @@ func ConnectWithRecovery() (*breez_sdk_spark.BreezSdk, error) {
 	return sdk, nil
 }
 
-// ANCHOR_END: unrecoverable-error
+// ANCHOR_END: corrupt-storage-error

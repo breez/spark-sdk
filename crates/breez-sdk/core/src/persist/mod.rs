@@ -96,6 +96,9 @@ pub enum StorageError {
     #[error("Failed to initialize database: {0}")]
     InitializationError(String),
 
+    #[error("Failed to migrate database: {0}")]
+    MigrationError(String),
+
     #[error("Failed to serialize/deserialize data: {0}")]
     Serialization(String),
 
