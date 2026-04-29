@@ -324,16 +324,17 @@ checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
 name = "bitreq"
-version = "0.3.4"
-source = "git+https://github.com/breez/corepc?branch=yse-bitreq-rustls#d052f8f0efd05459dd4ae157a2d68d2044ac824c"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6df90cd78f0510165fd370574676aeb57dbec0ee3bfff68645bb7b0e9a65dbd5"
 dependencies = [
  "rustls",
- "rustls-webpki 0.101.7",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "tokio",
  "tokio-rustls",
- "webpki-roots 0.25.4",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -369,6 +370,7 @@ dependencies = [
  "dnssec-prover",
  "futures",
  "hex",
+ "http",
  "lightning",
  "macros",
  "platform-utils",
@@ -384,6 +386,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-web-wasm-client",
+ "tower-service",
  "tracing",
 ]
 
@@ -401,7 +404,7 @@ dependencies = [
  "built",
  "chrono",
  "flashnet",
- "frost-secp256k1-tr-unofficial",
+ "frost-secp256k1-tr",
  "hex",
  "k256",
  "lnurl-models",
@@ -984,10 +987,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "frost-core-unofficial"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "579bf9770b82531690aa948a39dcd77f098f86389d5b45b76252257420ff263d"
+name = "frost-core"
+version = "2.1.0"
+source = "git+https://github.com/lightsparkdev/frost?rev=9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180#9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180"
 dependencies = [
  "byteorder",
  "const-crc32-nostd",
@@ -1007,27 +1009,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "frost-rerandomized-unofficial"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a3736da210f3df297cd1c2b58cf2934510f8f39d9ff6248bae8f1f6457fde98"
+name = "frost-rerandomized"
+version = "2.1.0"
+source = "git+https://github.com/lightsparkdev/frost?rev=9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180#9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180"
 dependencies = [
  "derive-getters",
  "document-features",
- "frost-core-unofficial",
+ "frost-core",
  "hex",
  "rand_core 0.6.4",
 ]
 
 [[package]]
-name = "frost-secp256k1-tr-unofficial"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5279a0a375d505f5ec711521284d183ab6fea98edfdf798d65434b16c59a251"
+name = "frost-secp256k1-tr"
+version = "2.1.0"
+source = "git+https://github.com/lightsparkdev/frost?rev=9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180#9aaf1b6b9fa3c2c3c2c7c70da83061deda1a9180"
 dependencies = [
  "document-features",
- "frost-core-unofficial",
- "frost-rerandomized-unofficial",
+ "frost-core",
+ "frost-rerandomized",
  "k256",
  "rand_core 0.6.4",
  "sha2",
@@ -2644,15 +2644,15 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
  "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.8",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -2689,19 +2689,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.101.7"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b6275d1ee7a1cd780b64aca7726599a1dbc893b1e64144529e55c3c2f745765"
-dependencies = [
- "ring",
- "untrusted",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.103.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ffdfa2f5286e2247234e03f680868ac2815974dc39e00ea15adc445d0aafe52"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -3054,8 +3044,8 @@ dependencies = [
  "built",
  "bytes",
  "chrono",
- "frost-core-unofficial",
- "frost-secp256k1-tr-unofficial",
+ "frost-core",
+ "frost-secp256k1-tr",
  "futures",
  "graphql_client",
  "hex",
@@ -3105,7 +3095,7 @@ dependencies = [
  "tokio-postgres-rustls",
  "tracing",
  "uuid",
- "webpki-roots 1.0.5",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -3113,7 +3103,7 @@ name = "spark-wallet"
 version = "0.1.0"
 dependencies = [
  "bitcoin",
- "frost-secp256k1-tr-unofficial",
+ "frost-secp256k1-tr",
  "futures",
  "hex",
  "platform-utils",
@@ -4037,24 +4027,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "0.25.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
-
-[[package]]
-name = "webpki-roots"
 version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.5",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.5"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12bed680863276c63889429bfd6cab3b99943659923822de1c8a39c49e4d722c"
+checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
 ]
