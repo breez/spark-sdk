@@ -10,16 +10,16 @@ pub(crate) fn js_error_to_passkey_prf_error(js_error: JsValue) -> PasskeyPrfErro
     PasskeyPrfError::Generic(error_message)
 }
 
-pub struct WasmPasskeyPrfProvider {
-    pub inner: PasskeyPrfProvider,
+pub struct WasmPrfProvider {
+    pub inner: PrfProvider,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
-unsafe impl Send for WasmPasskeyPrfProvider {}
-unsafe impl Sync for WasmPasskeyPrfProvider {}
+unsafe impl Send for WasmPrfProvider {}
+unsafe impl Sync for WasmPrfProvider {}
 
 #[macros::async_trait]
-impl breez_sdk_spark::passkey::PasskeyPrfProvider for WasmPasskeyPrfProvider {
+impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         let promise = self
             .inner
@@ -48,14 +48,18 @@ impl breez_sdk_spark::passkey::PasskeyPrfProvider for WasmPasskeyPrfProvider {
 }
 
 #[wasm_bindgen(typescript_custom_section)]
-const PASSKEY_PRF_PROVIDER_INTERFACE: &'static str = r#"/**
- * Interface for passkey PRF (Pseudo-Random Function) operations.
+const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
+ * Interface for PRF (Pseudo-Random Function) operations backing seedless
+ * wallet restore.
  *
- * Implement this interface to provide passkey PRF functionality for seedless wallet restore.
+ * Implemented by the built-in `PasskeyPrfProvider` (browser passkey via the
+ * WebAuthn PRF extension); also implementable directly for custom
+ * deterministic sources (YubiKey HMAC challenge, FIDO2 hmac-secret, on-disk
+ * key material, hardware HSMs).
  *
  * @example
  * ```typescript
- * class BrowserPasskeyPrfProvider implements PasskeyPrfProvider {
+ * class BrowserPasskeyPrfProvider implements PrfProvider {
  *     async derivePrfSeed(salt: string): Promise<Uint8Array> {
  *         const credential = await navigator.credentials.get({
  *             publicKey: {
@@ -77,12 +81,13 @@ const PASSKEY_PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * }
  * ```
  */
-export interface PasskeyPrfProvider {
+export interface PrfProvider {
     /**
-     * Derive a 32-byte seed from passkey PRF with the given salt.
+     * Derive a 32-byte seed from PRF with the given salt.
      *
-     * The platform authenticates the user via passkey and evaluates the PRF extension.
-     * The salt is used as input to the PRF to derive a deterministic output.
+     * The platform authenticates the user (typically via passkey) and
+     * evaluates the PRF extension or equivalent. The salt is used as input
+     * to the PRF to derive a deterministic output.
      *
      * @param salt - The salt string to use for PRF evaluation
      * @returns A Promise resolving to the 32-byte PRF output
@@ -91,23 +96,23 @@ export interface PasskeyPrfProvider {
     derivePrfSeed(salt: string): Promise<Uint8Array>;
 
     /**
-     * Check if a PRF-capable passkey is available on this device.
+     * Check if a PRF-capable source is available on this device.
      *
      * This allows applications to gracefully degrade if passkey PRF is not supported.
      *
-     * @returns A Promise resolving to true if PRF-capable passkey is available
+     * @returns A Promise resolving to true if a PRF-capable source is available
      */
     isPrfAvailable(): Promise<boolean>;
 }"#;
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(typescript_type = "PasskeyPrfProvider")]
-    pub type PasskeyPrfProvider;
+    #[wasm_bindgen(typescript_type = "PrfProvider")]
+    pub type PrfProvider;
 
     #[wasm_bindgen(structural, method, js_name = "derivePrfSeed", catch)]
-    pub fn derive_prf_seed(this: &PasskeyPrfProvider, salt: String) -> Result<Promise, JsValue>;
+    pub fn derive_prf_seed(this: &PrfProvider, salt: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "isPrfAvailable", catch)]
-    pub fn is_prf_available(this: &PasskeyPrfProvider) -> Result<Promise, JsValue>;
+    pub fn is_prf_available(this: &PrfProvider) -> Result<Promise, JsValue>;
 }
