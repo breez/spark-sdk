@@ -182,14 +182,12 @@ func ConnectWithRecovery() (*breez_sdk_spark.BreezSdk, error) {
 
 	sdk, err := breez_sdk_spark.Connect(makeRequest())
 	if err != nil {
-		var sdkErr *breez_sdk_spark.SdkError
-		if errors.As(err, &sdkErr) {
-			if _, ok := (*sdkErr).(breez_sdk_spark.SdkErrorCorruptStorage); ok {
-				// The SDK storage is corrupted and cannot be recovered by retrying.
-				// Clear the storage directory and reconnect with fresh storage.
-				os.RemoveAll(storageDir)
-				return breez_sdk_spark.Connect(makeRequest())
-			}
+		var corruptStorageErr *breez_sdk_spark.SdkErrorCorruptStorage
+		if errors.As(err, &corruptStorageErr) {
+			// The SDK storage is corrupted and cannot be recovered by retrying.
+			// Clear the storage directory and reconnect with fresh storage.
+			os.RemoveAll(storageDir)
+			return breez_sdk_spark.Connect(makeRequest())
 		}
 		return nil, err
 	}

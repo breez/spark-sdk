@@ -167,8 +167,10 @@ namespace BreezSdkSnippets
 
             ConnectRequest MakeRequest()
             {
-                var config = BreezSdkMethods.DefaultConfig(Network.Mainnet);
-                config.ApiKey = "<breez api key>";
+                var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+                {
+                    apiKey = "<breez api key>"
+                };
                 return new ConnectRequest(
                     config: config,
                     seed: new Seed.Mnemonic(mnemonic: "<mnemonic words>", passphrase: null),
@@ -178,7 +180,7 @@ namespace BreezSdkSnippets
 
             try
             {
-                return await BreezSdkMethods.Connect(MakeRequest());
+                return await BreezSdkSparkMethods.Connect(MakeRequest());
             }
             catch (SdkException.CorruptStorage)
             {
@@ -186,7 +188,7 @@ namespace BreezSdkSnippets
                 // Clear the storage directory and reconnect with fresh storage.
                 if (Directory.Exists(storageDir))
                     Directory.Delete(storageDir, recursive: true);
-                return await BreezSdkMethods.Connect(MakeRequest());
+                return await BreezSdkSparkMethods.Connect(MakeRequest());
             }
         }
         // ANCHOR_END: corrupt-storage-error

@@ -179,13 +179,14 @@ const exampleConnectWithRecovery = async () => {
   // ANCHOR: corrupt-storage-error
   const storageDir = './.data'
 
+  const seed: Seed = { type: 'mnemonic', mnemonic: '<mnemonic words>', passphrase: undefined }
   const connectRequest = {
     config: (() => {
       const config = defaultConfig('mainnet')
       config.apiKey = '<breez api key>'
       return config
     })(),
-    seed: { type: 'mnemonic', mnemonic: '<mnemonic words>', passphrase: undefined } as Seed,
+    seed,
     storageDir
   }
 

@@ -182,9 +182,10 @@ async def connect_with_recovery() -> BreezSdk:
 
     try:
         return await connect(request=make_request())
-    except SdkError.CORRUPT_STORAGE:
-        # The SDK storage is corrupted and cannot be recovered by retrying.
-        # Clear the storage directory and reconnect with fresh storage.
-        shutil.rmtree(storage_dir, ignore_errors=True)
-        return await connect(request=make_request())
+    except Exception as error:
+        if isinstance(error, SdkError.CorruptStorage):
+            # The SDK storage is corrupted and cannot be recovered by retrying.
+            # Clear the storage directory and reconnect with fresh storage.
+            shutil.rmtree(storage_dir, ignore_errors=True)
+            return await connect(request=make_request())
 # ANCHOR_END: corrupt-storage-error

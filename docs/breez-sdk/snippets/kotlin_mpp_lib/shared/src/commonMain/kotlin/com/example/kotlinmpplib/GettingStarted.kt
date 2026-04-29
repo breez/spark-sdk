@@ -179,7 +179,7 @@ class GettingStarted {
 
         return try {
             connect(makeRequest())
-        } catch (e: SdkError.CorruptStorage) {
+        } catch (e: SdkException.CorruptStorage) {
             // The SDK storage is corrupted and cannot be recovered by retrying.
             // Clear the storage directory and reconnect with fresh storage.
             java.io.File(storageDir).deleteRecursively()

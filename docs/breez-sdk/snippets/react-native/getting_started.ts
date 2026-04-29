@@ -152,7 +152,7 @@ const exampleConnectWithRecovery = async () => {
     storageDir
   }
 
-  let sdk: BreezSdk
+  let sdk
   try {
     sdk = await connect(connectRequest)
   } catch (error) {
