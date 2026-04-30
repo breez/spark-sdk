@@ -30,9 +30,26 @@ public class PasskeyProvider: PrfProvider {
     private let userName: String
     private let userDisplayName: String
     private let autoRegister: Bool
+    private let allowCredentialIds: [Data]
     private let anchor: PresentationAnchorProvider
     private let explicitTeamId: String?
     private let urlSession: URLSession
+
+    /// Optional callback fired with the credential ID returned by every
+    /// successful WebAuthn assertion (sign-in path). Hosts can set this
+    /// to record which credential was just used so they can populate
+    /// `excludeCredentialIds` and `allowCredentialIds` on subsequent
+    /// requests.
+    ///
+    /// Useful for migrating users whose passkey predates the host's
+    /// own credential-ID tracking: the first successful sign-in surfaces
+    /// the credential ID, after which the host's records are correct
+    /// and the platform-level "already exists" check can fire on
+    /// future create attempts.
+    ///
+    /// Must be set before calling `derivePrfSeed`. Not invoked on
+    /// registration (see `createPasskey`'s return value for that).
+    public var onAssertionCredentialId: ((Data) -> Void)?
 
     /// Protocol for providing a presentation anchor for the authorization controller.
     public protocol PresentationAnchorProvider {
@@ -94,6 +111,15 @@ public class PasskeyProvider: PrfProvider {
     ///     the assertion. When `false`, `derivePrfSeed` throws
     ///     `PasskeyPrfError.CredentialNotFound` instead, letting the caller
     ///     control registration separately via `createPasskey()`.
+    ///   - allowCredentialIds: When non-empty, restricts assertion (sign-in)
+    ///     to one of the listed credential IDs. iOS will refuse any other
+    ///     credential for this RP. Use this to bind sign-in to a specific
+    ///     passkey the caller has registered, instead of letting iOS pick
+    ///     any sibling credential that happens to share the RP. Critical
+    ///     for deterministic seed derivation when multiple credentials
+    ///     might exist for the same RP (e.g. test artifacts, or a user
+    ///     who registered separately on multiple devices). When empty
+    ///     (default), iOS picks any credential matching the RP.
     public init(
         rpId: String = "keys.breez.technology",
         rpName: String = "Breez SDK",
@@ -102,13 +128,15 @@ public class PasskeyProvider: PrfProvider {
         anchorProvider: PresentationAnchorProvider? = nil,
         teamId: String? = nil,
         urlSession: URLSession = .shared,
-        autoRegister: Bool = true
+        autoRegister: Bool = true,
+        allowCredentialIds: [Data] = []
     ) {
         self.rpId = rpId
         self.rpName = rpName
         self.userName = userName ?? rpName
         self.userDisplayName = userDisplayName ?? (userName ?? rpName)
         self.autoRegister = autoRegister
+        self.allowCredentialIds = allowCredentialIds
         self.anchor = anchorProvider ?? DefaultAnchorProvider()
         self.explicitTeamId = teamId
         self.urlSession = urlSession
@@ -431,6 +459,16 @@ public class PasskeyProvider: PrfProvider {
         let challenge = randomBytes(count: 32)
         let assertionRequest = provider.createCredentialAssertionRequest(challenge: challenge)
 
+        // Constrain assertion to specific credential IDs when the caller
+        // provided them. Without this, iOS picks any credential for the
+        // RP, which produces non-deterministic seeds when multiple
+        // credentials exist (different PRF keys per passkey).
+        if !allowCredentialIds.isEmpty {
+            assertionRequest.allowedCredentials = allowCredentialIds.map {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+            }
+        }
+
         // Configure PRF extension via ObjC helper
         // (PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift initializers)
         PasskeyPRFHelper.setAssertionPRFOn(assertionRequest, withSalt: saltData)
@@ -440,6 +478,13 @@ public class PasskeyProvider: PrfProvider {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
+        // Forward the assertion's credential ID to the host's recorder
+        // (e.g. a synced-keychain store of "credentials we know about")
+        // before we resolve the seed. Lets hosts auto-discover their
+        // own existing credentials on first sign-in after a migration.
+        delegate.onAssertionCredentialId = { [weak self] id in
+            self?.onAssertionCredentialId?(id)
+        }
 
         return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
@@ -496,6 +541,12 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
     var continuation: CheckedContinuation<Data, Error>?
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     var extractPrf = true
+    /// Invoked with the credential ID extracted from a successful
+    /// assertion before the continuation resolves. Set by the
+    /// PasskeyProvider so hosts can record which credential was used
+    /// on a sign-in. No-op on registration (the credential ID flows
+    /// out via the resumed Data instead).
+    var onAssertionCredentialId: ((Data) -> Void)?
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
         return anchor
@@ -520,6 +571,12 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
                 continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
                 return
             }
+
+            // Surface the credential ID before resolving so hosts can
+            // record it (synced keychain, server-side allowlist, etc.).
+            // Failures here must not block the seed return — the
+            // recorder is best-effort observability.
+            onAssertionCredentialId?(credential.credentialID)
 
             continuation?.resume(returning: prfData)
         } else {
