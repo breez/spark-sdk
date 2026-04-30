@@ -1,3 +1,4 @@
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
@@ -31,6 +32,74 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         // Convert Uint8Array to Vec<u8>
         let array = js_sys::Uint8Array::new(&result);
         Ok(array.to_vec())
+    }
+
+    async fn derive_prf_seeds(
+        &self,
+        salts: Vec<String>,
+    ) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+        // Probe the JS side: if the foreign object exposes
+        // `derivePrfSeeds`, prefer the bulk fast path. Custom JS
+        // providers that only implement the legacy `derivePrfSeed`
+        // method fall back to the trait's default loop, which
+        // produces N prompts for N salts.
+        let target: &wasm_bindgen::JsValue = self.inner.as_ref();
+        let key = wasm_bindgen::JsValue::from_str("derivePrfSeeds");
+        let supports_bulk = js_sys::Reflect::has(target, &key).unwrap_or(false)
+            && js_sys::Reflect::get(target, &key)
+                .map(|v| v.is_function())
+                .unwrap_or(false);
+
+        if !supports_bulk {
+            let mut out = Vec::with_capacity(salts.len());
+            for salt in salts {
+                out.push(self.derive_prf_seed(salt).await?);
+            }
+            return Ok(out);
+        }
+
+        // Build a JS array of strings to pass to derivePrfSeeds.
+        let salts_array = js_sys::Array::new();
+        for salt in &salts {
+            salts_array.push(&wasm_bindgen::JsValue::from_str(salt));
+        }
+
+        let func = js_sys::Reflect::get(target, &key)
+            .map_err(js_error_to_passkey_prf_error)?
+            .dyn_into::<js_sys::Function>()
+            .map_err(|_| {
+                PasskeyPrfError::Generic("derivePrfSeeds is not a function".to_string())
+            })?;
+        let result_promise = func
+            .call1(target, &salts_array)
+            .map_err(js_error_to_passkey_prf_error)?
+            .dyn_into::<Promise>()
+            .map_err(|_| {
+                PasskeyPrfError::Generic(
+                    "derivePrfSeeds did not return a Promise".to_string(),
+                )
+            })?;
+        let result = JsFuture::from(result_promise)
+            .await
+            .map_err(js_error_to_passkey_prf_error)?;
+
+        // Result should be Uint8Array[]. Convert each entry.
+        let array = js_sys::Array::from(&result);
+        let len = array.length() as usize;
+        if len != salts.len() {
+            return Err(PasskeyPrfError::Generic(format!(
+                "derivePrfSeeds returned {} outputs, expected {}",
+                len,
+                salts.len()
+            )));
+        }
+        let mut out = Vec::with_capacity(len);
+        for i in 0..array.length() {
+            let item = array.get(i);
+            let bytes = js_sys::Uint8Array::new(&item).to_vec();
+            out.push(bytes);
+        }
+        Ok(out)
     }
 
     async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
@@ -94,6 +163,20 @@ export interface PrfProvider {
      * @throws If authentication fails or PRF is not supported
      */
     derivePrfSeed(salt: string): Promise<Uint8Array>;
+
+    /**
+     * Optional bulk PRF derivation. Implementations that can collapse
+     * multiple derivations into a single user prompt (e.g. WebAuthn PRF
+     * with `prf.eval.first` + `prf.eval.second`) should override this.
+     * The SDK detects the presence of this method at runtime and falls
+     * back to looping `derivePrfSeed` when absent or unavailable.
+     *
+     * Output ordering matches input ordering.
+     *
+     * @param salts - Salt strings in caller order
+     * @returns A Promise resolving to one 32-byte output per salt
+     */
+    derivePrfSeeds?(salts: string[]): Promise<Uint8Array[]>;
 
     /**
      * Check if a PRF-capable source is available on this device.
