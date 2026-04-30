@@ -621,7 +621,7 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
             case .notInteractive:
                 return .AuthenticationFailed("User interaction required")
             case .matchedExcludedCredential:
-                return .AuthenticationFailed("Credential already registered")
+                return .CredentialAlreadyExists("Credential already registered")
             default:
                 return .Generic(nsError.localizedDescription)
             }
