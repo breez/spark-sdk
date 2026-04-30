@@ -36,6 +36,20 @@ function randomBytes(length) {
 }
 
 /**
+ * Thrown when `createPasskey` asks the platform to register a new
+ * passkey but it refuses because an entry in `excludeCredentialIds`
+ * matches a credential already on the device. Hosts should route the
+ * user to the sign-in path instead of treating this as a generic
+ * registration failure.
+ */
+export class PasskeyAlreadyExistsError extends Error {
+    constructor(message = 'A passkey for this RP already exists on this device') {
+        super(message);
+        this.name = 'PasskeyAlreadyExistsError';
+    }
+}
+
+/**
  * Built-in passkey-based PRF provider for browser environments.
  */
 export class PasskeyProvider {
@@ -60,6 +74,15 @@ export class PasskeyProvider {
      *   this RP ID, then retries the assertion. When false, throws an error
      *   instead, letting the caller control registration separately via
      *   `createPasskey()`.
+     * @param {Uint8Array[]} [options.allowCredentialIds=[]] - When non-empty,
+     *   restricts assertion (sign-in) to one of the listed credential IDs.
+     *   The browser refuses any other credential for this RP, even if it
+     *   matches the RP. Use this to bind sign-in to a specific passkey the
+     *   caller has registered, instead of letting the browser pick any
+     *   sibling credential that happens to share the RP. Critical for
+     *   deterministic seed derivation when multiple credentials might
+     *   exist for the same RP. When empty (default), the browser picks
+     *   any credential matching the RP.
      */
     constructor(options = {}) {
         this.rpId = options.rpId || DEFAULT_RP_ID;
@@ -67,6 +90,26 @@ export class PasskeyProvider {
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
         this.autoRegister = options.autoRegister !== false;
+        this.allowCredentialIds = options.allowCredentialIds || [];
+        /**
+         * Optional callback fired with the credential ID returned by
+         * every successful WebAuthn assertion. Hosts can set this to
+         * record which credential was just used so they can populate
+         * `excludeCredentialIds` and `allowCredentialIds` on subsequent
+         * requests.
+         *
+         * Useful for migrating users whose passkey predates the host's
+         * own credential-ID tracking: the first successful sign-in
+         * surfaces the credential ID, after which the host's records
+         * are correct and the platform-level "already exists" check
+         * can fire on future create attempts.
+         *
+         * Set before calling `derivePrfSeed`. Not invoked on
+         * registration (see `createPasskey`'s return value for that).
+         *
+         * @type {((credentialId: Uint8Array) => void) | undefined}
+         */
+        this.onAssertionCredentialId = undefined;
     }
 
     /**
@@ -214,11 +257,20 @@ export class PasskeyProvider {
      * @private
      */
     async _getAssertionWithPrf(saltBytes) {
+        // When non-empty, the browser refuses any credential not in the
+        // list. Without this, the browser picks any credential for the
+        // RP, which produces non-deterministic seeds when multiple
+        // credentials exist for the same RP.
+        const allowCredentials = (this.allowCredentialIds || []).map((id) => ({
+            type: 'public-key',
+            id,
+        }));
+
         const options = {
             publicKey: {
                 challenge: randomBytes(32),
                 rpId: this.rpId,
-                allowCredentials: [], // discoverable credentials
+                allowCredentials,
                 userVerification: 'required',
                 extensions: {
                     prf: {
@@ -239,6 +291,19 @@ export class PasskeyProvider {
 
         if (!credential) {
             throw new Error('Credential not found');
+        }
+
+        // Surface the asserted credential ID before resolving the PRF
+        // result so hosts can record it (synced storage, server-side
+        // allowlist). Failures inside the callback are swallowed: the
+        // assertion already succeeded and the seed return must not be
+        // blocked by host-side bookkeeping.
+        if (typeof this.onAssertionCredentialId === 'function') {
+            try {
+                this.onAssertionCredentialId(new Uint8Array(credential.rawId));
+            } catch {
+                // best-effort
+            }
         }
 
         const extensionResults = credential.getClientExtensionResults();
@@ -293,6 +358,15 @@ export class PasskeyProvider {
         try {
             credential = await navigator.credentials.create({ publicKey: publicKeyOptions });
         } catch (error) {
+            // Surface the duplicate-prevention check as a typed error so
+            // callers can route the user to sign-in instead of treating
+            // it as a generic registration failure. The browser raises
+            // InvalidStateError DOMException when an entry in
+            // excludeCredentials matches a credential already on the
+            // device. Only meaningful in the create path.
+            if (error instanceof DOMException && error.name === 'InvalidStateError') {
+                throw new PasskeyAlreadyExistsError(error.message);
+            }
             throw this._mapError(error);
         }
 
@@ -300,10 +374,24 @@ export class PasskeyProvider {
             throw new Error('Credential creation failed');
         }
 
-        // Verify PRF extension was acknowledged
+        // Verify PRF extension was acknowledged. The credential is now
+        // registered with the active credential provider, but if that
+        // provider lacks PRF support (e.g. Chrome Password Manager and
+        // 1Password on iOS — only iCloud Keychain implements PRF), the
+        // assertion side will silently fail later. Surface this here as
+        // an actionable message so the user knows where to look.
+        // WebAuthn doesn't expose a deletion API, so the orphan
+        // credential remains in the provider's store until manually
+        // removed in OS settings.
         const extensionResults = credential.getClientExtensionResults();
         if (!extensionResults.prf || !extensionResults.prf.enabled) {
-            throw new Error('PRF not supported by authenticator');
+            throw new Error(
+                'Passkey created, but the active credential provider does not '
+                + 'support the WebAuthn PRF extension. On iOS, only iCloud '
+                + 'Keychain currently supports PRF: switch the default '
+                + 'provider in Settings → Passwords → Password Options. '
+                + 'The orphan passkey can be removed in the same settings panel.'
+            );
         }
 
         return new Uint8Array(credential.rawId);
