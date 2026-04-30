@@ -283,7 +283,7 @@ impl EventEmitter {
             let t = Instant::now();
             listener.on_event(event.clone()).await;
             let dt = t.elapsed();
-            internal_total += dt;
+            internal_total = internal_total.saturating_add(dt);
             info!("emit({event_label}) internal listener {id}: {dt:?}");
         }
         drop(internal);
@@ -297,7 +297,7 @@ impl EventEmitter {
                 let t = Instant::now();
                 event = mw.process(e).await;
                 let dt = t.elapsed();
-                middleware_total += dt;
+                middleware_total = middleware_total.saturating_add(dt);
                 info!("emit({event_label}) middleware #{i}: {dt:?}");
             } else {
                 break;
@@ -314,7 +314,7 @@ impl EventEmitter {
                 let t = Instant::now();
                 listener.on_event(event.clone()).await;
                 let dt = t.elapsed();
-                external_total += dt;
+                external_total = external_total.saturating_add(dt);
                 info!("emit({event_label}) external listener {id}: {dt:?}");
             }
         }
@@ -322,9 +322,12 @@ impl EventEmitter {
         info!(
             "emit({event_label}) completed in {:?} (internal[{}]={:?}, middleware[{}]={:?}, external[{}]={:?})",
             start.elapsed(),
-            internal_count, internal_total,
-            middleware_count, middleware_total,
-            external_count, external_total
+            internal_count,
+            internal_total,
+            middleware_count,
+            middleware_total,
+            external_count,
+            external_total
         );
     }
 
