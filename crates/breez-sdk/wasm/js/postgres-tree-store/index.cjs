@@ -73,7 +73,9 @@ class PostgresTreeStore {
   }
 
   /**
-   * Run a function inside a transaction with the advisory lock.
+   * Run a function inside a transaction with the advisory lock. Reserved for
+   * operations whose correctness depends on serializing the available-leaf set
+   * (`tryReserveLeaves`, `setLeaves`).
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -83,6 +85,31 @@ class PostgresTreeStore {
     try {
       await client.query("BEGIN");
       await client.query(`SELECT pg_advisory_xact_lock(${TREE_STORE_WRITE_LOCK_KEY})`);
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`addLeaves`,
+   * `cancelReservation`, `finalizeReservation`, `updateReservation`) where
+   * MVCC + row-level locks suffice and the global lock would only add
+   * contention.
+   * @param {function(import('pg').PoolClient): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
@@ -106,7 +133,7 @@ class PostgresTreeStore {
         return;
       }
 
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Remove these leaves from spent_leaves table
         const leafIds = leaves.map((l) => l.id);
         await this._batchRemoveSpentLeaves(client, leafIds);
@@ -254,7 +281,7 @@ class PostgresTreeStore {
    */
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         const res = await client.query(
           "SELECT id FROM tree_reservations WHERE id = $1",
           [id]
@@ -294,7 +321,7 @@ class PostgresTreeStore {
    */
   async finalizeReservation(id, newLeaves) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Check if reservation exists and get purpose
         const res = await client.query(
           "SELECT id, purpose FROM tree_reservations WHERE id = $1",
@@ -457,7 +484,7 @@ class PostgresTreeStore {
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (client) => {
+      return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM tree_reservations WHERE id = $1",

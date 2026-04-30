@@ -67,9 +67,6 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Acquire advisory lock to prevent deadlocks with concurrent operations
-        Self::acquire_write_lock(&tx).await?;
-
         // Remove these leaves from spent_leaves table - when we receive a leaf through
         // add_leaves (e.g., from a claimed transfer), it's no longer "spent" from
         // our perspective. This handles the case where the same leaf returns to us
@@ -88,6 +85,26 @@ impl TreeStore for PostgresTreeStore {
         );
         self.notify_balance_change();
         Ok(())
+    }
+
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let row = client
+            .query_one(
+                r"
+                SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
+                FROM tree_leaves l
+                LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+                WHERE
+                    (l.reservation_id IS NULL AND l.status = 'Available')
+                    OR r.purpose = 'Swap'
+                ",
+                &[],
+            )
+            .await
+            .map_err(map_err)?;
+        let balance: i64 = row.get("balance");
+        Ok(u64::try_from(balance).unwrap_or(0))
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
@@ -242,8 +259,6 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        Self::acquire_write_lock(&tx).await?;
-
         let reservation = tx
             .query_opt("SELECT id FROM tree_reservations WHERE id = $1", &[id])
             .await
@@ -295,9 +310,6 @@ impl TreeStore for PostgresTreeStore {
     ) -> Result<(), TreeServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
-
-        // Acquire advisory lock to prevent deadlocks with concurrent operations
-        Self::acquire_write_lock(&tx).await?;
 
         // Check if reservation exists and get its purpose
         let reservation = tx
@@ -526,10 +538,6 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Acquire advisory lock to prevent deadlocks with concurrent operations
-        Self::acquire_write_lock(&tx).await?;
-
-        // Check if reservation exists (advisory lock provides serialization, no row locking needed)
         let reservation = tx
             .query_opt(
                 "SELECT id FROM tree_reservations WHERE id = $1",

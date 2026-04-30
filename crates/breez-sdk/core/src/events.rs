@@ -7,7 +7,7 @@ use std::{
 use platform_utils::time::Instant;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
-use tracing::debug;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::{DepositInfo, LightningAddressInfo, Payment};
@@ -271,20 +271,34 @@ impl EventEmitter {
     /// 3. External listeners see the processed event
     pub async fn emit(&self, event: &SdkEvent) {
         let start = Instant::now();
+        let event_label = format!("{event}");
+        let mut internal_total = std::time::Duration::ZERO;
+        let mut middleware_total = std::time::Duration::ZERO;
+        let mut external_total = std::time::Duration::ZERO;
 
         // Phase 1: Internal listeners see raw event
         let internal = self.internal_listeners.read().await;
-        for listener in internal.values() {
+        let internal_count = internal.len();
+        for (id, listener) in internal.iter() {
+            let t = Instant::now();
             listener.on_event(event.clone()).await;
+            let dt = t.elapsed();
+            internal_total += dt;
+            info!("emit({event_label}) internal listener {id}: {dt:?}");
         }
         drop(internal);
 
         // Phase 2: Middleware chain
         let mut event = Some(event.clone());
         let middleware = self.middleware.read().await;
-        for mw in middleware.iter() {
+        let middleware_count = middleware.len();
+        for (i, mw) in middleware.iter().enumerate() {
             if let Some(e) = event {
+                let t = Instant::now();
                 event = mw.process(e).await;
+                let dt = t.elapsed();
+                middleware_total += dt;
+                info!("emit({event_label}) middleware #{i}: {dt:?}");
             } else {
                 break;
             }
@@ -292,14 +306,26 @@ impl EventEmitter {
         drop(middleware);
 
         // Phase 3: External listeners see processed event
+        let mut external_count = 0;
         if let Some(ref event) = event {
             let listeners = self.external_listeners.read().await;
-            for listener in listeners.values() {
+            external_count = listeners.len();
+            for (id, listener) in listeners.iter() {
+                let t = Instant::now();
                 listener.on_event(event.clone()).await;
+                let dt = t.elapsed();
+                external_total += dt;
+                info!("emit({event_label}) external listener {id}: {dt:?}");
             }
         }
 
-        debug!("emit() completed in {:?}", start.elapsed());
+        info!(
+            "emit({event_label}) completed in {:?} (internal[{}]={:?}, middleware[{}]={:?}, external[{}]={:?})",
+            start.elapsed(),
+            internal_count, internal_total,
+            middleware_count, middleware_total,
+            external_count, external_total
+        );
     }
 
     pub async fn emit_synced(&self, synced: &InternalSyncedEvent) {

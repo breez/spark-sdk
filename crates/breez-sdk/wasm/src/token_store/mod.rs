@@ -1,5 +1,5 @@
 use macros::async_trait;
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput,
@@ -7,6 +7,7 @@ use spark_wallet::{
     TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
     TokenReservationPurpose,
 };
+use tracing::info;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
@@ -328,12 +329,26 @@ impl TokenOutputStore for WasmTokenStore {
             .token_store
             .list_tokens_outputs()
             .map_err(js_error_to_token_error)?;
+
+        let t = Instant::now();
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_token_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
         let wasm_results: Vec<WasmTokenOutputsPerStatus> =
             serde_wasm_bindgen::from_value(result)
                 .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let deser_dt = t.elapsed();
+
+        info!(
+            "WasmTokenStore::list_tokens_outputs: {} entries, js_promise: {:?}, deserialize: {:?}",
+            wasm_results.len(),
+            js_dt,
+            deser_dt
+        );
+
         wasm_results
             .into_iter()
             .map(TryInto::try_into)

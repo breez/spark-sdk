@@ -4,12 +4,14 @@ mod tests;
 use std::sync::Arc;
 
 use macros::async_trait;
+use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeServiceError, TreeStore,
 };
+use tracing::info;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
@@ -195,12 +197,29 @@ impl TreeStore for WasmTreeStore {
             .tree_store
             .get_leaves()
             .map_err(js_error_to_tree_error)?;
+
+        let t = Instant::now();
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_tree_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
         let wasm_leaves: WasmLeaves = serde_wasm_bindgen::from_value(result)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
-        Ok(wasm_leaves.into())
+        let deser_dt = t.elapsed();
+
+        let leaves: Leaves = wasm_leaves.into();
+        let count = leaves.available.len()
+            + leaves.not_available.len()
+            + leaves.available_missing_from_operators.len()
+            + leaves.reserved_for_payment.len()
+            + leaves.reserved_for_swap.len();
+        info!(
+            "WasmTreeStore::get_leaves: {} leaves, js_promise: {:?}, deserialize: {:?}",
+            count, js_dt, deser_dt
+        );
+        Ok(leaves)
     }
 
     async fn set_leaves(

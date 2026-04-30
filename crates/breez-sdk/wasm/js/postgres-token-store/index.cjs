@@ -75,7 +75,9 @@ class PostgresTokenStore {
   }
 
   /**
-   * Run a function inside a transaction with the advisory lock.
+   * Run a function inside a transaction with the advisory lock. Reserved for
+   * operations whose correctness depends on serializing the available-output
+   * set (`reserveTokenOutputs`, `setTokensOutputs`).
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -85,6 +87,30 @@ class PostgresTokenStore {
     try {
       await client.query("BEGIN");
       await client.query(`SELECT pg_advisory_xact_lock(${TOKEN_STORE_WRITE_LOCK_KEY})`);
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`cancelReservation`,
+   * `finalizeReservation`) where MVCC + row-level locks suffice and the global
+   * lock would only add contention.
+   * @param {function(import('pg').PoolClient): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
@@ -614,7 +640,7 @@ class PostgresTokenStore {
    */
   async cancelReservation(id) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Clear reservation_id from outputs
         await client.query(
           "UPDATE token_outputs SET reservation_id = NULL WHERE reservation_id = $1",
@@ -642,7 +668,7 @@ class PostgresTokenStore {
    */
   async finalizeReservation(id) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Get reservation purpose
         const reservationResult = await client.query(
           "SELECT purpose FROM token_reservations WHERE id = $1",

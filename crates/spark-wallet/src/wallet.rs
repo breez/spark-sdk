@@ -1284,17 +1284,17 @@ impl SparkWallet {
     pub async fn get_token_balances(
         &self,
     ) -> Result<HashMap<String, TokenBalance>, SparkWalletError> {
-        let token_outputs = self.token_output_service.list_tokens_outputs().await?;
+        let token_balances = self.token_output_service.get_token_balances().await?;
 
-        let balances = token_outputs
+        let balances = token_balances
             .into_iter()
-            .map(|token_outputs| {
-                let balance = token_outputs.balance();
+            .map(|(token_metadata, balance)| {
+                let identifier = token_metadata.identifier.clone();
                 (
-                    token_outputs.metadata.identifier.clone(),
+                    identifier,
                     TokenBalance {
                         balance,
-                        token_metadata: token_outputs.metadata,
+                        token_metadata,
                     },
                 )
             })

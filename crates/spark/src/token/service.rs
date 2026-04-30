@@ -35,6 +35,12 @@ impl TokenOutputService for SynchronousTokenOutputService {
         self.state.list_tokens_outputs().await
     }
 
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        self.state.get_token_balances().await
+    }
+
     async fn refresh_tokens_outputs(&self) -> Result<(), TokenOutputServiceError> {
         // Capture the start time before any network calls from the store's clock.
         // This uses the DB server time for database-backed stores to avoid clock skew.

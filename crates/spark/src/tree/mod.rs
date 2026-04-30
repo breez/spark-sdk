@@ -496,6 +496,16 @@ pub trait TreeStore: Send + Sync {
     /// ```
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError>;
 
+    /// Returns the wallet's spendable balance: the sum of leaf values that
+    /// would be included in `Leaves::balance()` (available + missing-operators
+    /// + swap-reserved). Default impl falls through to `get_leaves`; storage
+    /// backends that can compute this server-side should override to skip the
+    /// per-leaf fetch + deserialization round-trip.
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let leaves = self.get_leaves().await?;
+        Ok(leaves.balance())
+    }
+
     /// Replaces all leaves in the store with the provided set.
     ///
     /// This method performs a complete replacement of the stored leaves,
