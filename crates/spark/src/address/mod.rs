@@ -24,6 +24,10 @@ use prost::{Message as ProstMessage, encoding};
 
 use error::AddressError;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
+use spark_token_primitives::{
+    FinalizeTokenInvoiceRequest, PrepareTokenInvoiceRequest, PreparedTokenInvoice,
+    finalize_token_invoice, prepare_token_invoice,
+};
 use uuid::Uuid;
 
 use crate::Network;
@@ -293,33 +297,97 @@ impl SparkAddress {
             ));
         }
 
-        let spark_invoice_fields: Option<ProtoSparkInvoiceFields> = self
+        let invoice_fields = self
             .spark_invoice_fields
-            .clone()
-            .map(|f| f.try_into())
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No invoice fields".to_string()))?;
+
+        match &invoice_fields.payment_type {
+            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
+                let prepared = self.prepare_token_invoice_via_primitives(payment)?;
+                let signature = signer
+                    .sign_hash_schnorr_with_identity_key(&prepared.spark_invoice_hash)
+                    .await
+                    .map_err(|e| {
+                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
+                    })?;
+                finalize_token_invoice(FinalizeTokenInvoiceRequest {
+                    receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    network: network_as_u32(self.network),
+                    spark_invoice_fields_bytes: prepared.spark_invoice_fields_bytes,
+                    signature: Some(signature.serialize().to_vec()),
+                })
+                .map_err(|e| AddressError::Other(format!("Failed to finalize token invoice: {e}")))
+            }
+            Some(SparkAddressPaymentType::SatsPayment(_)) => {
+                let spark_invoice_fields: Option<ProtoSparkInvoiceFields> =
+                    Some(invoice_fields.clone().try_into()?);
+
+                let invoice_hash = self.compute_invoice_hash()?;
+
+                let signature = signer
+                    .sign_hash_schnorr_with_identity_key(&invoice_hash)
+                    .await
+                    .map_err(|e| {
+                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
+                    })?;
+
+                let proto_address = ProtoSparkAddress {
+                    identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    spark_invoice_fields,
+                    signature: Some(signature.serialize().to_vec()),
+                };
+
+                let payload_bytes = encode_spark_address_canonical(&proto_address);
+                let hrp = Self::network_to_hrp(&self.network);
+                Ok(bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap())
+            }
+            None => Err(AddressError::Other("No payment type".to_string())),
+        }
+    }
+
+    fn prepare_token_invoice_via_primitives(
+        &self,
+        payment: &TokensPayment,
+    ) -> Result<PreparedTokenInvoice, AddressError> {
+        let invoice_fields = self
+            .spark_invoice_fields
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No invoice fields".to_string()))?;
+
+        let token_identifier = payment
+            .token_identifier
+            .as_deref()
+            .map(|id| {
+                bech32m_decode_token_id(id, None)
+                    .map_err(|e| AddressError::Other(format!("Invalid token identifier: {e}")))
+            })
             .transpose()?;
 
-        let invoice_hash = self.compute_invoice_hash()?;
+        let token_amount = payment.amount.map(|a| a.to_unpadded_be_bytes());
 
-        let signature = signer
-            .sign_hash_schnorr_with_identity_key(&invoice_hash)
-            .await
-            .map_err(|e| AddressError::Other(format!("Failed to sign invoice hash: {e}")))?;
+        let sender_spark_address = invoice_fields
+            .sender_public_key
+            .map(|pk| SparkAddress::new(pk, self.network, None).to_address_string())
+            .transpose()?;
 
-        let proto_address = ProtoSparkAddress {
-            identity_public_key: self.identity_public_key.serialize().to_vec(),
-            spark_invoice_fields,
-            signature: Some(signature.serialize().to_vec()),
-        };
+        let expiry_time_unix_millis = invoice_fields.expiry_time.map(|t| {
+            t.duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        });
 
-        // Use canonical encoding for server compatibility
-        let payload_bytes = encode_spark_address_canonical(&proto_address);
-
-        let hrp = Self::network_to_hrp(&self.network);
-
-        // This is safe to unwrap, because we are using a valid HRP and payload
-        let address = bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap();
-        Ok(address)
+        prepare_token_invoice(PrepareTokenInvoiceRequest {
+            receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
+            network: network_as_u32(self.network),
+            token_identifier,
+            token_amount,
+            memo: invoice_fields.memo.clone(),
+            sender_spark_address,
+            expiry_time_unix_millis,
+            invoice_id: Some(invoice_fields.id.as_bytes().to_vec()),
+        })
+        .map_err(|e| AddressError::Other(format!("Failed to prepare token invoice: {e}")))
     }
 
     fn compute_invoice_hash(&self) -> Result<Vec<u8>, AddressError> {
@@ -333,82 +401,41 @@ impl SparkAddress {
             ));
         }
 
+        let payment_type = invoice_fields
+            .payment_type
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No payment type".to_string()))?;
+
+        if let SparkAddressPaymentType::TokensPayment(payment) = payment_type {
+            return Ok(self
+                .prepare_token_invoice_via_primitives(payment)?
+                .spark_invoice_hash);
+        }
+
+        let SparkAddressPaymentType::SatsPayment(payment) = payment_type else {
+            unreachable!("token payment handled above");
+        };
+
         let mut all_hashes = vec![
             sha256::Hash::hash(&invoice_fields.version.to_be_bytes())
                 .to_byte_array()
                 .to_vec(),
-        ];
-
-        all_hashes.push(
             sha256::Hash::hash(invoice_fields.id.as_bytes())
                 .to_byte_array()
                 .to_vec(),
-        );
-
-        all_hashes.push(
             sha256::Hash::hash(
                 &sha256::Hash::hash(&get_magic_network_identifier(self.network)).to_byte_array(),
             )
             .to_byte_array()
             .to_vec(),
-        );
-
-        all_hashes.push(
             sha256::Hash::hash(&self.identity_public_key.serialize())
                 .to_byte_array()
                 .to_vec(),
-        );
-
-        match &invoice_fields.payment_type {
-            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
-                all_hashes.push(sha256::Hash::hash(&[1]).to_byte_array().to_vec());
-
-                if let Some(token_identifier) = &payment.token_identifier {
-                    all_hashes.push(
-                        sha256::Hash::hash(
-                            &bech32m_decode_token_id(token_identifier, None)
-                                .map_err(|e| {
-                                    AddressError::Other(format!("Invalid token identifier: {e}"))
-                                })?
-                                .to_vec(),
-                        )
-                        .to_byte_array()
-                        .to_vec(),
-                    );
-                } else {
-                    all_hashes.push(sha256::Hash::hash(&[0; 32]).to_byte_array().to_vec());
-                }
-
-                // Match JS/Go/spark-token-primitives: None/empty amount hashes empty bytes,
-                // not `[0]`. A present amount hashes its canonical unpadded big-endian
-                // representation (the convention all senders use).
-                match payment.amount {
-                    Some(amount) => {
-                        all_hashes.push(
-                            sha256::Hash::hash(&u128::to_unpadded_be_bytes(&amount))
-                                .to_byte_array()
-                                .to_vec(),
-                        );
-                    }
-                    None => {
-                        all_hashes.push(sha256::Hash::hash(&[]).to_byte_array().to_vec());
-                    }
-                }
-            }
-            Some(SparkAddressPaymentType::SatsPayment(payment)) => {
-                all_hashes.push(sha256::Hash::hash(&[2]).to_byte_array().to_vec());
-
-                let amount = payment.amount.unwrap_or(0);
-                all_hashes.push(
-                    sha256::Hash::hash(&amount.to_be_bytes())
-                        .to_byte_array()
-                        .to_vec(),
-                );
-            }
-            None => {
-                return Err(AddressError::Other("No payment type".to_string()));
-            }
-        }
+            sha256::Hash::hash(&[2]).to_byte_array().to_vec(),
+            sha256::Hash::hash(&payment.amount.unwrap_or(0).to_be_bytes())
+                .to_byte_array()
+                .to_vec(),
+        ];
 
         if let Some(memo) = &invoice_fields.memo {
             all_hashes.push(sha256::Hash::hash(memo.as_bytes()).to_byte_array().to_vec());
@@ -440,10 +467,12 @@ impl SparkAddress {
         for hash in all_hashes {
             engine.input(&hash);
         }
-        let final_hash = sha256::Hash::from_engine(engine).to_byte_array().to_vec();
-
-        Ok(final_hash)
+        Ok(sha256::Hash::from_engine(engine).to_byte_array().to_vec())
     }
+}
+
+fn network_as_u32(network: Network) -> u32 {
+    u32::try_from(network.to_proto_network() as i32).expect("network proto value is non-negative")
 }
 
 /// Returns 4 bytes of the magic network identifier for the given network.
@@ -592,6 +621,13 @@ mod tests {
         let secp = Secp256k1::new();
         let (secret_key, _) = secp.generate_keypair(&mut bitcoin::secp256k1::rand::thread_rng());
         PublicKey::from_slice(&secret_key.public_key(&secp).serialize()).unwrap()
+    }
+
+    fn ms_aligned_now() -> SystemTime {
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        UNIX_EPOCH + platform_utils::time::Duration::from_millis(since_epoch.as_millis() as u64)
     }
 
     #[test_all]
@@ -799,7 +835,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             version: 1,
             sender_public_key: Some(sender_public_key),
-            expiry_time: Some(SystemTime::now()),
+            expiry_time: Some(ms_aligned_now()),
             payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
                 token_identifier: Some(
                     "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q".to_string(),
@@ -898,7 +934,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             version: 1,
             sender_public_key: Some(sender_public_key),
-            expiry_time: Some(SystemTime::now()),
+            expiry_time: Some(ms_aligned_now()),
             payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
                 token_identifier: Some(
                     "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q".to_string(),
