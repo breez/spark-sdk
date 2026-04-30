@@ -64,7 +64,7 @@ async fn build_proof_doh(name: &Name) -> Result<Vec<u8>> {
             // Process the response and collect new queries
             let queries = builder
                 .process_response(&response_buf)
-                .map_err(|e| anyhow!("Failed to process DNS response: {:?}", e))?;
+                .map_err(|e| anyhow!("Failed to process DNS response: {e:?}"))?;
             new_queries.extend(queries);
         }
         pending_queries = new_queries;
@@ -73,7 +73,7 @@ async fn build_proof_doh(name: &Name) -> Result<Vec<u8>> {
     // Finish and return the proof
     let (proof, _ttl) = builder
         .finish_proof()
-        .map_err(|e| anyhow!("Failed to finish DNSSEC proof: {:?}", e))?;
+        .map_err(|e| anyhow!("Failed to finish DNSSEC proof: {e:?}"))?;
 
     Ok(proof)
 }

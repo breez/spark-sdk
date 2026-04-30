@@ -52,13 +52,6 @@ fn extern_wasm_bindgen_from(
             #[serde(rename_all = "camelCase")]
         },
     };
-    output.extend(quote! {
-        impl wasm_bindgen::__rt::VectorIntoJsValue for #internal_name {
-            fn vector_into_jsvalue(vector: Box<[#internal_name]>) -> wasm_bindgen::JsValue {
-                wasm_bindgen::__rt::js_value_vector_into_jsvalue(vector)
-            }
-        }
-    });
     (additional_definition, input, output)
 }
 
