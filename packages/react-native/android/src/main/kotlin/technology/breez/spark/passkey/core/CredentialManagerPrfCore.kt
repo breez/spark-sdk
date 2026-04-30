@@ -65,6 +65,30 @@ public object CredentialManagerPrfCore {
     public const val DEFAULT_RP_NAME: String = "Breez SDK"
 
     /**
+     * Cached verdict for dual-salt PRF support, keyed off the
+     * authenticator's behavior on first attempt. Initially `null`
+     * (unknown); set to `true` after a successful dual-salt assertion
+     * returns both `results.first` and `results.second`, or `false` if
+     * the second salt was silently dropped.
+     *
+     * The verdict is per process: app restart re-probes. Different
+     * authenticators (Google Password Manager, Samsung Pass, third-party)
+     * may have different verdicts; the cache is conservative (assumes
+     * the worst once observed).
+     */
+    @Volatile
+    private var dualSaltSupportVerdict: Boolean? = null
+
+    /**
+     * Reset the cached dual-salt-support verdict. Useful in tests and
+     * for hosts that want to re-probe after a credential-provider
+     * change (e.g., user switched default authenticator in Settings).
+     */
+    public fun resetDualSaltVerdict() {
+        dualSaltSupportVerdict = null
+    }
+
+    /**
      * Returns `true` if this device's OS version could support passkey PRF.
      *
      * PRF extension support requires API 28+ (Android 9+) via Google Play
@@ -135,6 +159,135 @@ public object CredentialManagerPrfCore {
         } catch (e: Exception) {
             throw e.toCoreException()
         }
+    }
+
+    /**
+     * Bulk-derive multiple PRF outputs in as few authenticator
+     * ceremonies as the platform supports.
+     *
+     * Uses the WebAuthn PRF dual-salt fast path where available: a
+     * single assertion returns two PRF outputs via `prf.eval.first` and
+     * `prf.eval.second`. Authenticators that silently drop the second
+     * salt cause the cached verdict to flip to `false`, after which
+     * subsequent calls fall back to sequential single-salt assertions
+     * (matching the prior loop behavior).
+     *
+     * Salt count semantics:
+     * - 0 salts: empty result, no prompt.
+     * - 1 salt: equivalent to [deriveSeedOrRegister] (1 prompt).
+     * - 2 salts: 1 prompt on supported authenticators, 2 on others.
+     * - 3+ salts: pairs are batched. Trailing odd salt uses single-salt.
+     *
+     * Output ordering matches input ordering.
+     *
+     * @param allowCredentialIds applied to every assertion in the batch.
+     * @param onAssertionCredentialId invoked once per assertion that
+     *   returns a credential ID. With dual-salt support this fires
+     *   once for the pair; without, it fires per individual assertion.
+     */
+    public suspend fun deriveSeedsOrRegister(
+        activity: Activity,
+        salts: List<String>,
+        rpId: String,
+        rpName: String,
+        userName: String,
+        userDisplayName: String,
+        autoRegister: Boolean = true,
+        allowCredentialIds: List<ByteArray> = emptyList(),
+        onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
+    ): List<ByteArray> = withContext(Dispatchers.Main) {
+        if (salts.isEmpty()) {
+            return@withContext emptyList()
+        }
+        if (salts.size == 1) {
+            return@withContext listOf(
+                deriveSeedOrRegister(
+                    activity = activity,
+                    salt = salts[0],
+                    rpId = rpId,
+                    rpName = rpName,
+                    userName = userName,
+                    userDisplayName = userDisplayName,
+                    autoRegister = autoRegister,
+                    allowCredentialIds = allowCredentialIds,
+                    onAssertionCredentialId = onAssertionCredentialId,
+                )
+            )
+        }
+
+        val output = ArrayList<ByteArray>(salts.size)
+        var idx = 0
+        while (idx < salts.size) {
+            if (idx + 1 < salts.size && dualSaltSupportVerdict != false) {
+                // Attempt dual-salt for this pair. The cached verdict
+                // is `null` (unknown) on first try and `true` after a
+                // successful pair. Either way we attempt; a missing
+                // results.second flips the verdict to false and triggers
+                // a single-salt fallback for the second salt only.
+                try {
+                    val pair = getDualSaltAssertionWithPrfOrRegister(
+                        activity = activity,
+                        salt1 = salts[idx],
+                        salt2 = salts[idx + 1],
+                        rpId = rpId,
+                        rpName = rpName,
+                        userName = userName,
+                        userDisplayName = userDisplayName,
+                        autoRegister = autoRegister,
+                        allowCredentialIds = allowCredentialIds,
+                        onAssertionCredentialId = onAssertionCredentialId,
+                    )
+                    output.add(pair.first)
+                    if (pair.second != null) {
+                        output.add(pair.second!!)
+                        idx += 2
+                        continue
+                    }
+                    // Dual-salt unsupported: we got results.first but not
+                    // results.second. Flip the verdict so subsequent
+                    // calls don't waste a probe attempt, and fall through
+                    // to a single-salt for salts[idx + 1].
+                    dualSaltSupportVerdict = false
+                    output.add(
+                        deriveSeedOrRegister(
+                            activity = activity,
+                            salt = salts[idx + 1],
+                            rpId = rpId,
+                            rpName = rpName,
+                            userName = userName,
+                            userDisplayName = userDisplayName,
+                            autoRegister = autoRegister,
+                            allowCredentialIds = allowCredentialIds,
+                            onAssertionCredentialId = onAssertionCredentialId,
+                        )
+                    )
+                    idx += 2
+                    continue
+                } catch (e: CredentialManagerPrfCoreException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw e.toCoreException()
+                }
+            }
+
+            // Single-salt fallback: cached verdict says dual unsupported,
+            // or this is the trailing odd salt of a 3+ batch.
+            output.add(
+                deriveSeedOrRegister(
+                    activity = activity,
+                    salt = salts[idx],
+                    rpId = rpId,
+                    rpName = rpName,
+                    userName = userName,
+                    userDisplayName = userDisplayName,
+                    autoRegister = autoRegister,
+                    allowCredentialIds = allowCredentialIds,
+                    onAssertionCredentialId = onAssertionCredentialId,
+                )
+            )
+            idx += 1
+        }
+        output
     }
 
     /**
@@ -446,6 +599,159 @@ public object CredentialManagerPrfCore {
             )
         }
         return Base64.decode(first, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+    }
+
+    /**
+     * Run a dual-salt PRF assertion, with auto-registration on missing
+     * credential when [autoRegister] is true. Returns
+     * `(first, second?)` where `second` is null if the authenticator
+     * silently dropped the second salt (caller falls back to a single
+     * assertion for that salt).
+     *
+     * The cached [dualSaltSupportVerdict] is updated to `true` when
+     * both salts come back successfully.
+     */
+    private suspend fun getDualSaltAssertionWithPrfOrRegister(
+        activity: Activity,
+        salt1: String,
+        salt2: String,
+        rpId: String,
+        rpName: String,
+        userName: String,
+        userDisplayName: String,
+        autoRegister: Boolean,
+        allowCredentialIds: List<ByteArray>,
+        onAssertionCredentialId: ((ByteArray) -> Unit)?,
+    ): Pair<ByteArray, ByteArray?> {
+        return try {
+            getDualSaltAssertionWithPrf(
+                activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
+            )
+        } catch (e: NoCredentialException) {
+            if (!autoRegister) {
+                throw CredentialManagerPrfCoreException(Kind.CredentialNotFound, e.message)
+            }
+            @Suppress("UNUSED_VARIABLE")
+            val ignored = registerCredential(
+                activity, rpId, rpName, userName, userDisplayName,
+            )
+            getDualSaltAssertionWithPrf(
+                activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
+            )
+        }
+    }
+
+    private suspend fun getDualSaltAssertionWithPrf(
+        activity: Activity,
+        salt1: String,
+        salt2: String,
+        rpId: String,
+        allowCredentialIds: List<ByteArray>,
+        onAssertionCredentialId: ((ByteArray) -> Unit)?,
+    ): Pair<ByteArray, ByteArray?> {
+        val credentialManager = CredentialManager.create(activity)
+
+        val salt1Base64 = Base64.encodeToString(
+            salt1.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+        val salt2Base64 = Base64.encodeToString(
+            salt2.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+        val challenge = randomBase64Url(32)
+
+        val requestJson = JSONObject().apply {
+            put("challenge", challenge)
+            put("rpId", rpId)
+            put("allowCredentials", JSONArray().apply {
+                for (credId in allowCredentialIds) {
+                    put(JSONObject().apply {
+                        put("type", "public-key")
+                        put("id", Base64.encodeToString(
+                            credId,
+                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                        ))
+                    })
+                }
+            })
+            put("userVerification", "required")
+            put("extensions", JSONObject().apply {
+                put("prf", JSONObject().apply {
+                    put("eval", JSONObject().apply {
+                        put("first", salt1Base64)
+                        put("second", salt2Base64)
+                    })
+                })
+            })
+        }.toString()
+
+        val option = GetPublicKeyCredentialOption(requestJson)
+        val request = GetCredentialRequest(listOf(option))
+        val response = credentialManager.getCredential(activity, request)
+
+        val authResponseJson = response.credential.data.getString(
+            "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON",
+        ) ?: throw CredentialManagerPrfCoreException(
+            Kind.AuthenticationFailed,
+            "No credential response",
+        )
+
+        val responseJson = JSONObject(authResponseJson)
+
+        if (onAssertionCredentialId != null) {
+            val rawIdEncoded = responseJson.optString("rawId", "")
+            if (rawIdEncoded.isNotEmpty()) {
+                try {
+                    val rawId = Base64.decode(
+                        rawIdEncoded,
+                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                    )
+                    onAssertionCredentialId(rawId)
+                } catch (_: Exception) {
+                    // Best-effort: malformed rawId is non-fatal.
+                }
+            }
+        }
+
+        val extensions = responseJson.optJSONObject("clientExtensionResults")
+            ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
+        val prf = extensions.optJSONObject("prf")
+            ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
+        val results = prf.optJSONObject("results")
+            ?: throw CredentialManagerPrfCoreException(
+                Kind.PrfEvaluationFailed,
+                "no results",
+            )
+        val first = results.optString("first")
+        if (first.isNullOrEmpty()) {
+            throw CredentialManagerPrfCoreException(
+                Kind.PrfEvaluationFailed,
+                "empty first result",
+            )
+        }
+        val firstBytes = Base64.decode(
+            first,
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+
+        // The second salt may be silently dropped by the authenticator
+        // (third-party password managers, older Credential Manager
+        // implementations). Detect this and let the caller fall back
+        // to a sequential single-salt assertion for the missing one.
+        val second = results.optString("second", "")
+        if (second.isEmpty()) {
+            return Pair(firstBytes, null)
+        }
+        val secondBytes = try {
+            Base64.decode(second, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        } catch (_: Exception) {
+            return Pair(firstBytes, null)
+        }
+        // Mark dual-salt as supported on this authenticator: subsequent
+        // calls skip the probe and use the fast path directly.
+        dualSaltSupportVerdict = true
+        return Pair(firstBytes, secondBytes)
     }
 
     private suspend fun registerCredential(

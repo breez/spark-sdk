@@ -179,6 +179,77 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
+    /// Derive multiple PRF outputs in as few authenticator ceremonies as
+    /// possible. Overrides the loop default with the iOS 18+
+    /// `ASAuthorizationPublicKeyCredentialPRFAssertionInputValues`
+    /// dual-salt path: 2 derivations in a single user prompt.
+    ///
+    /// Salt count semantics:
+    /// - 0 salts: returns empty without prompting.
+    /// - 1 salt: equivalent to `derivePrfSeed`.
+    /// - 2 salts: one ceremony.
+    /// - 3+ salts: pairs are batched (N+1)/2 ceremonies; a trailing odd
+    ///   salt uses the single-salt path.
+    ///
+    /// - Parameter salts: Salt strings in order.
+    /// - Returns: One 32-byte output per salt, in input order.
+    /// - Throws: `PasskeyPrfError` if any underlying ceremony fails. The
+    ///   first failing ceremony aborts the rest.
+    public func derivePrfSeeds(salts: [String]) async throws -> [Data] {
+        if salts.isEmpty {
+            return []
+        }
+        if salts.count == 1 {
+            return [try await derivePrfSeed(salt: salts[0])]
+        }
+
+        var out: [Data] = []
+        out.reserveCapacity(salts.count)
+        var idx = 0
+        while idx < salts.count {
+            if idx + 1 < salts.count {
+                let pair = try await performDualSaltAssertion(
+                    salt1: salts[idx],
+                    salt2: salts[idx + 1]
+                )
+                out.append(pair.0)
+                out.append(pair.1)
+                idx += 2
+            } else {
+                // Odd trailing salt — single-salt fallback.
+                out.append(try await derivePrfSeed(salt: salts[idx]))
+                idx += 1
+            }
+        }
+        return out
+    }
+
+    private func performDualSaltAssertion(salt1: String, salt2: String) async throws -> (Data, Data) {
+        guard let salt1Data = salt1.data(using: .utf8),
+              let salt2Data = salt2.data(using: .utf8)
+        else {
+            throw PasskeyPrfError.Generic("Failed to encode salts as UTF-8")
+        }
+
+        // Try assertion. Auto-register on missing-credential, mirroring
+        // `derivePrfSeed`.
+        do {
+            return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
+        } catch let error as PasskeyPrfError where error.isCredentialNotFound {
+            guard autoRegister else { throw error }
+            do {
+                _ = try await registerCredential()
+            } catch let regError as PasskeyPrfError where regError.isCredentialNotFound {
+                throw PasskeyPrfError.Configuration(
+                    "Associated Domains entitlement not configured. "
+                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
+                    + "and ensure a valid provisioning profile."
+                )
+            }
+            return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
+        }
+    }
+
     /// Create a new passkey with PRF support.
     ///
     /// Only registers the credential — no seed derivation. Triggers exactly
@@ -493,6 +564,41 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
+    private func performDualSaltAssertionInner(salt1Data: Data, salt2Data: Data) async throws -> (Data, Data) {
+        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
+        let challenge = randomBytes(count: 32)
+        let assertionRequest = provider.createCredentialAssertionRequest(challenge: challenge)
+
+        if !allowCredentialIds.isEmpty {
+            assertionRequest.allowedCredentials = allowCredentialIds.map {
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
+            }
+        }
+
+        // Configure dual-salt PRF: iOS 18+ supports two salt inputs
+        // per assertion (saltInput1 + saltInput2), producing two PRF
+        // outputs in a single user prompt.
+        PasskeyPRFHelper.setAssertionPRFOnRequest(
+            assertionRequest,
+            withSalt1: salt1Data,
+            salt2: salt2Data
+        )
+
+        let delegate = DualSaltAuthorizationDelegate()
+        let controller = ASAuthorizationController(authorizationRequests: [assertionRequest])
+        controller.delegate = delegate
+        controller.presentationContextProvider = delegate
+        delegate.anchor = anchor.presentationAnchor()
+        delegate.onAssertionCredentialId = { [weak self] id in
+            self?.onAssertionCredentialId?(id)
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            delegate.continuation = continuation
+            controller.performRequests()
+        }
+    }
+
     private func registerCredential(excludeCredentialIds: [Data] = []) async throws -> Data {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
@@ -589,6 +695,95 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
             }
             continuation?.resume(returning: credential.credentialID)
         }
+    }
+
+    func authorizationController(
+        controller: ASAuthorizationController, didCompleteWithError error: Error
+    ) {
+        let mapped = mapAuthorizationError(error)
+        continuation?.resume(throwing: mapped)
+    }
+
+    private func mapAuthorizationError(_ error: Error) -> PasskeyPrfError {
+        let nsError = error as NSError
+
+        if nsError.domain == ASAuthorizationError.errorDomain {
+            switch ASAuthorizationError.Code(rawValue: nsError.code) {
+            case .canceled:
+                return .UserCancelled
+            case .unknown:
+                if nsError.localizedDescription.contains("no credential")
+                    || nsError.localizedDescription.contains("No credentials")
+                {
+                    return .CredentialNotFound
+                }
+                return .AuthenticationFailed(nsError.localizedDescription)
+            case .invalidResponse:
+                return .PrfEvaluationFailed(nsError.localizedDescription)
+            case .notHandled:
+                return .CredentialNotFound
+            case .failed:
+                return .AuthenticationFailed(nsError.localizedDescription)
+            case .notInteractive:
+                return .AuthenticationFailed("User interaction required")
+            case .matchedExcludedCredential:
+                return .CredentialAlreadyExists("Credential already registered")
+            default:
+                return .Generic(nsError.localizedDescription)
+            }
+        }
+
+        return .Generic(error.localizedDescription)
+    }
+}
+
+// MARK: - Dual-Salt Authorization Delegate
+
+@available(iOS 18.0, macOS 15.0, *)
+private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate,
+    ASAuthorizationControllerPresentationContextProviding
+{
+    var continuation: CheckedContinuation<(Data, Data), Error>?
+    var anchor: ASPresentationAnchor = ASPresentationAnchor()
+    /// Invoked with the credential ID extracted from a successful
+    /// dual-salt assertion before the continuation resolves. Same
+    /// semantics as the single-salt path.
+    var onAssertionCredentialId: ((Data) -> Void)?
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        return anchor
+    }
+
+    func authorizationController(
+        controller: ASAuthorizationController,
+        didCompleteWithAuthorization authorization: ASAuthorization
+    ) {
+        guard let credential = authorization.credential
+            as? ASAuthorizationPlatformPublicKeyCredentialAssertion
+        else {
+            continuation?.resume(
+                throwing: PasskeyPrfError.AuthenticationFailed(
+                    "Unexpected credential type"))
+            return
+        }
+
+        guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential),
+              let prfSecond = PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
+        else {
+            // The authenticator did not return both PRF outputs. This
+            // can happen on older iOS versions or on third-party
+            // credential providers that don't fully support the PRF
+            // spec. Surface it cleanly so the host can fall back to
+            // sequential single-salt assertions if needed.
+            continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
+            return
+        }
+
+        // Surface the credential ID before resolving so hosts can record
+        // it (synced keychain, server-side allowlist, etc.).
+        onAssertionCredentialId?(credential.credentialID)
+
+        continuation?.resume(returning: (prfFirst, prfSecond))
     }
 
     func authorizationController(

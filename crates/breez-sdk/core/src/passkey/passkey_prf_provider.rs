@@ -88,6 +88,47 @@ pub trait PrfProvider: Send + Sync {
     /// * `Err(PasskeyPrfError)` - If authentication fails or PRF is not supported
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError>;
 
+    /// Derive multiple 32-byte PRF outputs in as few authenticator
+    /// ceremonies as the platform supports.
+    ///
+    /// The default implementation loops over [`Self::derive_prf_seed`],
+    /// producing N user prompts for N salts. Built-in `PasskeyProvider`
+    /// implementations on iOS, Android, and the browser SHOULD override
+    /// this with the platform's dual-salt fast path: the WebAuthn PRF
+    /// extension supports up to two salts per assertion via
+    /// `prf.eval.first` + `prf.eval.second`, collapsing two derivations
+    /// into a single user prompt.
+    ///
+    /// Salt count semantics:
+    /// - 0 salts: returns an empty vec without prompting.
+    /// - 1 salt: equivalent to `derive_prf_seed(salt)`.
+    /// - 2 salts: ideally one ceremony on platforms that support dual-salt.
+    /// - 3+ salts: implementations should chunk into ceremonies of two
+    ///   (e.g. 3 salts -> 2 ceremonies). The default loop implementation
+    ///   simply produces N ceremonies.
+    ///
+    /// Output ordering matches input ordering: `output[i]` is the PRF
+    /// output for `salts[i]`.
+    ///
+    /// # Arguments
+    /// * `salts` - The salt strings to evaluate, in caller order.
+    ///
+    /// # Returns
+    /// * `Ok(Vec<Vec<u8>>)` - One 32-byte output per salt, in input order.
+    /// * `Err(PasskeyPrfError)` - If authentication fails, PRF is not
+    ///   supported, or fewer outputs than salts are returned by the
+    ///   platform.
+    async fn derive_prf_seeds(
+        &self,
+        salts: Vec<String>,
+    ) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+        let mut out = Vec::with_capacity(salts.len());
+        for salt in salts {
+            out.push(self.derive_prf_seed(salt).await?);
+        }
+        Ok(out)
+    }
+
     /// Check if a PRF-capable passkey is available on this device.
     ///
     /// This allows applications to gracefully degrade if passkey PRF is not supported.
